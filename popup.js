@@ -1,4 +1,5 @@
-// Storage schema: { accounts: [{name, secret, urls}], activeIndex: 0 }
+// Storage schema: { accounts: [{name, secret, urls}], activeIndex: 0,
+//                   auth: {salt,iv,data}, sessionExpiry: number, sessionDuration: number }
 
 let accounts = [];
 let activeIndex = 0;
@@ -384,6 +385,207 @@ document.getElementById('crypto-password').addEventListener('keydown', e => {
   if (e.key === 'Escape') hideCryptoForm();
 });
 
+// ── Lock / Session ────────────────────────────────────────────────────────────
+
+const AUTH_SENTINEL = 'otpilot-auth-ok';
+let lockSetupResolve = null;
+let lockLoginResolve = null;
+
+function loadAuthState() {
+  return new Promise(r =>
+    chrome.storage.local.get(['auth', 'sessionExpiry', 'sessionDuration'], r)
+  );
+}
+
+function saveSessionExpiry(durationMs) {
+  const expiry = Date.now() + durationMs;
+  return new Promise(r =>
+    chrome.storage.local.set({ sessionExpiry: expiry, sessionDuration: durationMs }, r)
+  );
+}
+
+async function createAuth(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key  = await deriveKey(password, salt);
+  const { iv, data } = await encryptData(key, AUTH_SENTINEL);
+  const auth = { salt: b64enc(salt), iv, data };
+  return new Promise(r => chrome.storage.local.set({ auth }, r)).then(() => auth);
+}
+
+async function verifyMasterPassword(password, auth) {
+  try {
+    const key   = await deriveKey(password, b64dec(auth.salt));
+    const plain = await decryptData(key, auth.iv, auth.data);
+    return plain === AUTH_SENTINEL;
+  } catch {
+    return false;
+  }
+}
+
+function setLockButtonState(btn, busy) {
+  btn.disabled = busy;
+  if (busy) {
+    btn.dataset.origText = btn.textContent;
+    btn.innerHTML = '<span class="spinner"></span> Verifying…';
+  } else {
+    btn.textContent = btn.dataset.origText || btn.textContent;
+  }
+}
+
+function showLockOverlay(mode) {
+  const overlay = document.getElementById('lock-overlay');
+  const setup   = document.getElementById('lock-setup');
+  const login   = document.getElementById('lock-login');
+  overlay.classList.remove('hidden');
+  if (mode === 'setup') {
+    setup.style.display = '';
+    login.style.display = 'none';
+    document.getElementById('lock-new-password').value = '';
+    document.getElementById('lock-confirm-password').value = '';
+    document.getElementById('lock-setup-err').textContent = '';
+    document.getElementById('lock-new-password').focus();
+  } else {
+    setup.style.display = 'none';
+    login.style.display = '';
+    document.getElementById('lock-password').value = '';
+    document.getElementById('lock-login-err').textContent = '';
+    document.getElementById('lock-password').classList.remove('err');
+    chrome.storage.local.get('sessionDuration', d => {
+      document.getElementById('lock-login-30d').checked = d.sessionDuration === 2592000000;
+    });
+    document.getElementById('lock-password').focus();
+  }
+}
+
+function hideLockOverlay() {
+  document.getElementById('lock-overlay').classList.add('hidden');
+}
+
+async function initLock() {
+  const { auth, sessionExpiry } = await loadAuthState();
+  if (!auth) {
+    return new Promise(resolve => {
+      lockSetupResolve = resolve;
+      showLockOverlay('setup');
+    }).then(() => true);
+  }
+  if (sessionExpiry && Date.now() < sessionExpiry) return false;
+  return new Promise(resolve => {
+    lockLoginResolve = resolve;
+    showLockOverlay('login');
+  }).then(() => true);
+}
+
+async function tryAutoFillCurrentTab() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    await chrome.tabs.sendMessage(tab.id, { action: 'fill', accountIndex: activeIndex });
+  } catch { /* not on an OTP page, ignore */ }
+}
+
+// Setup screen
+document.getElementById('lock-setup-btn').addEventListener('click', async () => {
+  const pw1 = document.getElementById('lock-new-password').value;
+  const pw2 = document.getElementById('lock-confirm-password').value;
+  const err = document.getElementById('lock-setup-err');
+  const btn = document.getElementById('lock-setup-btn');
+  const is30 = document.getElementById('lock-setup-30d').checked;
+
+  err.textContent = '';
+  document.getElementById('lock-new-password').classList.remove('err');
+  document.getElementById('lock-confirm-password').classList.remove('err');
+
+  if (!pw1) {
+    err.textContent = 'Enter a password.';
+    document.getElementById('lock-new-password').classList.add('err');
+    return;
+  }
+  if (pw1 !== pw2) {
+    err.textContent = 'Passwords do not match.';
+    document.getElementById('lock-confirm-password').classList.add('err');
+    return;
+  }
+
+  setLockButtonState(btn, true);
+  try {
+    await createAuth(pw1);
+    await saveSessionExpiry(is30 ? 2592000000 : 86400000);
+    hideLockOverlay();
+    const cb = lockSetupResolve;
+    lockSetupResolve = null;
+    cb?.();
+  } catch {
+    err.textContent = 'Failed to set password. Try again.';
+    setLockButtonState(btn, false);
+  }
+});
+
+['lock-new-password', 'lock-confirm-password'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('lock-setup-btn').click();
+  });
+});
+
+// Login screen
+document.getElementById('lock-login-btn').addEventListener('click', async () => {
+  const pw  = document.getElementById('lock-password').value;
+  const err = document.getElementById('lock-login-err');
+  const btn = document.getElementById('lock-login-btn');
+  const inp = document.getElementById('lock-password');
+  const is30 = document.getElementById('lock-login-30d').checked;
+
+  err.textContent = '';
+  inp.classList.remove('err');
+
+  if (!pw) {
+    err.textContent = 'Enter your password.';
+    inp.classList.add('err');
+    return;
+  }
+
+  setLockButtonState(btn, true);
+  try {
+    const { auth } = await loadAuthState();
+    const ok = await verifyMasterPassword(pw, auth);
+    if (ok) {
+      await saveSessionExpiry(is30 ? 2592000000 : 86400000);
+      hideLockOverlay();
+      const cb = lockLoginResolve;
+      lockLoginResolve = null;
+      cb?.();
+    } else {
+      err.textContent = 'Incorrect password.';
+      inp.classList.add('err');
+      inp.select();
+      setLockButtonState(btn, false);
+    }
+  } catch {
+    err.textContent = 'An error occurred. Try again.';
+    setLockButtonState(btn, false);
+  }
+});
+
+document.getElementById('lock-password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('lock-login-btn').click();
+});
+
+// Logout button
+document.getElementById('btn-logout').addEventListener('click', async () => {
+  clearInterval(timerInterval);
+  await new Promise(r => chrome.storage.local.set({ sessionExpiry: 0 }, r));
+  await new Promise(resolve => {
+    lockLoginResolve = async () => {
+      await loadState();
+      renderTabs();
+      startTimer();
+      tryAutoFillCurrentTab();
+      resolve();
+    };
+    showLockOverlay('login');
+  });
+});
+
 // ── Ko-fi link ────────────────────────────────────────────────────────────────
 
 document.getElementById('kofi-link').addEventListener('click', e => {
@@ -395,7 +597,9 @@ document.getElementById('kofi-link').addEventListener('click', e => {
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 (async () => {
+  const justAuthenticated = await initLock();
   await loadState();
   renderTabs();
   startTimer();
+  if (justAuthenticated) tryAutoFillCurrentTab();
 })();

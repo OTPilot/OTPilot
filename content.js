@@ -1,5 +1,14 @@
 // Runs on every page; bails out immediately unless an account URL matches.
 
+function isSessionLocked() {
+  return new Promise(r =>
+    chrome.storage.local.get(['auth', 'sessionExpiry'], d => {
+      if (!d.auth) { r(false); return; }
+      r(!d.sessionExpiry || Date.now() >= d.sessionExpiry);
+    })
+  );
+}
+
 function matchesPattern(pattern, hostname) {
   // Strip protocol and path, just match hostname portion
   const host = pattern.trim().replace(/^https?:\/\//, '').split('/')[0].toLowerCase();
@@ -108,7 +117,10 @@ async function fillAndSubmit(accountIndexHint, fromPopup = false) {
 // Message from popup "Fill Page" button
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.action === 'fill') {
-    fillAndSubmit(msg.accountIndex, true).then(r => reply(r));
+    isSessionLocked().then(locked => {
+      if (locked) { reply({ ok: false, msg: 'OTPilot is locked' }); return; }
+      fillAndSubmit(msg.accountIndex, true).then(r => reply(r));
+    });
     return true;
   }
 });
@@ -116,15 +128,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 // Auto-fill on page load if a URL pattern matches this page
 (async () => {
   await new Promise(r => setTimeout(r, 400));
+
   const acc = await getActiveAccount();
   if (!acc || !acc.secret) return;
 
-  // Only auto-fill if the current URL matches AND the account has auto-fill enabled
   const patterns = (acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
   const matched = patterns.some(p => matchesPattern(p, location.hostname.toLowerCase()));
   if (!matched) return;
   if (acc.autofill === false) return;
 
   const input = findOTPInput();
-  if (input) fillAndSubmit(undefined, false);
+  if (!input) return;
+
+  if (await isSessionLocked()) {
+    showToast('OTPilot locked — click the icon to unlock', false);
+    return;
+  }
+
+  fillAndSubmit(undefined, false);
 })();

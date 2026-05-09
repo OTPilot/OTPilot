@@ -266,6 +266,70 @@
     }
     .btn-crypto-cancel:hover { color: #94a3b8; border-color: #475569; }
 
+    /* ── Lock overlay ── */
+    #lock-overlay {
+      position: fixed; inset: 0; z-index: 999;
+      background: #0f172a;
+      display: flex; align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    #lock-overlay.hidden { display: none; }
+
+    #lock-setup, #lock-login {
+      width: 100%;
+      background: #1e293b;
+      border: none;
+      border-radius: 12px;
+      padding: 28px 24px 24px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+
+    .lock-head {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 10px; text-align: center; margin-bottom: 4px;
+    }
+    .lock-icon  { font-size: 36px; line-height: 1; }
+    .lock-title { font-size: 15px; font-weight: 700; color: #f1f5f9; }
+    .lock-sub   { font-size: 11px; color: #475569; line-height: 1.6; }
+
+    .lock-input {
+      width: 100%; padding: 9px 12px;
+      background: #0f172a; border: none;
+      border-radius: 6px; color: #e2e8f0;
+      font-size: 13px; font-family: monospace;
+    }
+    .lock-input:focus { outline: none; border-color: #475569; }
+    .lock-input.err   { border-color: #f87171; }
+
+    .lock-btn {
+      width: 100%; padding: 10px;
+      background: #0ea5e9; border: none; border-radius: 6px;
+      color: #fff; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: opacity .15s; margin-top: 2px;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .lock-btn:disabled { opacity: .45; cursor: default; }
+    .lock-btn:not(:disabled):hover { opacity: .85; }
+
+    .lock-err {
+      font-size: 12px; color: #f87171;
+      text-align: center; min-height: 15px; margin-top: -4px;
+    }
+
+    .lock-remember {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 11px; color: #64748b; cursor: pointer;
+    }
+    .lock-remember input { accent-color: #0ea5e9; flex-shrink: 0; }
+
+    .spinner {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,.3);
+      border-top-color: #fff;
+      animation: spin .7s linear infinite; flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     /* ── Ko-fi footer ── */
     .kofi-footer {
       border-top: 1px solid #1e293b;
@@ -283,9 +347,51 @@
 </head>
 <body>
 
+<!-- ── Lock overlay ── -->
+<div id="lock-overlay" class="hidden">
+
+  <!-- Screen A: first-time setup -->
+  <div id="lock-setup">
+    <div class="lock-head">
+      <div class="lock-icon">🔐</div>
+      <div class="lock-title">Create a master password</div>
+      <div class="lock-sub">You'll be asked for this each time your session expires.</div>
+    </div>
+    <input type="password" id="lock-new-password"     class="lock-input" placeholder="New password"     autocomplete="new-password">
+    <input type="password" id="lock-confirm-password" class="lock-input" placeholder="Confirm password" autocomplete="new-password">
+    <label class="lock-remember">
+      <input type="checkbox" id="lock-setup-30d">
+      Keep me logged in for 30 days (default: 24 h)
+    </label>
+    <div class="lock-err" id="lock-setup-err"></div>
+    <button class="lock-btn" id="lock-setup-btn">Set password</button>
+  </div>
+
+  <!-- Screen B: login (session expired) -->
+  <div id="lock-login" style="display:none">
+    <div class="lock-head">
+      <div class="lock-icon">🔒</div>
+      <div class="lock-title">OTPilot is locked</div>
+      <div class="lock-sub">Enter your master password to continue.</div>
+    </div>
+    <input type="password" id="lock-password" class="lock-input" placeholder="Master password" autocomplete="current-password">
+    <label class="lock-remember">
+      <input type="checkbox" id="lock-login-30d">
+      Keep me logged in for 30 days (default: 24 h)
+    </label>
+    <div class="lock-err" id="lock-login-err"></div>
+    <button class="lock-btn" id="lock-login-btn">Unlock</button>
+  </div>
+
+</div>
+
 <div class="header">
   <span style="font-size:18px">🔐</span>
   <h1>OTPilot</h1>
+  <button id="btn-logout" title="Lock OTPilot"
+    style="margin-left:auto; background:none; border:none; font-size:15px;
+           cursor:pointer; color:#334155; padding:0; line-height:1;
+           transition:color .15s">🔒</button>
 </div>
 
 <div id="tabs-bar"></div>
