@@ -295,9 +295,23 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   setStatus('Saved');
 });
 
-// Re-render draft when settings panel opens
-document.getElementById('settings-panel').addEventListener('toggle', e => {
-  if (e.target.open) renderAccountsList();
+// ── View switching ────────────────────────────────────────────────────────────
+
+function showView(view) {
+  const isSettings = view === 'settings';
+  document.getElementById('home-view').style.display      = isSettings ? 'none' : '';
+  document.getElementById('settings-panel').style.display = isSettings ? '' : 'none';
+  document.getElementById('nav-home').classList.toggle('active', !isSettings);
+  document.getElementById('nav-settings').classList.toggle('active', isSettings);
+  if (isSettings) renderAccountsList();
+}
+
+document.getElementById('nav-home').addEventListener('click', () => showView('home'));
+document.getElementById('nav-settings').addEventListener('click', () => showView('settings'));
+
+document.getElementById('btn-quick-add').addEventListener('click', () => {
+  showView('settings');
+  document.getElementById('btn-add').click();
 });
 
 // ── Crypto: Export / Import ───────────────────────────────────────────────────
@@ -633,6 +647,7 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
       await syncActiveIndexToUrl();
       renderTabs();
       startTimer();
+      showView('home');
       tryAutoFillCurrentTab();
       resolve();
     };
