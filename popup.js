@@ -7,13 +7,49 @@ let currentCode = '';
 let timerInterval = null;
 let obfuscated = true;
 
+// ── URL matching ─────────────────────────────────────────────────────────────
+
+function matchesPattern(pattern, hostname) {
+  const host = pattern.trim().replace(/^https?:\/\//, '').split('/')[0].toLowerCase();
+  if (!host) return false;
+  if (host.startsWith('*.')) {
+    const base = host.slice(2);
+    return hostname === base || hostname.endsWith('.' + base);
+  }
+  return hostname === host;
+}
+
+function findAccountIndexByHostname(hostname) {
+  for (let i = 0; i < accounts.length; i++) {
+    const patterns = (accounts[i].urls || '').split('\n').map(s => s.trim()).filter(Boolean);
+    if (patterns.some(p => matchesPattern(p, hostname))) return i;
+  }
+  return -1;
+}
+
+async function syncActiveIndexToUrl() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.url?.startsWith('http')) {
+      const hostname = new URL(tab.url).hostname.toLowerCase();
+      activeIndex = findAccountIndexByHostname(hostname);
+    } else {
+      activeIndex = -1;
+    }
+  } catch {
+    activeIndex = -1;
+  }
+}
+
 // ── Storage ──────────────────────────────────────────────────────────────────
 
 function loadState() {
   return new Promise(r =>
-    chrome.storage.local.get(['accounts', 'activeIndex'], d => {
+    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated'], d => {
       accounts = d.accounts || [];
       activeIndex = Math.min(d.activeIndex ?? 0, Math.max(accounts.length - 1, 0));
+      obfuscated = d.obfuscated ?? true;
+      applyObfuscateBtn();
       r();
     })
   );
@@ -69,7 +105,9 @@ async function refreshDisplay() {
     nameLabel.textContent = '';
     display.textContent = '••• •••';
     display.className = 'dim';
-    countdown.textContent = 'Add an account in Settings';
+    countdown.textContent = accounts.length > 0
+      ? 'No account for this page'
+      : 'Add an account in Settings';
     bar.style.width = '0%';
     btnCopy.disabled = true;
     btnFill.disabled = true;
@@ -122,11 +160,26 @@ function startTimer() {
 
 // ── Obfuscate toggle ─────────────────────────────────────────────────────────
 
-document.getElementById('btn-obfuscate').addEventListener('click', () => {
-  obfuscated = !obfuscated;
+const SVG_EYE = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+</svg>`;
+
+const SVG_EYE_OFF = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+  <line x1="1" y1="1" x2="23" y2="23"/>
+</svg>`;
+
+function applyObfuscateBtn() {
   const btn = document.getElementById('btn-obfuscate');
+  btn.innerHTML = obfuscated ? SVG_EYE : SVG_EYE_OFF;
   btn.classList.toggle('revealed', !obfuscated);
   btn.title = obfuscated ? 'Show code' : 'Hide code';
+}
+
+document.getElementById('btn-obfuscate').addEventListener('click', () => {
+  obfuscated = !obfuscated;
+  chrome.storage.local.set({ obfuscated });
+  applyObfuscateBtn();
   refreshDisplay();
 });
 
@@ -577,6 +630,7 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
   await new Promise(resolve => {
     lockLoginResolve = async () => {
       await loadState();
+      await syncActiveIndexToUrl();
       renderTabs();
       startTimer();
       tryAutoFillCurrentTab();
@@ -599,6 +653,7 @@ document.getElementById('kofi-link').addEventListener('click', e => {
 (async () => {
   const justAuthenticated = await initLock();
   await loadState();
+  await syncActiveIndexToUrl();
   renderTabs();
   startTimer();
   if (justAuthenticated) tryAutoFillCurrentTab();
