@@ -115,4 +115,4 @@ otp_pilot/
 
 ## License
 
-MIT — do whatever you want with it.
+GNU General Public License v3.0 — see [LICENSE](LICENSE) for details.
