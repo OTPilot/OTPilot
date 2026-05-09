@@ -144,7 +144,8 @@ zip -r releases/otpilot-$(grep '"version"' manifest.json | awk -F'"' '{print $4}
   manifest.json \
   popup.html popup.js \
   content.js totp.js \
-  icon16.png icon48.png icon128.png
+  icon16.png icon48.png icon128.png \
+  LICENSE
 ```
 
 Verify the contents before uploading:
