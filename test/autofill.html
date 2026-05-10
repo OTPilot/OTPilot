@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Two-factor authentication – Test Page</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.08);
+      padding: 40px 36px 32px;
+      width: 100%;
+      max-width: 380px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 28px;
+    }
+    .brand-dot {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: #6366f1;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 700; font-size: 14px;
+    }
+    .brand-name { font-weight: 700; font-size: 15px; color: #1e293b; }
+
+    h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 6px;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #64748b;
+      margin-bottom: 28px;
+      line-height: 1.5;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #475569;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+    }
+
+    input[name="otp_token"] {
+      width: 100%;
+      padding: 12px 16px;
+      font-size: 24px;
+      font-family: 'Courier New', monospace;
+      font-weight: 700;
+      letter-spacing: 8px;
+      text-align: center;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      color: #0f172a;
+      outline: none;
+      transition: border-color .15s;
+      margin-bottom: 20px;
+    }
+    input[name="otp_token"]:focus { border-color: #6366f1; }
+    input[name="otp_token"].filled { border-color: #22c55e; background: #f0fdf4; }
+
+    button[type="submit"] {
+      width: 100%;
+      padding: 12px;
+      background: #6366f1;
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    button[type="submit"]:hover { opacity: .88; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #f1f5f9;
+      margin: 24px 0 18px;
+    }
+
+    /* ── Result ── */
+    #result {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 16px;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 8px;
+      margin-top: 16px;
+    }
+    #result .check { font-size: 28px; }
+    #result .result-title { font-size: 14px; font-weight: 700; color: #15803d; }
+    #result .result-code { font-size: 12px; color: #4ade80; font-family: monospace; }
+
+    /* ── Setup note ── */
+    .setup-note {
+      margin-top: 24px;
+      padding: 14px 16px;
+      background: #fefce8;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      font-size: 12px;
+      color: #92400e;
+      line-height: 1.6;
+    }
+    .setup-note strong { font-weight: 700; }
+    .setup-note code {
+      background: #fef9c3;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div class="brand">
+    <div class="brand-dot">A</div>
+    <span class="brand-name">Acme Corp</span>
+  </div>
+
+  <h1>Two-factor authentication</h1>
+  <p class="subtitle">Enter the 6-digit code from your authenticator app.</p>
+
+  <form id="otp-form">
+    <label for="otp-input">Authentication code</label>
+    <input
+      id="otp-input"
+      name="otp_token"
+      type="text"
+      inputmode="numeric"
+      autocomplete="one-time-code"
+      maxlength="6"
+      placeholder="······"
+      autofocus
+    >
+    <button type="submit">Verify</button>
+  </form>
+
+  <div id="result">
+    <div class="check">✅</div>
+    <div class="result-title">Code verified!</div>
+    <div class="result-code" id="result-code"></div>
+  </div>
+
+  <hr class="divider">
+
+  <div class="setup-note">
+    <strong>OTPilot setup:</strong> for auto-fill to work, the active account must include
+    <code id="hostname-hint"></code> in its URL list.<br><br>
+    Quickest way: open <a href="setup.html">setup.html</a> first from the same origin
+    — OTPilot will offer to save the account with this hostname automatically.
+  </div>
+</div>
+
+<script>
+  document.getElementById('hostname-hint').textContent = location.hostname || '(serve via HTTP — file:// has no hostname)';
+
+  const form  = document.getElementById('otp-form');
+  const input = document.getElementById('otp-input');
+
+  // Highlight field once filled
+  input.addEventListener('input', () => {
+    input.classList.toggle('filled', input.value.length === 6);
+  });
+
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const code = input.value.trim();
+    if (code.length !== 6) return;
+
+    document.getElementById('result-code').textContent = `Code accepted: ${code}`;
+    document.getElementById('result').style.display = 'flex';
+    input.value = '';
+    input.classList.remove('filled');
+  });
+</script>
+
+</body>
+</html>
