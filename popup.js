@@ -237,7 +237,7 @@ function rebuildAccountsDOM() {
         <label>Secret (base32 or hex)</label>
         <div class="field-row">
           <input class="acc-secret" type="password" placeholder="Secret" value="${esc(acc.secret)}" autocomplete="off">
-          <button class="btn-eye" title="Show/hide">👁</button>
+          <button class="btn-eye" title="Show/hide">${SVG_EYE}</button>
         </div>
       </div>
       <div class="acc-field">
@@ -256,8 +256,11 @@ function rebuildAccountsDOM() {
       rebuildAccountsDOM();
     });
     card.querySelector('.btn-eye').addEventListener('click', e => {
-      const inp = e.target.previousElementSibling;
-      inp.type = inp.type === 'password' ? 'text' : 'password';
+      const btn = e.currentTarget;
+      const inp = btn.previousElementSibling;
+      const reveal = inp.type === 'password';
+      inp.type = reveal ? 'text' : 'password';
+      btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
     });
   });
 }
@@ -290,27 +293,29 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   await saveState();
 
   renderTabs();
-  renderAccountsList();
   startTimer();
+  showView('home');
   setStatus('Saved');
 });
 
 // ── View switching ────────────────────────────────────────────────────────────
 
 function showView(view) {
-  const isSettings = view === 'settings';
-  document.getElementById('home-view').style.display      = isSettings ? 'none' : '';
-  document.getElementById('settings-panel').style.display = isSettings ? '' : 'none';
-  document.getElementById('nav-home').classList.toggle('active', !isSettings);
-  document.getElementById('nav-settings').classList.toggle('active', isSettings);
-  if (isSettings) renderAccountsList();
+  document.getElementById('home-view').style.display     = view === 'home'     ? '' : 'none';
+  document.getElementById('settings-panel').style.display = view === 'accounts' ? '' : 'none';
+  document.getElementById('config-panel').style.display  = view === 'settings' ? '' : 'none';
+  document.getElementById('nav-home').classList.toggle('active',     view === 'home');
+  document.getElementById('nav-settings').classList.toggle('active', view === 'accounts');
+  document.getElementById('nav-config').classList.toggle('active',   view === 'settings');
+  if (view === 'accounts') renderAccountsList();
 }
 
-document.getElementById('nav-home').addEventListener('click', () => showView('home'));
-document.getElementById('nav-settings').addEventListener('click', () => showView('settings'));
+document.getElementById('nav-home').addEventListener('click',    () => showView('home'));
+document.getElementById('nav-settings').addEventListener('click', () => showView('accounts'));
+document.getElementById('nav-config').addEventListener('click',   () => showView('settings'));
 
 document.getElementById('btn-quick-add').addEventListener('click', () => {
-  showView('settings');
+  showView('accounts');
   document.getElementById('btn-add').click();
 });
 
