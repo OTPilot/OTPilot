@@ -135,8 +135,9 @@ otpilot/
 ├── icon48.png
 ├── icon128.png
 └── test/
-    ├── setup.html     # Test page simulating a 2FA setup flow
-    └── autofill.html  # Test page simulating a 2FA login prompt
+    ├── setup.html     # Test page simulating a 2FA setup flow (otpauth:// URI in DOM)
+    ├── autofill.html  # Test page simulating a 2FA login prompt
+    └── qr-only.html   # Test page with QR image only (no URI in DOM, tests BarcodeDetector)
 ```
 
 ---
@@ -151,23 +152,35 @@ GNU General Public License v3.0 — see [LICENSE](LICENSE) for details.
 
 ### Building the ZIP for store submission
 
-The ZIP must contain only the extension files — no `docs/`, `releases/`, `test/`, `.DS_Store`, or other metadata.
-
 ```bash
-cd /path/to/otpilot
-
-zip -r releases/otpilot-$(grep '"version"' manifest.json | awk -F'"' '{print $4}').zip \
-  manifest.json \
-  popup.html popup.js \
-  content.js totp.js \
-  icon16.png icon48.png icon128.png \
-  LICENSE
+make zip
 ```
 
-Verify the contents before uploading:
+Reads the version from `manifest.json` automatically and writes `releases/otpilot-<version>.zip`. Verify the contents before uploading:
 
 ```bash
 unzip -l releases/otpilot-*.zip
+```
+
+### Deploying the privacy policy to Vercel
+
+The privacy policy lives in `docs/privacy.html`. First-time setup:
+
+```bash
+npm i -g vercel
+cd docs && vercel
+```
+
+Follow the prompts and note the production URL — use it in the store listing's "Privacy policy URL" field. After that, deployments are:
+
+```bash
+make deploy
+```
+
+To build the ZIP and deploy in one step:
+
+```bash
+make release
 ```
 
 ### Running the test pages
@@ -175,31 +188,11 @@ unzip -l releases/otpilot-*.zip
 Serve via HTTP so hostname-based URL matching works:
 
 ```bash
-cd test
-python3 -m http.server 8080
+cd test && python3 -m http.server 8080
 ```
 
-Then open `http://localhost:8080/setup.html` to test setup detection and `http://localhost:8080/autofill.html` to test auto-fill.
-
-### Deploying the privacy policy to Vercel
-
-The privacy policy lives in `docs/privacy.html` and is deployed as a static site via Vercel.
-
-**First deploy (one-time setup):**
-
-```bash
-npm i -g vercel
-cd docs
-vercel
-```
-
-Follow the prompts: link to your Vercel account, set the project name, confirm the root directory is `docs/`. Vercel will give you a production URL — use that URL in the store listing's "Privacy policy URL" field.
-
-**Subsequent deploys:**
-
-```bash
-cd docs
-vercel --prod
-```
-
-No build step is needed; Vercel serves `privacy.html` as a static file directly.
+| Page | Tests |
+|---|---|
+| `setup.html` | Setup detection via `otpauth://` URI in DOM |
+| `autofill.html` | Auto-fill on a login page |
+| `qr-only.html` | Setup detection via QR image (`BarcodeDetector`) |
