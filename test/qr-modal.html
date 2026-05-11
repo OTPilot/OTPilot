@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>QR in Modal – OTPilot Test Page</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.08);
+      padding: 40px 36px 32px;
+      width: 100%;
+      max-width: 440px;
+      text-align: center;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 28px;
+    }
+    .brand-dot {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: #6366f1;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 700; font-size: 14px;
+    }
+    .brand-name { font-weight: 700; font-size: 15px; color: #1e293b; }
+
+    h1 { font-size: 20px; font-weight: 700; color: #0f172a; margin-bottom: 8px; }
+
+    .subtitle { font-size: 13px; color: #64748b; margin-bottom: 28px; line-height: 1.5; }
+
+    .open-btn {
+      display: inline-block;
+      padding: 11px 28px;
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 28px;
+    }
+    .open-btn:hover { background: #4f46e5; }
+
+    .note {
+      padding: 14px 16px;
+      background: #fefce8;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      font-size: 12px;
+      color: #92400e;
+      line-height: 1.6;
+      text-align: left;
+    }
+    .note strong { font-weight: 700; }
+    .note code {
+      background: #fef9c3;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+
+    /* ── Modal ── */
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.55);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 9999;
+    }
+
+    .modal {
+      background: #3d3d4e;
+      border-radius: 12px;
+      padding: 32px 28px 28px;
+      width: 100%;
+      max-width: 420px;
+      position: relative;
+      color: #f1f5f9;
+      text-align: left;
+    }
+
+    .modal-close {
+      position: absolute; top: 14px; right: 16px;
+      background: none; border: none;
+      color: #94a3b8; font-size: 18px; cursor: pointer;
+      line-height: 1;
+    }
+    .modal-close:hover { color: #f1f5f9; }
+
+    .modal-step { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+    .modal-title { font-size: 18px; font-weight: 700; margin-bottom: 20px; }
+    .modal-qr-label { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+
+    .modal-qr-wrap {
+      background: #fff;
+      display: inline-block;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 14px;
+    }
+
+    .modal-manual {
+      font-size: 12px; color: #94a3b8; margin-bottom: 8px;
+    }
+
+    .modal-secret {
+      display: flex; align-items: center; gap: 8px;
+      background: #2d2d3e;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-family: monospace;
+      font-size: 13px;
+      color: #e2e8f0;
+      letter-spacing: .04em;
+      margin-bottom: 20px;
+    }
+
+    .modal-next {
+      width: 100%;
+      padding: 11px;
+      background: #f1f5f9;
+      color: #0f172a;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .modal-next:hover { background: #e2e8f0; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div class="brand">
+    <div class="brand-dot">A</div>
+    <span class="brand-name">Acme Corp</span>
+  </div>
+
+  <h1>Two-factor authentication</h1>
+  <p class="subtitle">
+    This page simulates a site that injects a 2FA setup modal<br>
+    dynamically — the QR code is <strong>not</strong> in the DOM at load time.
+  </p>
+
+  <button class="open-btn" onclick="openModal()">Open 2FA setup</button>
+
+  <div class="note">
+    <strong>What OTPilot should do:</strong> after you click the button, a modal
+    appears with a QR code. OTPilot should detect it and show the
+    "Save to OTPilot?" suggestion overlay within ~300–500 ms.<br><br>
+    The QR image has no <code>qr</code>/<code>otp</code>/<code>mfa</code> keywords in its
+    <code>alt</code> or <code>src</code> — this tests the <em>fallback scan</em> and the
+    <em>MutationObserver</em> detection path.<br><br>
+    Secret used: <code>JBSWY3DPEHPK3PXP</code> (public test value).
+  </div>
+</div>
+
+<script>
+  function openModal() {
+    if (document.getElementById('acme-2fa-modal')) return;
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.id = 'acme-2fa-modal';
+
+    backdrop.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <button class="modal-close" aria-label="Close">×</button>
+        <div class="modal-step">Step 1 of 4</div>
+        <div class="modal-title" id="modal-title">Link an authentication app to your account</div>
+        <div class="modal-qr-label">Your QR code</div>
+        <div>
+          <div class="modal-qr-wrap">
+            <!-- alt and src have no QR-hint keywords — tests fallback scan + MutationObserver -->
+            <img
+              src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=otpauth%3A%2F%2Ftotp%2FAcme%3Ademo%40example.com%3Fsecret%3DJBSWY3DPEHPK3PXP%26issuer%3DAcme%26algorithm%3DSHA1%26digits%3D6%26period%3D30"
+              alt="security-setup"
+              width="180"
+              height="180"
+            >
+          </div>
+        </div>
+        <div class="modal-manual">If you can't scan the QR code, copy this link to your authentication app</div>
+        <div class="modal-secret">JBSWY3DPEHPK3PXP</div>
+        <button class="modal-next">Next</button>
+      </div>`;
+
+    backdrop.querySelector('.modal-close').onclick = () => backdrop.remove();
+    backdrop.querySelector('.modal-next').onclick  = () => backdrop.remove();
+    backdrop.onclick = e => { if (e.target === backdrop) backdrop.remove(); };
+
+    document.body.appendChild(backdrop);
+  }
+</script>
+</body>
+</html>

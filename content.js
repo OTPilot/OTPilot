@@ -212,29 +212,46 @@ function showLockOverlay(accountName) {
 
 const QR_HINTS = ['qr', 'totp', 'otp', 'mfa', '2fa', 'seed', 'authenticator'];
 
+async function decodeQrFromImg(detector, img) {
+  let barcodes = [];
+  try { barcodes = await detector.detect(img); } catch {}
+  if (!barcodes.length) {
+    try {
+      const res  = await fetch(img.src);
+      const blob = await res.blob();
+      const bmp  = await createImageBitmap(blob);
+      barcodes   = await detector.detect(bmp);
+    } catch {}
+  }
+  return barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://')) || null;
+}
+
 async function tryDecodeQrImages() {
   if (!('BarcodeDetector' in window)) return null;
   const detector = new BarcodeDetector({ formats: ['qr_code'] });
-  const imgs = [...document.querySelectorAll('img')].filter(img => {
+
+  // Pass 1: hint-filtered (fast path — covers images with qr/otp/mfa/etc in alt or src)
+  const hintImgs = [...document.querySelectorAll('img')].filter(img => {
     const text = ((img.alt || '') + (img.src || '')).toLowerCase();
     return QR_HINTS.some(h => text.includes(h));
   });
-  for (const img of imgs) {
-    try {
-      // Try direct detection first (works for same-origin / CORS-enabled images)
-      let barcodes = [];
-      try { barcodes = await detector.detect(img); } catch {}
-      if (!barcodes.length) {
-        // Fetch via extension (has cross-origin permissions) and decode from bitmap
-        const res  = await fetch(img.src);
-        const blob = await res.blob();
-        const bmp  = await createImageBitmap(blob);
-        barcodes   = await detector.detect(bmp);
-      }
-      const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
-      if (uri) return uri;
-    } catch {}
+  for (const img of hintImgs) {
+    const uri = await decodeQrFromImg(detector, img);
+    if (uri) return uri;
   }
+
+  // Pass 2: fallback — any visible, reasonably-sized image not already scanned
+  const fallbackImgs = [...document.querySelectorAll('img')].filter(img => {
+    if (hintImgs.includes(img)) return false;
+    if (img.naturalWidth < 80 || img.naturalHeight < 80) return false;
+    if (img.offsetParent === null && !img.closest('dialog, [role="dialog"]')) return false;
+    return true;
+  });
+  for (const img of fallbackImgs) {
+    const uri = await decodeQrFromImg(detector, img);
+    if (uri) return uri;
+  }
+
   return null;
 }
 
@@ -385,25 +402,66 @@ function showSuggestionOverlay(name, secret, locked = false) {
   }
 }
 
-(async function detectOtpSetup() {
-  const uri = await findOtpAuthUri();
-  if (!uri) return;
-  const parsed = parseOtpAuthUri(uri);
-  if (!parsed) return;
+let _detectionInFlight = false;
+let _debounceTimer     = null;
 
-  chrome.storage.local.get(['accounts', 'auth', 'sessionExpiry'], d => {
-    if (!d.auth) return; // extension not yet configured
-    const exists = (d.accounts || []).some(a => a.secret === parsed.secret);
-    if (exists) return;
-    const locked = !d.sessionExpiry || Date.now() >= d.sessionExpiry;
-    showSuggestionOverlay(parsed.name, parsed.secret, locked);
-  });
+async function runDetection() {
+  if (_detectionInFlight) return false;
+  _detectionInFlight = true;
+  try {
+    const uri    = await findOtpAuthUri();
+    if (!uri) return false;
+    const parsed = parseOtpAuthUri(uri);
+    if (!parsed) return false;
+
+    return await new Promise(resolve => {
+      chrome.storage.local.get(['accounts', 'auth', 'sessionExpiry'], d => {
+        if (!d.auth) { resolve(false); return; }
+        const exists = (d.accounts || []).some(a => a.secret === parsed.secret);
+        if (exists)  { resolve(false); return; }
+        const locked = !d.sessionExpiry || Date.now() >= d.sessionExpiry;
+        showSuggestionOverlay(parsed.name, parsed.secret, locked);
+        resolve(true);
+      });
+    });
+  } finally {
+    _detectionInFlight = false;
+  }
+}
+
+(async function startDetection() {
+  let observer;
+  const hardTimeoutId = setTimeout(() => { if (observer) observer.disconnect(); }, 30_000);
+
+  function scheduleDetection() {
+    clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(() => runDetection(), 300);
+  }
+
+  function onMutation(mutations) {
+    scheduleDetection();
+    // If a newly-added img hasn't loaded yet, re-scan once it does
+    for (const { addedNodes } of mutations) {
+      for (const node of addedNodes) {
+        if (node.nodeType !== 1) continue;
+        const imgs = node.tagName === 'IMG' ? [node] : [...node.querySelectorAll('img')];
+        for (const img of imgs) {
+          if (!img.complete || img.naturalWidth === 0) {
+            img.addEventListener('load', scheduleDetection, { once: true });
+          }
+        }
+      }
+    }
+  }
+
+  observer = new MutationObserver(onMutation);
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  await runDetection();
 })();
 
-// Auto-fill on page load if a URL pattern matches this page
+// Auto-fill when an OTP input is present (page load or injected into a modal)
 (async () => {
-  await new Promise(r => setTimeout(r, 400));
-
   const acc = await getActiveAccount();
   if (!acc || !acc.secret) return;
 
@@ -412,13 +470,32 @@ function showSuggestionOverlay(name, secret, locked = false) {
   if (!matched) return;
   if (acc.autofill === false) return;
 
-  const input = findOTPInput();
-  if (!input) return;
+  let _fillDebounce = null;
+  let _lastFilledInput = null;
 
-  if (await isSessionLocked()) {
-    showLockOverlay(acc.name);
-    return;
+  async function tryAutoFill() {
+    const input = findOTPInput();
+    if (!input || input === _lastFilledInput) return;
+    _lastFilledInput = input;
+
+    if (await isSessionLocked()) {
+      showLockOverlay(acc.name);
+      return;
+    }
+    fillAndSubmit(undefined, false);
   }
 
-  fillAndSubmit(undefined, false);
+  function scheduleFill() {
+    clearTimeout(_fillDebounce);
+    _fillDebounce = setTimeout(tryAutoFill, 300);
+  }
+
+  // Initial check (covers OTP inputs already in the DOM at page load)
+  await new Promise(r => setTimeout(r, 400));
+  await tryAutoFill();
+
+  // Watch for OTP inputs injected later (modals, SPAs)
+  const fillObserver = new MutationObserver(scheduleFill);
+  fillObserver.observe(document.body, { childList: true, subtree: true });
+  setTimeout(() => fillObserver.disconnect(), 120_000);
 })();
