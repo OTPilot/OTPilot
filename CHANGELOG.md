@@ -1,6 +1,8 @@
 # Changelog
 
-## v0.0.4
+
+## v0.0.4 (In progress)
+- **Fix: overlay re-appearing after dismiss** — Closing the "Save account?" overlay via X or "Not now" no longer causes it to reappear immediately. The dismissed secret is now remembered in memory for the duration of the page session.
 - **QR detection in modals** — OTPilot now detects 2FA setup QR codes that appear inside dynamically-injected modal dialogs (e.g. ko-fi, and other SPAs that open a setup flow after page load). A MutationObserver watches for DOM changes and re-runs detection when new content is added.
 - **Fallback QR image scan** — QR detection no longer relies on `alt`/`src` keywords (`qr`, `otp`, `mfa`, etc.). When the keyword-filtered pass finds nothing, OTPilot now scans all visible images ≥ 80 px as a fallback, catching QR codes served with generic filenames or alt text.
 - **Image load awareness** — When a newly-injected image hasn't finished loading, OTPilot waits for its `load` event before scanning, preventing missed detections due to timing.

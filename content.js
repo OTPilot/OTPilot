@@ -378,7 +378,7 @@ function showSuggestionOverlay(name, secret, locked = false) {
 
   document.body.appendChild(el);
 
-  const close      = () => el.remove();
+  const close      = () => { _dismissedSecrets.add(secret); el.remove(); };
   const primaryBtn = el.querySelector('.otpilot-primary');
 
   el.querySelector('.otpilot-overlay-close').onclick = close;
@@ -402,6 +402,8 @@ function showSuggestionOverlay(name, secret, locked = false) {
   }
 }
 
+const _dismissedSecrets = new Set();
+
 let _detectionInFlight = false;
 let _debounceTimer     = null;
 
@@ -417,6 +419,7 @@ async function runDetection() {
     return await new Promise(resolve => {
       chrome.storage.local.get(['accounts', 'auth', 'sessionExpiry'], d => {
         if (!d.auth) { resolve(false); return; }
+        if (_dismissedSecrets.has(parsed.secret)) { resolve(false); return; }
         const exists = (d.accounts || []).some(a => a.secret === parsed.secret);
         if (exists)  { resolve(false); return; }
         const locked = !d.sessionExpiry || Date.now() >= d.sessionExpiry;
