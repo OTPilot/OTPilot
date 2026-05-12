@@ -328,16 +328,16 @@ function renderAccountsList() {
   draft = accounts.map(a => ({ ...a }));
   draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   openAccIdx = -1;
-  document.getElementById('vault-search').value = '';
+  document.getElementById('acc-search').value = '';
   rebuildAccountsDOM();
 }
 
 // Flush the currently open accordion row's inputs into draft before any re-render.
 function syncOpenAccToDraft() {
   if (openAccIdx < 0) return;
-  const row = document.querySelector(`.vault-acc-row[data-i="${openAccIdx}"]`);
+  const row = document.querySelector(`.acc-row[data-i="${openAccIdx}"]`);
   if (!row) return;
-  const body = row.querySelector('.vault-acc-body');
+  const body = row.querySelector('.acc-body');
   if (!body) return;
   draft[openAccIdx].name     = body.querySelector('.acc-name').value.trim();
   draft[openAccIdx].email    = body.querySelector('.acc-email').value.trim();
@@ -347,18 +347,18 @@ function syncOpenAccToDraft() {
 }
 
 function updateVaultCount() {
-  const rows = document.querySelectorAll('.vault-acc-row');
+  const rows = document.querySelectorAll('.acc-row');
   const visible = [...rows].filter(r => r.style.display !== 'none').length;
   const total = draft.length;
-  const el = document.getElementById('vault-count');
+  const el = document.getElementById('acc-count');
   if (el) el.textContent = visible === total
     ? `${total} account${total !== 1 ? 's' : ''}`
     : `${visible} of ${total}`;
 }
 
 function applyVaultSearch() {
-  const q = (document.getElementById('vault-search')?.value || '').toLowerCase();
-  document.querySelectorAll('.vault-acc-row').forEach(row => {
+  const q = (document.getElementById('acc-search')?.value || '').toLowerCase();
+  document.querySelectorAll('.acc-row').forEach(row => {
     const i = parseInt(row.dataset.i, 10);
     const acc = draft[i];
     const match = !q
@@ -378,27 +378,27 @@ function rebuildAccountsDOM() {
     const color  = accentColor(acc.name || '');
 
     const row = document.createElement('div');
-    row.className = 'vault-acc-row';
+    row.className = 'acc-row';
     row.dataset.i = i;
 
     // ── Collapsed header ──
     const head = document.createElement('button');
-    head.className = 'vault-acc-head' + (isOpen ? ' open' : '');
+    head.className = 'acc-head' + (isOpen ? ' open' : '');
     head.innerHTML = `
       <span class="acc-av acc-av-md" style="background:${color}">${esc(nameInitials(acc.name))}</span>
-      <span class="vault-acc-head-text">
-        <span class="vault-acc-head-name">${esc(acc.name) || `Account ${i + 1}`}</span>
-        ${acc.email ? `<span class="vault-acc-head-email">${esc(acc.email)}</span>` : ''}
+      <span class="acc-head-text">
+        <span class="acc-head-name">${esc(acc.name) || `Account ${i + 1}`}</span>
+        ${acc.email ? `<span class="acc-head-email">${esc(acc.email)}</span>` : ''}
       </span>
-      <span class="vault-acc-chevron">
+      <span class="acc-chevron">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
       </span>`;
 
     // ── Expanded body ──
     const body = document.createElement('div');
-    body.className = 'vault-acc-body' + (isOpen ? ' open' : '');
+    body.className = 'acc-body' + (isOpen ? ' open' : '');
     body.innerHTML = `
-      <div class="vault-acc-body-head">
+      <div class="acc-body-head">
         <button class="btn-del" title="Delete account">✕ Delete</button>
       </div>
       <div class="acc-field">
@@ -464,15 +464,14 @@ function esc(s = '') {
 document.getElementById('btn-add').addEventListener('click', () => {
   syncOpenAccToDraft();
   draft.push({ name: '', email: '', secret: '', urls: '', autofill: true });
-  draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  openAccIdx = draft.findIndex(a => a.name === '' && !a.secret);
+  openAccIdx = draft.length - 1;
   rebuildAccountsDOM();
-  document.getElementById('accounts-list').firstElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  document.getElementById('accounts-list').lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
 
-document.getElementById('vault-search').addEventListener('input', applyVaultSearch);
+document.getElementById('acc-search').addEventListener('input', applyVaultSearch);
 
-document.getElementById('btn-cancel-vault').addEventListener('click', () => {
+document.getElementById('btn-cancel').addEventListener('click', () => {
   openAccIdx = -1;
   showView('home');
 });
@@ -482,6 +481,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
 
+  draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   accounts = draft;
   activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
   await saveState();
