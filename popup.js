@@ -226,7 +226,10 @@ function rebuildAccountsDOM() {
     card.className = 'acc-card';
     card.innerHTML = `
       <div class="acc-card-header">
-        <span class="acc-card-title">Account ${i + 1}</span>
+        <div class="acc-card-title">
+          <span class="acc-card-name">${esc(acc.name) || `Account ${i + 1}`}</span>
+          ${acc.email ? `<span class="acc-card-email">${esc(acc.email)}</span>` : ''}
+        </div>
         <button class="btn-del" data-i="${i}" title="Delete">✕</button>
       </div>
       <div class="acc-field">
