@@ -12,12 +12,6 @@ A Chrome extension that makes 2FA invisible — both when logging in and when se
 
 ---
 
-<p align="center">
-  <img src="docs/screenshot-popup.png" width="260" alt="Popup showing a live TOTP code">
-</p>
-
----
-
 ## Features
 
 - **Automatic setup detection** — visit any site's 2FA setup page and a floating prompt appears: "Save [Service] to OTPilot?" — one click and the account is saved, no manual secret entry required. Detects `otpauth://` URIs in the DOM and decodes QR code images via the browser's native `BarcodeDetector` API
@@ -69,9 +63,6 @@ If OTPilot is locked when a setup page is detected, the prompt also includes a p
 
 ### Adding an account manually
 
-<p align="center">
-  <img src="docs/screenshot-settings.png" width="260" alt="Settings panel with an account configured">
-</p>
 
 1. Click the OTPilot icon in the toolbar
 2. Expand **Settings**
@@ -100,9 +91,6 @@ You can also trigger a fill manually by clicking **Fill Page** in the popup.
 
 ## Backup & Restore
 
-<p align="center">
-  <img src="docs/screenshot-export.png" width="260" alt="Export password form">
-</p>
 
 ### Export
 1. Open Settings → click **↑ Export**
@@ -204,3 +192,6 @@ cd test && python3 -m http.server 8080
 | `setup.html` | Setup detection via `otpauth://` URI in DOM |
 | `autofill.html` | Auto-fill on a login page |
 | `qr-only.html` | Setup detection via QR image (`BarcodeDetector`) |
+| `qr-modal.html` | Setup detection when the QR code is injected inside a modal after page load |
+| `acme1-setup.html` | Setup detection for a multi-account site — Acme, alice@acme.test |
+| `acme2-setup.html` | Setup detection for a multi-account site — Acme, bob@acme.test (use alongside acme1 to test the same-domain picker) |
