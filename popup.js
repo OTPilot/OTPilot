@@ -366,11 +366,11 @@ async function decryptData(key, ivB64, dataB64) {
   return new TextDecoder().decode(plain);
 }
 
-async function runExport(password) {
-  if (!accounts.length) throw new Error('No accounts to export');
+async function runExport(password, exportAccounts) {
+  if (!exportAccounts.length) throw new Error('No accounts to export');
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key  = await deriveKey(password, salt);
-  const { iv, data } = await encryptData(key, JSON.stringify(accounts));
+  const { iv, data } = await encryptData(key, JSON.stringify(exportAccounts));
   const blob = new Blob(
     [JSON.stringify({ v: 1, salt: b64enc(salt), iv, data })],
     { type: 'application/json' }
@@ -382,29 +382,123 @@ async function runExport(password) {
   URL.revokeObjectURL(a.href);
 }
 
-async function runImport(file, password) {
+async function decryptBackup(file, password) {
   const { v, salt, iv, data } = JSON.parse(await file.text());
   if (v !== 1) throw new Error('Unknown backup format');
-  const key      = await deriveKey(password, b64dec(salt));
-  const plain    = await decryptData(key, iv, data);
+  const key   = await deriveKey(password, b64dec(salt));
+  const plain = await decryptData(key, iv, data);
   const imported = JSON.parse(plain);
   if (!Array.isArray(imported)) throw new Error('Invalid backup data');
+  return imported;
+}
 
-  accounts    = imported;
-  activeIndex = 0;
+const normSecret = s => (s || '').replace(/\s+/g, '').toUpperCase();
+
+async function applyImport(selectedAccounts) {
+  const existingSecrets = new Set(accounts.map(a => normSecret(a.secret)));
+  const toAdd = selectedAccounts.filter(a => !existingSecrets.has(normSecret(a.secret)));
+  accounts = [...accounts, ...toAdd];
   await saveState();
   renderTabs();
   renderAccountsList();
   startTimer();
+  return { added: toAdd.length, skipped: selectedAccounts.length - toAdd.length };
 }
+
+// ── Export picker ─────────────────────────────────────────────────────────────
+
+function showExportPicker() {
+  const list = document.getElementById('export-picker-list');
+  list.innerHTML = '';
+  accounts.forEach((acc, i) => {
+    const label = document.createElement('label');
+    label.className = 'export-acc-row';
+    label.innerHTML = `<input type="checkbox" checked data-idx="${i}">
+      <span class="export-acc-name">${acc.name}</span>
+      ${acc.email ? `<span class="export-acc-email">${acc.email}</span>` : ''}`;
+    list.appendChild(label);
+  });
+  document.getElementById('export-select-all').checked = true;
+  document.getElementById('export-picker').style.display = '';
+}
+
+function hideExportPicker() {
+  document.getElementById('export-picker').style.display = 'none';
+}
+
+document.getElementById('export-select-all').addEventListener('change', e => {
+  document.querySelectorAll('#export-picker-list input[type=checkbox]')
+    .forEach(cb => { cb.checked = e.target.checked; });
+});
+
+document.getElementById('export-picker-confirm').addEventListener('click', () => {
+  const selected = [...document.querySelectorAll('#export-picker-list input:checked')]
+    .map(cb => accounts[+cb.dataset.idx]);
+  if (selected.length === 0) { setStatus('Select at least one account', false); return; }
+  hideExportPicker();
+  showCryptoForm('export', selected);
+});
+
+document.getElementById('export-picker-cancel').addEventListener('click', hideExportPicker);
+
+// ── Import picker ─────────────────────────────────────────────────────────────
+
+let pendingImportAccounts = null;
+
+function showImportPicker(importedAccounts) {
+  pendingImportAccounts = importedAccounts;
+  const existingSecrets = new Set(accounts.map(a => normSecret(a.secret)));
+  const list = document.getElementById('import-picker-list');
+  list.innerHTML = '';
+  importedAccounts.forEach((acc, i) => {
+    const exists = existingSecrets.has(normSecret(acc.secret));
+    const label = document.createElement('label');
+    label.className = 'export-acc-row' + (exists ? ' disabled' : '');
+    label.innerHTML = `<input type="checkbox" ${exists ? 'disabled' : 'checked'} data-idx="${i}">
+      <span class="export-acc-name">${acc.name}</span>
+      ${acc.email ? `<span class="export-acc-email">${acc.email}</span>` : ''}
+      ${exists ? '<span class="export-acc-exists">already in vault</span>' : ''}`;
+    list.appendChild(label);
+  });
+  const hasNew = importedAccounts.some(a => !existingSecrets.has(normSecret(a.secret)));
+  document.getElementById('import-select-all').checked = hasNew;
+  document.getElementById('import-picker').style.display = '';
+}
+
+function hideImportPicker() {
+  document.getElementById('import-picker').style.display = 'none';
+  pendingImportAccounts = null;
+}
+
+document.getElementById('import-select-all').addEventListener('change', e => {
+  document.querySelectorAll('#import-picker-list input[type=checkbox]:not(:disabled)')
+    .forEach(cb => { cb.checked = e.target.checked; });
+});
+
+document.getElementById('import-picker-confirm').addEventListener('click', async () => {
+  const selected = [...document.querySelectorAll('#import-picker-list input:checked')]
+    .map(cb => pendingImportAccounts[+cb.dataset.idx]);
+  if (selected.length === 0) { setStatus('Select at least one account', false); return; }
+  const { added, skipped } = await applyImport(selected);
+  hideImportPicker();
+  setStatus(added === 0
+    ? `No new accounts (${skipped} already present)`
+    : skipped > 0
+      ? `Imported ${added} new account(s), ${skipped} already present`
+      : `Imported ${added} account(s)`);
+});
+
+document.getElementById('import-picker-cancel').addEventListener('click', hideImportPicker);
 
 // ── Crypto form (shared for export & import) ──────────────────────────────────
 
-let cryptoMode  = null; // 'export' | 'import'
-let pendingFile = null;
+let cryptoMode          = null; // 'export' | 'import'
+let pendingFile         = null;
+let pendingExportAccounts = null;
 
-function showCryptoForm(mode) {
-  cryptoMode = mode;
+function showCryptoForm(mode, selectedAccounts = null) {
+  cryptoMode            = mode;
+  pendingExportAccounts = selectedAccounts;
   const form  = document.getElementById('crypto-form');
   const label = document.getElementById('crypto-label');
   const input = document.getElementById('crypto-password');
@@ -419,12 +513,13 @@ function showCryptoForm(mode) {
 function hideCryptoForm() {
   document.getElementById('crypto-form').style.display = 'none';
   document.getElementById('crypto-password').value = '';
-  cryptoMode  = null;
-  pendingFile = null;
+  cryptoMode            = null;
+  pendingFile           = null;
+  pendingExportAccounts = null;
 }
 
 document.getElementById('btn-export').addEventListener('click', () => {
-  showCryptoForm('export');
+  showExportPicker();
 });
 
 document.getElementById('btn-import').addEventListener('click', () => {
@@ -445,13 +540,14 @@ document.getElementById('crypto-confirm').addEventListener('click', async () => 
 
   try {
     if (cryptoMode === 'export') {
-      await runExport(password);
+      const exportCount = pendingExportAccounts?.length ?? accounts.length;
+      await runExport(password, pendingExportAccounts);
       hideCryptoForm();
-      setStatus('Backup exported');
+      setStatus(`Exported ${exportCount} account(s)`);
     } else {
-      await runImport(pendingFile, password);
+      const imported = await decryptBackup(pendingFile, password);
       hideCryptoForm();
-      setStatus(`Imported ${accounts.length} account(s)`);
+      showImportPicker(imported);
     }
   } catch {
     setStatus(cryptoMode === 'import' ? 'Wrong password or invalid file' : 'Export failed', false);

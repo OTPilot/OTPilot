@@ -288,6 +288,36 @@
     }
     .btn-crypto-cancel:hover { color: #94a3b8; border-color: #475569; }
 
+    /* ── Export picker ── */
+    #export-picker, #import-picker {
+      margin-top: 8px; padding: 8px;
+      background: #0f172a; border: 1px solid #1e3a5f; border-radius: 6px;
+    }
+    #export-picker-list, #import-picker-list { max-height: 140px; overflow-y: auto; overflow-x: hidden; margin-bottom: 6px; }
+    .export-acc-row {
+      display: flex; align-items: center; gap: 7px;
+      padding: 4px 2px; cursor: pointer; border-radius: 4px;
+      overflow: hidden;
+    }
+    .export-acc-row:hover { background: #1e293b; }
+    .export-acc-row input { accent-color: #0ea5e9; flex-shrink: 0; }
+    .export-acc-name { font-size: 11px; font-weight: 600; color: #94a3b8; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .export-acc-email { font-size: 10px; color: #475569; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
+    .export-select-all {
+      display: flex; align-items: center; gap: 7px;
+      padding: 6px 2px 3px; cursor: pointer;
+      font-size: 10px; color: #475569;
+      border-top: 1px solid #1e3a5f; margin-top: 2px;
+    }
+    .export-select-all input { accent-color: #0ea5e9; }
+    .export-acc-exists {
+      font-size: 9px; color: #475569; background: #1e293b;
+      border: 1px solid #334155; border-radius: 3px; padding: 1px 5px;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    .export-acc-row.disabled { opacity: .45; cursor: default; }
+    .export-acc-row.disabled input { cursor: default; }
+
     /* ── Lock overlay ── */
     #lock-overlay {
       position: fixed; inset: 0; z-index: 999;
@@ -471,6 +501,30 @@
     <div class="backup-row">
       <button class="btn-backup" id="btn-export">↑ Export</button>
       <button class="btn-backup" id="btn-import">↓ Import</button>
+    </div>
+
+    <div id="export-picker" style="display:none">
+      <div id="export-picker-list"></div>
+      <label class="export-select-all">
+        <input type="checkbox" id="export-select-all" checked>
+        <span>Select all</span>
+      </label>
+      <div class="field-row" style="margin-top:8px">
+        <button class="btn-crypto-ok" id="export-picker-confirm">Export selected</button>
+        <button class="btn-crypto-cancel" id="export-picker-cancel">✕</button>
+      </div>
+    </div>
+
+    <div id="import-picker" style="display:none">
+      <div id="import-picker-list"></div>
+      <label class="export-select-all">
+        <input type="checkbox" id="import-select-all" checked>
+        <span>Select all</span>
+      </label>
+      <div class="field-row" style="margin-top:8px">
+        <button class="btn-crypto-ok" id="import-picker-confirm">Import selected</button>
+        <button class="btn-crypto-cancel" id="import-picker-cancel">✕</button>
+      </div>
     </div>
 
     <div id="crypto-form" style="display:none">

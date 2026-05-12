@@ -2,6 +2,9 @@
 
 ## v0.0.5 (Unreleased — in development)
 
+- **Selective export** — clicking Export now shows a picker with all vault accounts (all selected by default). Uncheck any you don't want included before entering the backup password.
+- **Selective import with merge** — after decrypting a backup, a picker lists every account in the file. Accounts already in the vault are shown dimmed with an "already in vault" badge and cannot be selected; new accounts are pre-checked. Only the checked accounts are added, so existing vault entries are never overwritten or removed.
+
 ## v0.0.4
 - **Email per account** — each account now stores an optional email address, editable in the account settings form. When a QR code is detected on a setup page with a label like `Acme:alice@acme.test`, the email is extracted and pre-filled automatically.
 - **Email shown in multi-account picker** — the same-domain picker overlay now shows the email as secondary text under each account name, making it easy to tell apart accounts like `alice@acme.test` vs `bob@acme.test`.
