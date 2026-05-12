@@ -310,8 +310,10 @@ function parseOtpAuthUri(uri) {
     const secret = params.get('secret');
     if (!secret) return null;
     const label = decodeURIComponent(url.pathname.slice(1));
-    const issuer = params.get('issuer') || label.split(':')[0];
-    return { name: issuer || label, secret };
+    const colonIdx = label.indexOf(':');
+    const issuer = params.get('issuer') || (colonIdx !== -1 ? label.slice(0, colonIdx) : label);
+    const email = colonIdx !== -1 ? label.slice(colonIdx + 1) : '';
+    return { name: issuer || label, secret, email };
   } catch { return null; }
 }
 
@@ -395,7 +397,7 @@ function wirePwField(el, primaryBtn, primaryLabel, onSuccess) {
   setTimeout(() => pwInput.focus(), 100);
 }
 
-function showSuggestionOverlay(name, secret, locked = false) {
+function showSuggestionOverlay(name, secret, email = '', locked = false) {
   if (document.getElementById('otpilot-suggestion')) return;
 
   const el = makeOverlay('otpilot-suggestion');
@@ -424,7 +426,7 @@ function showSuggestionOverlay(name, secret, locked = false) {
   function addAccount() {
     chrome.storage.local.get('accounts', d => {
       const accs = d.accounts || [];
-      accs.push({ name, secret, urls: location.hostname, autofill: true });
+      accs.push({ name, secret, urls: location.hostname, autofill: true, email });
       chrome.storage.local.set({ accounts: accs, activeIndex: accs.length - 1 }, () => {
         close();
         showToast(`${name} added to OTPilot`);
@@ -446,12 +448,18 @@ function showAccountPickerOverlay(matchingAccounts) {
   const close = () => el.remove();
 
   const rows = matchingAccounts.map(acc => {
-    const safeName = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const safeName  = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const safeEmail = (acc.email || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const emailHtml = safeEmail
+      ? `<span style="display:block;color:#64748b;font-size:10px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeEmail}</span>`
+      : '';
     return `
       <div class="otpilot-picker-row" style="display:flex;align-items:center;gap:8px;
            padding:8px 14px;border-bottom:1px solid #1e3a5f;">
-        <span style="flex:1;color:#e2e8f0;font-size:12px;font-weight:500;
-                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${safeName}</span>
+        <div style="flex:1;min-width:0;">
+          <span style="display:block;color:#e2e8f0;font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeName}</span>
+          ${emailHtml}
+        </div>
         <button class="otpilot-fill-btn" style="padding:5px 10px;background:#0ea5e9;border:none;
                 border-radius:5px;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">Fill</button>
         <button class="otpilot-copy-btn" style="padding:5px 10px;background:transparent;border:1px solid #334155;
@@ -504,7 +512,7 @@ async function runDetection() {
         const exists = (d.accounts || []).some(a => a.secret === parsed.secret);
         if (exists)  { resolve(false); return; }
         const locked = !d.sessionExpiry || Date.now() >= d.sessionExpiry;
-        showSuggestionOverlay(parsed.name, parsed.secret, locked);
+        showSuggestionOverlay(parsed.name, parsed.secret, parsed.email || '', locked);
         resolve(true);
       });
     });

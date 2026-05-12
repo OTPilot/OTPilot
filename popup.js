@@ -234,6 +234,10 @@ function rebuildAccountsDOM() {
         <input class="acc-name" type="text" placeholder="e.g. My Project QA" value="${esc(acc.name)}">
       </div>
       <div class="acc-field">
+        <label>Email (optional)</label>
+        <input class="acc-email" type="email" placeholder="e.g. user@example.com" value="${esc(acc.email || '')}">
+      </div>
+      <div class="acc-field">
         <label>Secret (base32 or hex)</label>
         <div class="field-row">
           <input class="acc-secret" type="password" placeholder="Secret" value="${esc(acc.secret)}" autocomplete="off">
@@ -281,6 +285,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   // read current DOM values into draft
   document.querySelectorAll('.acc-card').forEach((card, i) => {
     draft[i].name     = card.querySelector('.acc-name').value.trim();
+    draft[i].email    = card.querySelector('.acc-email').value.trim();
     draft[i].secret   = card.querySelector('.acc-secret').value.trim();
     draft[i].urls     = card.querySelector('.acc-urls').value.trim();
     draft[i].autofill = card.querySelector('.acc-autofill').checked;
