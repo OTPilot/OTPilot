@@ -2,6 +2,7 @@
 
 ## v0.0.5 (Unreleased — in development)
 
+- **Scalable account switcher** — replaced the horizontal scrolling tab bar with a chip + overflow pattern. The first three accounts appear as compact chips (colored avatar circle + name); a `+N` button reveals the rest. The overflow panel includes a live search that filters all accounts by name or email, making navigation fast regardless of vault size.
 - **Sticky footer** — the bottom nav and ko-fi footer are always anchored to the bottom of the popup; a minimum height prevents the popup from collapsing below the home view's natural size.
 - **Selective export** — clicking Export now shows a picker with all vault accounts (all selected by default). Uncheck any you don't want included before entering the backup password.
 - **Selective import with merge** — after decrypting a backup, a picker lists every account in the file. Accounts already in the vault are shown dimmed with an "already in vault" badge and cannot be selected; new accounts are pre-checked. Only the checked accounts are added, so existing vault entries are never overwritten or removed.

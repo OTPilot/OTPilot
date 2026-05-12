@@ -70,24 +70,135 @@ function setStatus(msg, ok = true) {
   statusTimer = setTimeout(() => { el.textContent = ''; el.className = ''; }, 2500);
 }
 
-// ── Tabs ─────────────────────────────────────────────────────────────────────
+// ── Account bar ──────────────────────────────────────────────────────────────
 
-function renderTabs() {
-  const bar = document.getElementById('tabs-bar');
+const AVATAR_COLORS = [
+  '#6366f1','#8b5cf6','#ec4899','#f59e0b',
+  '#10b981','#3b82f6','#ef4444','#14b8a6',
+  '#f97316','#84cc16','#06b6d4','#a78bfa',
+];
+
+function accentColor(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h);
+  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+}
+
+function nameInitials(name) {
+  return (name || '').split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?';
+}
+
+const CHIP_COUNT = 3;
+let overflowOpen = false;
+
+function closeOverflow() {
+  overflowOpen = false;
+  document.getElementById('account-overflow-panel').style.display = 'none';
+  document.getElementById('account-overflow-btn')?.classList.remove('active');
+}
+
+function renderAccountBar() {
+  closeOverflow();
+  const bar = document.getElementById('account-bar');
   bar.innerHTML = '';
-  accounts.forEach((acc, i) => {
-    const btn = document.createElement('button');
-    btn.className = 'tab' + (i === activeIndex ? ' active' : '');
-    btn.textContent = acc.name || 'Unnamed';
-    btn.addEventListener('click', () => {
+
+  accounts.slice(0, CHIP_COUNT).forEach((acc, i) => {
+    const chip = document.createElement('button');
+    chip.className = 'acc-chip' + (i === activeIndex ? ' active' : '');
+
+    const av = document.createElement('span');
+    av.className = 'acc-av';
+    av.style.background = accentColor(acc.name || '');
+    av.textContent = nameInitials(acc.name);
+
+    const lbl = document.createElement('span');
+    lbl.className = 'acc-chip-name';
+    lbl.textContent = (acc.name || 'Unnamed').split(/\s+/)[0];
+
+    chip.append(av, lbl);
+    chip.addEventListener('click', () => {
       activeIndex = i;
       saveState();
-      renderTabs();
+      renderAccountBar();
       startTimer();
     });
+    bar.appendChild(chip);
+  });
+
+  if (accounts.length > CHIP_COUNT) {
+    const hasActiveInOverflow = activeIndex >= CHIP_COUNT;
+    const btn = document.createElement('button');
+    btn.id = 'account-overflow-btn';
+    btn.className = 'acc-overflow-btn' + (hasActiveInOverflow ? ' has-active' : '');
+    btn.textContent = '+' + (accounts.length - CHIP_COUNT);
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      overflowOpen = !overflowOpen;
+      document.getElementById('account-overflow-panel').style.display = overflowOpen ? '' : 'none';
+      btn.classList.toggle('active', overflowOpen);
+      if (overflowOpen) {
+        const search = document.getElementById('account-search');
+        search.value = '';
+        renderOverflowList('');
+        search.focus();
+      }
+    });
     bar.appendChild(btn);
+  }
+}
+
+function renderOverflowList(filter) {
+  const list = document.getElementById('account-overflow-list');
+  list.innerHTML = '';
+  const q = filter.toLowerCase();
+  accounts.forEach((acc, i) => {
+    const name = acc.name || 'Unnamed';
+    const email = acc.email || '';
+    if (q && !name.toLowerCase().includes(q) && !email.toLowerCase().includes(q)) return;
+
+    const item = document.createElement('button');
+    item.className = 'acc-overflow-item' + (i === activeIndex ? ' active' : '');
+
+    const av = document.createElement('span');
+    av.className = 'acc-av acc-av-md';
+    av.style.background = accentColor(name);
+    av.textContent = nameInitials(name);
+
+    const text = document.createElement('span');
+    text.className = 'acc-overflow-text';
+    text.innerHTML = `<span class="acc-overflow-name">${esc(name)}</span>` +
+      (email ? `<span class="acc-overflow-email">${esc(email)}</span>` : '');
+
+    item.append(av, text);
+
+    if (i === activeIndex) {
+      const check = document.createElement('span');
+      check.className = 'acc-overflow-check';
+      check.textContent = '✓';
+      item.appendChild(check);
+    }
+
+    item.addEventListener('click', () => {
+      activeIndex = i;
+      saveState();
+      closeOverflow();
+      renderAccountBar();
+      startTimer();
+    });
+    list.appendChild(item);
   });
 }
+
+document.getElementById('account-search').addEventListener('input', e => {
+  renderOverflowList(e.target.value);
+});
+
+document.addEventListener('click', e => {
+  if (!overflowOpen) return;
+  const bar   = document.getElementById('account-bar');
+  const panel = document.getElementById('account-overflow-panel');
+  if (!bar.contains(e.target) && !panel.contains(e.target)) closeOverflow();
+});
 
 // ── OTP display loop ──────────────────────────────────────────────────────────
 
@@ -300,7 +411,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
   await saveState();
 
-  renderTabs();
+  renderAccountBar();
   startTimer();
   showView('home');
   setStatus('Saved');
@@ -309,6 +420,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 // ── View switching ────────────────────────────────────────────────────────────
 
 function showView(view) {
+  if (view !== 'home') closeOverflow();
   document.getElementById('home-view').style.display     = view === 'home'     ? '' : 'none';
   document.getElementById('settings-panel').style.display = view === 'accounts' ? '' : 'none';
   document.getElementById('config-panel').style.display  = view === 'settings' ? '' : 'none';
@@ -399,7 +511,7 @@ async function applyImport(selectedAccounts) {
   const toAdd = selectedAccounts.filter(a => !existingSecrets.has(normSecret(a.secret)));
   accounts = [...accounts, ...toAdd];
   await saveState();
-  renderTabs();
+  renderAccountBar();
   renderAccountsList();
   startTimer();
   return { added: toAdd.length, skipped: selectedAccounts.length - toAdd.length };
@@ -754,7 +866,7 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
     lockLoginResolve = async () => {
       await loadState();
       await syncActiveIndexToUrl();
-      renderTabs();
+      renderAccountBar();
       startTimer();
       showView('home');
       tryAutoFillCurrentTab();
@@ -778,7 +890,7 @@ document.getElementById('kofi-link').addEventListener('click', e => {
   const justAuthenticated = await initLock();
   await loadState();
   await syncActiveIndexToUrl();
-  renderTabs();
+  renderAccountBar();
   startTimer();
   if (justAuthenticated) tryAutoFillCurrentTab();
 })();

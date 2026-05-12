@@ -28,31 +28,133 @@
     }
     .header h1 { font-size: 15px; font-weight: 700; color: #f1f5f9; }
 
-    /* ── Tabs ── */
-    #tabs-bar {
+    /* ── Account bar ── */
+    #account-bar {
       display: flex;
-      padding: 10px 12px 0;
-      gap: 6px;
-      overflow-x: auto;
-      scrollbar-width: none;
+      align-items: center;
+      gap: 4px;
+      padding: 7px 10px;
     }
-    #tabs-bar::-webkit-scrollbar { display: none; }
 
-    .tab {
+    .acc-av {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      font-weight: 700;
+      color: #fff;
       flex-shrink: 0;
-      padding: 5px 12px;
+      width: 18px; height: 18px; font-size: 8px;
+    }
+    .acc-av.acc-av-md { width: 22px; height: 22px; font-size: 9px; }
+
+    .acc-chip {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px 3px 4px;
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 84px;
       background: transparent;
       border: 1px solid #1e3a5f;
       border-radius: 20px;
       color: #64748b;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
       cursor: pointer;
-      transition: all .15s;
-      white-space: nowrap;
+      font-family: inherit;
+      transition: border-color .15s, color .15s, background .15s;
     }
-    .tab:hover { color: #94a3b8; border-color: #334155; }
-    .tab.active { background: #1e3a5f; color: #38bdf8; border-color: #38bdf8; }
+    .acc-chip:hover { color: #94a3b8; border-color: #334155; }
+    .acc-chip.active { border-color: #38bdf8; background: rgba(56,189,248,0.08); color: #38bdf8; }
+    .acc-chip-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .acc-overflow-btn {
+      flex-shrink: 0;
+      margin-left: auto;
+      padding: 4px 8px;
+      background: transparent;
+      border: 1px solid #1e3a5f;
+      border-radius: 20px;
+      color: #475569;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: border-color .15s, color .15s;
+      position: relative;
+    }
+    .acc-overflow-btn:hover { border-color: #334155; color: #94a3b8; }
+    .acc-overflow-btn.active { border-color: #38bdf8; color: #38bdf8; }
+    .acc-overflow-btn.has-active::after {
+      content: '';
+      position: absolute;
+      top: -3px; right: -3px;
+      width: 7px; height: 7px;
+      background: #38bdf8;
+      border-radius: 50%;
+      border: 1.5px solid #0f172a;
+    }
+
+    .acc-overflow-panel {
+      border-bottom: 1px solid #1e3a5f;
+      background: #1e293b;
+    }
+    .acc-overflow-search {
+      padding: 7px 10px;
+      border-bottom: 1px solid #1e3a5f;
+    }
+    .acc-overflow-search input {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid #1e3a5f;
+      border-radius: 4px;
+      padding: 5px 8px;
+      color: #e2e8f0;
+      font-size: 11px;
+      font-family: inherit;
+      outline: none;
+    }
+    .acc-overflow-search input:focus { border-color: #38bdf8; }
+    .acc-overflow-search input::placeholder { color: #475569; }
+
+    .acc-overflow-list {
+      max-height: 150px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #1e3a5f transparent;
+    }
+    .acc-overflow-list::-webkit-scrollbar { width: 3px; }
+    .acc-overflow-list::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 2px; }
+
+    .acc-overflow-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 10px;
+      width: 100%;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      text-align: left;
+      transition: background .1s;
+    }
+    .acc-overflow-item:hover { background: rgba(56,189,248,0.06); }
+    .acc-overflow-item.active { background: rgba(56,189,248,0.1); }
+    .acc-overflow-text { flex: 1; min-width: 0; }
+    .acc-overflow-name {
+      display: block;
+      font-size: 11px; font-weight: 600; color: #e2e8f0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .acc-overflow-email {
+      display: block;
+      font-size: 10px; color: #475569;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .acc-overflow-check { color: #38bdf8; font-size: 10px; flex-shrink: 0; }
 
     /* ── OTP display ── */
     .code-section {
@@ -468,7 +570,13 @@
 
 <!-- Home view -->
 <div id="home-view">
-  <div id="tabs-bar"></div>
+  <div id="account-bar"></div>
+  <div id="account-overflow-panel" class="acc-overflow-panel" style="display:none">
+    <div class="acc-overflow-search">
+      <input type="text" id="account-search" placeholder="Search accounts…" autocomplete="off">
+    </div>
+    <div id="account-overflow-list" class="acc-overflow-list"></div>
+  </div>
 
   <div class="code-section">
     <div class="code-header">
