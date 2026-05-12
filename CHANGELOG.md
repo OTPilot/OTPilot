@@ -1,7 +1,8 @@
 # Changelog
 
+## v0.0.5 (Unreleased — in development)
 
-## v0.0.4 (Unreleased — in development)
+## v0.0.4
 - **Email per account** — each account now stores an optional email address, editable in the account settings form. When a QR code is detected on a setup page with a label like `Acme:alice@acme.test`, the email is extracted and pre-filled automatically.
 - **Email shown in multi-account picker** — the same-domain picker overlay now shows the email as secondary text under each account name, making it easy to tell apart accounts like `alice@acme.test` vs `bob@acme.test`.
 - **Vault nav rename + account card identity** — the "Accounts" nav tab is now labelled "Vault". Account cards in the Vault view now show the account name and email (when set) as the card title instead of the generic "Account N" label.
