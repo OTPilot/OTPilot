@@ -322,10 +322,51 @@ document.getElementById('btn-fill').addEventListener('click', async () => {
 
 // draft holds unsaved edits while settings panel is open
 let draft = [];
+let openAccIdx = -1;
 
 function renderAccountsList() {
-  draft = accounts.map(a => ({ ...a })); // clone
+  draft = accounts.map(a => ({ ...a }));
+  draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  openAccIdx = -1;
+  document.getElementById('vault-search').value = '';
   rebuildAccountsDOM();
+}
+
+// Flush the currently open accordion row's inputs into draft before any re-render.
+function syncOpenAccToDraft() {
+  if (openAccIdx < 0) return;
+  const row = document.querySelector(`.vault-acc-row[data-i="${openAccIdx}"]`);
+  if (!row) return;
+  const body = row.querySelector('.vault-acc-body');
+  if (!body) return;
+  draft[openAccIdx].name     = body.querySelector('.acc-name').value.trim();
+  draft[openAccIdx].email    = body.querySelector('.acc-email').value.trim();
+  draft[openAccIdx].secret   = body.querySelector('.acc-secret').value.trim();
+  draft[openAccIdx].urls     = body.querySelector('.acc-urls').value.trim();
+  draft[openAccIdx].autofill = body.querySelector('.acc-autofill').checked;
+}
+
+function updateVaultCount() {
+  const rows = document.querySelectorAll('.vault-acc-row');
+  const visible = [...rows].filter(r => r.style.display !== 'none').length;
+  const total = draft.length;
+  const el = document.getElementById('vault-count');
+  if (el) el.textContent = visible === total
+    ? `${total} account${total !== 1 ? 's' : ''}`
+    : `${visible} of ${total}`;
+}
+
+function applyVaultSearch() {
+  const q = (document.getElementById('vault-search')?.value || '').toLowerCase();
+  document.querySelectorAll('.vault-acc-row').forEach(row => {
+    const i = parseInt(row.dataset.i, 10);
+    const acc = draft[i];
+    const match = !q
+      || (acc.name  || '').toLowerCase().includes(q)
+      || (acc.email || '').toLowerCase().includes(q);
+    row.style.display = match ? '' : 'none';
+  });
+  updateVaultCount();
 }
 
 function rebuildAccountsDOM() {
@@ -333,15 +374,32 @@ function rebuildAccountsDOM() {
   container.innerHTML = '';
 
   draft.forEach((acc, i) => {
-    const card = document.createElement('div');
-    card.className = 'acc-card';
-    card.innerHTML = `
-      <div class="acc-card-header">
-        <div class="acc-card-title">
-          <span class="acc-card-name">${esc(acc.name) || `Account ${i + 1}`}</span>
-          ${acc.email ? `<span class="acc-card-email">${esc(acc.email)}</span>` : ''}
-        </div>
-        <button class="btn-del" data-i="${i}" title="Delete">✕</button>
+    const isOpen = i === openAccIdx;
+    const color  = accentColor(acc.name || '');
+
+    const row = document.createElement('div');
+    row.className = 'vault-acc-row';
+    row.dataset.i = i;
+
+    // ── Collapsed header ──
+    const head = document.createElement('button');
+    head.className = 'vault-acc-head' + (isOpen ? ' open' : '');
+    head.innerHTML = `
+      <span class="acc-av acc-av-md" style="background:${color}">${esc(nameInitials(acc.name))}</span>
+      <span class="vault-acc-head-text">
+        <span class="vault-acc-head-name">${esc(acc.name) || `Account ${i + 1}`}</span>
+        ${acc.email ? `<span class="vault-acc-head-email">${esc(acc.email)}</span>` : ''}
+      </span>
+      <span class="vault-acc-chevron">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </span>`;
+
+    // ── Expanded body ──
+    const body = document.createElement('div');
+    body.className = 'vault-acc-body' + (isOpen ? ' open' : '');
+    body.innerHTML = `
+      <div class="vault-acc-body-head">
+        <button class="btn-del" title="Delete account">✕ Delete</button>
       </div>
       <div class="acc-field">
         <label>Name</label>
@@ -367,20 +425,36 @@ function rebuildAccountsDOM() {
         <span class="toggle-track"></span>
         <span class="toggle-label">Auto-fill on matching pages</span>
       </label>`;
-    container.appendChild(card);
 
-    card.querySelector('.btn-del').addEventListener('click', () => {
-      draft.splice(i, 1);
+    head.addEventListener('click', () => {
+      syncOpenAccToDraft();
+      openAccIdx = isOpen ? -1 : i;
       rebuildAccountsDOM();
+      applyVaultSearch();
     });
-    card.querySelector('.btn-eye').addEventListener('click', e => {
+
+    body.querySelector('.btn-del').addEventListener('click', () => {
+      syncOpenAccToDraft();
+      draft.splice(i, 1);
+      openAccIdx = -1;
+      rebuildAccountsDOM();
+      applyVaultSearch();
+    });
+
+    body.querySelector('.btn-eye').addEventListener('click', e => {
       const btn = e.currentTarget;
       const inp = btn.previousElementSibling;
       const reveal = inp.type === 'password';
       inp.type = reveal ? 'text' : 'password';
       btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
     });
+
+    row.appendChild(head);
+    row.appendChild(body);
+    container.appendChild(row);
   });
+
+  updateVaultCount();
 }
 
 function esc(s = '') {
@@ -388,22 +462,18 @@ function esc(s = '') {
 }
 
 document.getElementById('btn-add').addEventListener('click', () => {
-  draft.push({ name: '', secret: '', urls: '' });
+  syncOpenAccToDraft();
+  draft.push({ name: '', email: '', secret: '', urls: '', autofill: true });
+  draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  openAccIdx = draft.findIndex(a => a.name === '' && !a.secret);
   rebuildAccountsDOM();
-  // scroll to the new card
-  const container = document.getElementById('accounts-list');
-  container.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  document.getElementById('accounts-list').firstElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
 
+document.getElementById('vault-search').addEventListener('input', applyVaultSearch);
+
 document.getElementById('btn-save-all').addEventListener('click', async () => {
-  // read current DOM values into draft
-  document.querySelectorAll('.acc-card').forEach((card, i) => {
-    draft[i].name     = card.querySelector('.acc-name').value.trim();
-    draft[i].email    = card.querySelector('.acc-email').value.trim();
-    draft[i].secret   = card.querySelector('.acc-secret').value.trim();
-    draft[i].urls     = card.querySelector('.acc-urls').value.trim();
-    draft[i].autofill = card.querySelector('.acc-autofill').checked;
-  });
+  syncOpenAccToDraft();
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
 
@@ -411,6 +481,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
   await saveState();
 
+  openAccIdx = -1;
   renderAccountBar();
   startTimer();
   showView('home');

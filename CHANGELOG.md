@@ -2,6 +2,7 @@
 
 ## v0.0.5 (Unreleased — in development)
 
+- **Vault list redesign** — the Vault tab now renders accounts as a compact accordion list sorted alphabetically. Each row shows only the colored avatar, name, and email; clicking a row expands it to reveal the full edit form while collapsing any previously open row. A search bar at the top filters by name or email in real time, with a live account counter that updates as you type.
 - **Scalable account switcher** — replaced the horizontal scrolling tab bar with a chip + overflow pattern. The first three accounts appear as compact chips (colored avatar circle + name); a `+N` button reveals the rest. The overflow panel includes a live search that filters all accounts by name or email, making navigation fast regardless of vault size.
 - **Sticky footer** — the bottom nav and ko-fi footer are always anchored to the bottom of the popup; a minimum height prevents the popup from collapsing below the home view's natural size.
 - **Selective export** — clicking Export now shows a picker with all vault accounts (all selected by default). Uncheck any you don't want included before entering the backup password.

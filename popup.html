@@ -262,34 +262,82 @@
     #home-view, #settings-panel, #config-panel { flex: 1; }
     .settings-body { padding: 6px 14px 14px; }
 
-    /* account card */
-    .acc-card {
+    /* ── Vault search + toolbar ── */
+    .vault-search {
+      padding: 7px 10px;
+      border-bottom: 1px solid #1e3a5f;
       background: #1e293b;
-      border: 1px solid #1e3a5f;
-      border-radius: 8px;
-      padding: 10px 12px 8px;
-      margin-bottom: 8px;
     }
-    .acc-card-header {
-      display: flex; align-items: flex-start;
-      justify-content: space-between; margin-bottom: 8px;
+    .vault-search-wrap { position: relative; }
+    .vault-search-icon {
+      position: absolute; left: 8px; top: 50%;
+      transform: translateY(-50%);
+      color: #334155; pointer-events: none; display: flex;
     }
-    .acc-card-title {
-      display: flex; flex-direction: column; gap: 1px;
+    .vault-search input {
+      width: 100%; background: #0f172a; border: 1px solid #1e3a5f;
+      border-radius: 4px; padding: 5px 8px 5px 28px;
+      color: #e2e8f0; font-size: 11px; font-family: inherit; outline: none;
+      transition: border-color .15s;
     }
-    .acc-card-name {
-      font-size: 11px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: .6px; color: #64748b;
+    .vault-search input:focus { border-color: #38bdf8; }
+    .vault-search input::placeholder { color: #475569; }
+
+    .vault-toolbar {
+      display: flex; align-items: center;
+      padding: 4px 10px; border-bottom: 1px solid #1e3a5f;
     }
-    .acc-card-email {
-      font-size: 10px; font-weight: 400; color: #475569;
-      text-transform: none; letter-spacing: 0;
+    .vault-count { font-size: 10px; color: #334155; }
+
+    /* ── Vault accordion ── */
+    .vault-acc-row { border-bottom: 1px solid #1e3a5f; }
+    .vault-acc-row:last-child { border-bottom: none; }
+
+    .vault-acc-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; width: 100%;
+      background: transparent; border: none; border-left: 2px solid transparent;
+      cursor: pointer; font-family: inherit; text-align: left;
+      transition: background .1s, border-color .15s;
     }
+    .vault-acc-head:hover { background: rgba(56,189,248,0.04); }
+    .vault-acc-head.open {
+      background: rgba(56,189,248,0.08); border-left-color: #38bdf8;
+    }
+    .vault-acc-head-text { flex: 1; min-width: 0; }
+    .vault-acc-head-name {
+      display: block; font-size: 11px; font-weight: 600; color: #e2e8f0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .vault-acc-head-email {
+      display: block; font-size: 10px; color: #475569;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .vault-acc-chevron {
+      color: #334155; transition: transform .2s, color .15s;
+      flex-shrink: 0; display: flex; align-items: center;
+    }
+    .vault-acc-head.open .vault-acc-chevron { transform: rotate(180deg); color: #38bdf8; }
+
+    .vault-acc-body {
+      display: none; padding: 8px 12px 10px;
+      background: #0c1525; border-top: 1px solid #1e3a5f;
+      border-left: 2px solid #38bdf8;
+    }
+    .vault-acc-body.open { display: block; }
+    .vault-acc-body-head {
+      display: flex; align-items: center;
+      justify-content: flex-end; margin-bottom: 8px;
+    }
+
+    .settings-footer { padding: 8px 14px 10px; border-top: 1px solid #1e3a5f; }
+
     .btn-del {
-      background: none; border: none; color: #475569;
-      font-size: 14px; cursor: pointer; padding: 0 2px; line-height: 1;
+      background: none; border: 1px solid #334155; border-radius: 4px;
+      color: #475569; font-size: 11px; cursor: pointer; padding: 2px 7px; line-height: 1.5;
+      font-family: inherit; transition: all .15s;
     }
-    .btn-del:hover { color: #f87171; }
+    .btn-del:hover { color: #f87171; border-color: #f87171; background: rgba(248,113,113,0.08); }
 
     .acc-field { margin-bottom: 7px; }
     .acc-field label {
@@ -600,8 +648,19 @@
 
 <!-- Accounts view -->
 <div id="settings-panel" style="display:none">
-  <div class="settings-body">
-    <div id="accounts-list"></div>
+  <div class="vault-search">
+    <div class="vault-search-wrap">
+      <span class="vault-search-icon">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </span>
+      <input id="vault-search" type="text" placeholder="Search accounts…" autocomplete="off">
+    </div>
+  </div>
+  <div class="vault-toolbar">
+    <span class="vault-count" id="vault-count"></span>
+  </div>
+  <div id="accounts-list"></div>
+  <div class="settings-footer">
     <button class="btn-add" id="btn-add">+ Add account</button>
     <button class="btn-save-all" id="btn-save-all">Save</button>
   </div>
