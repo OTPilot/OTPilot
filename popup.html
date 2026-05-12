@@ -331,6 +331,15 @@
     }
 
     .settings-footer { padding: 8px 14px 10px; border-top: 1px solid #1e3a5f; }
+    .settings-footer-actions { display: flex; gap: 6px; margin-top: 6px; }
+    .btn-cancel-vault {
+      flex: 1; padding: 8px;
+      background: transparent; border: 1px solid #334155;
+      border-radius: 6px; color: #475569;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      font-family: inherit; transition: all .15s;
+    }
+    .btn-cancel-vault:hover { border-color: #475569; color: #94a3b8; }
 
     .btn-del {
       background: none; border: 1px solid #334155; border-radius: 4px;
@@ -373,7 +382,7 @@
     .btn-add:hover { border-color: #38bdf8; color: #38bdf8; }
 
     .btn-save-all {
-      width: 100%; padding: 8px;
+      flex: 1; padding: 8px;
       background: #1e3a5f; border: 1px solid #38bdf8;
       border-radius: 6px; color: #38bdf8;
       font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
@@ -662,7 +671,10 @@
   <div id="accounts-list"></div>
   <div class="settings-footer">
     <button class="btn-add" id="btn-add">+ Add account</button>
-    <button class="btn-save-all" id="btn-save-all">Save</button>
+    <div class="settings-footer-actions">
+      <button class="btn-cancel-vault" id="btn-cancel-vault">Cancel</button>
+      <button class="btn-save-all" id="btn-save-all">Save</button>
+    </div>
   </div>
 </div>
 

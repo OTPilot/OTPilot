@@ -472,6 +472,11 @@ document.getElementById('btn-add').addEventListener('click', () => {
 
 document.getElementById('vault-search').addEventListener('input', applyVaultSearch);
 
+document.getElementById('btn-cancel-vault').addEventListener('click', () => {
+  openAccIdx = -1;
+  showView('home');
+});
+
 document.getElementById('btn-save-all').addEventListener('click', async () => {
   syncOpenAccToDraft();
 
