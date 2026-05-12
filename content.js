@@ -28,6 +28,13 @@ function findAccount(accounts, hostname) {
   return null;
 }
 
+function findAllMatchingAccounts(accounts, hostname) {
+  return accounts.filter(acc => {
+    const patterns = (acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
+    return patterns.some(p => matchesPattern(p, hostname));
+  });
+}
+
 function getActiveAccount(overrideIndex) {
   return new Promise(r =>
     chrome.storage.local.get(['accounts', 'activeIndex'], d => {
@@ -139,6 +146,35 @@ async function fillAndSubmit(accountIndexHint, fromPopup = false) {
   return result;
 }
 
+async function fillOTPWithAccount(acc) {
+  if (!acc.secret) return { ok: false, msg: `No secret set for "${acc.name}"` };
+  const input = findOTPInput();
+  if (!input) return { ok: false, msg: 'No OTP field found on this page' };
+  let code;
+  try { code = await generateTOTP(acc.secret); }
+  catch (e) { return { ok: false, msg: 'Invalid secret: ' + e.message }; }
+  input.focus();
+  input.value = code;
+  input.dispatchEvent(new Event('input',  { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  return { ok: true, code, input };
+}
+
+async function fillAndSubmitWithAccount(acc) {
+  const result = await fillOTPWithAccount(acc);
+  if (result.ok) {
+    showToast('OTP filled: ' + result.code);
+    const form = result.input.closest('form');
+    if (form) {
+      setTimeout(() => {
+        const submitBtn = form.querySelector('[type="submit"]');
+        if (submitBtn) submitBtn.click(); else form.submit();
+      }, 600);
+    }
+  }
+  return result;
+}
+
 // Message from popup "Fill Page" button
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.action === 'fill') {
@@ -170,7 +206,7 @@ async function verifyInContent(password, auth) {
   } catch { return false; }
 }
 
-function showLockOverlay(accountName) {
+function showLockOverlay(accountName, onUnlock) {
   if (document.getElementById('otpilot-lock')) return;
 
   const el = document.createElement('div');
@@ -205,7 +241,8 @@ function showLockOverlay(accountName) {
   el.querySelector('.otpilot-overlay-close').onclick = close;
   el.querySelector('.otpilot-secondary').onclick     = close;
 
-  wirePwField(el, primaryBtn, 'Unlock', () => { close(); fillAndSubmit(undefined, false); });
+  const defaultOnUnlock = () => { close(); fillAndSubmit(undefined, false); };
+  wirePwField(el, primaryBtn, 'Unlock', onUnlock || defaultOnUnlock);
 }
 
 // ── Detect 2FA setup pages ───────────────────────────────────────────────────
@@ -402,6 +439,50 @@ function showSuggestionOverlay(name, secret, locked = false) {
   }
 }
 
+function showAccountPickerOverlay(matchingAccounts) {
+  if (document.getElementById('otpilot-picker')) return;
+
+  const el = makeOverlay('otpilot-picker');
+  const close = () => el.remove();
+
+  const rows = matchingAccounts.map(acc => {
+    const safeName = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `
+      <div class="otpilot-picker-row" style="display:flex;align-items:center;gap:8px;
+           padding:8px 14px;border-bottom:1px solid #1e3a5f;">
+        <span style="flex:1;color:#e2e8f0;font-size:12px;font-weight:500;
+                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${safeName}</span>
+        <button class="otpilot-fill-btn" style="padding:5px 10px;background:#0ea5e9;border:none;
+                border-radius:5px;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">Fill</button>
+        <button class="otpilot-copy-btn" style="padding:5px 10px;background:transparent;border:1px solid #334155;
+                border-radius:5px;color:#94a3b8;font-size:11px;cursor:pointer;">Copy</button>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `${OVERLAY_HEADER}
+    <div style="padding:8px 14px 4px;color:#94a3b8;font-size:11px;">Multiple accounts for this site</div>
+    ${rows}`;
+
+  document.body.appendChild(el);
+  el.querySelector('.otpilot-overlay-close').onclick = close;
+
+  el.querySelectorAll('.otpilot-picker-row').forEach((row, i) => {
+    const acc = matchingAccounts[i];
+    row.querySelector('.otpilot-fill-btn').onclick = async () => {
+      close();
+      const result = await fillAndSubmitWithAccount(acc);
+      if (!result.ok) showToast(result.msg, false);
+    };
+    row.querySelector('.otpilot-copy-btn').onclick = async () => {
+      try {
+        const code = await generateTOTP(acc.secret);
+        await navigator.clipboard.writeText(code);
+        showToast(`Copied: ${code}`);
+      } catch { showToast('Clipboard unavailable', false); }
+    };
+  });
+}
+
 const _dismissedSecrets = new Set();
 
 let _detectionInFlight = false;
@@ -465,40 +546,69 @@ async function runDetection() {
 
 // Auto-fill when an OTP input is present (page load or injected into a modal)
 (async () => {
-  const acc = await getActiveAccount();
-  if (!acc || !acc.secret) return;
+  const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
+  const hostname = location.hostname.toLowerCase();
+  const matching = findAllMatchingAccounts(accounts, hostname).filter(a => a.autofill !== false);
 
-  const patterns = (acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
-  const matched = patterns.some(p => matchesPattern(p, location.hostname.toLowerCase()));
-  if (!matched) return;
-  if (acc.autofill === false) return;
+  if (matching.length === 0) return;
 
-  let _fillDebounce = null;
-  let _lastFilledInput = null;
+  // ── Single account: existing auto-fill behavior ──────────────────────────
+  if (matching.length === 1) {
+    const acc = matching[0];
+    let _fillDebounce = null;
+    let _lastFilledInput = null;
 
-  async function tryAutoFill() {
+    async function tryAutoFill() {
+      const input = findOTPInput();
+      if (!input || input === _lastFilledInput) return;
+      _lastFilledInput = input;
+      if (await isSessionLocked()) { showLockOverlay(acc.name); return; }
+      fillAndSubmit(undefined, false);
+    }
+
+    function scheduleFill() {
+      clearTimeout(_fillDebounce);
+      _fillDebounce = setTimeout(tryAutoFill, 300);
+    }
+
+    await new Promise(r => setTimeout(r, 400));
+    await tryAutoFill();
+
+    const fillObserver = new MutationObserver(scheduleFill);
+    fillObserver.observe(document.body, { childList: true, subtree: true });
+    setTimeout(() => fillObserver.disconnect(), 120_000);
+    return;
+  }
+
+  // ── Multiple accounts: show picker when OTP input appears ────────────────
+  let _pickerDebounce = null;
+  let _pickerShown    = false;
+
+  async function tryShowPicker() {
+    if (_pickerShown) return;
     const input = findOTPInput();
-    if (!input || input === _lastFilledInput) return;
-    _lastFilledInput = input;
+    if (!input) return;
+    _pickerShown = true;
 
     if (await isSessionLocked()) {
-      showLockOverlay(acc.name);
+      showLockOverlay('OTPilot', () => {
+        document.getElementById('otpilot-lock')?.remove();
+        showAccountPickerOverlay(matching);
+      });
       return;
     }
-    fillAndSubmit(undefined, false);
+    showAccountPickerOverlay(matching);
   }
 
-  function scheduleFill() {
-    clearTimeout(_fillDebounce);
-    _fillDebounce = setTimeout(tryAutoFill, 300);
+  function schedulePicker() {
+    clearTimeout(_pickerDebounce);
+    _pickerDebounce = setTimeout(tryShowPicker, 300);
   }
 
-  // Initial check (covers OTP inputs already in the DOM at page load)
   await new Promise(r => setTimeout(r, 400));
-  await tryAutoFill();
+  await tryShowPicker();
 
-  // Watch for OTP inputs injected later (modals, SPAs)
-  const fillObserver = new MutationObserver(scheduleFill);
-  fillObserver.observe(document.body, { childList: true, subtree: true });
-  setTimeout(() => fillObserver.disconnect(), 120_000);
+  const pickerObserver = new MutationObserver(schedulePicker);
+  pickerObserver.observe(document.body, { childList: true, subtree: true });
+  setTimeout(() => pickerObserver.disconnect(), 120_000);
 })();
