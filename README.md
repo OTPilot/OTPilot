@@ -4,6 +4,12 @@ A Chrome extension that makes 2FA invisible — both when logging in and when se
 
 > **Version:** 0.0.3 · Manifest V3 · No dependencies · No bundler
 
+<p align="center">
+  <a href="https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk">
+    <img src="https://img.shields.io/badge/Chrome_Web_Store-Install-4285F4?logo=googlechrome&logoColor=white" alt="Install on Chrome">
+  </a>
+</p>
+
 ---
 
 <p align="center">
@@ -28,7 +34,9 @@ A Chrome extension that makes 2FA invisible — both when logging in and when se
 
 ## Installation
 
-OTPilot is not on the Chrome Web Store yet. Load it manually:
+Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk).
+
+**Or load manually (developer mode):**
 
 1. Download or clone this repository
 2. Open Chrome and go to `chrome://extensions`
