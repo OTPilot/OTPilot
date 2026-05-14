@@ -130,10 +130,22 @@ otpilot/
 ├── icon16.png
 ├── icon48.png
 ├── icon128.png
+├── playwright.config.js  # Playwright E2E configuration
+├── tests/
+│   ├── fixtures.js      # Extension context fixture (loads extension, resolves ID)
+│   ├── popup.spec.js    # Popup UI tests
+│   ├── setup.spec.js    # Content script setup-detection tests
+│   └── autofill.spec.js # Autofill flow tests
+├── .github/
+│   └── workflows/
+│       └── e2e.yml      # CI pipeline (runs on every PR)
 └── test/
-    ├── setup.html     # Test page simulating a 2FA setup flow (otpauth:// URI in DOM)
-    ├── autofill.html  # Test page simulating a 2FA login prompt
-    └── qr-only.html   # Test page with QR image only (no URI in DOM, tests BarcodeDetector)
+    ├── setup.html       # Test page simulating a 2FA setup flow (otpauth:// URI in DOM)
+    ├── autofill.html    # Test page simulating a 2FA login prompt
+    ├── qr-only.html     # QR image only (no URI in DOM, tests BarcodeDetector)
+    ├── qr-modal.html    # QR code injected inside a modal after page load
+    ├── acme1-setup.html # Multi-account setup — Acme, alice@acme.test
+    └── acme2-setup.html # Multi-account setup — Acme, bob@acme.test
 ```
 
 ---
@@ -145,6 +157,31 @@ GNU General Public License v3.0 — see [LICENSE](LICENSE) for details.
 ---
 
 ## Developer notes
+
+### Running automated E2E tests
+
+The extension ships with a Playwright test suite that covers the popup UI, the content script setup-detection overlay, and the autofill flow.
+
+**Prerequisites:** Node.js 18+
+
+```bash
+npm install
+npx playwright install chromium  # first time only
+```
+
+**Run the tests:**
+
+```bash
+npm test                # headless (well, headed — Chrome extensions require it)
+npm run test:ui         # Playwright interactive UI
+npm run test:report     # open the last HTML report
+```
+
+Tests spin up a local HTTP server automatically (port 8080) so the content script can run on `http://localhost:8080/test/*.html`.
+
+The CI pipeline runs the full suite on every pull request — see `.github/workflows/e2e.yml`.
+
+---
 
 ### Building the ZIP for store submission
 
