@@ -1,6 +1,14 @@
+node_modules
+dist
+build
+coverage
+*.log
+
 .DS_Store
 docs/.vercel
 releases
 screenshots
 extra_files
 design
+test-results/
+playwright-report/
