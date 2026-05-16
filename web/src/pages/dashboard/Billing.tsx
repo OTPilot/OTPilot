@@ -40,7 +40,13 @@ export default function Billing() {
   }
 
   const plan = userData?.plan ?? 'free'
-  const isPaid = plan !== 'free'
+  const isPaid = plan === 'personal' || plan === 'team_lite' || plan === 'team_pro'
+  const PLAN_LABELS: Record<string, string> = {
+    free: 'Free',
+    personal: 'Personal',
+    team_lite: 'Team Lite',
+    team_pro: 'Team Pro',
+  }
 
   return (
     <div className="space-y-6">
@@ -64,9 +70,9 @@ export default function Billing() {
 
         <div className="flex items-center gap-3">
           <span className={`text-2xl font-bold ${isPaid ? 'text-teal-400' : 'text-zinc-100'}`}>
-            {isPaid ? 'Personal' : 'Free'}
+            {PLAN_LABELS[plan] ?? plan}
           </span>
-          {isPaid && (
+          {plan === 'personal' && (
             <span className="text-xs font-semibold bg-teal-500/15 text-teal-400 border border-teal-500/25 px-2 py-0.5 rounded-full">
               Lifetime
             </span>

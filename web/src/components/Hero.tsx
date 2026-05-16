@@ -1,6 +1,7 @@
+import type { ReactElement } from 'react'
 import { detectBrowser, browserMeta, CHROME_STORE_URL, type Browser } from '../lib/browser'
 
-const BROWSER_ICONS: Record<Browser, JSX.Element> = {
+const BROWSER_ICONS: Record<Browser, ReactElement> = {
   chrome: (
     <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
       <circle cx="12" cy="12" r="10" fill="#EA4335"/>

@@ -7,6 +7,12 @@ let currentCode = '';
 let timerInterval = null;
 let obfuscated = true;
 
+// ── Plan helpers ─────────────────────────────────────────────────────────────
+
+function canSync(plan) {
+  return plan === 'personal' || plan === 'team_lite' || plan === 'team_pro';
+}
+
 // ── URL matching ─────────────────────────────────────────────────────────────
 
 function matchesPattern(pattern, hostname) {
@@ -50,7 +56,7 @@ function loadState() {
       activeIndex = Math.min(d.activeIndex ?? 0, Math.max(accounts.length - 1, 0));
       obfuscated = d.obfuscated ?? true;
       applyObfuscateBtn();
-      if (d.userPlan && d.userPlan !== 'free') {
+      if (d.userPlan && canSync(d.userPlan)) {
         document.querySelector('.kofi-footer').style.display = 'none';
       }
       r();
@@ -1024,12 +1030,12 @@ async function renderSyncPanel() {
     const stored = await new Promise(r => chrome.storage.local.get('userPlan', r));
     plan = stored.userPlan;
   }
-  if (plan && plan !== 'free') document.querySelector('.kofi-footer').style.display = 'none';
+  if (plan && canSync(plan)) document.querySelector('.kofi-footer').style.display = 'none';
 
   const email = session.user.email ?? '';
   const labels = { free: 'Free', personal: 'Personal', team_lite: 'Team', team_pro: 'Team Pro' };
 
-  if (!plan || plan === 'free') {
+  if (!plan || !canSync(plan)) {
     document.getElementById('sync-avatar-free').textContent = (email[0] ?? '?').toUpperCase();
     document.getElementById('sync-email-free').textContent = email;
     document.getElementById('sync-plan-badge-free').textContent = labels[plan] ?? 'Free';

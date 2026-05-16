@@ -24,7 +24,10 @@ export default function DashboardLayout() {
     )
   }
 
-  if (!user) return <Navigate to="/" replace />
+  if (!user) {
+    sessionStorage.setItem('auth_next', window.location.pathname + window.location.search)
+    return <Navigate to="/auth/login" replace />
+  }
 
   async function handleSignOut() {
     queryClient.clear()

@@ -8,7 +8,7 @@ export default function Navbar() {
   const [scrolled, setScrolled] = useState(false)
   const { user } = useAuth()
   const browser = detectBrowser()
-  const { label, href } = browserMeta[browser]
+  const { name: browserLabel, available, href } = browserMeta[browser]
 
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 20)
@@ -58,14 +58,23 @@ export default function Navbar() {
               >
                 Sign in
               </button>
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm font-medium px-4 py-2 rounded-lg bg-gradient-to-r from-teal-500 to-emerald-500 text-black hover:from-teal-400 hover:to-emerald-400 transition-all"
-              >
-                {label}
-              </a>
+              {available && href ? (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm font-medium px-4 py-2 rounded-lg bg-gradient-to-r from-teal-500 to-emerald-500 text-black hover:from-teal-400 hover:to-emerald-400 transition-all"
+                >
+                  Add to {browserLabel}
+                </a>
+              ) : (
+                <a
+                  href="/dashboard/billing"
+                  className="text-sm font-medium px-4 py-2 rounded-lg bg-gradient-to-r from-teal-500 to-emerald-500 text-black hover:from-teal-400 hover:to-emerald-400 transition-all"
+                >
+                  Get started
+                </a>
+              )}
             </>
           )}
         </div>

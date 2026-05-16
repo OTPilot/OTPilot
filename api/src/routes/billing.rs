@@ -41,7 +41,7 @@ async fn create_checkout(
     .await?
     .ok_or(ApiError::Unauthorized)?;
 
-    if user.plan != "free" {
+    if matches!(user.plan.as_str(), "personal" | "team_lite" | "team_pro") {
         return Err(ApiError::BadRequest("Already on a paid plan".into()));
     }
 

@@ -126,7 +126,7 @@ async fn require_cloud_plan(state: &AppState, user_id: uuid::Uuid) -> Result<()>
     .await?
     .ok_or(ApiError::Unauthorized)?;
 
-    if user.plan == "free" {
+    if !matches!(user.plan.as_str(), "personal" | "team_lite" | "team_pro") {
         return Err(ApiError::Forbidden);
     }
     Ok(())

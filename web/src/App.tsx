@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import Landing from './pages/Landing'
 import Callback from './pages/auth/Callback'
+import Login from './pages/auth/Login'
 import DashboardLayout from './pages/dashboard/Layout'
 import Overview from './pages/dashboard/Overview'
 import Billing from './pages/dashboard/Billing'
@@ -17,6 +18,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/auth/callback" element={<Callback />} />
+        <Route path="/auth/login" element={<Login />} />
 
         <Route path="/dashboard" element={<DashboardLayout />}>
           <Route index element={<Overview />} />

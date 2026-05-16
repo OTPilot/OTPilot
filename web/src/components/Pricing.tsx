@@ -3,7 +3,7 @@ import { detectBrowser, browserMeta } from '../lib/browser'
 
 export default function Pricing() {
   const [yearly, setYearly] = useState(false)
-  const { label: browserLabel, href: browserHref } = browserMeta[detectBrowser()]
+  const { name: browserLabel, available: browserAvailable, href: browserHref } = browserMeta[detectBrowser()]
 
   const plans = [
     {
@@ -11,8 +11,8 @@ export default function Pricing() {
       price: '$0',
       priceNote: 'forever',
       description: 'Everything you need for personal use, locally.',
-      cta: browserLabel,
-      ctaHref: browserHref,
+      cta: browserAvailable ? `Add to ${browserLabel}` : 'Add to Chrome',
+      ctaHref: browserAvailable ? browserHref! : 'https://chromewebstore.google.com/detail/otpilot',
       ctaExternal: true,
       highlight: false,
       features: [
@@ -32,7 +32,7 @@ export default function Pricing() {
       annualEquiv: 'No future charges for you',
       description: 'Sync your accounts across every browser and device.',
       cta: 'Lock in Early Adopter access',
-      ctaHref: '#',
+      ctaHref: '/dashboard/billing',
       ctaExternal: false,
       highlight: true,
       badge: 'Early Adopter',
@@ -49,9 +49,10 @@ export default function Pricing() {
       priceNote: yearly ? 'per workspace / year' : 'per workspace / month',
       annualEquiv: yearly ? 'Save 2 months vs monthly' : undefined,
       description: 'Shared 2FA for small teams and startups.',
-      cta: 'Start team plan',
-      ctaHref: '#',
+      cta: 'Coming soon',
+      ctaHref: null,
       ctaExternal: false,
+      ctaDisabled: true,
       highlight: false,
       features: [
         'Everything in Personal',
@@ -157,18 +158,24 @@ export default function Pricing() {
                 ))}
               </ul>
 
-              <a
-                href={plan.ctaHref}
-                target={plan.ctaExternal ? '_blank' : undefined}
-                rel={plan.ctaExternal ? 'noopener noreferrer' : undefined}
-                className={`w-full py-2.5 rounded-xl text-sm font-semibold text-center transition-all ${
-                  plan.highlight
-                    ? 'bg-gradient-to-r from-teal-500 to-emerald-500 text-black hover:from-teal-400 hover:to-emerald-400'
-                    : 'bg-white/8 text-white hover:bg-white/12 border border-white/10'
-                }`}
-              >
-                {plan.cta}
-              </a>
+              {'ctaDisabled' in plan && plan.ctaDisabled ? (
+                <span className="w-full py-2.5 rounded-xl text-sm font-semibold text-center bg-white/4 text-zinc-600 border border-white/5 cursor-not-allowed block">
+                  {plan.cta}
+                </span>
+              ) : (
+                <a
+                  href={plan.ctaHref!}
+                  target={plan.ctaExternal ? '_blank' : undefined}
+                  rel={plan.ctaExternal ? 'noopener noreferrer' : undefined}
+                  className={`w-full py-2.5 rounded-xl text-sm font-semibold text-center transition-all block ${
+                    plan.highlight
+                      ? 'bg-gradient-to-r from-teal-500 to-emerald-500 text-black hover:from-teal-400 hover:to-emerald-400'
+                      : 'bg-white/8 text-white hover:bg-white/12 border border-white/10'
+                  }`}
+                >
+                  {plan.cta}
+                </a>
+              )}
             </div>
           ))}
         </div>

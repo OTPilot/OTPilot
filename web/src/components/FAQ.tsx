@@ -15,7 +15,7 @@ const faqs = [
   },
   {
     q: 'What happens if I cancel my Team plan?',
-    a: 'Your extension reverts to local-only mode. All locally stored accounts remain intact. Shared codes that teammates accessed via your team become inaccessible to them, but their own local accounts are unaffected.',
+    a: 'Your extension reverts to local-only mode. Cloud sync stops immediately — the Personal Cloud plan and the Team plan are independent, so cancelling Team does not grant Personal sync. All locally stored accounts remain intact. Shared codes that teammates accessed via your team become inaccessible to them, but their own local accounts are unaffected.',
   },
   {
     q: 'Is OTPilot open source?',

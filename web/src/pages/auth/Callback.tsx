@@ -9,15 +9,20 @@ export default function Callback() {
   const navigate = useNavigate()
 
   useEffect(() => {
+    function redirectAfterLogin() {
+      const next = sessionStorage.getItem('auth_next')
+      sessionStorage.removeItem('auth_next')
+      navigate(next || '/dashboard', { replace: true })
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        navigate('/dashboard', { replace: true })
+        redirectAfterLogin()
       } else {
-        // Wait for onAuthStateChange to fire with the new session
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
           if (s) {
             subscription.unsubscribe()
-            navigate('/dashboard', { replace: true })
+            redirectAfterLogin()
           }
         })
       }
