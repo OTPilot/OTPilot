@@ -1,0 +1,113 @@
+'use strict';
+
+// Minimal Supabase Auth client for OTPilot extension.
+// Google OAuth only — uses chrome.identity.launchWebAuthFlow.
+// Session persisted in chrome.storage.local under 'cloudSession'.
+
+const SupabaseAuth = (() => {
+  const URL_BASE  = 'https://qulptwblkmcvsjrjnugl.supabase.co';
+  const ANON_KEY  = 'sb_publishable_EMOVzQrKXM6NTe7Kv-YyyQ_mssE9pE5';
+  const STORE_KEY = 'cloudSession';
+
+  // ── Storage ────────────────────────────────────────────────────────────────
+
+  function loadSession() {
+    return new Promise(r =>
+      chrome.storage.local.get([STORE_KEY], d => r(d[STORE_KEY] ?? null))
+    );
+  }
+  function saveSession(s) {
+    return new Promise(r => chrome.storage.local.set({ [STORE_KEY]: s }, r));
+  }
+  function clearSession() {
+    return new Promise(r => chrome.storage.local.remove([STORE_KEY], r));
+  }
+
+  // ── Token refresh ──────────────────────────────────────────────────────────
+
+  async function refreshToken(refreshToken) {
+    const res = await fetch(`${URL_BASE}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: ANON_KEY },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!res.ok) return null;
+    const d = await res.json();
+    const s = {
+      access_token:  d.access_token,
+      refresh_token: d.refresh_token,
+      expires_at:    Date.now() + d.expires_in * 1000,
+      user: { id: d.user.id, email: d.user.email },
+    };
+    await saveSession(s);
+    return s;
+  }
+
+  // ── Public API ─────────────────────────────────────────────────────────────
+
+  async function getSession() {
+    return loadSession();
+  }
+
+  async function getAccessToken() {
+    const s = await loadSession();
+    if (!s) return null;
+    if (Date.now() > s.expires_at - 60000) {
+      const refreshed = await refreshToken(s.refresh_token);
+      return refreshed?.access_token ?? null;
+    }
+    return s.access_token;
+  }
+
+  async function signInWithGoogle() {
+    const redirectUrl = chrome.identity.getRedirectURL();
+    const authUrl = `${URL_BASE}/auth/v1/authorize`
+      + `?provider=google`
+      + `&redirect_to=${encodeURIComponent(redirectUrl)}`
+      + `&apikey=${ANON_KEY}`
+      + `&flow_type=implicit`;
+
+    return new Promise((resolve, reject) => {
+      chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true }, async responseUrl => {
+        if (chrome.runtime.lastError || !responseUrl) {
+          reject(new Error(chrome.runtime.lastError?.message ?? 'Cancelled'));
+          return;
+        }
+        try {
+          const params       = new URLSearchParams(new URL(responseUrl).hash.slice(1));
+          const access_token  = params.get('access_token');
+          const refresh_token = params.get('refresh_token');
+          const expires_in    = parseInt(params.get('expires_in') ?? '3600', 10);
+
+          if (!access_token) { reject(new Error('No token in response')); return; }
+
+          const userRes = await fetch(`${URL_BASE}/auth/v1/user`, {
+            headers: { Authorization: `Bearer ${access_token}`, apikey: ANON_KEY },
+          });
+          const user = await userRes.json();
+
+          const session = {
+            access_token, refresh_token,
+            expires_at: Date.now() + expires_in * 1000,
+            user: { id: user.id, email: user.email },
+          };
+          await saveSession(session);
+          resolve(session);
+        } catch (e) { reject(e); }
+      });
+    });
+  }
+
+  async function signOut() {
+    const token = await getAccessToken();
+    if (token) {
+      await fetch(`${URL_BASE}/auth/v1/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, apikey: ANON_KEY },
+      }).catch(() => {});
+    }
+    await clearSession();
+  }
+
+  return { getSession, getAccessToken, signInWithGoogle, signOut };
+})();

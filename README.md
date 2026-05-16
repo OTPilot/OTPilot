@@ -1,234 +1,34 @@
 # OTPilot
 
-A Chrome extension that makes 2FA invisible — both when logging in and when setting it up. Visit a 2FA setup page and OTPilot offers to save the account automatically. Visit a login page and it fills the code and submits the form before you've reached for your phone.
+**TOTP authenticator for Chrome and Edge** — auto-detects 2FA setup pages, saves secrets in one click, and auto-fills codes on login.
 
-> **Version:** 0.0.3 · Manifest V3 · No dependencies · No bundler
-
-<p align="center">
-  <a href="https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk">
-    <img src="https://img.shields.io/badge/Chrome_Web_Store-Install-4285F4?logo=googlechrome&logoColor=white" alt="Install on Chrome">
-  </a>
-</p>
+[**Add to Chrome →**](https://chromewebstore.google.com/detail/otpilot) · [**otpilot.app**](https://otpilot.app)
 
 ---
 
 ## Features
 
-- **Automatic setup detection** — visit any site's 2FA setup page and a floating prompt appears: "Save [Service] to OTPilot?" — one click and the account is saved, no manual secret entry required. Detects `otpauth://` URIs in the DOM and decodes QR code images via the browser's native `BarcodeDetector` API
-- **Auto-fill & submit** — detects OTP input fields and fills them automatically when you land on a matching page
-- **Inline unlock** — if the extension is locked, it shows a password prompt right on the page; enter your master password and it unlocks and fills in one step
-- **Master password lock** — the extension is gated behind a master password; sessions last 24 h or 30 days
-- **Multiple accounts** — add as many accounts as you need, each with its own name, secret and URL list
-- **URL-based matching** — each account maps to one or more URLs (wildcard `*` supported); the right secret is picked automatically
-- **Any secret format** — accepts both **base32** (Google Authenticator style) and **hex** secrets
-- **Encrypted backup** — export all accounts to a password-protected JSON file; import it on any machine
-- **No bundler, no build step** — plain vanilla JS, load unpacked and done
+- **Auto-detect 2FA setup** — scans pages for `otpauth://` URIs and QR codes; offers to save in one click
+- **Auto-fill** — fills TOTP codes on login pages automatically, or on demand
+- **Vault** — manage all your accounts with name, email, secret, and URL patterns
+- **Master password lock** — AES-GCM encrypted vault with 24h / 30-day sessions
+- **Local encrypted backup** — export and import your vault with a password
+- **Cloud sync** *(Personal plan)* — end-to-end encrypted sync across all your devices
+
+**Coming soon**
+- Firefox and Safari support
+- Team sharing - share TOTP access with teammates without exposing secrets
+- Audit logs
+
+
+## Licenses
+
+| Directory | License |
+|-----------|---------|
+| `extension/` | GPL v3 |
+| `api/` | AGPL v3 |
+| `web/` | MIT |
 
 ---
 
-## Installation
-
-Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk).
-
-**Or load manually (developer mode):**
-
-1. Download or clone this repository
-2. Open Chrome and go to `chrome://extensions`
-3. Enable **Developer mode** (toggle in the top-right corner)
-4. Click **Load unpacked** and select the `otpilot` folder
-5. The OTPilot icon will appear in your toolbar
-
----
-
-## First use
-
-On the first open, OTPilot asks you to create a **master password**. This password protects access to the extension. You will be asked for it again once your session expires.
-
-- Choose **Keep me logged in for 30 days** to extend the session; otherwise it lasts 24 hours.
-- Click the 🔒 button in the header at any time to lock the extension manually.
-
----
-
-## Setup
-
-### Saving an account from a setup page
-
-When you enable 2FA on any site, the site shows you a QR code containing your secret. OTPilot reads that information directly from the page and shows a floating prompt:
-
-> **OTPilot** · Save **GitHub** to OTPilot? · [Add account] [Not now]
-
-Click **Add account** and OTPilot saves the account, pre-filled with the service name and the current URL. You never need to see or paste a secret.
-
-If OTPilot is locked when a setup page is detected, the prompt also includes a password field — enter your master password and it unlocks and saves in one step.
-
-### Adding an account manually
-
-
-1. Click the OTPilot icon in the toolbar
-2. Expand **Settings**
-3. Click **+ Add account**
-4. Fill in:
-   - **Name** — label shown on the tab (e.g. `Work QA`)
-   - **Secret** — your TOTP secret in base32 or hex
-   - **URLs** — one hostname per line, `*` wildcard supported:
-     ```
-     *.staging.example.com
-     admin.myapp.io
-     ```
-5. Click **Save**
-
-The account tab appears at the top of the popup and the code starts ticking immediately.
-
-### Auto-fill
-
-When you navigate to a page whose hostname matches one of the configured URLs and an OTP field is detected, OTPilot fills and submits the form automatically.
-
-If the extension is locked when you land on an OTP page, a floating prompt appears on the page asking for your master password. Enter it and press Enter — OTPilot unlocks and fills without opening the popup.
-
-You can also trigger a fill manually by clicking **Fill Page** in the popup.
-
----
-
-## Backup & Restore
-
-
-### Export
-1. Open Settings → click **↑ Export**
-2. Enter a password
-3. `otpilot-backup.json` is downloaded
-
-### Import
-1. Open Settings → click **↓ Import**
-2. Select your `otpilot-backup.json`
-3. Enter the password used when exporting
-
-The backup file is encrypted with **AES-GCM 256-bit**. The key is derived from your password using **PBKDF2** (SHA-256, 200 000 iterations). Without the password the file is unreadable.
-
----
-
-## Security notes
-
-- Access to the extension is protected by a master password; the session expires after 24 h (or 30 days if opted in)
-- Secrets are stored in `chrome.storage.local` — sandboxed to this extension, not accessible by web pages or other extensions
-- The content script runs on every page but exits immediately if no configured URL matches and no 2FA setup page is detected
-- Master password verification happens entirely inside the content script via Web Crypto API — no background service worker or external communication needed
-- No data is ever sent to any server
-- The extension requests `*://*/*` host permission so the content script can run on user-defined URLs; it never reads page content beyond looking for OTP input fields or `otpauth://` URIs
-
----
-
-## Project structure
-
-```
-otpilot/
-├── manifest.json      # MV3 manifest
-├── totp.js            # TOTP algorithm (RFC 6238) via Web Crypto API
-├── content.js         # Auto-fill, setup detection, and in-page overlays
-├── popup.html         # Extension popup UI
-├── popup.js           # Popup logic, account management, export/import, lock/session
-├── icon.svg           # Source icon
-├── icon16.png
-├── icon48.png
-├── icon128.png
-├── playwright.config.js  # Playwright E2E configuration
-├── tests/
-│   ├── fixtures.js      # Extension context fixture (loads extension, resolves ID)
-│   ├── popup.spec.js    # Popup UI tests
-│   ├── setup.spec.js    # Content script setup-detection tests
-│   └── autofill.spec.js # Autofill flow tests
-├── .github/
-│   └── workflows/
-│       └── e2e.yml      # CI pipeline (runs on every PR)
-└── test/
-    ├── setup.html       # Test page simulating a 2FA setup flow (otpauth:// URI in DOM)
-    ├── autofill.html    # Test page simulating a 2FA login prompt
-    ├── qr-only.html     # QR image only (no URI in DOM, tests BarcodeDetector)
-    ├── qr-modal.html    # QR code injected inside a modal after page load
-    ├── acme1-setup.html # Multi-account setup — Acme, alice@acme.test
-    └── acme2-setup.html # Multi-account setup — Acme, bob@acme.test
-```
-
----
-
-## License
-
-GNU General Public License v3.0 — see [LICENSE](LICENSE) for details.
-
----
-
-## Developer notes
-
-### Running automated E2E tests
-
-The extension ships with a Playwright test suite that covers the popup UI, the content script setup-detection overlay, and the autofill flow.
-
-**Prerequisites:** Node.js 18+
-
-```bash
-npm install
-npx playwright install chromium  # first time only
-```
-
-**Run the tests:**
-
-```bash
-npm test                # headless (well, headed — Chrome extensions require it)
-npm run test:ui         # Playwright interactive UI
-npm run test:report     # open the last HTML report
-```
-
-Tests spin up a local HTTP server automatically (port 8080) so the content script can run on `http://localhost:8080/test/*.html`.
-
-The CI pipeline runs the full suite on every pull request — see `.github/workflows/e2e.yml`.
-
----
-
-### Building the ZIP for store submission
-
-```bash
-make zip
-```
-
-Reads the version from `manifest.json` automatically and writes `releases/otpilot-<version>.zip`. Verify the contents before uploading:
-
-```bash
-unzip -l releases/otpilot-*.zip
-```
-
-### Deploying the privacy policy to Vercel
-
-The privacy policy lives in `docs/privacy.html`. First-time setup:
-
-```bash
-npm i -g vercel
-cd docs && vercel
-```
-
-Follow the prompts and note the production URL — use it in the store listing's "Privacy policy URL" field. After that, deployments are:
-
-```bash
-make deploy
-```
-
-To build the ZIP and deploy in one step:
-
-```bash
-make release
-```
-
-### Running the test pages
-
-Serve via HTTP so hostname-based URL matching works:
-
-```bash
-cd test && python3 -m http.server 8080
-```
-
-| Page | Tests |
-|---|---|
-| `setup.html` | Setup detection via `otpauth://` URI in DOM |
-| `autofill.html` | Auto-fill on a login page |
-| `qr-only.html` | Setup detection via QR image (`BarcodeDetector`) |
-| `qr-modal.html` | Setup detection when the QR code is injected inside a modal after page load |
-| `acme1-setup.html` | Setup detection for a multi-account site — Acme, alice@acme.test |
-| `acme2-setup.html` | Setup detection for a multi-account site — Acme, bob@acme.test (use alongside acme1 to test the same-domain picker) |
+If OTPilot saves you time, consider [buying me a coffee ☕](https://ko-fi.com/carpedev) — it helps keep the project alive.

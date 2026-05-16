@@ -1,7 +1,15 @@
 # Changelog
 
-## v0.0.6 (Unreleased — in development)
+## v1.0.0 (Unreleased — in development)
 
+- **Cloud sync** — accounts are encrypted end-to-end on the device and synced across all your browsers. A recovery key is generated on first use; the server never sees your secrets unencrypted.
+- **Google sign-in** — sign in with Google directly from the extension popup to enable sync.
+- **Personal plan** — one-time $15 upgrade via Stripe unlocks cloud sync. Plan status reflects immediately in the extension and dashboard after payment.
+- **Web dashboard** — new `/dashboard` with plan overview, last sync time, and billing management.
+- **Browser compatibility strip** — the landing page now detects your browser and shows the right install button. Firefox and Safari are shown as "coming soon" with a Chrome fallback.
+- **CI/CD pipelines** — automated checks for the API (fmt, clippy, tests, Docker build) and web (type-check, build) on every pull request.
+
+### E2E test suite
 
 - **E2E test suite** — Playwright tests cover the popup UI (setup screen, OTP display, accounts view, search), content script setup detection (overlay appears/disappears correctly), and the autofill flow (OTP field filled and highlighted via extension message). Tests run automatically on every pull request via GitHub Actions (`xvfb-run` for headed Chrome on Linux).
 

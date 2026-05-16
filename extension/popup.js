@@ -7,6 +7,12 @@ let currentCode = '';
 let timerInterval = null;
 let obfuscated = true;
 
+// ── Plan helpers ─────────────────────────────────────────────────────────────
+
+function canSync(plan) {
+  return plan === 'personal' || plan === 'team_lite' || plan === 'team_pro';
+}
+
 // ── URL matching ─────────────────────────────────────────────────────────────
 
 function matchesPattern(pattern, hostname) {
@@ -45,11 +51,14 @@ async function syncActiveIndexToUrl() {
 
 function loadState() {
   return new Promise(r =>
-    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated'], d => {
+    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated', 'userPlan'], d => {
       accounts = d.accounts || [];
       activeIndex = Math.min(d.activeIndex ?? 0, Math.max(accounts.length - 1, 0));
       obfuscated = d.obfuscated ?? true;
       applyObfuscateBtn();
+      if (d.userPlan && canSync(d.userPlan)) {
+        document.querySelector('.kofi-footer').style.display = 'none';
+      }
       r();
     })
   );
@@ -105,6 +114,8 @@ function renderAccountBar() {
   accounts.slice(0, CHIP_COUNT).forEach((acc, i) => {
     const chip = document.createElement('button');
     chip.className = 'acc-chip' + (i === activeIndex ? ' active' : '');
+    chip.addEventListener('mouseenter', () => showChipTooltip(chip, acc.name, acc.email));
+    chip.addEventListener('mouseleave', hideChipTooltip);
 
     const av = document.createElement('span');
     av.className = 'acc-av';
@@ -497,18 +508,22 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 
 function showView(view) {
   if (view !== 'home') closeOverflow();
-  document.getElementById('home-view').style.display     = view === 'home'     ? '' : 'none';
+  document.getElementById('home-view').style.display      = view === 'home'     ? '' : 'none';
   document.getElementById('settings-panel').style.display = view === 'accounts' ? '' : 'none';
-  document.getElementById('config-panel').style.display  = view === 'settings' ? '' : 'none';
+  document.getElementById('config-panel').style.display   = view === 'settings' ? '' : 'none';
+  document.getElementById('sync-panel').style.display     = view === 'sync'     ? '' : 'none';
   document.getElementById('nav-home').classList.toggle('active',     view === 'home');
   document.getElementById('nav-settings').classList.toggle('active', view === 'accounts');
   document.getElementById('nav-config').classList.toggle('active',   view === 'settings');
+  document.getElementById('nav-sync').classList.toggle('active',     view === 'sync');
   if (view === 'accounts') renderAccountsList();
+  if (view === 'sync') renderSyncPanel();
 }
 
 document.getElementById('nav-home').addEventListener('click',    () => showView('home'));
 document.getElementById('nav-settings').addEventListener('click', () => showView('accounts'));
 document.getElementById('nav-config').addEventListener('click',   () => showView('settings'));
+document.getElementById('nav-sync').addEventListener('click',     () => showView('sync'));
 
 document.getElementById('btn-quick-add').addEventListener('click', () => {
   showView('accounts');
@@ -938,6 +953,8 @@ document.getElementById('lock-password').addEventListener('keydown', e => {
 document.getElementById('btn-logout').addEventListener('click', async () => {
   clearInterval(timerInterval);
   await new Promise(r => chrome.storage.local.set({ sessionExpiry: 0 }, r));
+  await new Promise(r => chrome.storage.local.remove('userPlan', r));
+  document.querySelector('.kofi-footer').style.display = '';
   await new Promise(resolve => {
     lockLoginResolve = async () => {
       await loadState();
@@ -952,6 +969,259 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
   });
 });
 
+// ── Chip tooltip ──────────────────────────────────────────────────────────────
+
+const _chipTooltip = document.getElementById('acc-tooltip');
+const _tipName     = document.getElementById('acc-tip-name');
+const _tipEmail    = document.getElementById('acc-tip-email');
+
+function showChipTooltip(chip, name, email) {
+  const rect = chip.getBoundingClientRect();
+  _tipName.textContent  = name || '';
+  _tipEmail.textContent = email || '';
+  _tipEmail.style.display = email ? 'block' : 'none';
+  _chipTooltip.style.display = '';
+  _chipTooltip.style.left = rect.left + 'px';
+  _chipTooltip.style.top  = (rect.bottom + 4) + 'px';
+}
+
+function hideChipTooltip() {
+  _chipTooltip.style.display = 'none';
+}
+
+// ── Cloud Sync UI ─────────────────────────────────────────────────────────────
+
+let _currentSyncKey = '';
+let _syncKeyRevealed = false;
+
+function setSyncKeyDisplay(key) {
+  _currentSyncKey = key;
+  _syncKeyRevealed = false;
+  document.getElementById('sync-key-display').textContent = '•'.repeat(key.length);
+  const revBtn = document.getElementById('btn-reveal-synckey');
+  if (revBtn) revBtn.textContent = 'Show key';
+}
+
+function syncShowView(id) {
+  ['sv-signin', 'sv-newkey', 'sv-restore', 'sv-active', 'sv-free', 'sv-stop-confirm'].forEach(v => {
+    const el = document.getElementById(v);
+    if (el) el.classList.toggle('hidden', v !== id);
+  });
+}
+
+function syncSetStatus(state, text) {
+  const dot  = document.getElementById('sync-dot');
+  const span = document.getElementById('sync-status-text');
+  if (!dot || !span) return;
+  dot.className = `sync-dot ${state}`;
+  span.textContent = text;
+}
+
+async function renderSyncPanel() {
+  const session = await SupabaseAuth.getSession();
+  if (!session) { syncShowView('sv-signin'); return; }
+
+  let plan;
+  try {
+    const data = await CloudSync.syncUser();
+    plan = data.plan;
+    await new Promise(r => chrome.storage.local.set({ userPlan: plan }, r));
+  } catch {
+    const stored = await new Promise(r => chrome.storage.local.get('userPlan', r));
+    plan = stored.userPlan;
+  }
+  if (plan && canSync(plan)) document.querySelector('.kofi-footer').style.display = 'none';
+
+  const email = session.user.email ?? '';
+  const labels = { free: 'Free', personal: 'Personal', team_lite: 'Team', team_pro: 'Team Pro' };
+
+  if (!plan || !canSync(plan)) {
+    document.getElementById('sync-avatar-free').textContent = (email[0] ?? '?').toUpperCase();
+    document.getElementById('sync-email-free').textContent = email;
+    document.getElementById('sync-plan-badge-free').textContent = labels[plan] ?? 'Free';
+    syncShowView('sv-free');
+    return;
+  }
+
+  const badgeEl = document.getElementById('sync-plan-badge');
+  if (badgeEl) badgeEl.textContent = labels[plan] ?? plan ?? '';
+
+  const avatar = document.getElementById('sync-avatar');
+  if (avatar) avatar.textContent = (email[0] ?? '?').toUpperCase();
+  const emailEl = document.getElementById('sync-email');
+  if (emailEl) emailEl.textContent = email;
+
+  const syncKey = await CloudSync.getSyncKey();
+
+  if (!syncKey) {
+    try {
+      const hasData = await CloudSync.serverHasData();
+      if (hasData) {
+        syncShowView('sv-restore');
+      } else {
+        const newKey = await CloudSync.generateSyncKey();
+        setSyncKeyDisplay(newKey);
+        syncShowView('sv-newkey');
+      }
+    } catch {
+      const newKey = await CloudSync.generateSyncKey();
+      setSyncKeyDisplay(newKey);
+      syncShowView('sv-newkey');
+    }
+    return;
+  }
+
+  syncShowView('sv-active');
+  syncSetStatus('idle', 'Ready');
+}
+
+async function doSync() {
+  syncSetStatus('syncing', 'Syncing…');
+  try {
+    const result = await CloudSync.push(accounts, new Date().toISOString());
+    if (result.conflict) {
+      const merged = CloudSync.mergeAccounts(accounts, result.serverAccounts);
+      accounts = merged;
+      await saveState();
+      renderAccountBar();
+      await CloudSync.push(accounts, new Date().toISOString());
+    }
+    syncSetStatus('ok', `Synced · ${new Date().toLocaleTimeString()}`);
+  } catch (e) {
+    syncSetStatus('error', e.message ?? 'Sync failed');
+  }
+}
+
+// Sign-in button
+document.getElementById('btn-google-signin').addEventListener('click', async e => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  try {
+    await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ action: 'signInWithGoogle' }, response => {
+        if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
+        if (response?.ok) resolve(response.session);
+        else reject(new Error(response?.error ?? 'Sign in failed'));
+      });
+    });
+    await CloudSync.syncUser();
+    await renderSyncPanel();
+  } catch (err) {
+    btn.disabled = false;
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.2l6.7-6.7C35.7 2.5 30.2 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.8 6C12.4 13.1 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.6 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.5 2.8-2.1 5.2-4.5 6.8l7 5.4c4.1-3.8 6.4-9.4 6.4-16.2z"/><path fill="#FBBC05" d="M10.4 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.8-6A23.9 23.9 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l7.8-6z"/><path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7-5.4c-2 1.4-4.6 2.2-8.2 2.2-6.2 0-11.5-3.7-13.5-9.1l-7.8 6C6.6 42.6 14.6 48 24 48z"/></svg> Continue with Google';
+    console.error('Sign in error:', err);
+  }
+});
+
+// Recovery key: reveal/hide toggle
+document.getElementById('btn-reveal-synckey').addEventListener('click', () => {
+  _syncKeyRevealed = !_syncKeyRevealed;
+  document.getElementById('sync-key-display').textContent = _syncKeyRevealed
+    ? _currentSyncKey
+    : '•'.repeat(_currentSyncKey.length);
+  document.getElementById('btn-reveal-synckey').textContent = _syncKeyRevealed ? 'Hide key' : 'Show key';
+});
+
+// New key: copy
+document.getElementById('btn-copy-synckey').addEventListener('click', async () => {
+  await navigator.clipboard.writeText(_currentSyncKey).catch(() => {});
+  document.getElementById('btn-copy-synckey').textContent = 'Copied!';
+  setTimeout(() => {
+    document.getElementById('btn-copy-synckey').textContent = 'Copy key';
+  }, 1500);
+});
+
+// New key: confirm saved
+document.getElementById('btn-confirm-newkey').addEventListener('click', async () => {
+  syncShowView('sv-active');
+  syncSetStatus('syncing', 'Uploading…');
+  try {
+    await CloudSync.syncUser();
+    await doSync();
+  } catch (e) {
+    syncSetStatus('error', e.message);
+  }
+});
+
+// Restore: submit key
+document.getElementById('btn-restore-key').addEventListener('click', async () => {
+  const input = document.getElementById('sync-restore-input');
+  const errEl = document.getElementById('sync-restore-err');
+  const keyB64 = input.value.trim();
+  errEl.textContent = '';
+  if (!keyB64) { errEl.textContent = 'Paste your recovery key.'; return; }
+  try {
+    await CloudSync.saveSyncKey(keyB64);
+    const remoteAccounts = await CloudSync.pull();
+    if (remoteAccounts) {
+      const merged = CloudSync.mergeAccounts(accounts, remoteAccounts);
+      accounts = merged;
+      await saveState();
+      renderAccountBar();
+    }
+    syncShowView('sv-active');
+    syncSetStatus('ok', 'Restored');
+  } catch {
+    errEl.textContent = 'Invalid key or decryption failed.';
+    await CloudSync.deleteSyncKey();
+  }
+});
+
+// Restore: start fresh
+document.getElementById('btn-overwrite-server').addEventListener('click', async () => {
+  const newKey = await CloudSync.generateSyncKey();
+  setSyncKeyDisplay(newKey);
+  syncShowView('sv-newkey');
+});
+
+// Sync now
+document.getElementById('btn-sync-now').addEventListener('click', doSync);
+
+// Show recovery key
+document.getElementById('btn-show-recovery').addEventListener('click', async () => {
+  const key = await CloudSync.getSyncKey();
+  if (!key) return;
+  setSyncKeyDisplay(key);
+  syncShowView('sv-newkey');
+  document.getElementById('btn-confirm-newkey').textContent = 'Back to sync';
+  document.getElementById('btn-confirm-newkey').onclick = () => {
+    syncShowView('sv-active');
+    document.getElementById('btn-confirm-newkey').textContent = 'I\'ve saved it — Enable sync';
+    document.getElementById('btn-confirm-newkey').onclick = null;
+  };
+});
+
+// Stop syncing — free plan view (show confirmation)
+let _stopSyncMode = 'free';
+document.getElementById('btn-free-signout').addEventListener('click', () => {
+  _stopSyncMode = 'free';
+  syncShowView('sv-stop-confirm');
+});
+
+// Stop syncing — active view (show confirmation)
+document.getElementById('btn-cloud-signout').addEventListener('click', () => {
+  _stopSyncMode = 'active';
+  syncShowView('sv-stop-confirm');
+});
+
+// Stop sync: cancel
+document.getElementById('btn-cancel-stop-sync').addEventListener('click', () => {
+  syncShowView(_stopSyncMode === 'free' ? 'sv-free' : 'sv-active');
+});
+
+// Stop sync: confirm
+document.getElementById('btn-confirm-stop-sync').addEventListener('click', async () => {
+  await SupabaseAuth.signOut();
+  if (_stopSyncMode === 'active') await CloudSync.deleteSyncKey();
+  await new Promise(r => chrome.storage.local.remove('userPlan', r));
+  document.querySelector('.kofi-footer').style.display = '';
+  syncShowView('sv-signin');
+  const btn = document.getElementById('btn-google-signin');
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.2l6.7-6.7C35.7 2.5 30.2 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.8 6C12.4 13.1 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.6 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.5 2.8-2.1 5.2-4.5 6.8l7 5.4c4.1-3.8 6.4-9.4 6.4-16.2z"/><path fill="#FBBC05" d="M10.4 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.8-6A23.9 23.9 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l7.8-6z"/><path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7-5.4c-2 1.4-4.6 2.2-8.2 2.2-6.2 0-11.5-3.7-13.5-9.1l-7.8 6C6.6 42.6 14.6 48 24 48z"/></svg> Continue with Google';
+});
+
 // ── Ko-fi link ────────────────────────────────────────────────────────────────
 
 document.getElementById('kofi-link').addEventListener('click', e => {
@@ -962,6 +1232,24 @@ document.getElementById('kofi-link').addEventListener('click', e => {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
+// Silent background pull on popup open — picks up changes from other devices.
+async function silentPullSync() {
+  try {
+    const session = await SupabaseAuth.getSession();
+    if (!session) return;
+    const syncKey = await CloudSync.getSyncKey();
+    if (!syncKey) return;
+    const remote = await CloudSync.pull();
+    if (!remote) return;
+    const merged = CloudSync.mergeAccounts(accounts, remote);
+    if (merged.length !== accounts.length) {
+      accounts = merged;
+      await saveState();
+      renderAccountBar();
+    }
+  } catch { /* offline or not synced — ignore */ }
+}
+
 (async () => {
   const justAuthenticated = await initLock();
   await loadState();
@@ -969,4 +1257,5 @@ document.getElementById('kofi-link').addEventListener('click', e => {
   renderAccountBar();
   startTimer();
   if (justAuthenticated) tryAutoFillCurrentTab();
+  silentPullSync(); // fire-and-forget
 })();
