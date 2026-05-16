@@ -3,10 +3,10 @@ mod error;
 mod middleware;
 mod routes;
 
+use axum::{http::Method, Router};
 use std::collections::HashMap;
 use std::sync::Arc;
-use axum::{Router, http::Method};
-use tower_http::cors::{CorsLayer, Any};
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -27,8 +27,10 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "api=debug,tower_http=debug".into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "api=debug,tower_http=debug".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -52,11 +54,16 @@ async fn main() -> anyhow::Result<()> {
     }
     assert!(!jwt_keys.is_empty(), "no usable keys in Supabase JWKS");
 
-    let stripe_secret_key        = std::env::var("STRIPE_SECRET_KEY").expect("STRIPE_SECRET_KEY must be set");
-    let stripe_webhook_secret    = std::env::var("STRIPE_WEBHOOK_SECRET").expect("STRIPE_WEBHOOK_SECRET must be set");
-    let stripe_personal_price_id = std::env::var("STRIPE_PERSONAL_PRICE_ID").expect("STRIPE_PERSONAL_PRICE_ID must be set");
-    let success_url              = std::env::var("SUCCESS_URL").unwrap_or_else(|_| "http://localhost:5173/dashboard?upgraded=1".into());
-    let cancel_url               = std::env::var("CANCEL_URL").unwrap_or_else(|_| "http://localhost:5173/dashboard".into());
+    let stripe_secret_key =
+        std::env::var("STRIPE_SECRET_KEY").expect("STRIPE_SECRET_KEY must be set");
+    let stripe_webhook_secret =
+        std::env::var("STRIPE_WEBHOOK_SECRET").expect("STRIPE_WEBHOOK_SECRET must be set");
+    let stripe_personal_price_id =
+        std::env::var("STRIPE_PERSONAL_PRICE_ID").expect("STRIPE_PERSONAL_PRICE_ID must be set");
+    let success_url = std::env::var("SUCCESS_URL")
+        .unwrap_or_else(|_| "http://localhost:5173/dashboard?upgraded=1".into());
+    let cancel_url =
+        std::env::var("CANCEL_URL").unwrap_or_else(|_| "http://localhost:5173/dashboard".into());
 
     let state = AppState {
         db,

@@ -16,10 +16,7 @@ struct UserRow {
 }
 
 /// Called by the extension after login to ensure a `users` row exists.
-async fn sync_user(
-    State(state): State<AppState>,
-    auth: AuthUser,
-) -> Result<Json<UserRow>> {
+async fn sync_user(State(state): State<AppState>, auth: AuthUser) -> Result<Json<UserRow>> {
     sqlx::query(
         r#"
         INSERT INTO users (id, plan, created_at)
@@ -32,12 +29,10 @@ async fn sync_user(
     .execute(&state.db)
     .await?;
 
-    let user = sqlx::query_as::<_, UserRow>(
-        "SELECT id, plan, created_at FROM users WHERE id = $1",
-    )
-    .bind(auth.id)
-    .fetch_one(&state.db)
-    .await?;
+    let user = sqlx::query_as::<_, UserRow>("SELECT id, plan, created_at FROM users WHERE id = $1")
+        .bind(auth.id)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(user))
 }

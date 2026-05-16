@@ -1,8 +1,4 @@
-use axum::{
-    extract::State,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, routing::get, Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,8 +10,7 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/accounts", get(get_accounts).put(put_accounts))
+    Router::new().route("/accounts", get(get_accounts).put(put_accounts))
 }
 
 #[derive(sqlx::FromRow)]
@@ -41,10 +36,7 @@ struct PutAccountsRequest {
     updated_at: chrono::DateTime<Utc>,
 }
 
-async fn get_accounts(
-    State(state): State<AppState>,
-    auth: AuthUser,
-) -> Result<Json<Value>> {
+async fn get_accounts(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Value>> {
     require_cloud_plan(&state, auth.id).await?;
 
     let row = sqlx::query_as::<_, AccountRow>(
@@ -118,13 +110,11 @@ async fn put_accounts(
 
 /// Checks that the user has a plan that allows cloud sync (personal or team).
 async fn require_cloud_plan(state: &AppState, user_id: uuid::Uuid) -> Result<()> {
-    let user = sqlx::query_as::<_, UserPlanRow>(
-        "SELECT plan FROM users WHERE id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(ApiError::Unauthorized)?;
+    let user = sqlx::query_as::<_, UserPlanRow>("SELECT plan FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
 
     if !matches!(user.plan.as_str(), "personal" | "team_lite" | "team_pro") {
         return Err(ApiError::Forbidden);

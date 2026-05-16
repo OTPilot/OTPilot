@@ -52,7 +52,10 @@ impl FromRequestParts<AppState> for AuthUser {
         })?;
 
         let id = Uuid::parse_str(&data.claims.sub).map_err(|_| ApiError::Unauthorized)?;
-        Ok(AuthUser { id, email: data.claims.email })
+        Ok(AuthUser {
+            id,
+            email: data.claims.email,
+        })
     }
 }
 

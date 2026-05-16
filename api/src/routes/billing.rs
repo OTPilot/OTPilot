@@ -1,13 +1,7 @@
-use axum::{
-    body::Bytes,
-    extract::State,
-    http::HeaderMap,
-    routing::post,
-    Json, Router,
-};
+use axum::{body::Bytes, extract::State, http::HeaderMap, routing::post, Json, Router};
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use serde_json::{json, Value};
+use sha2::Sha256;
 
 use crate::{
     error::{ApiError, Result},
@@ -29,17 +23,12 @@ struct UserPlanRow {
 }
 
 /// Creates a Stripe Checkout session and returns the redirect URL.
-async fn create_checkout(
-    State(state): State<AppState>,
-    auth: AuthUser,
-) -> Result<Json<Value>> {
-    let user = sqlx::query_as::<_, UserPlanRow>(
-        "SELECT plan FROM users WHERE id = $1",
-    )
-    .bind(auth.id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(ApiError::Unauthorized)?;
+async fn create_checkout(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Value>> {
+    let user = sqlx::query_as::<_, UserPlanRow>("SELECT plan FROM users WHERE id = $1")
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
 
     if matches!(user.plan.as_str(), "personal" | "team_lite" | "team_pro") {
         return Err(ApiError::BadRequest("Already on a paid plan".into()));
@@ -52,7 +41,10 @@ async fn create_checkout(
         ("mode", "payment"),
         ("success_url", state.success_url.as_str()),
         ("cancel_url", state.cancel_url.as_str()),
-        ("line_items[0][price]", state.stripe_personal_price_id.as_str()),
+        (
+            "line_items[0][price]",
+            state.stripe_personal_price_id.as_str(),
+        ),
         ("line_items[0][quantity]", "1"),
         ("client_reference_id", user_id.as_str()),
     ];
@@ -111,13 +103,11 @@ async fn webhook(
 
         let customer_id = session["customer"].as_str().unwrap_or("");
 
-        sqlx::query(
-            "UPDATE users SET plan = 'personal', stripe_customer_id = $1 WHERE id = $2",
-        )
-        .bind(customer_id)
-        .bind(user_id)
-        .execute(&state.db)
-        .await?;
+        sqlx::query("UPDATE users SET plan = 'personal', stripe_customer_id = $1 WHERE id = $2")
+            .bind(customer_id)
+            .bind(user_id)
+            .execute(&state.db)
+            .await?;
 
         tracing::info!("upgraded user {user_id} to personal plan");
     }
