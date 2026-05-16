@@ -1,5 +1,11 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import Landing from './pages/Landing'
+import Callback from './pages/auth/Callback'
+import DashboardLayout from './pages/dashboard/Layout'
+import Overview from './pages/dashboard/Overview'
+import Billing from './pages/dashboard/Billing'
+import Team from './pages/dashboard/Team'
+import Settings from './pages/dashboard/Settings'
 import Tos from './pages/legal/Tos'
 import Privacy from './pages/legal/Privacy'
 import Refunds from './pages/legal/Refunds'
@@ -10,6 +16,15 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Landing />} />
+        <Route path="/auth/callback" element={<Callback />} />
+
+        <Route path="/dashboard" element={<DashboardLayout />}>
+          <Route index element={<Overview />} />
+          <Route path="billing" element={<Billing />} />
+          <Route path="team" element={<Team />} />
+          <Route path="settings" element={<Settings />} />
+        </Route>
+
         <Route path="/tos" element={<Tos />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/refunds" element={<Refunds />} />

@@ -1,29 +1,17 @@
 {
   "name": "otpilot",
   "version": "1.0.0",
-  "description": "A Chrome extension that makes 2FA invisible — both when logging in and when setting it up. Visit a 2FA setup page and OTPilot offers to save the account automatically. Visit a login page and it fills the code and submits the form before you've reached for your phone.",
+  "description": "TOTP authenticator for Chrome and Edge — auto-detects 2FA setup pages, saves secrets in one click, and auto-fills codes on login.",
   "main": "content.js",
-  "directories": {
-    "doc": "docs",
-    "test": "test"
-  },
   "type": "module",
   "scripts": {
     "test": "playwright test",
     "test:ui": "playwright test --ui",
     "test:report": "playwright show-report"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/carpe-diem/OTPilot.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/carpe-diem/OTPilot/issues"
-  },
-  "homepage": "https://github.com/carpe-diem/OTPilot#readme",
+  "author": "Alberto Paparelli",
+  "license": "GPL-3.0-only",
+  "homepage": "https://otpilot.app",
   "devDependencies": {
     "@playwright/test": "^1.60.0"
   }

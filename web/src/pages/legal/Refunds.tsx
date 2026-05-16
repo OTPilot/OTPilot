@@ -73,26 +73,6 @@ export default function Refunds() {
                     <td className="py-2.5 pr-4">After 14 days</td>
                     <td className="py-2.5 text-zinc-500">No refund</td>
                   </tr>
-                  <tr>
-                    <td className="py-2.5 pr-4">Team monthly ($8/mo)</td>
-                    <td className="py-2.5 pr-4">Within 14 days</td>
-                    <td className="py-2.5 text-teal-400">Full refund</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 pr-4">Team monthly ($8/mo)</td>
-                    <td className="py-2.5 pr-4">After 14 days</td>
-                    <td className="py-2.5 text-zinc-500">No refund (cancel anytime)</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 pr-4">Team yearly ($80/yr)</td>
-                    <td className="py-2.5 pr-4">Within 14 days</td>
-                    <td className="py-2.5 text-teal-400">Full refund</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 pr-4">Team yearly ($80/yr)</td>
-                    <td className="py-2.5 pr-4">14 days – 1 year (valid cause)</td>
-                    <td className="py-2.5 text-zinc-300">Pro-rata for unused months</td>
-                  </tr>
                 </tbody>
               </table>
             </div>

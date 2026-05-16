@@ -1,28 +1,46 @@
-export type Browser = 'chrome' | 'firefox' | 'edge' | 'other'
+export type Browser = 'chrome' | 'firefox' | 'edge' | 'safari' | 'other'
 
 export function detectBrowser(): Browser {
   const ua = navigator.userAgent
   if (ua.includes('Edg/')) return 'edge'
   if (ua.includes('Firefox/')) return 'firefox'
   if (ua.includes('Chrome/')) return 'chrome'
+  if (ua.includes('Safari/')) return 'safari'
   return 'other'
 }
 
-export const browserMeta: Record<Browser, { label: string; href: string }> = {
+export type BrowserMeta = {
+  name: string
+  available: boolean
+  href: string | null
+}
+
+export const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/otpilot'
+
+export const browserMeta: Record<Browser, BrowserMeta> = {
   chrome: {
-    label: 'Add to Chrome',
-    href: 'https://chromewebstore.google.com/detail/otpilot',
-  },
-  firefox: {
-    label: 'Add to Firefox',
-    href: 'https://addons.mozilla.org/en-US/firefox/addon/otpilot/',
+    name: 'Chrome',
+    available: true,
+    href: CHROME_STORE_URL,
   },
   edge: {
-    label: 'Add to Edge',
+    name: 'Edge',
+    available: true,
     href: 'https://microsoftedge.microsoft.com/addons/detail/otpilot',
   },
+  firefox: {
+    name: 'Firefox',
+    available: false,
+    href: null,
+  },
+  safari: {
+    name: 'Safari',
+    available: false,
+    href: null,
+  },
   other: {
-    label: 'Get the extension',
-    href: 'https://chromewebstore.google.com/detail/otpilot',
+    name: 'Chrome',
+    available: true,
+    href: CHROME_STORE_URL,
   },
 }

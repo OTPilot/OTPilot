@@ -1,10 +1,24 @@
 node_modules
 dist
+dist-ssr
 build
 coverage
 *.log
 
 .DS_Store
+
+# Rust
+api/target
+api/debug
+api/**/*.rs.bk
+api/*.pdb
+api/**/mutants.out*/
+api/rustc-ice-*.txt
+
+# env files — never commit secrets
+.env
+.env.local
+.env.*.local
 docs/.vercel
 releases
 screenshots

@@ -7,11 +7,11 @@ const faqs = [
   },
   {
     q: 'Can OTPilot read my TOTP secrets?',
-    a: 'No. Your secrets are encrypted with your master password before leaving your device. We never see them in plain text — not even for cloud sync. The encryption key exists only on your device.',
+    a: 'No. Your secrets are encrypted with your master password before leaving your device. We never see them in plain text, not even for cloud sync. The encryption key exists only on your device.',
   },
   {
-    q: 'What does "lifetime" mean for the Personal plan?',
-    a: '"Lifetime" refers to the operational lifetime of the OTPilot Cloud Service. If the service is ever discontinued, we\'ll give 90 days advance notice. Your local extension will keep working regardless — no data is held hostage.',
+    q: 'What does "locked in" mean for Early Adopters?',
+    a: 'It means your $15 is your price forever, no renewals, no future charges, no price increases for you. The pricing model may change for new customers down the road, but everyone who buys now keeps their access under the same terms. If the cloud service is ever discontinued, we\'ll give 90 days advance notice and your local extension keeps working regardless.',
   },
   {
     q: 'What happens if I cancel my Team plan?',
@@ -19,15 +19,19 @@ const faqs = [
   },
   {
     q: 'Is OTPilot open source?',
-    a: 'The extension is MIT licensed and fully open source. The cloud API backend is source-available under the Elastic License 2.0 — you can read and audit every line, but you can\'t offer it as a competing hosted service.',
+    a: 'Yes. The extension is GPL v3 and the backend is AGPL v3 — both OSI-approved open source licenses. You can read, audit, and fork every line. The copyleft terms mean that anyone who distributes a modified version must also keep it open source under the same license.',
   },
   {
     q: 'Can I get a refund?',
-    a: 'Yes, within 14 days of purchase, if the service didn\'t work as documented or there was a billing error. We don\'t offer refunds for "changed my mind" — but you can always stay on the free plan before committing.',
+    a: 'Yes, within 14 days of purchase, if the service didn\'t work as documented or there was a billing error. We don\'t offer refunds for "changed my mind", but you can always stay on the free plan before committing.',
   },
   {
     q: 'Which browsers does OTPilot support?',
-    a: 'OTPilot works on Chrome, Firefox, and Edge — all plans, including Free. Safari is not currently supported.',
+    a: 'OTPilot is available on Chrome and Edge. Firefox and Safari support is coming soon.',
+  },
+  {
+    q: 'Can I use OTPilot on multiple devices without paying?',
+    a: 'Yes. On the free plan you can move your accounts between devices manually using the encrypted export/import feature, just export from one browser and import on another. Cloud sync (automatic, real-time) is available on the Personal plan.',
   },
 ]
 

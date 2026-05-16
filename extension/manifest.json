@@ -3,8 +3,11 @@
   "name": "OTPilot",
   "version": "0.0.5",
   "description": "Detects 2FA setup pages and saves accounts in one click. Auto-fills TOTP codes on login pages — no phone needed.",
-  "permissions": ["storage", "tabs"],
-  "host_permissions": ["*://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["storage", "tabs", "identity"],
+  "host_permissions": ["*://*/*", "https://qulptwblkmcvsjrjnugl.supabase.co/*"],
   "icons": {
     "16":  "icon16.png",
     "48":  "icon48.png",
