@@ -52,7 +52,7 @@ async fn create_checkout(State(state): State<AppState>, auth: AuthUser) -> Resul
         params.push(("customer_email", email.as_str()));
     }
     params.push(("automatic_tax[enabled]", "true"));
-    params.push(("allow_promotion_codes", "true"));
+    // params.push(("allow_promotion_codes", "true"));
 
     let res = client
         .post("https://api.stripe.com/v1/checkout/sessions")
