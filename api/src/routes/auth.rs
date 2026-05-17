@@ -58,6 +58,12 @@ async fn sync_user(
     .execute(&state.db)
     .await?;
 
+    let plan: String = sqlx::query_scalar("SELECT plan FROM users WHERE id = $1")
+        .bind(auth.id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or_else(|_| "free".to_string());
+
     if let (Some(device_id), Some(name), Some(os), Some(browser)) = (
         body.device_id.as_deref(),
         body.name.as_deref(),
@@ -94,7 +100,7 @@ async fn sync_user(
             if let (Some(email), Some(api_key)) =
                 (auth.email.as_deref(), state.resend_api_key.as_deref())
             {
-                crate::email::send_new_device_email(api_key, &state.from_email, email, name).await;
+                crate::email::send_new_device_email(api_key, &state.from_email, email, name, &plan).await;
             }
         }
     }

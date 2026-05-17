@@ -1,6 +1,7 @@
 # Changelog
 
-## v1.1.0 (Unreleased — in development)
+
+## v1.0.0
 
 ### Smart sync
 
@@ -30,8 +31,6 @@
 ### Other
 
 - **Overflow counter** — the account bar overflow button now reads "2 more" instead of "+2", and shows a tooltip with the exact count.
-
-## v1.0.0 (Unreleased — in development)
 
 - **Cloud sync** — accounts are encrypted end-to-end on the device and synced across all your browsers. A recovery key is generated on first use; the server never sees your secrets unencrypted.
 - **Google sign-in** — sign in with Google directly from the extension popup to enable sync.

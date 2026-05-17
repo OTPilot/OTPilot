@@ -1187,7 +1187,7 @@ async function doSync() {
     syncSetStatus('ok', `Synced · ${new Date().toLocaleTimeString()}`);
   } catch (e) {
     const msg = e.message ?? 'Sync failed';
-    if (/40[13]/.test(msg)) {
+    if (/401/.test(msg)) {
       // Account deleted or token revoked — sign out cleanly
       _syncInProgress = false;
       await SupabaseAuth.signOut();
@@ -1206,13 +1206,14 @@ document.getElementById('btn-google-signin').addEventListener('click', async e =
   btn.disabled = true;
   btn.textContent = 'Signing in…';
   try {
-    await new Promise((resolve, reject) => {
+    const session = await new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({ action: 'signInWithGoogle' }, response => {
         if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
         if (response?.ok) resolve(response.session);
         else reject(new Error(response?.error ?? 'Sign in failed'));
       });
     });
+    SupabaseAuth.cacheSession(session); // avoid storage propagation race before syncUser
     await CloudSync.syncUser();
     await renderSyncPanel();
   } catch (err) {
@@ -1246,6 +1247,7 @@ document.getElementById('btn-confirm-newkey').addEventListener('click', async ()
   syncSetStatus('syncing', 'Uploading…');
   try {
     await CloudSync.syncUser();
+    await stampLocalChange(); // force initial push so other devices can detect existing sync
     await doSync();
   } catch (e) {
     syncSetStatus('error', e.message);
@@ -1306,11 +1308,14 @@ document.getElementById('btn-show-recovery').addEventListener('click', async () 
   };
 });
 
-// Stop syncing — free plan view (show confirmation)
+// Sign out — free plan view (no sync key, no confirmation needed)
 let _stopSyncMode = 'free';
-document.getElementById('btn-free-signout').addEventListener('click', () => {
-  _stopSyncMode = 'free';
-  syncShowView('sv-stop-confirm');
+document.getElementById('btn-free-signout').addEventListener('click', async () => {
+  await SupabaseAuth.signOut();
+  await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r));
+  localChangedAt = null;
+  lastSyncedAt   = null;
+  await renderSyncPanel();
 });
 
 // Stop syncing — active view (show confirmation)
@@ -1360,10 +1365,12 @@ async function silentPullSync() {
     if (!session) return;
     const syncKey = await CloudSync.getSyncKey();
     if (!syncKey) return;
+    const { userPlan: plan } = await new Promise(r => chrome.storage.local.get('userPlan', r));
+    if (!canSync(plan)) return;
     await doSync();
   } catch (e) {
     const msg = e?.message ?? '';
-    if (/40[13]/.test(msg)) {
+    if (/401/.test(msg)) {
       await SupabaseAuth.signOut();
       await renderSyncPanel();
     }
