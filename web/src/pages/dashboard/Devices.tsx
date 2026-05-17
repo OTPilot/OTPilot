@@ -33,8 +33,6 @@ function formatTime(iso: string) {
 }
 
 export default function Devices() {
-  const qc = useQueryClient()
-
   const { data: devices = [], isLoading } = useQuery<Device[]>({
     queryKey: ['devices'],
     queryFn: async () => {
@@ -42,22 +40,6 @@ export default function Devices() {
       if (!res.ok) throw new Error('Failed to load devices')
       return res.json()
     },
-  })
-
-  const disconnect = useMutation({
-    mutationFn: async (device_id: string) => {
-      const res = await apiFetch(`/devices/${device_id}/disconnect`, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed')
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['devices'] }),
-  })
-
-  const erase = useMutation({
-    mutationFn: async (device_id: string) => {
-      const res = await apiFetch(`/devices/${device_id}/erase`, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed')
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['devices'] }),
   })
 
   if (isLoading) {
@@ -82,13 +64,7 @@ export default function Devices() {
       {devices.length > 0 && (
         <div className="space-y-3">
           {devices.map(device => (
-            <DeviceCard
-              key={device.device_id}
-              device={device}
-              onDisconnect={() => disconnect.mutate(device.device_id)}
-              onRemove={() => erase.mutate(device.device_id)}
-              isMutating={disconnect.isPending || erase.isPending}
-            />
+            <DeviceCard key={device.device_id} device={device} />
           ))}
         </div>
       )}
@@ -96,19 +72,28 @@ export default function Devices() {
   )
 }
 
-function DeviceCard({
-  device,
-  onDisconnect,
-  onRemove,
-  isMutating,
-}: {
-  device: Device
-  onDisconnect: () => void
-  onRemove: () => void
-  isMutating: boolean
-}) {
+function DeviceCard({ device }: { device: Device }) {
+  const qc = useQueryClient()
   const [expanded, setExpanded] = useState(false)
   const [confirm, setConfirm] = useState<'disconnect' | 'erase' | null>(null)
+
+  const disconnect = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch(`/devices/${device.device_id}/disconnect`, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed')
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['devices'] }),
+  })
+
+  const erase = useMutation({
+    mutationFn: async () => {
+      const res = await apiFetch(`/devices/${device.device_id}/erase`, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed')
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['devices'] }),
+  })
+
+  const isMutating = disconnect.isPending || erase.isPending
 
   const { data: logs, isError: logsError } = useQuery<SyncLog[]>({
     queryKey: ['device-logs', device.device_id],
@@ -145,8 +130,8 @@ function DeviceCard({
               </span>
               <button
                 onClick={() => {
-                  if (confirm === 'disconnect') onDisconnect()
-                  else onRemove()
+                  if (confirm === 'disconnect') disconnect.mutate()
+                  else erase.mutate()
                   setConfirm(null)
                 }}
                 disabled={isMutating}

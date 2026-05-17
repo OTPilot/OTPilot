@@ -14,6 +14,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 // ── Background sync polling ───────────────────────────────────────────────────
 
+// Change to Railway URL before releasing:
 const API_URL      = 'http://localhost:8080';
 const ALARM_NAME   = 'otpilot-sync-poll';
 const POLL_MINUTES = 5;

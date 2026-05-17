@@ -224,7 +224,7 @@ async fn pending_command(
 }
 
 /// Checks that the user has a plan that allows cloud sync (personal or team).
-async fn require_cloud_plan(state: &AppState, user_id: uuid::Uuid) -> Result<()> {
+pub(crate) async fn require_cloud_plan(state: &AppState, user_id: uuid::Uuid) -> Result<()> {
     let user = sqlx::query_as::<_, UserPlanRow>("SELECT plan FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_optional(&state.db)

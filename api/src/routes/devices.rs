@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{
     error::{ApiError, Result},
     middleware::auth::AuthUser,
+    routes::accounts::require_cloud_plan,
     AppState,
 };
 
@@ -51,6 +52,7 @@ async fn list_devices(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Vec<DeviceRow>>> {
+    require_cloud_plan(&state, auth.id).await?;
     let rows = sqlx::query_as::<_, DeviceRow>(
         "SELECT id, device_id, name, os, browser, first_seen_at, last_seen_at, pending_action
          FROM devices WHERE user_id = $1 ORDER BY last_seen_at DESC",
@@ -66,6 +68,7 @@ async fn device_logs(
     auth: AuthUser,
     Path(device_id): Path<String>,
 ) -> Result<Json<Vec<SyncLogRow>>> {
+    require_cloud_plan(&state, auth.id).await?;
     let rows = sqlx::query_as::<_, SyncLogRow>(
         "SELECT id, action, accounts_count, created_at
          FROM sync_logs WHERE user_id = $1 AND device_id = $2
@@ -83,6 +86,7 @@ async fn disconnect_device(
     auth: AuthUser,
     Path(device_id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
+    require_cloud_plan(&state, auth.id).await?;
     let nonce = Uuid::new_v4().to_string();
     let res = sqlx::query(
         "UPDATE devices SET pending_action = 'disconnect', pending_nonce = $1
@@ -104,6 +108,7 @@ async fn erase_device(
     auth: AuthUser,
     Path(device_id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
+    require_cloud_plan(&state, auth.id).await?;
     let nonce = Uuid::new_v4().to_string();
     let res = sqlx::query(
         "UPDATE devices SET pending_action = 'erase', pending_nonce = $1
@@ -126,6 +131,7 @@ async fn ack_device(
     Path(device_id): Path<String>,
     Json(body): Json<AckRequest>,
 ) -> Result<Json<serde_json::Value>> {
+    require_cloud_plan(&state, auth.id).await?;
     let nonce_matches: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM devices WHERE user_id = $1 AND device_id = $2 AND pending_nonce = $3)",
     )

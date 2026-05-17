@@ -130,20 +130,27 @@ async fn sync_user(
 }
 
 async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<StatusCode> {
-    // Delete our DB rows first (CASCADE handles accounts, devices, sync_logs)
-    sqlx::query("DELETE FROM users WHERE id = $1")
-        .bind(auth.id)
-        .execute(&state.db)
-        .await?;
-
-    // Delete from Supabase Auth — fire-and-forget, don't fail the request if it errors
+    // Delete Supabase Auth user first — if this fails we abort before touching the DB,
+    // so the user can retry. Doing it second would leave a live credential with no DB row.
     let url = format!("{}/auth/v1/admin/users/{}", state.supabase_url, auth.id);
-    let _ = reqwest::Client::new()
+    let sb_res = reqwest::Client::new()
         .delete(&url)
         .header("apikey", &state.supabase_service_key)
         .bearer_auth(&state.supabase_service_key)
         .send()
-        .await;
+        .await
+        .map_err(|e| anyhow::anyhow!("Supabase request failed: {e}"))?;
+
+    if !sb_res.status().is_success() {
+        let status = sb_res.status();
+        return Err(anyhow::anyhow!("Supabase deletion returned {status}").into());
+    }
+
+    // Supabase user is gone — now remove our DB rows (CASCADE handles the rest)
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(auth.id)
+        .execute(&state.db)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
