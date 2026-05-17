@@ -1186,7 +1186,15 @@ async function doSync() {
 
     syncSetStatus('ok', `Synced · ${new Date().toLocaleTimeString()}`);
   } catch (e) {
-    syncSetStatus('error', e.message ?? 'Sync failed');
+    const msg = e.message ?? 'Sync failed';
+    if (/40[13]/.test(msg)) {
+      // Account deleted or token revoked — sign out cleanly
+      _syncInProgress = false;
+      await SupabaseAuth.signOut();
+      await renderSyncPanel();
+      return;
+    }
+    syncSetStatus('error', msg);
   } finally {
     _syncInProgress = false;
   }
@@ -1353,7 +1361,14 @@ async function silentPullSync() {
     const syncKey = await CloudSync.getSyncKey();
     if (!syncKey) return;
     await doSync();
-  } catch { /* offline — ignore */ }
+  } catch (e) {
+    const msg = e?.message ?? '';
+    if (/40[13]/.test(msg)) {
+      await SupabaseAuth.signOut();
+      await renderSyncPanel();
+    }
+    // other errors (offline, etc.) — ignore silently
+  }
 }
 
 (async () => {

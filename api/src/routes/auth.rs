@@ -1,11 +1,13 @@
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{extract::State, http::StatusCode, routing::{delete, post}, Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::{error::Result, middleware::auth::AuthUser, AppState};
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/auth/sync-user", post(sync_user))
+    Router::new()
+        .route("/auth/sync-user", post(sync_user))
+        .route("/users/me", delete(delete_user))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -112,4 +114,26 @@ async fn sync_user(
     .await?;
 
     Ok(Json(user))
+}
+
+async fn delete_user(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<StatusCode> {
+    // Delete our DB rows first (CASCADE handles accounts, devices, sync_logs)
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(auth.id)
+        .execute(&state.db)
+        .await?;
+
+    // Delete from Supabase Auth — fire-and-forget, don't fail the request if it errors
+    let url = format!("{}/auth/v1/admin/users/{}", state.supabase_url, auth.id);
+    let _ = reqwest::Client::new()
+        .delete(&url)
+        .header("apikey", &state.supabase_service_key)
+        .bearer_auth(&state.supabase_service_key)
+        .send()
+        .await;
+
+    Ok(StatusCode::NO_CONTENT)
 }

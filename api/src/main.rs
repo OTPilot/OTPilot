@@ -23,6 +23,8 @@ pub struct AppState {
     pub cancel_url: String,
     pub resend_api_key: Option<String>,
     pub from_email: String,
+    pub supabase_url: String,
+    pub supabase_service_key: String,
 }
 
 #[tokio::main]
@@ -70,6 +72,8 @@ async fn main() -> anyhow::Result<()> {
     let resend_api_key = std::env::var("RESEND_API_KEY").ok();
     let from_email = std::env::var("FROM_EMAIL")
         .unwrap_or_else(|_| "noreply@otpilot.app".into());
+    let supabase_service_key =
+        std::env::var("SUPABASE_SERVICE_ROLE_KEY").expect("SUPABASE_SERVICE_ROLE_KEY must be set");
 
     let state = AppState {
         db,
@@ -81,6 +85,8 @@ async fn main() -> anyhow::Result<()> {
         cancel_url,
         resend_api_key,
         from_email,
+        supabase_url,
+        supabase_service_key,
     };
 
     let cors = CorsLayer::new()

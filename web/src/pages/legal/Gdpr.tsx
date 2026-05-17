@@ -7,7 +7,7 @@ const rights = [
   },
   {
     title: 'Right to erasure (Art. 17)',
-    description: 'You can delete your account at any time from the dashboard settings. All personal data is permanently purged within 30 days. Your local extension data is unaffected.',
+    description: 'You can delete your account at any time from the dashboard Settings page. All synced data (accounts, devices, sync history) is deleted immediately and permanently. Stripe billing records are retained as required by law. Your local extension data is unaffected.',
   },
   {
     title: 'Right to data portability (Art. 20)',
@@ -126,11 +126,11 @@ export default function Gdpr() {
                 <tbody className="divide-y divide-white/5">
                   <tr>
                     <td className="py-2.5 pr-4">Account data (email, plan)</td>
-                    <td className="py-2.5">Until account deletion + 30 days</td>
+                    <td className="py-2.5">Deleted immediately upon account deletion</td>
                   </tr>
                   <tr>
                     <td className="py-2.5 pr-4">Encrypted accounts blob</td>
-                    <td className="py-2.5">Until account deletion + 30 days</td>
+                    <td className="py-2.5">Deleted immediately upon account deletion</td>
                   </tr>
                   <tr>
                     <td className="py-2.5 pr-4">IP address logs</td>
