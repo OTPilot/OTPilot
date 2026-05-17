@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { Analytics } from '@vercel/analytics/react'
 import Landing from './pages/Landing'
 import Callback from './pages/auth/Callback'
 import Login from './pages/auth/Login'
@@ -32,6 +33,7 @@ export default function App() {
         <Route path="/refunds" element={<Refunds />} />
         <Route path="/gdpr" element={<Gdpr />} />
       </Routes>
+      <Analytics />
     </BrowserRouter>
   )
 }
