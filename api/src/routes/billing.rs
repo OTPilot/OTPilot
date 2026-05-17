@@ -51,6 +51,7 @@ async fn create_checkout(State(state): State<AppState>, auth: AuthUser) -> Resul
     if !email.is_empty() {
         params.push(("customer_email", email.as_str()));
     }
+    params.push(("automatic_tax[enabled]", "true"));
 
     let res = client
         .post("https://api.stripe.com/v1/checkout/sessions")
