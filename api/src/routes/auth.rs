@@ -100,7 +100,8 @@ async fn sync_user(
             if let (Some(email), Some(api_key)) =
                 (auth.email.as_deref(), state.resend_api_key.as_deref())
             {
-                crate::email::send_new_device_email(api_key, &state.from_email, email, name, &plan).await;
+                crate::email::send_new_device_email(api_key, &state.from_email, email, name, &plan)
+                    .await;
             }
         }
     }

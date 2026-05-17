@@ -190,7 +190,8 @@ async fn put_accounts(
                     .fetch_one(&state.db)
                     .await
                     .unwrap_or_else(|_| "free".to_string());
-                crate::email::send_new_device_email(api_key, &state.from_email, email, name, &plan).await;
+                crate::email::send_new_device_email(api_key, &state.from_email, email, name, &plan)
+                    .await;
             }
         }
     }

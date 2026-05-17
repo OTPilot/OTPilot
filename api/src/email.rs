@@ -1,4 +1,10 @@
-pub async fn send_new_device_email(api_key: &str, from: &str, to: &str, device_name: &str, plan: &str) {
+pub async fn send_new_device_email(
+    api_key: &str,
+    from: &str,
+    to: &str,
+    device_name: &str,
+    plan: &str,
+) {
     let (subject, body) = if plan == "free" {
         (
             "A new device connected to your OTPilot account".to_string(),
