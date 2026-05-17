@@ -17,7 +17,7 @@ function useUserPlan() {
   })
 }
 
-function useSyncInfo() {
+function useSyncInfo(enabled: boolean) {
   return useQuery<SyncData>({
     queryKey: ['sync-info'],
     queryFn: async () => {
@@ -26,6 +26,7 @@ function useSyncInfo() {
       return res.json()
     },
     staleTime: 30_000,
+    enabled,
   })
 }
 
@@ -44,7 +45,8 @@ function formatSyncTime(iso: string) {
 export default function Overview() {
   const { user } = useAuth()
   const { data: userData } = useUserPlan()
-  const { data: syncData } = useSyncInfo()
+  const canSync = userData?.plan === 'personal' || userData?.plan === 'team_lite' || userData?.plan === 'team_pro'
+  const { data: syncData } = useSyncInfo(canSync)
 
   const PLAN_LABELS: Record<string, string> = {
     free: 'Free',
