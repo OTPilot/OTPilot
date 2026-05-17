@@ -131,8 +131,13 @@ async fn sync_user(
 }
 
 async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<StatusCode> {
-    // Delete Supabase Auth user first — if this fails we abort before touching the DB,
-    // so the user can retry. Doing it second would leave a live credential with no DB row.
+    // Mark for deletion first. If the DELETE below fails after Supabase succeeds,
+    // the flag survives and the startup cleanup in main() finishes the job.
+    sqlx::query("UPDATE users SET pending_deletion_at = NOW() WHERE id = $1")
+        .bind(auth.id)
+        .execute(&state.db)
+        .await?;
+
     let url = format!("{}/auth/v1/admin/users/{}", state.supabase_url, auth.id);
     let sb_res = reqwest::Client::new()
         .delete(&url)
@@ -143,15 +148,21 @@ async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<St
         .map_err(|e| anyhow::anyhow!("Supabase request failed: {e}"))?;
 
     if !sb_res.status().is_success() {
+        // Supabase deletion failed — clear the flag so the user can retry.
+        let _ = sqlx::query("UPDATE users SET pending_deletion_at = NULL WHERE id = $1")
+            .bind(auth.id)
+            .execute(&state.db)
+            .await;
         let status = sb_res.status();
         return Err(anyhow::anyhow!("Supabase deletion returned {status}").into());
     }
 
-    // Supabase user is gone — now remove our DB rows (CASCADE handles the rest)
-    sqlx::query("DELETE FROM users WHERE id = $1")
+    // Supabase user is gone — remove DB row (CASCADE handles the rest).
+    // Fire-and-forget: if this fails the startup cleanup will finish it.
+    let _ = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(auth.id)
         .execute(&state.db)
-        .await?;
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

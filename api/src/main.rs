@@ -42,6 +42,11 @@ async fn main() -> anyhow::Result<()> {
     let db = db::connect().await?;
     sqlx::migrate!("./migrations").run(&db).await?;
 
+    // Finish any deletions where Supabase succeeded but the DB DELETE did not.
+    let _ = sqlx::query("DELETE FROM users WHERE pending_deletion_at IS NOT NULL")
+        .execute(&db)
+        .await;
+
     let supabase_url = std::env::var("SUPABASE_URL").expect("SUPABASE_URL must be set");
     let jwks_url = format!("{}/auth/v1/.well-known/jwks.json", supabase_url);
     let jwks: jsonwebtoken::jwk::JwkSet = reqwest::get(&jwks_url).await?.json().await?;
