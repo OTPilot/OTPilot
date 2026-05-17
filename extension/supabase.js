@@ -11,16 +11,30 @@ const SupabaseAuth = (() => {
 
   // ── Storage ────────────────────────────────────────────────────────────────
 
+  let _memSession = null; // in-memory cache to avoid storage propagation races
+
   function loadSession() {
+    if (_memSession) return Promise.resolve(_memSession);
     return new Promise(r =>
-      chrome.storage.local.get([STORE_KEY], d => r(d[STORE_KEY] ?? null))
+      chrome.storage.local.get([STORE_KEY], d => {
+        _memSession = d[STORE_KEY] ?? null;
+        r(_memSession);
+      })
     );
   }
   function saveSession(s) {
+    _memSession = s;
     return new Promise(r => chrome.storage.local.set({ [STORE_KEY]: s }, r));
   }
   function clearSession() {
+    _memSession = null;
     return new Promise(r => chrome.storage.local.remove([STORE_KEY], r));
+  }
+
+  // Called by the popup right after receiving a session from the background,
+  // so getAccessToken() doesn't race against the background's storage write.
+  function cacheSession(s) {
+    _memSession = s;
   }
 
   // ── Token refresh ──────────────────────────────────────────────────────────
@@ -109,5 +123,5 @@ const SupabaseAuth = (() => {
     await clearSession();
   }
 
-  return { getSession, getAccessToken, signInWithGoogle, signOut };
+  return { getSession, getAccessToken, signInWithGoogle, signOut, cacheSession };
 })();

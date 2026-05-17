@@ -6,6 +6,9 @@ let activeIndex = 0;
 let currentCode = '';
 let timerInterval = null;
 let obfuscated = true;
+let localChangedAt = null;  // ISO string: last time accounts were modified locally
+let lastSyncedAt   = null;  // ISO string: last completed bidirectional sync
+let tombstones     = {};    // { [accountName]: ISO } — deleted accounts
 
 // ── Plan helpers ─────────────────────────────────────────────────────────────
 
@@ -51,10 +54,13 @@ async function syncActiveIndexToUrl() {
 
 function loadState() {
   return new Promise(r =>
-    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated', 'userPlan'], d => {
-      accounts = d.accounts || [];
-      activeIndex = Math.min(d.activeIndex ?? 0, Math.max(accounts.length - 1, 0));
-      obfuscated = d.obfuscated ?? true;
+    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], d => {
+      accounts       = d.accounts || [];
+      activeIndex    = Math.min(d.activeIndex ?? 0, Math.max(accounts.length - 1, 0));
+      obfuscated     = d.obfuscated ?? true;
+      localChangedAt = d.localChangedAt ?? null;
+      lastSyncedAt   = d.lastSyncedAt   ?? null;
+      tombstones     = d.tombstones     ?? {};
       applyObfuscateBtn();
       if (d.userPlan && canSync(d.userPlan)) {
         document.querySelector('.kofi-footer').style.display = 'none';
@@ -67,6 +73,27 @@ function loadState() {
 function saveState() {
   return new Promise(r => chrome.storage.local.set({ accounts, activeIndex }, r));
 }
+
+function stampLocalChange() {
+  localChangedAt = new Date().toISOString();
+  return new Promise(r => chrome.storage.local.set({ localChangedAt }, r));
+}
+
+function writeLastSyncedAt(ts) {
+  lastSyncedAt = ts;
+  return new Promise(r => chrome.storage.local.set({ lastSyncedAt: ts }, r));
+}
+
+function formatRelativeTime(isoStr) {
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const min  = Math.floor(diff / 60000);
+  const hr   = Math.floor(min / 60);
+  if (min <  1)  return 'just now';
+  if (min < 60)  return `${min}m ago`;
+  if (hr  < 24)  return `${hr}h ago`;
+  return new Date(isoStr).toLocaleDateString();
+}
+
 
 // ── Status banner ─────────────────────────────────────────────────────────────
 
@@ -141,7 +168,9 @@ function renderAccountBar() {
     const btn = document.createElement('button');
     btn.id = 'account-overflow-btn';
     btn.className = 'acc-overflow-btn' + (hasActiveInOverflow ? ' has-active' : '');
-    btn.textContent = '+' + (accounts.length - CHIP_COUNT);
+    const hidden = accounts.length - CHIP_COUNT;
+    btn.textContent = hidden + ' more';
+    btn.title = `${hidden} more account${hidden === 1 ? '' : 's'}`;
     btn.addEventListener('click', e => {
       e.stopPropagation();
       overflowOpen = !overflowOpen;
@@ -492,10 +521,32 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
 
+  // Diff old accounts vs draft: stamp _updatedAt on new/changed, tombstone deleted
+  const now      = new Date().toISOString();
+  const oldMap   = new Map(accounts.map(a => [a.name, a]));
+  const draftSet = new Set(draft.map(a => a.name));
+
+  for (const acc of draft) {
+    const old = oldMap.get(acc.name);
+    const changed = !old ||
+      old.secret !== acc.secret || old.urls !== acc.urls ||
+      old.email !== acc.email || old.autofill !== acc.autofill;
+    acc._updatedAt = changed ? now : (old._updatedAt ?? now);
+  }
+
+  const newTombs = { ...tombstones };
+  for (const acc of accounts) {
+    if (!draftSet.has(acc.name)) newTombs[acc.name] = now;
+  }
+  tombstones = newTombs;
+  await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+
   draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   accounts = draft;
   activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
   await saveState();
+  await stampLocalChange();
+  silentPullSync(); // start push before navigating so fetch is in-flight while popup is open
 
   openAccIdx = -1;
   renderAccountBar();
@@ -599,9 +650,16 @@ const normSecret = s => (s || '').replace(/\s+/g, '').toUpperCase();
 
 async function applyImport(selectedAccounts) {
   const existingSecrets = new Set(accounts.map(a => normSecret(a.secret)));
-  const toAdd = selectedAccounts.filter(a => !existingSecrets.has(normSecret(a.secret)));
+  const now   = new Date().toISOString();
+  const toAdd = selectedAccounts
+    .filter(a => !existingSecrets.has(normSecret(a.secret)))
+    .map(a => ({ ...a, _updatedAt: now }));
   accounts = [...accounts, ...toAdd];
   await saveState();
+  if (toAdd.length > 0) {
+    await stampLocalChange();
+    silentPullSync();
+  }
   renderAccountBar();
   renderAccountsList();
   startTimer();
@@ -1072,23 +1130,73 @@ async function renderSyncPanel() {
   }
 
   syncShowView('sv-active');
-  syncSetStatus('idle', 'Ready');
+  const readyText = lastSyncedAt
+    ? `Last synced ${formatRelativeTime(lastSyncedAt)}`
+    : 'Ready';
+  syncSetStatus('idle', readyText);
 }
 
+let _syncInProgress = false;
 async function doSync() {
+  if (_syncInProgress) return;
+  _syncInProgress = true;
   syncSetStatus('syncing', 'Syncing…');
   try {
-    const result = await CloudSync.push(accounts, new Date().toISOString());
-    if (result.conflict) {
-      const merged = CloudSync.mergeAccounts(accounts, result.serverAccounts);
-      accounts = merged;
+    const serverMeta = await CloudSync.getServerMeta();
+
+    const serverNewer = serverMeta !== null &&
+      (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt);
+    const localNewer  = localChangedAt !== null &&
+      (lastSyncedAt === null || localChangedAt > lastSyncedAt);
+
+    if (serverNewer && !localNewer) {
+      accounts   = serverMeta.accounts;
+      tombstones = serverMeta.tombstones;
       await saveState();
+      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
       renderAccountBar();
-      await CloudSync.push(accounts, new Date().toISOString());
+      startTimer();
+      await writeLastSyncedAt(serverMeta.updatedAt);
+    } else if (!serverNewer && localNewer) {
+      await CloudSync.push(accounts, tombstones, localChangedAt);
+      await writeLastSyncedAt(localChangedAt);
+    } else if (serverNewer && localNewer) {
+      const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
+        accounts, tombstones, serverMeta.accounts, serverMeta.tombstones, lastSyncedAt
+      );
+      accounts   = merged;
+      tombstones = mergedTombs;
+      const now = new Date().toISOString();
+      await saveState();
+      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+      renderAccountBar();
+      startTimer();
+      await CloudSync.push(merged, mergedTombs, now);
+      await writeLastSyncedAt(now);
+    } else if (!serverMeta && localChangedAt) {
+      await CloudSync.push(accounts, tombstones, localChangedAt);
+      await writeLastSyncedAt(localChangedAt);
     }
+
+    if (serverMeta?.command) {
+      await CloudSync.executeCommand(serverMeta.command);
+      await renderSyncPanel();
+      return;
+    }
+
     syncSetStatus('ok', `Synced · ${new Date().toLocaleTimeString()}`);
   } catch (e) {
-    syncSetStatus('error', e.message ?? 'Sync failed');
+    const msg = e.message ?? 'Sync failed';
+    if (/401/.test(msg)) {
+      // Account deleted or token revoked — sign out cleanly
+      _syncInProgress = false;
+      await SupabaseAuth.signOut();
+      await renderSyncPanel();
+      return;
+    }
+    syncSetStatus('error', msg);
+  } finally {
+    _syncInProgress = false;
   }
 }
 
@@ -1098,13 +1206,14 @@ document.getElementById('btn-google-signin').addEventListener('click', async e =
   btn.disabled = true;
   btn.textContent = 'Signing in…';
   try {
-    await new Promise((resolve, reject) => {
+    const session = await new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({ action: 'signInWithGoogle' }, response => {
         if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
         if (response?.ok) resolve(response.session);
         else reject(new Error(response?.error ?? 'Sign in failed'));
       });
     });
+    SupabaseAuth.cacheSession(session); // avoid storage propagation race before syncUser
     await CloudSync.syncUser();
     await renderSyncPanel();
   } catch (err) {
@@ -1138,6 +1247,7 @@ document.getElementById('btn-confirm-newkey').addEventListener('click', async ()
   syncSetStatus('syncing', 'Uploading…');
   try {
     await CloudSync.syncUser();
+    await stampLocalChange(); // force initial push so other devices can detect existing sync
     await doSync();
   } catch (e) {
     syncSetStatus('error', e.message);
@@ -1153,11 +1263,17 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
   if (!keyB64) { errEl.textContent = 'Paste your recovery key.'; return; }
   try {
     await CloudSync.saveSyncKey(keyB64);
-    const remoteAccounts = await CloudSync.pull();
-    if (remoteAccounts) {
-      const merged = CloudSync.mergeAccounts(accounts, remoteAccounts);
-      accounts = merged;
+    const pullResult = await CloudSync.pull();
+    if (pullResult) {
+      const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
+      const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
+        accounts, tombstones, remoteAccounts, remoteTombs, null
+      );
+      accounts   = merged;
+      tombstones = mergedTombs;
       await saveState();
+      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+      await writeLastSyncedAt(new Date().toISOString());
       renderAccountBar();
     }
     syncShowView('sv-active');
@@ -1192,11 +1308,15 @@ document.getElementById('btn-show-recovery').addEventListener('click', async () 
   };
 });
 
-// Stop syncing — free plan view (show confirmation)
+// Sign out — free plan view (no sync key, no confirmation needed)
 let _stopSyncMode = 'free';
-document.getElementById('btn-free-signout').addEventListener('click', () => {
-  _stopSyncMode = 'free';
-  syncShowView('sv-stop-confirm');
+document.getElementById('btn-free-signout').addEventListener('click', async () => {
+  await SupabaseAuth.signOut();
+  await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r));
+  localChangedAt = null;
+  lastSyncedAt   = null;
+  tombstones     = {};
+  await renderSyncPanel();
 });
 
 // Stop syncing — active view (show confirmation)
@@ -1214,7 +1334,12 @@ document.getElementById('btn-cancel-stop-sync').addEventListener('click', () => 
 document.getElementById('btn-confirm-stop-sync').addEventListener('click', async () => {
   await SupabaseAuth.signOut();
   if (_stopSyncMode === 'active') await CloudSync.deleteSyncKey();
-  await new Promise(r => chrome.storage.local.remove('userPlan', r));
+  await new Promise(r => chrome.storage.local.remove(
+    ['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r
+  ));
+  localChangedAt = null;
+  lastSyncedAt   = null;
+  tombstones     = {};
   document.querySelector('.kofi-footer').style.display = '';
   syncShowView('sv-signin');
   const btn = document.getElementById('btn-google-signin');
@@ -1232,22 +1357,26 @@ document.getElementById('kofi-link').addEventListener('click', e => {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-// Silent background pull on popup open — picks up changes from other devices.
+// Full sync on popup open and on server-change notifications.
+// Guards session + key so doSync is never called without credentials.
 async function silentPullSync() {
+  if (_syncInProgress) return;
   try {
     const session = await SupabaseAuth.getSession();
     if (!session) return;
     const syncKey = await CloudSync.getSyncKey();
     if (!syncKey) return;
-    const remote = await CloudSync.pull();
-    if (!remote) return;
-    const merged = CloudSync.mergeAccounts(accounts, remote);
-    if (merged.length !== accounts.length) {
-      accounts = merged;
-      await saveState();
-      renderAccountBar();
+    const { userPlan: plan } = await new Promise(r => chrome.storage.local.get('userPlan', r));
+    if (!canSync(plan)) return;
+    await doSync();
+  } catch (e) {
+    const msg = e?.message ?? '';
+    if (/401/.test(msg)) {
+      await SupabaseAuth.signOut();
+      await renderSyncPanel();
     }
-  } catch { /* offline or not synced — ignore */ }
+    // other errors (offline, etc.) — ignore silently
+  }
 }
 
 (async () => {
@@ -1257,5 +1386,9 @@ async function silentPullSync() {
   renderAccountBar();
   startTimer();
   if (justAuthenticated) tryAutoFillCurrentTab();
+  chrome.storage.local.remove('pendingServerSync');
   silentPullSync(); // fire-and-forget
+  chrome.runtime.onMessage.addListener(msg => {
+    if (msg.action === 'serverDataChanged') silentPullSync();
+  });
 })();

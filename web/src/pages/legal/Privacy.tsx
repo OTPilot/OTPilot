@@ -85,7 +85,7 @@ export default function Privacy() {
             <h2 className="text-white font-semibold text-lg mb-3">GDPR rights (EU users)</h2>
             <ul className="space-y-2">
               <li><strong className="text-zinc-300">Access:</strong> Request a copy of all data we hold about you.</li>
-              <li><strong className="text-zinc-300">Deletion:</strong> Delete your account from the dashboard. All data is purged within 30 days.</li>
+              <li><strong className="text-zinc-300">Deletion:</strong> Delete your account from the dashboard Settings page. All synced data is deleted immediately and permanently. Stripe billing records are retained as required by law.</li>
               <li><strong className="text-zinc-300">Portability:</strong> Export your encrypted backup at any time from the extension.</li>
               <li><strong className="text-zinc-300">Rectification:</strong> Update your email via dashboard settings.</li>
             </ul>
@@ -94,7 +94,7 @@ export default function Privacy() {
 
           <section>
             <h2 className="text-white font-semibold text-lg mb-3">Data retention</h2>
-            <p>Account data is retained while your account is active. Upon deletion, all data is permanently removed within 30 days. Stripe billing records are retained as required by law.</p>
+            <p>Account data is retained while your account is active. Upon deletion, all synced data (accounts blob, devices, sync history) is deleted immediately and permanently. Stripe billing records are retained as required by applicable financial regulations.</p>
           </section>
 
           <section>

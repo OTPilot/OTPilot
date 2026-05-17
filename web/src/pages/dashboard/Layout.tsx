@@ -7,6 +7,7 @@ import Logo from '../../components/Logo'
 const navItems = [
   { to: '/dashboard',          label: 'Overview',  end: true },
   { to: '/dashboard/billing',  label: 'Billing' },
+  { to: '/dashboard/devices',  label: 'Devices' },
   { to: '/dashboard/team',     label: 'Team' },
   { to: '/dashboard/settings', label: 'Settings' },
 ]

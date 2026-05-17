@@ -1,4 +1,5 @@
 mod db;
+mod email;
 mod error;
 mod middleware;
 mod routes;
@@ -20,6 +21,10 @@ pub struct AppState {
     pub stripe_personal_price_id: String,
     pub success_url: String,
     pub cancel_url: String,
+    pub resend_api_key: Option<String>,
+    pub from_email: String,
+    pub supabase_url: String,
+    pub supabase_service_key: String,
 }
 
 #[tokio::main]
@@ -29,13 +34,18 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "api=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "api=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     let db = db::connect().await?;
     sqlx::migrate!("./migrations").run(&db).await?;
+
+    // Finish any deletions where Supabase succeeded but the DB DELETE did not.
+    let _ = sqlx::query("DELETE FROM users WHERE pending_deletion_at IS NOT NULL")
+        .execute(&db)
+        .await;
 
     let supabase_url = std::env::var("SUPABASE_URL").expect("SUPABASE_URL must be set");
     let jwks_url = format!("{}/auth/v1/.well-known/jwks.json", supabase_url);
@@ -64,6 +74,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "http://localhost:5173/dashboard?upgraded=1".into());
     let cancel_url =
         std::env::var("CANCEL_URL").unwrap_or_else(|_| "http://localhost:5173/dashboard".into());
+    let resend_api_key = std::env::var("RESEND_API_KEY").ok();
+    let from_email = std::env::var("FROM_EMAIL").unwrap_or_else(|_| "noreply@otpilot.app".into());
+    let supabase_service_key =
+        std::env::var("SUPABASE_SERVICE_ROLE_KEY").expect("SUPABASE_SERVICE_ROLE_KEY must be set");
 
     let state = AppState {
         db,
@@ -73,6 +87,10 @@ async fn main() -> anyhow::Result<()> {
         stripe_personal_price_id,
         success_url,
         cancel_url,
+        resend_api_key,
+        from_email,
+        supabase_url,
+        supabase_service_key,
     };
 
     let cors = CorsLayer::new()
@@ -85,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::accounts::router())
         .merge(routes::teams::router())
         .merge(routes::billing::router())
+        .merge(routes::devices::router())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

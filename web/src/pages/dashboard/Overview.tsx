@@ -1,9 +1,17 @@
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../../lib/useAuth'
 import { apiFetch } from '../../lib/api'
 
-type UserData = { id: string; plan: string; created_at: string }
-type SyncData = { updated_at: string } | null
+type UserData = {
+  id: string
+  plan: string
+  created_at: string
+  last_sync_at: string | null
+  accounts_count: number
+  syncs_this_month: number
+  devices_count: number
+}
 
 function useUserPlan() {
   return useQuery<UserData>({
@@ -17,36 +25,23 @@ function useUserPlan() {
   })
 }
 
-function useSyncInfo(enabled: boolean) {
-  return useQuery<SyncData>({
-    queryKey: ['sync-info'],
-    queryFn: async () => {
-      const res = await apiFetch('/accounts')
-      if (!res.ok) return null
-      return res.json()
-    },
-    staleTime: 30_000,
-    enabled,
-  })
-}
-
-function formatSyncTime(iso: string) {
-  const d = new Date(iso)
-  const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
+function formatRelative(iso: string) {
+  const diffMs = Date.now() - new Date(iso).getTime()
   const diffMin = Math.floor(diffMs / 60_000)
   if (diffMin < 1) return 'Just now'
   if (diffMin < 60) return `${diffMin}m ago`
   const diffH = Math.floor(diffMin / 60)
   if (diffH < 24) return `${diffH}h ago`
-  return d.toLocaleDateString()
+  return new Date(iso).toLocaleDateString()
+}
+
+function formatMemberSince(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
 }
 
 export default function Overview() {
   const { user } = useAuth()
   const { data: userData } = useUserPlan()
-  const canSync = userData?.plan === 'personal' || userData?.plan === 'team_lite' || userData?.plan === 'team_pro'
-  const { data: syncData } = useSyncInfo(canSync)
 
   const PLAN_LABELS: Record<string, string> = {
     free: 'Free',
@@ -54,11 +49,9 @@ export default function Overview() {
     team_lite: 'Team',
     team_pro: 'Team Pro',
   }
-  const planLabel = userData ? (PLAN_LABELS[userData.plan] ?? userData.plan) : '–'
 
-  const lastSync = syncData?.updated_at
-    ? formatSyncTime(syncData.updated_at)
-    : 'Never'
+  const planLabel  = userData ? (PLAN_LABELS[userData.plan] ?? userData.plan) : '–'
+  const lastSync   = userData?.last_sync_at ? formatRelative(userData.last_sync_at) : 'Never'
 
   return (
     <div className="space-y-6">
@@ -68,19 +61,28 @@ export default function Overview() {
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-        <StatCard label="Plan" value={planLabel} />
-        <StatCard label="Last sync" value={lastSync} />
+        <StatCard label="Plan"             value={planLabel}                                          to="/dashboard/billing" />
+        <StatCard label="Last sync"        value={lastSync} />
+        <StatCard label="Accounts"         value={String(userData?.accounts_count   ?? '–')} />
+        <StatCard label="Devices"          value={String(userData?.devices_count    ?? '–')}          to="/dashboard/devices" />
+        <StatCard label="Syncs this month" value={String(userData?.syncs_this_month ?? '–')} />
+        <StatCard label="Member since"     value={userData ? formatMemberSince(userData.created_at) : '–'} />
       </div>
-
     </div>
   )
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+function StatCard({ label, value, to }: { label: string; value: string; to?: string }) {
+  const content = (
+    <>
       <p className="text-xs text-zinc-500 mb-1">{label}</p>
       <p className="text-lg font-bold text-zinc-100">{value}</p>
-    </div>
+    </>
   )
+
+  const cls = 'rounded-lg border border-zinc-800 bg-zinc-900 p-4' +
+    (to ? ' hover:border-zinc-600 transition-colors' : '')
+
+  if (to) return <Link to={to} className={cls}>{content}</Link>
+  return <div className={cls}>{content}</div>
 }
