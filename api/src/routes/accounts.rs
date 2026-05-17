@@ -1,4 +1,8 @@
-use axum::{extract::{Query, State}, routing::get, Json, Router};
+use axum::{
+    extract::{Query, State},
+    routing::get,
+    Json, Router,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -178,7 +182,9 @@ async fn put_accounts(
         .await;
 
         if is_new {
-            if let (Some(email), Some(api_key)) = (auth.email.as_deref(), state.resend_api_key.as_deref()) {
+            if let (Some(email), Some(api_key)) =
+                (auth.email.as_deref(), state.resend_api_key.as_deref())
+            {
                 crate::email::send_new_device_email(api_key, &state.from_email, email, name).await;
             }
         }

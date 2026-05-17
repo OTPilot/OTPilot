@@ -70,8 +70,7 @@ async fn main() -> anyhow::Result<()> {
     let cancel_url =
         std::env::var("CANCEL_URL").unwrap_or_else(|_| "http://localhost:5173/dashboard".into());
     let resend_api_key = std::env::var("RESEND_API_KEY").ok();
-    let from_email = std::env::var("FROM_EMAIL")
-        .unwrap_or_else(|_| "noreply@otpilot.app".into());
+    let from_email = std::env::var("FROM_EMAIL").unwrap_or_else(|_| "noreply@otpilot.app".into());
     let supabase_service_key =
         std::env::var("SUPABASE_SERVICE_ROLE_KEY").expect("SUPABASE_SERVICE_ROLE_KEY must be set");
 

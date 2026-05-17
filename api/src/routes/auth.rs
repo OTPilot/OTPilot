@@ -1,4 +1,9 @@
-use axum::{extract::State, http::StatusCode, routing::{delete, post}, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    routing::{delete, post},
+    Json, Router,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
@@ -86,7 +91,9 @@ async fn sync_user(
         .await;
 
         if is_new {
-            if let (Some(email), Some(api_key)) = (auth.email.as_deref(), state.resend_api_key.as_deref()) {
+            if let (Some(email), Some(api_key)) =
+                (auth.email.as_deref(), state.resend_api_key.as_deref())
+            {
                 crate::email::send_new_device_email(api_key, &state.from_email, email, name).await;
             }
         }
@@ -116,10 +123,7 @@ async fn sync_user(
     Ok(Json(user))
 }
 
-async fn delete_user(
-    State(state): State<AppState>,
-    auth: AuthUser,
-) -> Result<StatusCode> {
+async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<StatusCode> {
     // Delete our DB rows first (CASCADE handles accounts, devices, sync_logs)
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(auth.id)
