@@ -6,7 +6,7 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["storage", "tabs", "identity"],
+  "permissions": ["storage", "tabs", "identity", "alarms"],
   "host_permissions": ["*://*/*", "https://qulptwblkmcvsjrjnugl.supabase.co/*"],
   "icons": {
     "16":  "icon16.png",

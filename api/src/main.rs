@@ -1,4 +1,5 @@
 mod db;
+mod email;
 mod error;
 mod middleware;
 mod routes;
@@ -20,6 +21,8 @@ pub struct AppState {
     pub stripe_personal_price_id: String,
     pub success_url: String,
     pub cancel_url: String,
+    pub resend_api_key: Option<String>,
+    pub from_email: String,
 }
 
 #[tokio::main]
@@ -29,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "api=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "api=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -64,6 +67,9 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "http://localhost:5173/dashboard?upgraded=1".into());
     let cancel_url =
         std::env::var("CANCEL_URL").unwrap_or_else(|_| "http://localhost:5173/dashboard".into());
+    let resend_api_key = std::env::var("RESEND_API_KEY").ok();
+    let from_email = std::env::var("FROM_EMAIL")
+        .unwrap_or_else(|_| "noreply@otpilot.app".into());
 
     let state = AppState {
         db,
@@ -73,6 +79,8 @@ async fn main() -> anyhow::Result<()> {
         stripe_personal_price_id,
         success_url,
         cancel_url,
+        resend_api_key,
+        from_email,
     };
 
     let cors = CorsLayer::new()
@@ -85,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::accounts::router())
         .merge(routes::teams::router())
         .merge(routes::billing::router())
+        .merge(routes::devices::router())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

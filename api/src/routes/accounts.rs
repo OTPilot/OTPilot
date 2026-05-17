@@ -1,4 +1,4 @@
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{extract::{Query, State}, routing::get, Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -29,14 +29,39 @@ struct UserPlanRow {
     plan: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct PendingCmdRow {
+    pending_action: String,
+    pending_nonce: String,
+}
+
+#[derive(Deserialize)]
+struct GetAccountsParams {
+    device_id: Option<String>,
+}
+
 #[derive(Deserialize, Serialize)]
 struct PutAccountsRequest {
     encrypted_blob: String,
     /// Client's local updated_at — used for last-write-wins conflict resolution.
     updated_at: chrono::DateTime<Utc>,
+    #[serde(default)]
+    device_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    os: Option<String>,
+    #[serde(default)]
+    browser: Option<String>,
+    #[serde(default)]
+    accounts_count: Option<i32>,
 }
 
-async fn get_accounts(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Value>> {
+async fn get_accounts(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<GetAccountsParams>,
+) -> Result<Json<Value>> {
     require_cloud_plan(&state, auth.id).await?;
 
     let row = sqlx::query_as::<_, AccountRow>(
@@ -46,12 +71,21 @@ async fn get_accounts(State(state): State<AppState>, auth: AuthUser) -> Result<J
     .fetch_optional(&state.db)
     .await?;
 
+    let command = pending_command(&state.db, auth.id, params.device_id.as_deref()).await;
+
     match row {
         Some(r) => Ok(Json(json!({
             "encrypted_blob": r.encrypted_blob,
             "updated_at": r.updated_at,
+            "command": command,
         }))),
-        None => Ok(Json(json!(null))),
+        None => {
+            if let Some(cmd) = command {
+                Ok(Json(json!({ "command": cmd })))
+            } else {
+                Ok(Json(json!(null)))
+            }
+        }
     }
 }
 
@@ -102,10 +136,80 @@ async fn put_accounts(
     .execute(&state.db)
     .await?;
 
+    if let (Some(device_id), Some(name), Some(os), Some(browser)) = (
+        body.device_id.as_deref(),
+        body.name.as_deref(),
+        body.os.as_deref(),
+        body.browser.as_deref(),
+    ) {
+        let is_new: bool = sqlx::query_scalar(
+            "SELECT NOT EXISTS(SELECT 1 FROM devices WHERE user_id = $1 AND device_id = $2)",
+        )
+        .bind(auth.id)
+        .bind(device_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
+
+        let _ = sqlx::query(
+            r#"
+            INSERT INTO devices (user_id, device_id, name, os, browser)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (user_id, device_id) DO UPDATE
+            SET name = EXCLUDED.name, os = EXCLUDED.os, browser = EXCLUDED.browser,
+                last_seen_at = NOW()
+            "#,
+        )
+        .bind(auth.id)
+        .bind(device_id)
+        .bind(name)
+        .bind(os)
+        .bind(browser)
+        .execute(&state.db)
+        .await;
+
+        let _ = sqlx::query(
+            "INSERT INTO sync_logs (user_id, device_id, action, accounts_count) VALUES ($1, $2, 'push', $3)",
+        )
+        .bind(auth.id)
+        .bind(device_id)
+        .bind(body.accounts_count.unwrap_or(0))
+        .execute(&state.db)
+        .await;
+
+        if is_new {
+            if let (Some(email), Some(api_key)) = (auth.email.as_deref(), state.resend_api_key.as_deref()) {
+                crate::email::send_new_device_email(api_key, &state.from_email, email, name).await;
+            }
+        }
+    }
+
+    let command = pending_command(&state.db, auth.id, body.device_id.as_deref()).await;
+
     Ok(Json(json!({
         "conflict": false,
         "updated_at": body.updated_at,
+        "command": command,
     })))
+}
+
+async fn pending_command(
+    db: &sqlx::PgPool,
+    user_id: uuid::Uuid,
+    device_id: Option<&str>,
+) -> Option<Value> {
+    let device_id = device_id?;
+    sqlx::query_as::<_, PendingCmdRow>(
+        "SELECT pending_action, pending_nonce FROM devices
+         WHERE user_id = $1 AND device_id = $2 AND pending_action IS NOT NULL",
+    )
+    .bind(user_id)
+    .bind(device_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .map(|r| json!({ "action": r.pending_action, "nonce": r.pending_nonce }))
 }
 
 /// Checks that the user has a plan that allows cloud sync (personal or team).

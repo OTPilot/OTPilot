@@ -8,6 +8,7 @@ import Overview from './pages/dashboard/Overview'
 import Billing from './pages/dashboard/Billing'
 import Team from './pages/dashboard/Team'
 import Settings from './pages/dashboard/Settings'
+import Devices from './pages/dashboard/Devices'
 import Tos from './pages/legal/Tos'
 import Privacy from './pages/legal/Privacy'
 import Refunds from './pages/legal/Refunds'
@@ -25,6 +26,7 @@ export default function App() {
           <Route index element={<Overview />} />
           <Route path="billing" element={<Billing />} />
           <Route path="team" element={<Team />} />
+          <Route path="devices" element={<Devices />} />
           <Route path="settings" element={<Settings />} />
         </Route>
 

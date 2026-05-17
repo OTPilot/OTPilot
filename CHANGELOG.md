@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.1.0 (Unreleased — in development)
+
+### Smart sync
+
+- **Merge-aware sync** — changes from two browsers that happened simultaneously are now merged instead of the slower one silently overwriting the faster one. If both devices edited the same account at the same time, both versions are preserved and one is marked `(conflict)` so you can decide later.
+- **Deletion tracking** — deleting an account now propagates to all other devices correctly. Previously, the deleted account would reappear on the next sync from another browser.
+- **Last-write-wins per account** — each account carries an `_updatedAt` timestamp. When two devices edited different accounts, both changes survive. When one edited an account sequentially after the other, the newest version wins cleanly.
+- **Auto-sync on save** — any change (add, edit, delete) automatically triggers a sync 2 seconds after saving. No need to open the sync panel.
+- **Background polling** — the extension polls the server every 5 minutes while the browser is open. If another device makes a change while the popup is closed, you see it as soon as you open it.
+- **Full sync on popup open** — opening the popup now always runs a complete sync: pull if server is newer, push if local is newer, merge if both changed. Previously it could skip syncing when there were unsaved local changes.
+- **Last synced time** — the sync panel now shows "Last synced 3m ago" instead of "Ready" when a prior sync exists.
+
+### Device management
+
+- **Device tracking** — each browser installation gets a stable device ID. Every sync records which device synced, the browser name, OS, and account count.
+- **New device alert** — when a new browser syncs your vault for the first time, you receive an email notification.
+- **Devices dashboard** — the web dashboard has a new Devices page listing all connected browsers, when they last synced, and their full sync history (up to 10 entries per device).
+- **Disconnect** — send a disconnect command to any device from the dashboard. The next time that device syncs, it loses access to the sync key and stops syncing.
+- **Remove** — like disconnect, but also wipes all local OTPilot data from that device (accounts, keys, settings) on next sync.
+- **Sync log auto-cleanup** — the database keeps only the last 10 sync log entries per device automatically via a PostgreSQL trigger.
+
+### Other
+
+- **Overflow counter** — the account bar overflow button now reads "2 more" instead of "+2", and shows a tooltip with the exact count.
+
 ## v1.0.0 (Unreleased — in development)
 
 - **Cloud sync** — accounts are encrypted end-to-end on the device and synced across all your browsers. A recovery key is generated on first use; the server never sees your secrets unencrypted.
