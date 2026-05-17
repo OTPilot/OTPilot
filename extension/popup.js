@@ -1315,6 +1315,7 @@ document.getElementById('btn-free-signout').addEventListener('click', async () =
   await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r));
   localChangedAt = null;
   lastSyncedAt   = null;
+  tombstones     = {};
   await renderSyncPanel();
 });
 
