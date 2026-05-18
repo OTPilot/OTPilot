@@ -131,7 +131,6 @@ async fn leave_device(
     auth: AuthUser,
     Path(device_id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
-    require_cloud_plan(&state, auth.id).await?;
     sqlx::query("DELETE FROM devices WHERE user_id = $1 AND device_id = $2")
         .bind(auth.id)
         .bind(&device_id)

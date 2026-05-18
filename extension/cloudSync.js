@@ -274,7 +274,8 @@ const CloudSync = (() => {
 
   async function leaveDevice() {
     const device_id = await getDeviceId();
-    await apiFetch(`/devices/${encodeURIComponent(device_id)}/leave`, { method: 'POST' });
+    const res = await apiFetch(`/devices/${encodeURIComponent(device_id)}/leave`, { method: 'POST' });
+    if (!res.ok) throw new Error(`leaveDevice ${res.status}`);
   }
 
   return {
