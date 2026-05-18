@@ -1,5 +1,8 @@
 # Changelog
 
+ ## v1.1.0 (Unreleased — in development)
+
+
 
 ## v1.0.0
 
@@ -45,7 +48,7 @@
 - **E2E test suite** — Playwright tests cover the popup UI (setup screen, OTP display, accounts view, search), content script setup detection (overlay appears/disappears correctly), and the autofill flow (OTP field filled and highlighted via extension message). Tests run automatically on every pull request via GitHub Actions (`xvfb-run` for headed Chrome on Linux).
 
 
-## v0.0.5 (Unreleased — in development)
+## v0.0.5
 
 - **Vault list redesign** — the Vault tab now renders accounts as a compact accordion list sorted alphabetically. Each row shows only the colored avatar, name, and email; clicking a row expands it to reveal the full edit form while collapsing any previously open row. A search bar at the top filters by name or email in real time, with a live account counter that updates as you type.
 - **Scalable account switcher** — replaced the horizontal scrolling tab bar with a chip + overflow pattern. The first three accounts appear as compact chips (colored avatar circle + name); a `+N` button reveals the rest. The overflow panel includes a live search that filters all accounts by name or email, making navigation fast regardless of vault size.
