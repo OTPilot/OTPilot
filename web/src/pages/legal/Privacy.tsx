@@ -78,6 +78,9 @@ export default function Privacy() {
               <li><strong className="text-zinc-300">Supabase</strong> — authentication (magic links, OAuth). GDPR-compliant, EU hosting available.</li>
               <li><strong className="text-zinc-300">Railway</strong> — API and database hosting.</li>
               <li><strong className="text-zinc-300">Stripe</strong> — payment processing. PCI DSS compliant.</li>
+              <li><strong className="text-zinc-300">Resend</strong> — transactional email delivery (new device alerts).</li>
+              <li><strong className="text-zinc-300">Vercel</strong> — web frontend hosting and anonymous traffic analytics.</li>
+              <li><strong className="text-zinc-300">Sentry</strong> — error monitoring and crash reporting.</li>
             </ul>
           </section>
 

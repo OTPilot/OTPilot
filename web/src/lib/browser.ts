@@ -15,7 +15,7 @@ export type BrowserMeta = {
   href: string | null
 }
 
-export const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/otpilot'
+export const CHROME_STORE_URL = 'https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk'
 
 export const browserMeta: Record<Browser, BrowserMeta> = {
   chrome: {
@@ -26,7 +26,7 @@ export const browserMeta: Record<Browser, BrowserMeta> = {
   edge: {
     name: 'Edge',
     available: true,
-    href: 'https://microsoftedge.microsoft.com/addons/detail/otpilot',
+    href: 'https://microsoftedge.microsoft.com/addons/detail/OTPilot/alcjdoijhlfpmanfjiibhlinehdgdnce',
   },
   firefox: {
     name: 'Firefox',

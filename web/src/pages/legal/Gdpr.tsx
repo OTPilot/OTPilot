@@ -49,6 +49,13 @@ const processors = [
     gdpr: 'PCI DSS compliant · DPA available',
     link: 'https://stripe.com/privacy',
   },
+  {
+    name: 'Sentry',
+    purpose: 'Error monitoring and crash reporting',
+    location: 'USA',
+    gdpr: 'DPA available · SCCs in place',
+    link: 'https://sentry.io/privacy/',
+  },
 ]
 
 export default function Gdpr() {
