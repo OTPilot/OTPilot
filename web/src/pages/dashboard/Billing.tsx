@@ -40,13 +40,31 @@ export default function Billing() {
   }
 
   const plan = userData?.plan ?? 'free'
-  const isPaid = plan === 'personal' || plan === 'team_lite' || plan === 'team_pro'
-  const PLAN_LABELS: Record<string, string> = {
-    free: 'Free',
-    personal: 'Personal',
-    team_lite: 'Team Lite',
-    team_pro: 'Team Pro',
-  }
+  const isPaid = plan !== 'free'
+
+  const freePlanFeatures = [
+    'Unlimited TOTP accounts',
+    'Auto-fill on any site',
+    'Auto-detect 2FA setup',
+    'Master password lock',
+    'Local encrypted backup',
+    'Chrome, Firefox & Edge',
+  ]
+
+  const personalFeatures = [
+    'Everything in Free',
+    'End-to-end encrypted sync',
+    'Multi-device, multi-browser',
+    'Cloud backup',
+  ]
+
+  const teamFeatures = [
+    'Everything in Personal',
+    '5 seats included',
+    'Shared TOTP accounts',
+    'Invite & revoke access',
+    '+$2 / extra seat / month',
+  ]
 
   return (
     <div className="space-y-6">
@@ -61,90 +79,144 @@ export default function Billing() {
         </div>
       )}
 
-      {/* Current plan card */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Current plan</p>
-          {isLoading && <div className="w-4 h-4 rounded-full border-2 border-zinc-700 border-t-zinc-400 animate-spin" />}
-        </div>
+      {error && <p className="text-sm text-red-400">{error}</p>}
 
-        <div className="flex items-center gap-3">
-          <span className={`text-2xl font-bold ${isPaid ? 'text-teal-400' : 'text-zinc-100'}`}>
-            {PLAN_LABELS[plan] ?? plan}
-          </span>
-          {plan === 'personal' && (
-            <span className="text-xs font-semibold bg-teal-500/15 text-teal-400 border border-teal-500/25 px-2 py-0.5 rounded-full">
-              Lifetime
-            </span>
-          )}
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 
-        <ul className="space-y-1.5">
-          {isPaid ? (
-            <>
-              <PlanFeature text="Cloud sync across all your devices" active />
-              <PlanFeature text="End-to-end encrypted backups" active />
-              <PlanFeature text="One-time payment — no subscription" active />
-            </>
-          ) : (
-            <>
-              <PlanFeature text="Unlimited TOTP accounts" active />
-              <PlanFeature text="Auto-fill on any site" active />
-              <PlanFeature text="Auto-detect 2FA setup" active />
-              <PlanFeature text="Master password lock" active />
-              <PlanFeature text="Local encrypted backup" active />
-              <PlanFeature text="Chrome, Firefox & Edge" active />
-              <PlanFeature text="Cloud sync across devices" active={false} />
-              <PlanFeature text="Cross-device access" active={false} />
-            </>
-          )}
-        </ul>
+        {/* Free */}
+        <PlanCard
+          name="Free"
+          price="$0"
+          priceNote="forever"
+          features={freePlanFeatures}
+          current={plan === 'free'}
+          highlight={false}
+          cta={plan === 'free' ? 'Current plan' : null}
+          ctaDisabled
+        />
+
+        {/* Personal Cloud */}
+        <PlanCard
+          name="Personal Cloud"
+          price="$15"
+          priceLabel="one-time payment"
+          priceNote="your price, locked in forever"
+          badge={isPaid ? undefined : 'Early Adopter'}
+          features={personalFeatures}
+          current={plan === 'personal'}
+          highlight={!isPaid}
+          cta={isPaid ? 'Current plan' : (upgrading ? 'Redirecting to Stripe…' : 'Upgrade — $15 one-time')}
+          ctaDisabled={isPaid || isLoading}
+          onCtaClick={!isPaid ? handleUpgrade : undefined}
+          ctaNote={!isPaid ? 'Secure payment via Stripe · 14-day refund policy' : undefined}
+        />
+
+        {/* Team Lite */}
+        <PlanCard
+          name="Team Lite"
+          price="$8"
+          priceNote="per workspace / month"
+          features={teamFeatures}
+          current={plan === 'team_lite' || plan === 'team_pro'}
+          highlight={false}
+          cta="Coming soon"
+          ctaDisabled
+        />
+
       </div>
 
-      {/* Upgrade CTA */}
-      {!isPaid && (
-        <div className="rounded-lg border border-zinc-700 bg-zinc-900 p-5 space-y-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1">Upgrade</p>
-            <p className="text-2xl font-bold text-zinc-100">
-              $15
-              <span className="text-sm font-normal text-zinc-500 ml-1">one-time</span>
-            </p>
-            <p className="text-xs text-zinc-500 mt-0.5">Paid once — your access and price are locked in.</p>
-          </div>
-
-          {error && <p className="text-sm text-red-400">{error}</p>}
-
-          <button
-            onClick={handleUpgrade}
-            disabled={upgrading || isLoading}
-            className="w-full py-2.5 rounded-lg bg-teal-500 hover:bg-teal-400 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-950 text-sm font-semibold transition-colors"
-          >
-            {upgrading ? 'Redirecting to Stripe…' : 'Upgrade to Personal — $15'}
-          </button>
-
-          <p className="text-xs text-zinc-600 text-center">
-            Secure payment via Stripe · 14-day refund policy
-          </p>
-        </div>
-      )}
+      <p className="text-xs text-zinc-600 text-center">
+        All plans include a 14-day refund window for technical issues.{' '}
+        <a href="/refunds" className="underline hover:text-zinc-400 transition-colors">Refund policy →</a>
+      </p>
     </div>
   )
 }
 
-function PlanFeature({ text, active }: { text: string; active: boolean }) {
+function PlanCard({
+  name, price, priceLabel, priceNote, badge, features,
+  current, highlight, cta, ctaDisabled, onCtaClick, ctaNote,
+}: {
+  name: string
+  price: string
+  priceLabel?: string
+  priceNote: string
+  badge?: string
+  features: string[]
+  current: boolean
+  highlight: boolean
+  cta: string | null
+  ctaDisabled?: boolean
+  onCtaClick?: () => void
+  ctaNote?: string
+}) {
   return (
-    <li className="flex items-center gap-2 text-sm">
-      {active ? (
-        <svg className="w-3.5 h-3.5 text-teal-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-        </svg>
-      ) : (
-        <svg className="w-3.5 h-3.5 text-zinc-700 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-        </svg>
+    <div className={`relative rounded-2xl p-5 flex flex-col ${
+      highlight
+        ? 'bg-gradient-to-b from-teal-500/10 to-emerald-500/5 border border-teal-500/30'
+        : 'bg-white/[0.03] border border-white/8'
+    }`}>
+      {badge && (
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+          <span className="px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r from-teal-500 to-emerald-500 text-black">
+            {badge}
+          </span>
+        </div>
       )}
-      <span className={active ? 'text-zinc-300' : 'text-zinc-600'}>{text}</span>
-    </li>
+
+      {current && (
+        <div className="absolute top-3 right-3">
+          <span className="text-xs font-semibold bg-teal-500/15 text-teal-400 border border-teal-500/25 px-2 py-0.5 rounded-full">
+            Current plan
+          </span>
+        </div>
+      )}
+
+      <div className="mb-5">
+        <h3 className={`font-semibold mb-3 ${highlight ? 'text-teal-300' : 'text-zinc-300'}`}>
+          {name}
+        </h3>
+
+        {priceLabel && (
+          <span className="inline-block text-xs font-semibold uppercase tracking-wider text-teal-400 mb-1.5">
+            {priceLabel}
+          </span>
+        )}
+        <div className="flex items-end gap-1.5 mb-1">
+          <span className="text-4xl font-bold text-white">{price}</span>
+        </div>
+        <p className="text-xs text-zinc-500">{priceNote}</p>
+      </div>
+
+      <ul className="space-y-2.5 flex-1 mb-6">
+        {features.map((f) => (
+          <li key={f} className="flex items-start gap-2.5 text-sm text-zinc-300">
+            <svg className="w-4 h-4 text-teal-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+            </svg>
+            {f}
+          </li>
+        ))}
+      </ul>
+
+      {cta && (
+        <div className="space-y-2">
+          <button
+            onClick={onCtaClick}
+            disabled={ctaDisabled}
+            className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-all ${
+              ctaDisabled
+                ? 'bg-white/4 text-zinc-600 border border-white/5 cursor-not-allowed'
+                : highlight
+                  ? 'bg-gradient-to-r from-teal-500 to-emerald-500 text-black hover:from-teal-400 hover:to-emerald-400'
+                  : 'bg-white/8 text-white hover:bg-white/12 border border-white/10'
+            }`}
+          >
+            {cta}
+          </button>
+          {ctaNote && <p className="text-xs text-zinc-600 text-center">{ctaNote}</p>}
+        </div>
+      )}
+    </div>
   )
 }

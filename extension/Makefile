@@ -1,20 +1,36 @@
 VERSION := $(shell grep '"version"' manifest.json | awk -F'"' '{print $$4}')
 ZIP     := releases/otpilot-$(VERSION).zip
+ZIP_DEV := releases/otpilot-$(VERSION)-dev.zip
 
-.PHONY: zip deploy release
+EXTENSION_FILES := \
+  manifest.json \
+  popup.html popup.js \
+  background.js \
+  content.js totp.js \
+  supabase.js cloudSync.js \
+  config.js links.js \
+  icon16.png icon48.png icon128.png \
+  LICENSE
 
-zip:
+.PHONY: dev prod zip zip_dev
+
+dev:
+	@cp config-dev.js config.js
+	@echo "config.js ← config-dev.js"
+
+prod:
+	@cp config-prod.js config.js
+	@echo "config.js ← config-prod.js"
+
+zip: prod
 	@mkdir -p releases
 	@rm -f $(ZIP)
-	zip -r $(ZIP) \
-	  manifest.json \
-	  popup.html popup.js \
-	  content.js totp.js \
-	  icon16.png icon48.png icon128.png \
-	  LICENSE
+	zip $(ZIP) $(EXTENSION_FILES)
 	@echo "→ $(ZIP)"
+	@$(MAKE) dev
 
-deploy:
-	cd docs && vercel --prod
-
-release: zip deploy
+zip_dev: dev
+	@mkdir -p releases
+	@rm -f $(ZIP_DEV)
+	zip $(ZIP_DEV) $(EXTENSION_FILES)
+	@echo "→ $(ZIP_DEV)"

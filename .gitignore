@@ -19,6 +19,11 @@ api/rustc-ice-*.txt
 .env
 .env.local
 .env.*.local
+
+# extension config — use config.example.js as template
+extension/config.js
+extension/config-dev.js
+extension/config-prod.js
 docs/.vercel
 releases
 screenshots

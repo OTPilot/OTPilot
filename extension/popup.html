@@ -562,6 +562,7 @@
     .sync-view.hidden { display: none; }
     .sync-heading { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: #475569; }
     .sync-desc { font-size: 12px; color: #64748b; line-height: 1.6; }
+    .sync-hint { font-size: 11px; color: #38bdf8; background: rgba(56,189,248,.07); border: 1px solid rgba(56,189,248,.18); border-radius: 6px; padding: 8px 10px; line-height: 1.5; margin-top: 2px; }
     .btn-google {
       display: flex; align-items: center; justify-content: center; gap: 9px;
       width: 100%; padding: 9px 12px; background: #fff; border: none; border-radius: 7px;
@@ -846,6 +847,7 @@
   <div id="sv-restore" class="sync-view hidden">
     <div class="sync-heading">Enter recovery key</div>
     <div class="sync-desc">Your encrypted accounts are waiting on the server. Paste your recovery key to decrypt them.</div>
+    <div class="sync-hint">Already set up on another device? Open OTPilot there → <strong>Sync → Show recovery key</strong>.</div>
     <input type="text" class="sync-input" id="sync-restore-input" placeholder="Paste recovery key…" spellcheck="false" autocomplete="off">
     <div class="sync-err" id="sync-restore-err"></div>
     <button class="btn-sync-primary" id="btn-restore-key">Restore accounts</button>
@@ -861,7 +863,7 @@
       <div class="sync-plan-badge" id="sync-plan-badge-free">Free</div>
     </div>
     <div class="sync-desc" style="margin-top:12px">Cloud sync is available on the <strong>Personal</strong> plan — a one-time $15 payment. Your TOTP secrets are encrypted on your device before upload.</div>
-    <a href="https://otpilot.app/#pricing" target="_blank" class="btn-sync-primary" style="display:block;text-align:center;text-decoration:none;margin-top:4px">Upgrade — $15 one-time</a>
+    <a id="link-upgrade" href="#" target="_blank" class="btn-sync-primary" style="display:block;text-align:center;text-decoration:none;margin-top:4px">Upgrade — $15 one-time</a>
     <button class="btn-sync-danger" id="btn-free-signout">Sign out</button>
   </div>
 
@@ -877,7 +879,7 @@
     </div>
     <button class="btn-sync-primary" id="btn-sync-now">Sync now</button>
     <button class="btn-sync-ghost" id="btn-show-recovery">Show recovery key</button>
-    <a href="https://otpilot.app/dashboard" target="_blank" class="btn-sync-ghost" style="display:block;text-align:center;text-decoration:none">Go to dashboard →</a>
+    <a id="link-dashboard" href="#" target="_blank" class="btn-sync-ghost" style="display:block;text-align:center;text-decoration:none">Go to dashboard →</a>
     <button class="btn-sync-danger" id="btn-cloud-signout">Stop syncing</button>
   </div>
 
@@ -930,6 +932,8 @@
 
 <div id="acc-tooltip"><span class="acc-tooltip-name" id="acc-tip-name"></span><span class="acc-tooltip-email" id="acc-tip-email"></span></div>
 
+<script src="config.js"></script>
+<script src="links.js"></script>
 <script src="supabase.js"></script>
 <script src="cloudSync.js"></script>
 <script src="totp.js"></script>

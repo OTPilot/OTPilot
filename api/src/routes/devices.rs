@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
         .route("/devices/{device_id}/disconnect", post(disconnect_device))
         .route("/devices/{device_id}/erase", post(erase_device))
         .route("/devices/{device_id}/ack", post(ack_device))
+        .route("/devices/{device_id}/leave", post(leave_device))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -122,6 +123,20 @@ async fn erase_device(
     if res.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn leave_device(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(device_id): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    require_cloud_plan(&state, auth.id).await?;
+    sqlx::query("DELETE FROM devices WHERE user_id = $1 AND device_id = $2")
+        .bind(auth.id)
+        .bind(&device_id)
+        .execute(&state.db)
+        .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

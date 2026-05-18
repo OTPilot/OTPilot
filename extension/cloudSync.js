@@ -6,8 +6,7 @@
 // unless the user explicitly copies it to set up a new device.
 
 const CloudSync = (() => {
-  // Change to Railway URL before releasing:
-  const API_URL  = 'http://localhost:8080';
+  const API_URL  = CONFIG.API_URL;
   const KEY_STORE      = 'syncKey';
   const DEVICE_ID_KEY  = 'deviceId';
 
@@ -273,9 +272,14 @@ const CloudSync = (() => {
     return { accounts: result, tombstones: mergedTombs };
   }
 
+  async function leaveDevice() {
+    const device_id = await getDeviceId();
+    await apiFetch(`/devices/${encodeURIComponent(device_id)}/leave`, { method: 'POST' });
+  }
+
   return {
     getSyncKey, generateSyncKey, saveSyncKey, deleteSyncKey,
     serverHasData, syncUser, pull, push, mergeWithTombstones,
-    getServerMeta, executeCommand,
+    getServerMeta, executeCommand, leaveDevice,
   };
 })();

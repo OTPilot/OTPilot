@@ -1273,8 +1273,10 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
       tombstones = mergedTombs;
       await saveState();
       await new Promise(r => chrome.storage.local.set({ tombstones }, r));
-      await writeLastSyncedAt(new Date().toISOString());
       renderAccountBar();
+      const now = new Date().toISOString();
+      await CloudSync.push(merged, mergedTombs, now);
+      await writeLastSyncedAt(now);
     }
     syncShowView('sv-active');
     syncSetStatus('ok', 'Restored');
@@ -1311,6 +1313,7 @@ document.getElementById('btn-show-recovery').addEventListener('click', async () 
 // Sign out — free plan view (no sync key, no confirmation needed)
 let _stopSyncMode = 'free';
 document.getElementById('btn-free-signout').addEventListener('click', async () => {
+  try { await CloudSync.leaveDevice() } catch {}
   await SupabaseAuth.signOut();
   await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r));
   localChangedAt = null;
@@ -1332,6 +1335,7 @@ document.getElementById('btn-cancel-stop-sync').addEventListener('click', () => 
 
 // Stop sync: confirm
 document.getElementById('btn-confirm-stop-sync').addEventListener('click', async () => {
+  try { await CloudSync.leaveDevice() } catch {}
   await SupabaseAuth.signOut();
   if (_stopSyncMode === 'active') await CloudSync.deleteSyncKey();
   await new Promise(r => chrome.storage.local.remove(
@@ -1388,6 +1392,20 @@ async function silentPullSync() {
   if (justAuthenticated) tryAutoFillCurrentTab();
   chrome.storage.local.remove('pendingServerSync');
   silentPullSync(); // fire-and-forget
+
+  // If the user is logged in with a cloud plan but has no local sync key,
+  // they must enter the recovery key before using sync — go there automatically.
+  (async () => {
+    try {
+      const session = await SupabaseAuth.getSession();
+      if (!session) return;
+      const { userPlan: plan } = await new Promise(r => chrome.storage.local.get('userPlan', r));
+      if (!canSync(plan)) return;
+      const syncKey = await CloudSync.getSyncKey();
+      if (!syncKey) showView('sync');
+    } catch {}
+  })();
+
   chrome.runtime.onMessage.addListener(msg => {
     if (msg.action === 'serverDataChanged') silentPullSync();
   });

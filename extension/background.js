@@ -1,6 +1,6 @@
 'use strict';
 
-importScripts('supabase.js');
+importScripts('config.js', 'supabase.js');
 
 // Handles OAuth from the background so the popup closing doesn't kill the flow.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -14,8 +14,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 // ── Background sync polling ───────────────────────────────────────────────────
 
-// Change to Railway URL before releasing:
-const API_URL      = 'http://localhost:8080';
+const API_URL      = CONFIG.API_URL;
 const ALARM_NAME   = 'otpilot-sync-poll';
 const POLL_MINUTES = 5;
 
