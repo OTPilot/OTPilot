@@ -25,9 +25,7 @@ pub async fn send_new_device_email(
     };
 
     if !enabled {
-        println!(
-            "[email] (not sent — SEND_EMAILS is off)\n  To: {to}\n  Subject: {subject}\n  Body: {body}"
-        );
+        tracing::debug!("[email] not sent (SEND_EMAILS is off) — subject: {subject}");
         return;
     }
 

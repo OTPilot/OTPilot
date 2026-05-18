@@ -40,7 +40,7 @@ export default function Billing() {
   }
 
   const plan = userData?.plan ?? 'free'
-  const isPaid = plan !== 'free'
+  const isPaid = plan === 'personal' || plan === 'team_lite' || plan === 'team_pro'
 
   const freePlanFeatures = [
     'Unlimited TOTP accounts',

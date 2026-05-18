@@ -37,7 +37,7 @@ make prod   # uses config-prod.js (Railway API)
 
 > The dashboard frontend is at **https://otpilot.app** (Vercel). The backend API has no custom domain — use the Railway-provided URL directly in `config-prod.js`.
 
-`make zip` cambia a prod, genera el zip, y vuelve a dev automáticamente.
+`make zip` switches to prod, builds the zip, and switches back to dev automatically.
 
 ## Files
 
