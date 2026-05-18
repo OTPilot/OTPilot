@@ -1,5 +1,6 @@
 pub async fn send_new_device_email(
-    api_key: &str,
+    enabled: bool,
+    api_key: Option<&str>,
     from: &str,
     to: &str,
     device_name: &str,
@@ -9,7 +10,7 @@ pub async fn send_new_device_email(
         (
             "A new device connected to your OTPilot account".to_string(),
             format!(
-                "A new browser just connected to your OTPilot account: {}.\n\nWith the Personal plan you can sync your TOTP accounts across all your devices — it's a one-time $15 payment, no subscription.\n\nUpgrade here: https://otpilot.app/#pricing",
+                "A new browser just connected to your OTPilot account: {}.\n\nWith the Personal plan you can sync your TOTP accounts across all your devices — it's a one-time $15 payment, no subscription.\n\nUpgrade here: https://otpilot.app/dashboard/billing",
                 device_name
             ),
         )
@@ -23,10 +24,22 @@ pub async fn send_new_device_email(
         )
     };
 
+    if !enabled {
+        println!(
+            "[email] (not sent — SEND_EMAILS is off)\n  To: {to}\n  Subject: {subject}\n  Body: {body}"
+        );
+        return;
+    }
+
+    let Some(key) = api_key else {
+        tracing::warn!("SEND_EMAILS=true but RESEND_API_KEY is not set — email skipped");
+        return;
+    };
+
     let client = reqwest::Client::new();
     let _ = client
         .post("https://api.resend.com/emails")
-        .bearer_auth(api_key)
+        .bearer_auth(key)
         .json(&serde_json::json!({
             "from": from,
             "to":   [to],
