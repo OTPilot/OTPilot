@@ -20,6 +20,7 @@
 - **Devices dashboard** — the web dashboard has a new Devices page listing all connected browsers, when they last synced, and their full sync history (up to 10 entries per device).
 - **Disconnect** — send a disconnect command to any device from the dashboard. The next time that device syncs, it loses access to the sync key and stops syncing.
 - **Remove** — like disconnect, but also wipes all local OTPilot data from that device (accounts, keys, settings) on next sync.
+- **Self-disconnect on sign-out** — signing out of the extension now removes the device from the dashboard immediately, rather than leaving a stale "connected" entry until the server expires it.
 - **Sync log auto-cleanup** — the database keeps only the last 10 sync log entries per device automatically via a PostgreSQL trigger.
 
 ### Account deletion
