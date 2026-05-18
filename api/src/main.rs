@@ -23,6 +23,7 @@ pub struct AppState {
     pub cancel_url: String,
     pub resend_api_key: Option<String>,
     pub from_email: String,
+    pub send_emails: bool,
     pub supabase_url: String,
     pub supabase_service_key: String,
 }
@@ -76,6 +77,9 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("CANCEL_URL").unwrap_or_else(|_| "http://localhost:5173/dashboard".into());
     let resend_api_key = std::env::var("RESEND_API_KEY").ok();
     let from_email = std::env::var("FROM_EMAIL").unwrap_or_else(|_| "noreply@otpilot.app".into());
+    let send_emails = std::env::var("SEND_EMAILS")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
     let supabase_service_key =
         std::env::var("SUPABASE_SERVICE_ROLE_KEY").expect("SUPABASE_SERVICE_ROLE_KEY must be set");
 
@@ -89,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
         cancel_url,
         resend_api_key,
         from_email,
+        send_emails,
         supabase_url,
         supabase_service_key,
     };

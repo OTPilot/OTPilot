@@ -17,18 +17,45 @@ Chrome extension (Manifest V3). Detects 2FA setup pages, saves TOTP secrets in o
 2. Enable **Developer mode**
 3. Click **Load unpacked** → select the `extension/` folder
 
+## Configuration
+
+Environment-specific values (API URL, Supabase credentials) live in a `config.js` file that is **not committed** to the repo. Use the provided script to switch between environments:
+
+```bash
+make dev    # uses config-dev.js  (localhost API)
+make prod   # uses config-prod.js (Railway API)
+```
+
+**First-time setup:** copy `config.example.js` to `config-dev.js` and `config-prod.js` and fill in the values.
+
+| Key | Dev | Prod |
+|---|---|---|
+| `API_URL` | `http://localhost:8080` | Railway backend URL |
+| `DASHBOARD_URL` | `http://localhost:5175` | `https://otpilot.app` |
+| `SUPABASE_URL` | your Supabase project URL | same |
+| `SUPABASE_ANON_KEY` | your anon key | same |
+
+> The dashboard frontend is at **https://otpilot.app** (Vercel). The backend API has no custom domain — use the Railway-provided URL directly in `config-prod.js`.
+
+`make zip` switches to prod, builds the zip, and switches back to dev automatically.
+
 ## Files
 
 ```
 extension/
-├── manifest.json     MV3 manifest
-├── popup.html        Extension popup UI + styles
-├── popup.js          Popup logic (accounts, lock, sync UI)
-├── background.js     Service worker (handles OAuth flow)
-├── content.js        Auto-fill + setup detection (runs on every page)
-├── totp.js           TOTP algorithm (RFC 6238) via Web Crypto API
-├── supabase.js       Supabase Auth client (Google OAuth, session management)
-└── cloudSync.js      Cloud sync (AES-GCM encryption, API calls)
+├── manifest.json        MV3 manifest
+├── popup.html           Extension popup UI + styles
+├── popup.js             Popup logic (accounts, lock, sync UI)
+├── background.js        Service worker (handles OAuth flow)
+├── content.js           Auto-fill + setup detection (runs on every page)
+├── totp.js              TOTP algorithm (RFC 6238) via Web Crypto API
+├── supabase.js          Supabase Auth client (Google OAuth, session management)
+├── cloudSync.js         Cloud sync (AES-GCM encryption, API calls)
+├── config.example.js    Config template (commit this)
+├── config-dev.js        Dev config — gitignored
+├── config-prod.js       Prod config — gitignored
+├── config.js            Active config (copy of dev or prod) — gitignored
+└── use-config.sh        Script to switch active config
 ```
 
 ## Cloud sync

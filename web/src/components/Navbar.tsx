@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { detectBrowser, browserMeta } from '../lib/browser'
 import { useAuth } from '../lib/useAuth'
-import { supabase } from '../lib/supabase'
 import Logo from './Logo'
 
 export default function Navbar() {
@@ -49,15 +48,12 @@ export default function Navbar() {
             </a>
           ) : (
             <>
-              <button
-                onClick={() => supabase.auth.signInWithOAuth({
-                  provider: 'google',
-                  options: { redirectTo: `${window.location.origin}/auth/callback` },
-                })}
+              <a
+                href="/auth/login"
                 className="text-sm text-zinc-400 hover:text-white transition-colors"
               >
                 Sign in
-              </button>
+              </a>
               {available && href ? (
                 <a
                   href={href}

@@ -182,16 +182,21 @@ async fn put_accounts(
         .await;
 
         if is_new {
-            if let (Some(email), Some(api_key)) =
-                (auth.email.as_deref(), state.resend_api_key.as_deref())
-            {
+            if let Some(email) = auth.email.as_deref() {
                 let plan: String = sqlx::query_scalar("SELECT plan FROM users WHERE id = $1")
                     .bind(auth.id)
                     .fetch_one(&state.db)
                     .await
                     .unwrap_or_else(|_| "free".to_string());
-                crate::email::send_new_device_email(api_key, &state.from_email, email, name, &plan)
-                    .await;
+                crate::email::send_new_device_email(
+                    state.send_emails,
+                    state.resend_api_key.as_deref(),
+                    &state.from_email,
+                    email,
+                    name,
+                    &plan,
+                )
+                .await;
             }
         }
     }

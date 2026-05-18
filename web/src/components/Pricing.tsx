@@ -12,7 +12,7 @@ export default function Pricing() {
       priceNote: 'forever',
       description: 'Everything you need for personal use, locally.',
       cta: browserAvailable ? `Add to ${browserLabel}` : 'Add to Chrome',
-      ctaHref: browserAvailable ? browserHref! : 'https://chromewebstore.google.com/detail/otpilot',
+      ctaHref: browserAvailable ? browserHref! : 'https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk',
       ctaExternal: true,
       highlight: false,
       features: [

@@ -5,8 +5,8 @@
 // Session persisted in chrome.storage.local under 'cloudSession'.
 
 const SupabaseAuth = (() => {
-  const URL_BASE  = 'https://qulptwblkmcvsjrjnugl.supabase.co';
-  const ANON_KEY  = 'sb_publishable_EMOVzQrKXM6NTe7Kv-YyyQ_mssE9pE5';
+  const URL_BASE  = CONFIG.SUPABASE_URL;
+  const ANON_KEY  = CONFIG.SUPABASE_ANON_KEY;
   const STORE_KEY = 'cloudSession';
 
   // ── Storage ────────────────────────────────────────────────────────────────

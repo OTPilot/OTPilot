@@ -1266,15 +1266,24 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     const pullResult = await CloudSync.pull();
     if (pullResult) {
       const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
-      const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
-        accounts, tombstones, remoteAccounts, remoteTombs, null
-      );
+
+      // On reconnect the server is the source of truth.
+      // Add any local-only accounts not present or deleted on the server,
+      // but discard local tombstones — offline deletions must not override synced data.
+      const remoteNames   = new Set(remoteAccounts.map(a => a.name));
+      const remoteDeleted = new Set(Object.keys(remoteTombs));
+      const localOnly     = accounts.filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
+      const merged        = [...remoteAccounts, ...localOnly];
+      const mergedTombs   = remoteTombs;
+
       accounts   = merged;
       tombstones = mergedTombs;
       await saveState();
       await new Promise(r => chrome.storage.local.set({ tombstones }, r));
-      await writeLastSyncedAt(new Date().toISOString());
       renderAccountBar();
+      const now = new Date().toISOString();
+      await CloudSync.push(merged, mergedTombs, now);
+      await writeLastSyncedAt(now);
     }
     syncShowView('sv-active');
     syncSetStatus('ok', 'Restored');
@@ -1311,6 +1320,7 @@ document.getElementById('btn-show-recovery').addEventListener('click', async () 
 // Sign out — free plan view (no sync key, no confirmation needed)
 let _stopSyncMode = 'free';
 document.getElementById('btn-free-signout').addEventListener('click', async () => {
+  try { await CloudSync.leaveDevice() } catch (e) { console.error('leaveDevice:', e) }
   await SupabaseAuth.signOut();
   await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r));
   localChangedAt = null;
@@ -1332,6 +1342,7 @@ document.getElementById('btn-cancel-stop-sync').addEventListener('click', () => 
 
 // Stop sync: confirm
 document.getElementById('btn-confirm-stop-sync').addEventListener('click', async () => {
+  try { await CloudSync.leaveDevice() } catch (e) { console.error('leaveDevice:', e) }
   await SupabaseAuth.signOut();
   if (_stopSyncMode === 'active') await CloudSync.deleteSyncKey();
   await new Promise(r => chrome.storage.local.remove(
@@ -1388,6 +1399,18 @@ async function silentPullSync() {
   if (justAuthenticated) tryAutoFillCurrentTab();
   chrome.storage.local.remove('pendingServerSync');
   silentPullSync(); // fire-and-forget
+
+  // If the user is logged in but has no local sync key, go to Sync automatically.
+  // renderSyncPanel() will show the correct view (sv-restore, sv-newkey, or sv-free).
+  (async () => {
+    try {
+      const session = await SupabaseAuth.getSession();
+      if (!session) return;
+      const syncKey = await CloudSync.getSyncKey();
+      if (!syncKey) showView('sync');
+    } catch {}
+  })();
+
   chrome.runtime.onMessage.addListener(msg => {
     if (msg.action === 'serverDataChanged') silentPullSync();
   });
