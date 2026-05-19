@@ -376,10 +376,15 @@ function findPlainTextSecret() {
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   let node;
   while ((node = walker.nextNode())) {
+    if (node.parentElement?.closest('code, pre, kbd, script, style')) continue;
     const raw = node.textContent.trim();
     if (!raw) continue;
     const compact = raw.replace(/\s/g, '').toUpperCase();
-    if (compact.length >= 16 && compact.length <= 64 && /^[A-Z2-7]+$/.test(compact)) {
+    if (
+      compact.length >= 16 && compact.length <= 64 &&
+      /^[A-Z2-7]+$/.test(compact) &&
+      /[2-7]/.test(compact)
+    ) {
       return { secret: compact, name: guessIssuerFromPage(), email: '' };
     }
   }
