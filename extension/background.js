@@ -11,6 +11,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg.action === 'fetchImageBuffer') {
+    let parsed;
+    try { parsed = new URL(msg.url); } catch { sendResponse({ ok: false, error: 'Invalid URL' }); return true; }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      sendResponse({ ok: false, error: 'Invalid URL scheme' });
+      return true;
+    }
     fetch(msg.url)
       .then(r => r.arrayBuffer())
       .then(buf => sendResponse({ ok: true, data: Array.from(new Uint8Array(buf)) }))

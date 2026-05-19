@@ -92,8 +92,6 @@ function findOTPInput() {
       const sectionText = (section?.innerText || '').toLowerCase();
       if (CODE_PAGE_HINTS.some(h => sectionText.includes(h))) return inp;
     }
-    // Last resort: first visible input
-    if (inputs.length > 0) return inputs[0];
   }
 
   return null;
@@ -380,7 +378,7 @@ function findPlainTextSecret() {
   while ((node = walker.nextNode())) {
     const raw = node.textContent.trim();
     if (!raw) continue;
-    const compact = raw.replace(/\s/g, '');
+    const compact = raw.replace(/\s/g, '').toUpperCase();
     if (compact.length >= 16 && compact.length <= 64 && /^[A-Z2-7]+$/.test(compact)) {
       return { secret: compact, name: guessIssuerFromPage(), email: '' };
     }
@@ -642,7 +640,6 @@ async function runDetection() {
 (async () => {
   let _fillDebounce  = null;
   let _lastFilledInput = null;
-  let _pickerShown   = false;
 
   async function tryAutoFill() {
     const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
@@ -660,8 +657,7 @@ async function runDetection() {
       if (await isSessionLocked()) { showLockOverlay(acc.name); return; }
       fillAndSubmit(undefined, false);
     } else {
-      if (_pickerShown) return;
-      _pickerShown = true;
+      if (document.getElementById('otpilot-picker')) return;
       if (await isSessionLocked()) {
         showLockOverlay('OTPilot', () => {
           document.getElementById('otpilot-lock')?.remove();
@@ -683,4 +679,6 @@ async function runDetection() {
 
   const fillObserver = new MutationObserver(scheduleFill);
   fillObserver.observe(document.body, { childList: true, subtree: true });
+  // Disconnect after 5 minutes to avoid indefinite storage polling on high-churn SPAs.
+  setTimeout(() => fillObserver.disconnect(), 300_000);
 })();
