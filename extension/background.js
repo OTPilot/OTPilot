@@ -8,7 +8,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     SupabaseAuth.signInWithGoogle()
       .then(session => sendResponse({ ok: true, session }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
-    return true; // keep message channel open for async response
+    return true;
+  }
+  if (msg.action === 'fetchImageBuffer') {
+    fetch(msg.url)
+      .then(r => r.arrayBuffer())
+      .then(buf => sendResponse({ ok: true, data: Array.from(new Uint8Array(buf)) }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
   }
 });
 
