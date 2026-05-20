@@ -96,7 +96,7 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | POST | `/auth/sync-user` | Upsert user row, register device, return plan + stats |
 | DELETE | `/users/me` | Soft-delete account (sets `pending_deletion_at`) |
 | GET | `/accounts` | Return encrypted blob + `updated_at` |
-| POST | `/accounts` | Upload encrypted blob |
+| PUT | `/accounts` | Upload encrypted blob |
 | POST | `/billing/checkout` | Create Stripe Checkout session |
 | POST | `/billing/webhook` | Stripe webhook — sets `plan` on payment |
 | GET | `/devices` | List registered devices |
