@@ -373,23 +373,10 @@ const TWOFACTOR_HINTS = [
 
 function findPlainTextSecret() {
   // Only scan pages whose URL suggests a 2FA/security setup flow.
-  // This prevents false positives on pages that merely discuss 2FA (blog posts, PR diffs).
+  // Uses word-boundary matching (URL separators) so that 'otp' in '/otpilot/' does NOT match.
   const path = (location.pathname + location.search).toLowerCase();
-  const PATH_HINTS = [
-    // Explicit protocol names
-    '2fa', 'mfa', 'otp', 'totp',
-    // Separator-variant spellings of "two factor" and "two step"
-    'two-factor', 'two_factor', 'two-step', 'two_step',
-    // Multi-factor variants
-    'multifactor', 'multi-factor',
-    // Enrollment / setup flows (Duo, Auth0, Google enroll-welcome)
-    'enroll',
-    // Authenticator-app pages
-    'authenticator',
-    // Settings/security hubs (GitHub /settings/security, Shopify, etc.)
-    'security',
-  ];
-  if (!PATH_HINTS.some(h => path.includes(h))) return null;
+  const PATH_RE = /(?:^|[/\-_.=?&])(?:2fa|mfa|otp|totp|two[-_](?:factor|step)|multi[-_]?factor|enroll(?:ment)?|authenticator|security)(?=[/\-_.=?&]|$)/;
+  if (!PATH_RE.test(path)) return null;
 
   const bodyText = (document.body.innerText || '').toLowerCase();
   if (!TWOFACTOR_HINTS.some(h => bodyText.includes(h))) return null;
