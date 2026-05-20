@@ -1,8 +1,14 @@
 # Changelog
 
- ## v1.1.0 (Unreleased — in development)
+## v1.0.1 (Unreleased — in development)
 
+### Extension
 
+- **Plain-text TOTP secret detection** — OTPilot now detects raw base32 secrets displayed as text on 2FA setup pages (e.g. Twitter/X's "Can't scan the QR code?" flow). When no `otpauth://` URI or decodable QR is found, the content script scans text nodes for 16–64 character base32 strings in pages with 2FA context keywords and offers to save the account via the suggestion overlay.
+- **QR detection CORS bypass** — QR image decoding now routes the image fetch through the background service worker when direct detection and same-origin fetch both fail, bypassing CORS restrictions on cross-origin QR images (e.g. Twitter, GitHub).
+- **Canvas QR scanning** — Added a third pass to `tryDecodeQrImages` that scans `<canvas>` elements ≥ 80 px, covering sites that render the QR code to a canvas rather than an `<img>`.
+- **Expanded OTP input selectors** — `findOTPInput` now matches `name*=token`, `name*=code` (excluding postal/zip/promo), `id*=token`, `id*=code`, `data-testid*=otp`, `data-testid*=token`, and Twitter's specific `data-testid="ocfEnterTextTextInput"`. Added a context-aware fallback: when the page heading contains code-entry text (e.g. "confirmation code"), the closest visible text/number/tel input in the relevant section is selected.
+- **Dynamic auto-fill for SPAs** — The auto-fill observer now re-reads accounts from storage on every DOM mutation check instead of reading once at page load. This means accounts added mid-session via the suggestion overlay (e.g. saving Twitter while already on the settings page) trigger auto-fill immediately when the confirmation input appears, without a page reload. The 120-second observer timeout is also removed so auto-fill works throughout the full lifetime of the page.
 
 ## v1.0.0
 

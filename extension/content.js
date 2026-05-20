@@ -57,6 +57,19 @@ const OTP_SELECTORS = [
   'input[type="text"][maxlength="6"]',
   'input[name*="otp"]',
   'input[id*="otp"]',
+  'input[name*="token"]:not([name*="csrf"]):not([name*="reset"]):not([name*="access"]):not([name*="invite"]):not([name*="confirm"]):not([name*="auth"])',
+  'input[id*="token"]:not([id*="csrf"]):not([id*="reset"]):not([id*="access"]):not([id*="invite"]):not([id*="confirm"]):not([id*="auth"])',
+  'input[name*="code"]:not([name*="postal"]):not([name*="zip"]):not([name*="promo"]):not([name*="coupon"]):not([name*="discount"]):not([name*="referral"]):not([name*="verification"]):not([name*="activation"]):not([name*="invite"]):not([name*="recovery"])',
+  'input[id*="code"]:not([id*="postal"]):not([id*="zip"]):not([id*="promo"]):not([id*="coupon"]):not([id*="discount"]):not([id*="referral"]):not([id*="verification"]):not([id*="activation"]):not([id*="invite"]):not([id*="recovery"])',
+  'input[data-testid*="otp"]',
+  'input[data-testid*="token"]:not([data-testid*="csrf"]):not([data-testid*="reset"]):not([data-testid*="access"]):not([data-testid*="invite"]):not([data-testid*="confirm"]):not([data-testid*="auth"])',
+  // Twitter / X 2FA confirmation screen
+  'input[data-testid="ocfEnterTextTextInput"]',
+];
+
+const CODE_PAGE_HINTS = [
+  'confirmation code', 'verification code', 'enter the code',
+  'enter your code', 'authentication code', 'enter code',
 ];
 
 function findOTPInput() {
@@ -64,6 +77,36 @@ function findOTPInput() {
     const el = document.querySelector(sel);
     if (el && el.offsetParent !== null) return el;
   }
+
+  // Context-aware fallback: on a code-entry page, pick the first visible
+  // non-readonly text/number/tel input that is within or near the code prompt.
+  const pageText = (document.body.innerText || '').toLowerCase();
+  if (CODE_PAGE_HINTS.some(h => pageText.includes(h))) {
+    // Mirror the same exclusions used in OTP_SELECTORS so the fallback doesn't
+    // pick up inputs that were explicitly excluded from the primary selectors.
+    const NON_OTP_FRAGMENTS = [
+      'postal', 'zip', 'promo', 'coupon', 'discount', 'referral',
+      'verification', 'activation', 'invite', 'recovery',
+      'csrf', 'reset', 'access', 'confirm', 'auth',
+    ];
+    const inputs = [...document.querySelectorAll(
+      'input[type="text"], input[type="number"], input[type="tel"], input:not([type])'
+    )].filter(el => {
+      if (!el.offsetParent || el.readOnly || el.disabled) return false;
+      const haystack = `${el.name || ''} ${el.id || ''} ${el.dataset.testid || ''}`.toLowerCase();
+      return !NON_OTP_FRAGMENTS.some(f => haystack.includes(f));
+    });
+
+    // Prefer inputs whose surrounding form/dialog contains code-page hints.
+    // Intentionally limited to form/dialog — broader ancestors (main, section) span
+    // entire pages and cause false positives when page content mentions these phrases.
+    for (const inp of inputs) {
+      const section = inp.closest('form, [role="dialog"]') || inp.parentElement;
+      const sectionText = (section?.innerText || '').toLowerCase();
+      if (CODE_PAGE_HINTS.some(h => sectionText.includes(h))) return inp;
+    }
+  }
+
   return null;
 }
 
@@ -206,7 +249,7 @@ async function verifyInContent(password, auth) {
   } catch { return false; }
 }
 
-function showLockOverlay(accountName, onUnlock) {
+function showLockOverlay(accountName, onUnlock, onDismiss) {
   if (document.getElementById('otpilot-lock')) return;
 
   const el = document.createElement('div');
@@ -235,13 +278,13 @@ function showLockOverlay(accountName, onUnlock) {
 
   document.body.appendChild(el);
 
-  const close      = () => el.remove();
+  const close      = () => { el.remove(); onDismiss?.(); };
   const primaryBtn = el.querySelector('.otpilot-primary');
 
   el.querySelector('.otpilot-overlay-close').onclick = close;
   el.querySelector('.otpilot-secondary').onclick     = close;
 
-  const defaultOnUnlock = () => { close(); fillAndSubmit(undefined, false); };
+  const defaultOnUnlock = () => { el.remove(); fillAndSubmit(undefined, false); };
   wirePwField(el, primaryBtn, 'Unlock', onUnlock || defaultOnUnlock);
 }
 
@@ -258,6 +301,16 @@ async function decodeQrFromImg(detector, img) {
       const blob = await res.blob();
       const bmp  = await createImageBitmap(blob);
       barcodes   = await detector.detect(bmp);
+    } catch {}
+  }
+  // CORS fallback: route the fetch through the background service worker
+  if (!barcodes.length && img.src.startsWith('http') && chrome.runtime?.id) {
+    try {
+      const resp = await chrome.runtime.sendMessage({ action: 'fetchImageBuffer', url: img.src });
+      if (resp?.ok) {
+        const bmp = await createImageBitmap(new Blob([new Uint8Array(resp.data)]));
+        barcodes  = await detector.detect(bmp);
+      }
     } catch {}
   }
   return barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://')) || null;
@@ -289,6 +342,17 @@ async function tryDecodeQrImages() {
     if (uri) return uri;
   }
 
+  // Pass 3: canvas elements (some sites render QR to canvas instead of <img>)
+  for (const canvas of document.querySelectorAll('canvas')) {
+    if (canvas.width < 80 || canvas.height < 80) continue;
+    if (canvas.offsetParent === null && !canvas.closest('dialog, [role="dialog"]')) continue;
+    try {
+      const barcodes = await detector.detect(canvas);
+      const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
+      if (uri) return uri;
+    } catch {}
+  }
+
   return null;
 }
 
@@ -301,6 +365,55 @@ async function findOtpAuthUri() {
   if (m) return decodeURIComponent(m[0]);
   // 3. QR code image (BarcodeDetector)
   return tryDecodeQrImages();
+}
+
+function guessIssuerFromPage() {
+  const ogSite = document.querySelector('meta[property="og:site_name"]')?.content?.trim();
+  if (ogSite) return ogSite;
+  const appName = document.querySelector('meta[name="application-name"]')?.content?.trim();
+  if (appName) return appName;
+  const host = location.hostname.replace(/^(www\.|app\.)/, '');
+  const name = host.split('.')[0];
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+const TWOFACTOR_HINTS = [
+  'two-factor', '2fa', 'totp', 'authenticator', 'qr code',
+  "can't scan", 'cannot scan', 'secret key', 'verification app',
+  'authentication app', 'link the app', 'link your app',
+];
+
+function findPlainTextSecret() {
+  // Only scan pages whose URL suggests a 2FA/security setup flow.
+  // Uses word-boundary matching (URL separators) so that 'otp' in '/otpilot/' does NOT match.
+  // Also checks location.hash so hash-router SPAs (#/two-factor/setup) are covered.
+  const path = (location.pathname + location.search + location.hash).toLowerCase();
+  const PATH_RE = /(?:^|[/\-_.=?&#])(?:2fa|mfa|otp|totp|two[-_](?:factor|step)|multi[-_]?factor|enroll(?:ment)?|authenticator|security)(?=[/\-_.=?&#]|$)/;
+  if (!PATH_RE.test(path)) return null;
+
+  const bodyText = (document.body.innerText || '').toLowerCase();
+  if (!TWOFACTOR_HINTS.some(h => bodyText.includes(h))) return null;
+
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.parentElement?.closest('code, pre, kbd, script, style')) continue;
+    const raw = node.textContent.trim();
+    if (!raw) continue;
+    const compact = raw.replace(/\s/g, '').toUpperCase();
+    if (
+      compact.length >= 16 && compact.length <= 64 &&
+      /^[A-Z2-7]+$/.test(compact) &&
+      /[2-7]/.test(compact)
+    ) {
+      // Reject if the secret is buried inside a larger paragraph — real secret
+      // displays are standalone, not embedded in prose.
+      const parentText = (node.parentElement?.innerText || '').replace(/\s/g, '');
+      if (parentText.length > compact.length * 4) continue;
+      return { secret: compact, name: guessIssuerFromPage(), email: '' };
+    }
+  }
+  return null;
 }
 
 function parseOtpAuthUri(uri) {
@@ -441,11 +554,11 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   }
 }
 
-function showAccountPickerOverlay(matchingAccounts) {
+function showAccountPickerOverlay(matchingAccounts, onClose) {
   if (document.getElementById('otpilot-picker')) return;
 
   const el = makeOverlay('otpilot-picker');
-  const close = () => el.remove();
+  const close = () => { el.remove(); onClose?.(); };
 
   const rows = matchingAccounts.map(acc => {
     const safeName  = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -500,9 +613,8 @@ async function runDetection() {
   if (_detectionInFlight) return false;
   _detectionInFlight = true;
   try {
-    const uri    = await findOtpAuthUri();
-    if (!uri) return false;
-    const parsed = parseOtpAuthUri(uri);
+    const uri = await findOtpAuthUri();
+    const parsed = uri ? parseOtpAuthUri(uri) : findPlainTextSecret();
     if (!parsed) return false;
 
     return await new Promise(resolve => {
@@ -527,7 +639,10 @@ async function runDetection() {
 
   function scheduleDetection() {
     clearTimeout(_debounceTimer);
-    _debounceTimer = setTimeout(() => runDetection(), 300);
+    _debounceTimer = setTimeout(() => {
+      if (!chrome.runtime?.id) { observer?.disconnect(); return; }
+      runDetection();
+    }, 300);
   }
 
   function onMutation(mutations) {
@@ -552,71 +667,68 @@ async function runDetection() {
   await runDetection();
 })();
 
-// Auto-fill when an OTP input is present (page load or injected into a modal)
+// Auto-fill when an OTP input is present (page load or injected into a modal).
+// Accounts are read from storage on every check so that accounts added after
+// page load (e.g. via the suggestion overlay) are picked up immediately.
 (async () => {
-  const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
-  const hostname = location.hostname.toLowerCase();
-  const matching = findAllMatchingAccounts(accounts, hostname).filter(a => a.autofill !== false);
+  let _fillDebounce        = null;
+  let _lastFilledInput     = null;
+  let _pickerDismissed     = false;
+  let _pickerDismissedFor  = null;
+  let _lockDismissed       = false;
+  let _lockDismissedFor    = null;
 
-  if (matching.length === 0) return;
+  async function tryAutoFill() {
+    const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
+    const hostname = location.hostname.toLowerCase();
+    const matching = findAllMatchingAccounts(accounts, hostname).filter(a => a.autofill !== false);
+    if (matching.length === 0) return;
 
-  // ── Single account: existing auto-fill behavior ──────────────────────────
-  if (matching.length === 1) {
-    const acc = matching[0];
-    let _fillDebounce = null;
-    let _lastFilledInput = null;
-
-    async function tryAutoFill() {
-      const input = findOTPInput();
-      if (!input || input === _lastFilledInput) return;
-      _lastFilledInput = input;
-      if (await isSessionLocked()) { showLockOverlay(acc.name); return; }
-      fillAndSubmit(undefined, false);
-    }
-
-    function scheduleFill() {
-      clearTimeout(_fillDebounce);
-      _fillDebounce = setTimeout(tryAutoFill, 300);
-    }
-
-    await new Promise(r => setTimeout(r, 400));
-    await tryAutoFill();
-
-    const fillObserver = new MutationObserver(scheduleFill);
-    fillObserver.observe(document.body, { childList: true, subtree: true });
-    setTimeout(() => fillObserver.disconnect(), 120_000);
-    return;
-  }
-
-  // ── Multiple accounts: show picker when OTP input appears ────────────────
-  let _pickerDebounce = null;
-  let _pickerShown    = false;
-
-  async function tryShowPicker() {
-    if (_pickerShown) return;
     const input = findOTPInput();
     if (!input) return;
-    _pickerShown = true;
 
-    if (await isSessionLocked()) {
-      showLockOverlay('OTPilot', () => {
-        document.getElementById('otpilot-lock')?.remove();
-        showAccountPickerOverlay(matching);
-      });
-      return;
+    if (matching.length === 1) {
+      if (input === _lastFilledInput) return;
+      _lastFilledInput = input;
+      const acc = matching[0];
+      if (await isSessionLocked()) { showLockOverlay(acc.name); return; }
+      fillAndSubmit(undefined, false);
+    } else {
+      if (document.getElementById('otpilot-picker')) return;
+      // Same input the user already closed the picker for → don't re-open.
+      // Different input (SPA navigated to new step) → reset and re-open.
+      if (_pickerDismissed && input === _pickerDismissedFor) return;
+      _pickerDismissed = false;
+
+      const onClose = () => { _pickerDismissed = true; _pickerDismissedFor = input; };
+
+      if (await isSessionLocked()) {
+        if (_lockDismissed && input === _lockDismissedFor) return;
+        const onLockDismiss = () => { _lockDismissed = true; _lockDismissedFor = input; };
+        showLockOverlay('OTPilot', () => {
+          document.getElementById('otpilot-lock')?.remove();
+          _lockDismissed = false;
+          showAccountPickerOverlay(matching, onClose);
+        }, onLockDismiss);
+        return;
+      }
+      showAccountPickerOverlay(matching, onClose);
     }
-    showAccountPickerOverlay(matching);
   }
 
-  function schedulePicker() {
-    clearTimeout(_pickerDebounce);
-    _pickerDebounce = setTimeout(tryShowPicker, 300);
+  function scheduleFill() {
+    clearTimeout(_fillDebounce);
+    _fillDebounce = setTimeout(() => {
+      if (!chrome.runtime?.id) { fillObserver.disconnect(); return; }
+      tryAutoFill();
+    }, 300);
   }
 
   await new Promise(r => setTimeout(r, 400));
-  await tryShowPicker();
+  await tryAutoFill();
 
-  const pickerObserver = new MutationObserver(schedulePicker);
-  pickerObserver.observe(document.body, { childList: true, subtree: true });
-  setTimeout(() => pickerObserver.disconnect(), 120_000);
+  const fillObserver = new MutationObserver(scheduleFill);
+  fillObserver.observe(document.body, { childList: true, subtree: true });
+  // Disconnect after 5 minutes to avoid indefinite storage polling on high-churn SPAs.
+  setTimeout(() => fillObserver.disconnect(), 300_000);
 })();
