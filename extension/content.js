@@ -59,8 +59,8 @@ const OTP_SELECTORS = [
   'input[id*="otp"]',
   'input[name*="token"]:not([name*="csrf"]):not([name*="reset"]):not([name*="access"]):not([name*="invite"]):not([name*="confirm"]):not([name*="auth"])',
   'input[id*="token"]:not([id*="csrf"]):not([id*="reset"]):not([id*="access"]):not([id*="invite"]):not([id*="confirm"]):not([id*="auth"])',
-  'input[name*="code"]:not([name*="postal"]):not([name*="zip"]):not([name*="promo"]):not([name*="coupon"]):not([name*="discount"]):not([name*="referral"]):not([name*="verification"])',
-  'input[id*="code"]:not([id*="postal"]):not([id*="zip"]):not([id*="promo"]):not([id*="coupon"]):not([id*="discount"]):not([id*="referral"]):not([id*="verification"])',
+  'input[name*="code"]:not([name*="postal"]):not([name*="zip"]):not([name*="promo"]):not([name*="coupon"]):not([name*="discount"]):not([name*="referral"]):not([name*="verification"]):not([name*="activation"]):not([name*="invite"]):not([name*="recovery"])',
+  'input[id*="code"]:not([id*="postal"]):not([id*="zip"]):not([id*="promo"]):not([id*="coupon"]):not([id*="discount"]):not([id*="referral"]):not([id*="verification"]):not([id*="activation"]):not([id*="invite"]):not([id*="recovery"])',
   'input[data-testid*="otp"]',
   'input[data-testid*="token"]:not([data-testid*="csrf"]):not([data-testid*="reset"]):not([data-testid*="access"]):not([data-testid*="invite"]):not([data-testid*="confirm"]):not([data-testid*="auth"])',
   // Twitter / X 2FA confirmation screen
@@ -82,9 +82,20 @@ function findOTPInput() {
   // non-readonly text/number/tel input that is within or near the code prompt.
   const pageText = (document.body.innerText || '').toLowerCase();
   if (CODE_PAGE_HINTS.some(h => pageText.includes(h))) {
+    // Mirror the same exclusions used in OTP_SELECTORS so the fallback doesn't
+    // pick up inputs that were explicitly excluded from the primary selectors.
+    const NON_OTP_FRAGMENTS = [
+      'postal', 'zip', 'promo', 'coupon', 'discount', 'referral',
+      'verification', 'activation', 'invite', 'recovery',
+      'csrf', 'reset', 'access', 'confirm', 'auth',
+    ];
     const inputs = [...document.querySelectorAll(
       'input[type="text"], input[type="number"], input[type="tel"], input:not([type])'
-    )].filter(el => el.offsetParent !== null && !el.readOnly && !el.disabled);
+    )].filter(el => {
+      if (!el.offsetParent || el.readOnly || el.disabled) return false;
+      const haystack = `${el.name || ''} ${el.id || ''} ${el.dataset.testid || ''}`.toLowerCase();
+      return !NON_OTP_FRAGMENTS.some(f => haystack.includes(f));
+    });
 
     // Prefer inputs whose surrounding form/dialog contains code-page hints.
     // Intentionally limited to form/dialog — broader ancestors (main, section) span
@@ -238,7 +249,7 @@ async function verifyInContent(password, auth) {
   } catch { return false; }
 }
 
-function showLockOverlay(accountName, onUnlock) {
+function showLockOverlay(accountName, onUnlock, onDismiss) {
   if (document.getElementById('otpilot-lock')) return;
 
   const el = document.createElement('div');
@@ -267,13 +278,13 @@ function showLockOverlay(accountName, onUnlock) {
 
   document.body.appendChild(el);
 
-  const close      = () => el.remove();
+  const close      = () => { el.remove(); onDismiss?.(); };
   const primaryBtn = el.querySelector('.otpilot-primary');
 
   el.querySelector('.otpilot-overlay-close').onclick = close;
   el.querySelector('.otpilot-secondary').onclick     = close;
 
-  const defaultOnUnlock = () => { close(); fillAndSubmit(undefined, false); };
+  const defaultOnUnlock = () => { el.remove(); fillAndSubmit(undefined, false); };
   wirePwField(el, primaryBtn, 'Unlock', onUnlock || defaultOnUnlock);
 }
 
@@ -293,7 +304,7 @@ async function decodeQrFromImg(detector, img) {
     } catch {}
   }
   // CORS fallback: route the fetch through the background service worker
-  if (!barcodes.length && img.src.startsWith('http')) {
+  if (!barcodes.length && img.src.startsWith('http') && chrome.runtime?.id) {
     try {
       const resp = await chrome.runtime.sendMessage({ action: 'fetchImageBuffer', url: img.src });
       if (resp?.ok) {
@@ -626,7 +637,10 @@ async function runDetection() {
 
   function scheduleDetection() {
     clearTimeout(_debounceTimer);
-    _debounceTimer = setTimeout(() => runDetection(), 300);
+    _debounceTimer = setTimeout(() => {
+      if (!chrome.runtime?.id) { observer?.disconnect(); return; }
+      runDetection();
+    }, 300);
   }
 
   function onMutation(mutations) {
@@ -658,7 +672,9 @@ async function runDetection() {
   let _fillDebounce        = null;
   let _lastFilledInput     = null;
   let _pickerDismissed     = false;
-  let _pickerDismissedFor  = null;   // the input element active when picker was closed
+  let _pickerDismissedFor  = null;
+  let _lockDismissed       = false;
+  let _lockDismissedFor    = null;
 
   async function tryAutoFill() {
     const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
@@ -685,10 +701,12 @@ async function runDetection() {
       const onClose = () => { _pickerDismissed = true; _pickerDismissedFor = input; };
 
       if (await isSessionLocked()) {
+        if (_lockDismissed && input === _lockDismissedFor) return;
+        const onLockDismiss = () => { _lockDismissed = true; _lockDismissedFor = input; };
         showLockOverlay('OTPilot', () => {
-          document.getElementById('otpilot-lock')?.remove();
+          _lockDismissed = false;
           showAccountPickerOverlay(matching, onClose);
-        });
+        }, onLockDismiss);
         return;
       }
       showAccountPickerOverlay(matching, onClose);
@@ -697,7 +715,10 @@ async function runDetection() {
 
   function scheduleFill() {
     clearTimeout(_fillDebounce);
-    _fillDebounce = setTimeout(tryAutoFill, 300);
+    _fillDebounce = setTimeout(() => {
+      if (!chrome.runtime?.id) { fillObserver.disconnect(); return; }
+      tryAutoFill();
+    }, 300);
   }
 
   await new Promise(r => setTimeout(r, 400));
