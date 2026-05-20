@@ -94,7 +94,7 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | Method | Path | Description |
 |---|---|---|
 | POST | `/auth/sync-user` | Upsert user row, register device, return plan + stats |
-| DELETE | `/users/me` | Soft-delete account (sets `pending_deletion_at`) |
+| DELETE | `/users/me` | Hard-delete account (sets `pending_deletion_at` as a rollback guard, then deletes the Supabase auth user and the DB row in the same request) |
 | GET | `/accounts` | Return encrypted blob + `updated_at` |
 | PUT | `/accounts` | Upload encrypted blob |
 | POST | `/billing/checkout` | Create Stripe Checkout session |
