@@ -706,6 +706,7 @@ async function runDetection() {
         if (_lockDismissed && input === _lockDismissedFor) return;
         const onLockDismiss = () => { _lockDismissed = true; _lockDismissedFor = input; };
         showLockOverlay('OTPilot', () => {
+          document.getElementById('otpilot-lock')?.remove();
           _lockDismissed = false;
           showAccountPickerOverlay(matching, onClose);
         }, onLockDismiss);
