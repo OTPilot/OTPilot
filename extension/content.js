@@ -62,7 +62,7 @@ const OTP_SELECTORS = [
   'input[name*="code"]:not([name*="postal"]):not([name*="zip"]):not([name*="promo"]):not([name*="coupon"]):not([name*="discount"])',
   'input[id*="code"]:not([id*="postal"]):not([id*="zip"]):not([id*="promo"]):not([id*="coupon"]):not([id*="discount"])',
   'input[data-testid*="otp"]',
-  'input[data-testid*="token"]',
+  'input[data-testid*="token"]:not([data-testid*="csrf"]):not([data-testid*="reset"]):not([data-testid*="access"]):not([data-testid*="invite"]):not([data-testid*="confirm"]):not([data-testid*="auth"])',
   // Twitter / X 2FA confirmation screen
   'input[data-testid="ocfEnterTextTextInput"]',
 ];
