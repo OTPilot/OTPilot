@@ -118,10 +118,10 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | `/dashboard/devices` | `Devices.tsx` | Device management (disconnect / erase) |
 | `/dashboard/team` | `Team.tsx` | Stub — Phase 3 |
 | `/dashboard/settings` | `Settings.tsx` | Account settings, deletion |
-| `/legal/privacy` | `Privacy.tsx` | |
-| `/legal/tos` | `Tos.tsx` | |
-| `/legal/gdpr` | `Gdpr.tsx` | |
-| `/legal/refunds` | `Refunds.tsx` | |
+| `/privacy` | `Privacy.tsx` | |
+| `/tos` | `Tos.tsx` | |
+| `/gdpr` | `Gdpr.tsx` | |
+| `/refunds` | `Refunds.tsx` | |
 
 `apiFetch()` in `web/src/lib/api.ts` appends the Supabase JWT automatically to every request.
 
