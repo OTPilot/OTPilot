@@ -86,9 +86,11 @@ function findOTPInput() {
       'input[type="text"], input[type="number"], input[type="tel"], input:not([type])'
     )].filter(el => el.offsetParent !== null && !el.readOnly && !el.disabled);
 
-    // Prefer inputs whose surrounding text contains code-page hints
+    // Prefer inputs whose surrounding form/dialog contains code-page hints.
+    // Intentionally limited to form/dialog — broader ancestors (main, section) span
+    // entire pages and cause false positives when page content mentions these phrases.
     for (const inp of inputs) {
-      const section = inp.closest('form, [role="dialog"], main, section, article') || inp.parentElement;
+      const section = inp.closest('form, [role="dialog"]') || inp.parentElement;
       const sectionText = (section?.innerText || '').toLowerCase();
       if (CODE_PAGE_HINTS.some(h => sectionText.includes(h))) return inp;
     }
@@ -370,6 +372,25 @@ const TWOFACTOR_HINTS = [
 ];
 
 function findPlainTextSecret() {
+  // Only scan pages whose URL suggests a 2FA/security setup flow.
+  // This prevents false positives on pages that merely discuss 2FA (blog posts, PR diffs).
+  const path = (location.pathname + location.search).toLowerCase();
+  const PATH_HINTS = [
+    // Explicit protocol names
+    '2fa', 'mfa', 'otp', 'totp',
+    // Separator-variant spellings of "two factor" and "two step"
+    'two-factor', 'two_factor', 'two-step', 'two_step',
+    // Multi-factor variants
+    'multifactor', 'multi-factor',
+    // Enrollment / setup flows (Duo, Auth0, Google enroll-welcome)
+    'enroll',
+    // Authenticator-app pages
+    'authenticator',
+    // Settings/security hubs (GitHub /settings/security, Shopify, etc.)
+    'security',
+  ];
+  if (!PATH_HINTS.some(h => path.includes(h))) return null;
+
   const bodyText = (document.body.innerText || '').toLowerCase();
   if (!TWOFACTOR_HINTS.some(h => bodyText.includes(h))) return null;
 
@@ -385,6 +406,10 @@ function findPlainTextSecret() {
       /^[A-Z2-7]+$/.test(compact) &&
       /[2-7]/.test(compact)
     ) {
+      // Reject if the secret is buried inside a larger paragraph — real secret
+      // displays are standalone, not embedded in prose.
+      const parentText = (node.parentElement?.innerText || '').replace(/\s/g, '');
+      if (parentText.length > compact.length * 4) continue;
       return { secret: compact, name: guessIssuerFromPage(), email: '' };
     }
   }
