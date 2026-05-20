@@ -71,7 +71,7 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 | `accounts` | `user_id`, `encrypted_blob`, `updated_at` | AES-GCM ciphertext only |
 | `teams` | — | Stub, Phase 3 |
 | `devices` | `user_id`, `device_id`, `name`, `os`, `browser`, `pending_action` | Registered extension installs |
-| `sync_logs` | `user_id`, `device_id`, `synced_at`, `direction` | Trimmed automatically by trigger (keep last 100 per user) |
+| `sync_logs` | `user_id`, `device_id`, `action`, `accounts_count`, `created_at` | Trimmed automatically by trigger (keep last 100 per user) |
 
 ### Extension JS modules
 - `totp.js` — TOTP code generation (loaded as content script alongside `content.js`)
