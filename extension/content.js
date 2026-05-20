@@ -345,6 +345,7 @@ async function tryDecodeQrImages() {
   // Pass 3: canvas elements (some sites render QR to canvas instead of <img>)
   for (const canvas of document.querySelectorAll('canvas')) {
     if (canvas.width < 80 || canvas.height < 80) continue;
+    if (canvas.offsetParent === null && !canvas.closest('dialog, [role="dialog"]')) continue;
     try {
       const barcodes = await detector.detect(canvas);
       const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
@@ -385,8 +386,9 @@ const TWOFACTOR_HINTS = [
 function findPlainTextSecret() {
   // Only scan pages whose URL suggests a 2FA/security setup flow.
   // Uses word-boundary matching (URL separators) so that 'otp' in '/otpilot/' does NOT match.
-  const path = (location.pathname + location.search).toLowerCase();
-  const PATH_RE = /(?:^|[/\-_.=?&])(?:2fa|mfa|otp|totp|two[-_](?:factor|step)|multi[-_]?factor|enroll(?:ment)?|authenticator|security)(?=[/\-_.=?&]|$)/;
+  // Also checks location.hash so hash-router SPAs (#/two-factor/setup) are covered.
+  const path = (location.pathname + location.search + location.hash).toLowerCase();
+  const PATH_RE = /(?:^|[/\-_.=?&#])(?:2fa|mfa|otp|totp|two[-_](?:factor|step)|multi[-_]?factor|enroll(?:ment)?|authenticator|security)(?=[/\-_.=?&#]|$)/;
   if (!PATH_RE.test(path)) return null;
 
   const bodyText = (document.body.innerText || '').toLowerCase();
