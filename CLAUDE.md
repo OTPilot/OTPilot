@@ -42,7 +42,7 @@ Requires `api/.env` with `DATABASE_URL`, `SUPABASE_URL`, `PORT`, and Stripe vars
 ### Web
 ```bash
 cd web
-npm run dev            # Vite dev server on :5175
+npm run dev            # Vite dev server on :5173
 npm run build          # tsc type-check + vite build
 npm run lint           # ESLint
 ```
