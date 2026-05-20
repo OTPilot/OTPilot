@@ -59,8 +59,8 @@ const OTP_SELECTORS = [
   'input[id*="otp"]',
   'input[name*="token"]:not([name*="csrf"]):not([name*="reset"]):not([name*="access"]):not([name*="invite"]):not([name*="confirm"]):not([name*="auth"])',
   'input[id*="token"]:not([id*="csrf"]):not([id*="reset"]):not([id*="access"]):not([id*="invite"]):not([id*="confirm"]):not([id*="auth"])',
-  'input[name*="code"]:not([name*="postal"]):not([name*="zip"]):not([name*="promo"]):not([name*="coupon"]):not([name*="discount"])',
-  'input[id*="code"]:not([id*="postal"]):not([id*="zip"]):not([id*="promo"]):not([id*="coupon"]):not([id*="discount"])',
+  'input[name*="code"]:not([name*="postal"]):not([name*="zip"]):not([name*="promo"]):not([name*="coupon"]):not([name*="discount"]):not([name*="referral"]):not([name*="verification"])',
+  'input[id*="code"]:not([id*="postal"]):not([id*="zip"]):not([id*="promo"]):not([id*="coupon"]):not([id*="discount"]):not([id*="referral"]):not([id*="verification"])',
   'input[data-testid*="otp"]',
   'input[data-testid*="token"]:not([data-testid*="csrf"]):not([data-testid*="reset"]):not([data-testid*="access"]):not([data-testid*="invite"]):not([data-testid*="confirm"]):not([data-testid*="auth"])',
   // Twitter / X 2FA confirmation screen
