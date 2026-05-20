@@ -554,11 +554,11 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   }
 }
 
-function showAccountPickerOverlay(matchingAccounts) {
+function showAccountPickerOverlay(matchingAccounts, onClose) {
   if (document.getElementById('otpilot-picker')) return;
 
   const el = makeOverlay('otpilot-picker');
-  const close = () => el.remove();
+  const close = () => { el.remove(); onClose?.(); };
 
   const rows = matchingAccounts.map(acc => {
     const safeName  = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -668,8 +668,10 @@ async function runDetection() {
 // Accounts are read from storage on every check so that accounts added after
 // page load (e.g. via the suggestion overlay) are picked up immediately.
 (async () => {
-  let _fillDebounce  = null;
-  let _lastFilledInput = null;
+  let _fillDebounce        = null;
+  let _lastFilledInput     = null;
+  let _pickerDismissed     = false;
+  let _pickerDismissedFor  = null;   // the input element active when picker was closed
 
   async function tryAutoFill() {
     const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
@@ -688,14 +690,21 @@ async function runDetection() {
       fillAndSubmit(undefined, false);
     } else {
       if (document.getElementById('otpilot-picker')) return;
+      // Same input the user already closed the picker for → don't re-open.
+      // Different input (SPA navigated to new step) → reset and re-open.
+      if (_pickerDismissed && input === _pickerDismissedFor) return;
+      _pickerDismissed = false;
+
+      const onClose = () => { _pickerDismissed = true; _pickerDismissedFor = input; };
+
       if (await isSessionLocked()) {
         showLockOverlay('OTPilot', () => {
           document.getElementById('otpilot-lock')?.remove();
-          showAccountPickerOverlay(matching);
+          showAccountPickerOverlay(matching, onClose);
         });
         return;
       }
-      showAccountPickerOverlay(matching);
+      showAccountPickerOverlay(matching, onClose);
     }
   }
 
