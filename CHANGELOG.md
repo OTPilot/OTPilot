@@ -1,22 +1,19 @@
 # Changelog
 
-## v1.1.0 (Unreleased — in development)
+## v1.0.2 (Unreleased — in development)
 
-### Team sharing
 
-- **Share TOTP codes with teammates** — account owners can share a TOTP code without exposing the underlying secret. The secret is encrypted with an independent sharing key; the backend generates the code on demand for authorized recipients. The raw secret is never transmitted.
-- **Instant revocation** — the owner can revoke access at any time from the dashboard. Access is cut immediately on the next code request.
-- **Email invitations** — invite teammates by email. If they already have an OTPilot account, the invite appears directly in their extension. If not, they receive an email with a link to install OTPilot; the pending invite is automatically linked to their account on signup.
-- **Team dashboard** — manage team members, shared codes, and pending invitations from the web dashboard.
-- **Team plan** — team sharing requires a Team subscription ($8–10/month or $70–80/year), which includes up to 5 seats. Additional seats at $2/user/month.
-
-## v1.0.1 (Unreleased — in development)
+## v1.0.1
 
 ### Extension
 
 - **Plain-text TOTP secret detection** — OTPilot now detects raw base32 secrets displayed as text on 2FA setup pages (e.g. Twitter/X's "Can't scan the QR code?" flow). When no `otpauth://` URI or decodable QR is found, the content script scans text nodes for 16–64 character base32 strings in pages with 2FA context keywords and offers to save the account via the suggestion overlay.
+- **Secret in input fields** — Plain-text secret detection now also scans `<input>` values, not just text nodes. Fixes detection on sites like Sentry that display the authenticator secret inside a readonly text field rather than as visible page text.
+- **Inline SVG QR scanning** — Added a fourth pass to `tryDecodeQrImages` that serializes inline `<svg>` elements to an offscreen canvas and runs `BarcodeDetector` on the result. Fixes QR detection on sites that render the QR code via React's `qrcode.react` (e.g. Sentry), which produces an inline SVG rather than an `<img>` or `<canvas>`.
 - **QR detection CORS bypass** — QR image decoding now routes the image fetch through the background service worker when direct detection and same-origin fetch both fail, bypassing CORS restrictions on cross-origin QR images (e.g. Twitter, GitHub).
 - **Canvas QR scanning** — Added a third pass to `tryDecodeQrImages` that scans `<canvas>` elements ≥ 80 px, covering sites that render the QR code to a canvas rather than an `<img>`.
+- **Enrollment page auto-fill guard** — Auto-fill is now suppressed on 2FA setup/enrollment pages (detected by a visible base32 secret in any input field). Previously, auto-fill would trigger immediately after saving the new account, submit the confirmation form before Sentry/similar could accept it, and cause an infinite reload loop as each failed submission regenerated a new secret.
+- **Code reveal overlay** — After saving a new account on an enrollment page, a floating overlay shows the current 6-digit TOTP code with a one-click Copy button. The user pastes it manually into the confirmation field, avoiding the race condition from auto-submission. The overlay dismisses automatically after 15 seconds or on copy.
 - **Expanded OTP input selectors** — `findOTPInput` now matches `name*=token`, `name*=code` (excluding postal/zip/promo), `id*=token`, `id*=code`, `data-testid*=otp`, `data-testid*=token`, and Twitter's specific `data-testid="ocfEnterTextTextInput"`. Added a context-aware fallback: when the page heading contains code-entry text (e.g. "confirmation code"), the closest visible text/number/tel input in the relevant section is selected.
 - **Dynamic auto-fill for SPAs** — The auto-fill observer now re-reads accounts from storage on every DOM mutation check instead of reading once at page load. This means accounts added mid-session via the suggestion overlay (e.g. saving Twitter while already on the settings page) trigger auto-fill immediately when the confirmation input appears, without a page reload. The 120-second observer timeout is also removed so auto-fill works throughout the full lifetime of the page.
 

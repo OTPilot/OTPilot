@@ -353,6 +353,31 @@ async function tryDecodeQrImages() {
     } catch {}
   }
 
+  // Pass 4: inline SVG elements (e.g. Sentry uses qrcode.react which renders SVG directly)
+  for (const svg of document.querySelectorAll('svg')) {
+    if (svg.offsetParent === null && !svg.closest('dialog, [role="dialog"]')) continue;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width < 80 || rect.height < 80) continue;
+    try {
+      const svgData = new XMLSerializer().serializeToString(svg);
+      const blob = new Blob([svgData], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      const offscreen = new Image();
+      try {
+        await new Promise((res, rej) => { offscreen.onload = res; offscreen.onerror = rej; offscreen.src = url; });
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(rect.width);
+      canvas.height = Math.round(rect.height);
+      canvas.getContext('2d').drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+      const barcodes = await detector.detect(canvas);
+      const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
+      if (uri) return uri;
+    } catch {}
+  }
+
   return null;
 }
 
@@ -413,6 +438,22 @@ function findPlainTextSecret() {
       return { secret: compact, name: guessIssuerFromPage(), email: '' };
     }
   }
+
+  // Some sites (e.g. Sentry) show the secret inside an <input> value rather than a text node.
+  for (const el of document.querySelectorAll('input[type="text"], input[readonly], input:not([type]), textarea')) {
+    if (!el.offsetParent || el.disabled) continue;
+    const raw = (el.value || '').trim();
+    if (!raw) continue;
+    const compact = raw.replace(/\s/g, '').toUpperCase();
+    if (
+      compact.length >= 16 && compact.length <= 64 &&
+      /^[A-Z2-7]+$/.test(compact) &&
+      /[2-7]/.test(compact)
+    ) {
+      return { secret: compact, name: guessIssuerFromPage(), email: '' };
+    }
+  }
+
   return null;
 }
 
@@ -510,6 +551,33 @@ function wirePwField(el, primaryBtn, primaryLabel, onSuccess) {
   setTimeout(() => pwInput.focus(), 100);
 }
 
+function showCodeRevealOverlay(name, code) {
+  if (document.getElementById('otpilot-code-reveal')) return;
+  const el = makeOverlay('otpilot-code-reveal');
+  const safeName = name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const formatted = code.slice(0, 3) + ' ' + code.slice(3);
+  el.innerHTML = `${OVERLAY_HEADER}
+    <div style="padding:12px 14px;">
+      <div style="color:#94a3b8;font-size:11px;margin-bottom:6px;">${safeName} added — copy your code:</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="flex:1;font-size:22px;font-weight:700;letter-spacing:3px;color:#f1f5f9;font-family:monospace;">${formatted}</span>
+        <button class="otpilot-copy-code" style="padding:6px 12px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Copy</button>
+      </div>
+    </div>`;
+  document.body.appendChild(el);
+  const close = () => el.remove();
+  el.querySelector('.otpilot-overlay-close').onclick = close;
+  el.querySelector('.otpilot-copy-code').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      const btn = el.querySelector('.otpilot-copy-code');
+      btn.textContent = 'Copied!';
+      setTimeout(close, 1200);
+    } catch { close(); }
+  };
+  setTimeout(close, 15_000);
+}
+
 function showSuggestionOverlay(name, secret, email = '', locked = false) {
   if (document.getElementById('otpilot-suggestion')) return;
 
@@ -536,15 +604,20 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   el.querySelector('.otpilot-overlay-close').onclick = close;
   el.querySelector('.otpilot-secondary').onclick     = close;
 
-  function addAccount() {
-    chrome.storage.local.get('accounts', d => {
-      const accs = d.accounts || [];
-      accs.push({ name, secret, urls: location.hostname, autofill: true, email });
-      chrome.storage.local.set({ accounts: accs, activeIndex: accs.length - 1 }, () => {
-        close();
-        showToast(`${name} added to OTPilot`);
-      });
-    });
+  async function addAccount() {
+    const d = await new Promise(r => chrome.storage.local.get('accounts', r));
+    const accs = d.accounts || [];
+    accs.push({ name, secret, urls: location.hostname, autofill: true, email });
+    await new Promise(r => chrome.storage.local.set({ accounts: accs, activeIndex: accs.length - 1 }, r));
+    _dismissedSecrets.add(secret);
+    el.remove();
+    let code = '';
+    try { code = await generateTOTP(secret); } catch {}
+    if (code) {
+      showCodeRevealOverlay(name, code);
+    } else {
+      showToast(`${name} added to OTPilot`);
+    }
   }
 
   if (locked) {
@@ -678,7 +751,25 @@ async function runDetection() {
   let _lockDismissed       = false;
   let _lockDismissedFor    = null;
 
+  function isEnrollmentPage() {
+    // Suppress auto-fill on 2FA setup/enrollment pages. Requires PATH_RE to match
+    // (same guard as findPlainTextSecret) so random pages with off-screen readonly
+    // inputs containing base32-looking strings don't silently break auto-fill.
+    const path = (location.pathname + location.search + location.hash).toLowerCase();
+    const PATH_RE = /(?:^|[/\-_.=?&#])(?:2fa|mfa|otp|totp|two[-_](?:factor|step)|multi[-_]?factor|enroll(?:ment)?|authenticator|security)(?=[/\-_.=?&#]|$)/;
+    if (!PATH_RE.test(path)) return false;
+    return [...document.querySelectorAll(
+      'input[type="text"], input[readonly], input:not([type]), textarea'
+    )].some(el => {
+      if (!el.offsetParent || el.disabled) return false;
+      const v = (el.value || '').replace(/\s/g, '').toUpperCase();
+      return v.length >= 16 && v.length <= 64 && /^[A-Z2-7]+$/.test(v) && /[2-7]/.test(v);
+    });
+  }
+
   async function tryAutoFill() {
+    if (isEnrollmentPage()) return;
+
     const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
     const hostname = location.hostname.toLowerCase();
     const matching = findAllMatchingAccounts(accounts, hostname).filter(a => a.autofill !== false);
