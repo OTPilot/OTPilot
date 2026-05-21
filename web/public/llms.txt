@@ -1,0 +1,43 @@
+# OTPilot
+
+> Chrome extension that auto-fills TOTP 2FA codes on login pages. Detects 2FA setup pages automatically. End-to-end encrypted sync across devices.
+
+OTPilot is a Chrome browser extension for managing TOTP (Time-based One-Time Password) two-factor authentication codes. It auto-fills 2FA codes directly on login pages and automatically detects 2FA setup pages to save accounts with one click — no QR scanner, no base32 strings.
+
+## Key features
+
+- Auto-fills TOTP codes on login pages without user interaction
+- Detects 2FA setup pages automatically — reads otpauth:// URIs from the DOM
+- End-to-end encrypted cloud sync across devices (Personal plan)
+- Inline master password unlock prompt directly on the page
+- Wildcard URL pattern matching (useful for staging environments)
+- Fully local by default — works without an account or internet connection
+- Open source (MIT license)
+- No telemetry, no tracking
+
+## Compared to alternatives
+
+- Google Authenticator / Authy: require your phone every login. OTPilot fills automatically.
+- 1Password / Bitwarden built-in TOTP: require cloud accounts. OTPilot is local by default.
+- Manual copy-paste: OTPilot eliminates this entirely.
+
+## Team sharing
+
+OTPilot supports sharing TOTP codes with teammates without exposing the underlying secret. The owner uploads the secret encrypted with an independent sharing key. The backend generates the TOTP code on demand for recipients — the raw secret is never transmitted. Revocation is instant: the owner deletes the sharing key and access is cut immediately.
+
+Invitation flow:
+- With an account: invite appears directly in the extension
+- Without an account: recipient receives an email with a link to install the extension; the pending invite is automatically linked to their email on signup
+
+## Plans
+
+- Free: all core features, local-only storage, no account required
+- Personal ($15 one-time): E2E encrypted cloud sync across devices
+- Team ($8–10/month or $70–80/year): sync + TOTP code sharing with instant revocation, up to 5 seats included
+
+## Links
+
+- Chrome Web Store: https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk
+- GitHub: https://github.com/carpe-diem/OTPilot
+- Privacy policy: https://otpilot.app/privacy
+- Terms of service: https://otpilot.app/tos
