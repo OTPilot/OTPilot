@@ -1,12 +1,24 @@
 // Runs on every page; bails out immediately unless an account URL matches.
 
+function safeStorageGet(keys) {
+  return new Promise(r => {
+    try { chrome.storage.local.get(keys, data => r(data)); }
+    catch { r({}); }
+  });
+}
+
+function safeStorageSet(items) {
+  return new Promise(r => {
+    try { chrome.storage.local.set(items, () => r()); }
+    catch { r(); }
+  });
+}
+
 function isSessionLocked() {
-  return new Promise(r =>
-    chrome.storage.local.get(['auth', 'sessionExpiry'], d => {
-      if (!d.auth) { r(false); return; }
-      r(!d.sessionExpiry || Date.now() >= d.sessionExpiry);
-    })
-  );
+  return safeStorageGet(['auth', 'sessionExpiry']).then(d => {
+    if (!d.auth) return false;
+    return !d.sessionExpiry || Date.now() >= d.sessionExpiry;
+  });
 }
 
 function matchesPattern(pattern, hostname) {
@@ -36,17 +48,13 @@ function findAllMatchingAccounts(accounts, hostname) {
 }
 
 function getActiveAccount(overrideIndex) {
-  return new Promise(r =>
-    chrome.storage.local.get(['accounts', 'activeIndex'], d => {
-      const accs = d.accounts || [];
-      // 1. Try URL-based match first
-      const byUrl = findAccount(accs, location.hostname.toLowerCase());
-      if (byUrl) { r(byUrl); return; }
-      // 2. Fall back to the account selected in the popup (or override from message)
-      const idx = overrideIndex ?? d.activeIndex ?? 0;
-      r(accs[idx] || null);
-    })
-  );
+  return safeStorageGet(['accounts', 'activeIndex']).then(d => {
+    const accs = d.accounts || [];
+    const byUrl = findAccount(accs, location.hostname.toLowerCase());
+    if (byUrl) return byUrl;
+    const idx = overrideIndex ?? d.activeIndex ?? 0;
+    return accs[idx] || null;
+  });
 }
 
 const OTP_SELECTORS = [
@@ -353,6 +361,28 @@ async function tryDecodeQrImages() {
     } catch {}
   }
 
+  // Pass 4: inline SVG elements (e.g. Sentry uses qrcode.react which renders SVG directly)
+  for (const svg of document.querySelectorAll('svg')) {
+    if (svg.offsetParent === null && !svg.closest('dialog, [role="dialog"]')) continue;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width < 80 || rect.height < 80) continue;
+    try {
+      const svgData = new XMLSerializer().serializeToString(svg);
+      const blob = new Blob([svgData], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      const offscreen = new Image();
+      await new Promise((res, rej) => { offscreen.onload = res; offscreen.onerror = rej; offscreen.src = url; });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(rect.width);
+      canvas.height = Math.round(rect.height);
+      canvas.getContext('2d').drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      const barcodes = await detector.detect(canvas);
+      const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
+      if (uri) return uri;
+    } catch {}
+  }
+
   return null;
 }
 
@@ -413,6 +443,21 @@ function findPlainTextSecret() {
       return { secret: compact, name: guessIssuerFromPage(), email: '' };
     }
   }
+
+  // Some sites (e.g. Sentry) show the secret inside an <input> value rather than a text node.
+  for (const el of document.querySelectorAll('input[type="text"], input[readonly], input:not([type]), textarea')) {
+    const raw = (el.value || '').trim();
+    if (!raw) continue;
+    const compact = raw.replace(/\s/g, '').toUpperCase();
+    if (
+      compact.length >= 16 && compact.length <= 64 &&
+      /^[A-Z2-7]+$/.test(compact) &&
+      /[2-7]/.test(compact)
+    ) {
+      return { secret: compact, name: guessIssuerFromPage(), email: '' };
+    }
+  }
+
   return null;
 }
 
@@ -485,12 +530,10 @@ function wirePwField(el, primaryBtn, primaryLabel, onSuccess) {
     primaryBtn.textContent = 'Verifying…';
 
     try {
-      const { auth, sessionDuration } = await new Promise(r =>
-        chrome.storage.local.get(['auth', 'sessionDuration'], r)
-      );
+      const { auth, sessionDuration } = await safeStorageGet(['auth', 'sessionDuration']);
       if (await verifyInContent(password, auth)) {
         const dur = sessionDuration || 86400000;
-        await new Promise(r => chrome.storage.local.set({ sessionExpiry: Date.now() + dur }, r));
+        await safeStorageSet({ sessionExpiry: Date.now() + dur });
         onSuccess();
       } else {
         errEl.textContent = 'Incorrect password';
@@ -508,6 +551,32 @@ function wirePwField(el, primaryBtn, primaryLabel, onSuccess) {
   primaryBtn.onclick = attempt;
   pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') attempt(); });
   setTimeout(() => pwInput.focus(), 100);
+}
+
+function showCodeRevealOverlay(name, code) {
+  const el = makeOverlay('otpilot-code-reveal');
+  const safeName = name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const formatted = code.slice(0, 3) + ' ' + code.slice(3);
+  el.innerHTML = `${OVERLAY_HEADER}
+    <div style="padding:12px 14px;">
+      <div style="color:#94a3b8;font-size:11px;margin-bottom:6px;">${safeName} added — copy your code:</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="flex:1;font-size:22px;font-weight:700;letter-spacing:3px;color:#f1f5f9;font-family:monospace;">${formatted}</span>
+        <button class="otpilot-copy-code" style="padding:6px 12px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Copy</button>
+      </div>
+    </div>`;
+  document.body.appendChild(el);
+  const close = () => el.remove();
+  el.querySelector('.otpilot-overlay-close').onclick = close;
+  el.querySelector('.otpilot-copy-code').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      const btn = el.querySelector('.otpilot-copy-code');
+      btn.textContent = 'Copied!';
+      setTimeout(close, 1200);
+    } catch { close(); }
+  };
+  setTimeout(close, 15_000);
 }
 
 function showSuggestionOverlay(name, secret, email = '', locked = false) {
@@ -536,15 +605,23 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   el.querySelector('.otpilot-overlay-close').onclick = close;
   el.querySelector('.otpilot-secondary').onclick     = close;
 
-  function addAccount() {
-    chrome.storage.local.get('accounts', d => {
-      const accs = d.accounts || [];
-      accs.push({ name, secret, urls: location.hostname, autofill: true, email });
-      chrome.storage.local.set({ accounts: accs, activeIndex: accs.length - 1 }, () => {
-        close();
-        showToast(`${name} added to OTPilot`);
-      });
-    });
+  async function addAccount() {
+    const d = await safeStorageGet('accounts');
+    const accs = d.accounts || [];
+    accs.push({ name, secret, urls: location.hostname, autofill: true, email });
+    await safeStorageSet({ accounts: accs, activeIndex: accs.length - 1 });
+    _dismissedSecrets.add(secret);
+    el.remove();
+
+    // On setup/enrollment pages show the current code so the user can paste it
+    // manually — don't auto-fill, which would race against form submission.
+    let code = '';
+    try { code = await generateTOTP(secret); } catch {}
+    if (code) {
+      showCodeRevealOverlay(name, code);
+    } else {
+      showToast(`${name} added to OTPilot`);
+    }
   }
 
   if (locked) {
@@ -617,17 +694,14 @@ async function runDetection() {
     const parsed = uri ? parseOtpAuthUri(uri) : findPlainTextSecret();
     if (!parsed) return false;
 
-    return await new Promise(resolve => {
-      chrome.storage.local.get(['accounts', 'auth', 'sessionExpiry'], d => {
-        if (!d.auth) { resolve(false); return; }
-        if (_dismissedSecrets.has(parsed.secret)) { resolve(false); return; }
-        const exists = (d.accounts || []).some(a => a.secret === parsed.secret);
-        if (exists)  { resolve(false); return; }
-        const locked = !d.sessionExpiry || Date.now() >= d.sessionExpiry;
-        showSuggestionOverlay(parsed.name, parsed.secret, parsed.email || '', locked);
-        resolve(true);
-      });
-    });
+    const d = await safeStorageGet(['accounts', 'auth', 'sessionExpiry']);
+    if (!d.auth) return false;
+    if (_dismissedSecrets.has(parsed.secret)) return false;
+    const exists = (d.accounts || []).some(a => a.secret === parsed.secret);
+    if (exists) return false;
+    const locked = !d.sessionExpiry || Date.now() >= d.sessionExpiry;
+    showSuggestionOverlay(parsed.name, parsed.secret, parsed.email || '', locked);
+    return true;
   } finally {
     _detectionInFlight = false;
   }
@@ -678,8 +752,21 @@ async function runDetection() {
   let _lockDismissed       = false;
   let _lockDismissedFor    = null;
 
+  function isEnrollmentPage() {
+    // If a base32 secret key is visible in any input we're on a 2FA setup page,
+    // not a login page — don't auto-fill the confirmation token field.
+    return [...document.querySelectorAll(
+      'input[type="text"], input[readonly], input:not([type]), textarea'
+    )].some(el => {
+      const v = (el.value || '').replace(/\s/g, '').toUpperCase();
+      return v.length >= 16 && v.length <= 64 && /^[A-Z2-7]+$/.test(v) && /[2-7]/.test(v);
+    });
+  }
+
   async function tryAutoFill() {
-    const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
+    if (isEnrollmentPage()) return;
+
+    const { accounts = [] } = await safeStorageGet('accounts');
     const hostname = location.hostname.toLowerCase();
     const matching = findAllMatchingAccounts(accounts, hostname).filter(a => a.autofill !== false);
     if (matching.length === 0) return;
