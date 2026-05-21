@@ -295,7 +295,18 @@ const QR_HINTS = ['qr', 'totp', 'otp', 'mfa', '2fa', 'seed', 'authenticator'];
 async function decodeQrFromImg(detector, img) {
   let barcodes = [];
   try { barcodes = await detector.detect(img); } catch {}
+  // Canvas fallback: handles data: URLs (fetch() doesn't work for them in content
+  // scripts) and images that haven't painted yet when detect(img) is called.
   if (!barcodes.length) {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      barcodes = await detector.detect(canvas);
+    } catch {}
+  }
+  if (!barcodes.length && !img.src.startsWith('data:')) {
     try {
       const res  = await fetch(img.src);
       const blob = await res.blob();
@@ -368,10 +379,12 @@ async function tryDecodeQrImages() {
       } finally {
         URL.revokeObjectURL(url);
       }
+      // Render at ≥400px so each QR module is large enough for BarcodeDetector.
+      const canvasSize = Math.max(Math.round(rect.width), 400);
       const canvas = document.createElement('canvas');
-      canvas.width = Math.round(rect.width);
-      canvas.height = Math.round(rect.height);
-      canvas.getContext('2d').drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+      canvas.width = canvasSize;
+      canvas.height = canvasSize;
+      canvas.getContext('2d').drawImage(offscreen, 0, 0, canvasSize, canvasSize);
       const barcodes = await detector.detect(canvas);
       const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
       if (uri) return uri;
@@ -560,7 +573,7 @@ function showCodeRevealOverlay(name, code) {
     <div style="padding:12px 14px;">
       <div style="color:#94a3b8;font-size:11px;margin-bottom:6px;">${safeName} added — copy your code:</div>
       <div style="display:flex;align-items:center;gap:8px;">
-        <span style="flex:1;font-size:22px;font-weight:700;letter-spacing:3px;color:#f1f5f9;font-family:monospace;">${formatted}</span>
+        <span class="otpilot-reveal-code" style="flex:1;font-size:22px;font-weight:700;letter-spacing:3px;color:#f1f5f9;font-family:monospace;">${formatted}</span>
         <button class="otpilot-copy-code" style="padding:6px 12px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Copy</button>
       </div>
     </div>`;

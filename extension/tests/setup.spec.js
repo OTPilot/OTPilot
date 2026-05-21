@@ -103,8 +103,8 @@ test('detects inline SVG QR code', async ({ context, extensionId }) => {
   const page = await context.newPage();
   await page.goto('http://localhost:8080/test/qr-svg.html');
 
-  // Wait for the SVG to be fetched and injected into the DOM
-  await page.waitForSelector('#qr-wrap svg', { timeout: 10000 });
+  // SVG is static in the HTML — waitForSelector resolves immediately
+  await page.waitForSelector('#qr-wrap svg', { timeout: 5000 });
 
   // Detection runs after SVG is in the DOM (MutationObserver fires)
   const overlay = page.locator('#otpilot-suggestion');
@@ -165,7 +165,7 @@ test('shows code-reveal overlay after adding on enrollment page', async ({ conte
   // Code-reveal overlay should appear with a 6-digit code
   const reveal = page.locator('#otpilot-code-reveal');
   await expect(reveal).toBeVisible({ timeout: 3000 });
-  const codeText = await reveal.locator('span').first().innerText();
+  const codeText = await reveal.locator('.otpilot-reveal-code').innerText();
   await expect(codeText.replace(/\s/g, '')).toMatch(/^\d{6}$/);
 });
 
