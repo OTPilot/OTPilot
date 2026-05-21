@@ -1,13 +1,18 @@
 import { test as base, chromium } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const extensionPath = path.resolve(__dirname, '..');
 
 export const test = base.extend({
   context: async ({}, use) => {
-    const context = await chromium.launchPersistentContext('', {
+    // Fresh isolated profile per test — prevents session-restore from stale tabs
+    // and lock conflicts when tests run in parallel.
+    const userDataDir = mkdtempSync(path.join(tmpdir(), 'otpilot-test-'));
+    const context = await chromium.launchPersistentContext(userDataDir, {
       headless: false,
       args: [
         `--disable-extensions-except=${extensionPath}`,
@@ -16,6 +21,7 @@ export const test = base.extend({
     });
     await use(context);
     await context.close();
+    try { rmSync(userDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
   },
 
   extensionId: async ({ context }, use) => {

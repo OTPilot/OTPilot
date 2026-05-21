@@ -2,7 +2,7 @@ import { test, expect, FAKE_AUTH, SESSION_24H, TEST_SECRET } from './fixtures.js
 
 test('autofill test page has OTP input field', async ({ context }) => {
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/autofill.html');
+  await page.goto('http://localhost:8765/test/autofill.html');
 
   const input = page.locator('input[name="otp_token"]');
   await expect(input).toBeVisible();
@@ -27,12 +27,12 @@ test('content script fills OTP field when triggered via extension message', asyn
 
   // Navigate to the autofill page and wait for content script to run
   const autofillPage = await context.newPage();
-  await autofillPage.goto('http://localhost:8080/test/autofill.html');
+  await autofillPage.goto('http://localhost:8765/test/autofill.html');
   await autofillPage.waitForLoadState('networkidle');
 
   // Send the fill message from the extension (popup) context
   const tabId = await popupPage.evaluate(async () => {
-    const tabs = await chrome.tabs.query({ url: 'http://localhost:8080/test/autofill.html' });
+    const tabs = await chrome.tabs.query({ url: 'http://localhost:8765/test/autofill.html' });
     return tabs[0]?.id ?? null;
   });
 
@@ -61,11 +61,11 @@ test('filled code is highlighted (filled class added)', async ({ context, extens
   }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
 
   const autofillPage = await context.newPage();
-  await autofillPage.goto('http://localhost:8080/test/autofill.html');
+  await autofillPage.goto('http://localhost:8765/test/autofill.html');
   await autofillPage.waitForLoadState('networkidle');
 
   const tabId = await popupPage.evaluate(async () => {
-    const tabs = await chrome.tabs.query({ url: 'http://localhost:8080/test/autofill.html' });
+    const tabs = await chrome.tabs.query({ url: 'http://localhost:8765/test/autofill.html' });
     return tabs[0]?.id ?? null;
   });
 

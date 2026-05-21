@@ -20,7 +20,7 @@ test('detects otpauth anchor and shows suggestion overlay', async ({ context, ex
   await popupPage.close();
 
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/qr-anchor.html');
+  await page.goto('http://localhost:8765/test/qr-anchor.html');
 
   const overlay = page.locator('#otpilot-suggestion');
   await expect(overlay).toBeVisible({ timeout: 5000 });
@@ -38,7 +38,7 @@ test('no overlay when the account is already saved', async ({ context, extension
   await popupPage.close();
 
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/qr-anchor.html');
+  await page.goto('http://localhost:8765/test/qr-anchor.html');
 
   await page.waitForTimeout(2000);
   await expect(page.locator('#otpilot-suggestion')).not.toBeVisible();
@@ -51,7 +51,7 @@ test('no overlay when no master password is set up', async ({ context, extension
   await popupPage.close();
 
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/qr-anchor.html');
+  await page.goto('http://localhost:8765/test/qr-anchor.html');
 
   await page.waitForTimeout(2000);
   await expect(page.locator('#otpilot-suggestion')).not.toBeVisible();
@@ -64,7 +64,7 @@ test('dismiss overlay via Not now button', async ({ context, extensionId }) => {
   await popupPage.close();
 
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/qr-anchor.html');
+  await page.goto('http://localhost:8765/test/qr-anchor.html');
 
   const overlay = page.locator('#otpilot-suggestion');
   await expect(overlay).toBeVisible({ timeout: 5000 });
@@ -81,7 +81,7 @@ test('detects QR image inside dynamically injected modal', async ({ context, ext
   await popupPage.close();
 
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/qr-img-modal.html');
+  await page.goto('http://localhost:8765/test/qr-img-modal.html');
 
   // Modal is not in the DOM at load time — click to inject it
   await page.getByRole('button', { name: 'Open 2FA setup' }).click();
@@ -101,7 +101,7 @@ test('detects inline SVG QR code', async ({ context, extensionId }) => {
   await popupPage.close();
 
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/qr-svg.html');
+  await page.goto('http://localhost:8765/test/qr-svg.html');
 
   // SVG is static in the HTML — waitForSelector resolves immediately
   await page.waitForSelector('#qr-wrap svg', { timeout: 5000 });
@@ -121,7 +121,7 @@ test('detects base32 secret in a text node', async ({ context, extensionId }) =>
   await popupPage.close();
 
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/2fa-plaintext.html');
+  await page.goto('http://localhost:8765/test/2fa-plaintext.html');
 
   const overlay = page.locator('#otpilot-suggestion');
   await expect(overlay).toBeVisible({ timeout: 5000 });
@@ -137,7 +137,7 @@ test('detects base32 secret inside an input value', async ({ context, extensionI
   await popupPage.close();
 
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/2fa-input-secret.html');
+  await page.goto('http://localhost:8765/test/2fa-input-secret.html');
 
   const overlay = page.locator('#otpilot-suggestion');
   await expect(overlay).toBeVisible({ timeout: 5000 });
@@ -153,7 +153,7 @@ test('shows code-reveal overlay after adding on enrollment page', async ({ conte
   await popupPage.close();
 
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/enrollment.html');
+  await page.goto('http://localhost:8765/test/enrollment.html');
 
   // Suggestion overlay appears from the readonly secret input
   const suggestion = page.locator('#otpilot-suggestion');
@@ -176,7 +176,7 @@ test('does not auto-fill the token field on enrollment page', async ({ context, 
   await popupPage.close();
 
   const page = await context.newPage();
-  await page.goto('http://localhost:8080/test/enrollment.html');
+  await page.goto('http://localhost:8765/test/enrollment.html');
 
   const suggestion = page.locator('#otpilot-suggestion');
   await expect(suggestion).toBeVisible({ timeout: 5000 });
