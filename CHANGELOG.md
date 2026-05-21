@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.1.0 (Unreleased — in development)
+
+### Team sharing
+
+- **Share TOTP codes with teammates** — account owners can share a TOTP code without exposing the underlying secret. The secret is encrypted with an independent sharing key; the backend generates the code on demand for authorized recipients. The raw secret is never transmitted.
+- **Instant revocation** — the owner can revoke access at any time from the dashboard. Access is cut immediately on the next code request.
+- **Email invitations** — invite teammates by email. If they already have an OTPilot account, the invite appears directly in their extension. If not, they receive an email with a link to install OTPilot; the pending invite is automatically linked to their account on signup.
+- **Team dashboard** — manage team members, shared codes, and pending invitations from the web dashboard.
+- **Team plan** — team sharing requires a Team subscription ($8–10/month or $70–80/year), which includes up to 5 seats. Additional seats at $2/user/month.
+
 ## v1.0.1 (Unreleased — in development)
 
 ### Extension
