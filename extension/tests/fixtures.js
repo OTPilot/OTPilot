@@ -39,4 +39,4 @@ export { expect } from '@playwright/test';
 
 export const FAKE_AUTH = { salt: 'dGVzdA==', iv: 'dGVzdA==', data: 'dGVzdA==' };
 export const SESSION_24H = () => Date.now() + 86400000;
-export const TEST_SECRET = 'JBSWY3DPEHPK3PXP'; // from test/setup.html
+export const TEST_SECRET = 'JBSWY3DPEHPK3PXP'; // from test/qr-anchor.html

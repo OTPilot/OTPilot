@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>2FA Setup – Plain Text Secret – OTPilot Test Page</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.08);
+      padding: 40px 36px 32px;
+      width: 100%;
+      max-width: 400px;
+    }
+    h1 { font-size: 20px; font-weight: 700; color: #0f172a; margin-bottom: 8px; }
+    .subtitle { font-size: 13px; color: #64748b; margin-bottom: 24px; line-height: 1.5; }
+    .label {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .5px; color: #94a3b8; margin-bottom: 6px;
+    }
+    .secret-block {
+      background: #f1f5f9;
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-family: monospace;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: #0f172a;
+      margin-bottom: 20px;
+    }
+    .note {
+      margin-top: 24px;
+      padding: 14px 16px;
+      background: #fefce8;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      font-size: 12px;
+      color: #92400e;
+      line-height: 1.6;
+    }
+    .note strong { font-weight: 700; }
+    .note code { background: #fef9c3; padding: 1px 5px; border-radius: 3px; font-family: monospace; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Can't scan the QR code?</h1>
+  <p class="subtitle">
+    Enter this key manually into your authenticator app to set up two-factor authentication.
+  </p>
+
+  <div class="label">Setup key</div>
+  <!--
+    Secret is a plain text node — no <input>, no anchor, no QR image.
+    OTPilot must find it via TreeWalker (findPlainTextSecret text-node pass).
+    URL path contains "2fa" so PATH_RE matches.
+  -->
+  <div class="secret-block">JBSWY3DPEHPK3PXP</div>
+
+  <p class="subtitle" style="margin-bottom:0">
+    Type-based: TOTP · Time-based · 6 digits · 30 second interval
+  </p>
+
+  <div class="note">
+    <strong>Detection path:</strong> base32 text node — no <code>otpauth://</code>
+    anchor, no QR image, no input field.<br><br>
+    Simulates Twitter/X "Can't scan the QR code?" flow.<br><br>
+    Secret used: <code>JBSWY3DPEHPK3PXP</code> (public test value).
+  </div>
+</div>
+</body>
+</html>

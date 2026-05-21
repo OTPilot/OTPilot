@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Inline SVG QR – OTPilot Test Page</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.08);
+      padding: 40px 36px 32px;
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+    }
+    h1 { font-size: 20px; font-weight: 700; color: #0f172a; margin-bottom: 6px; }
+    .subtitle { font-size: 13px; color: #64748b; margin-bottom: 28px; line-height: 1.5; }
+    #qr-wrap {
+      display: inline-block;
+      padding: 16px;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      width: 212px;
+      height: 212px;
+    }
+    #qr-wrap svg { display: block; width: 180px; height: 180px; }
+    .note {
+      margin-top: 24px;
+      padding: 14px 16px;
+      background: #fefce8;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      font-size: 12px;
+      color: #92400e;
+      line-height: 1.6;
+      text-align: left;
+    }
+    .note strong { font-weight: 700; }
+    .note code { background: #fef9c3; padding: 1px 5px; border-radius: 3px; font-family: monospace; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Set up authenticator app</h1>
+  <p class="subtitle">Scan this QR code with your authenticator app.</p>
+
+  <!--
+    The QR is fetched as SVG and injected inline — no <img> tag.
+    This simulates Sentry's qrcode.react pattern (inline <svg> in the DOM).
+    OTPilot must use Pass 4 (SVG serialise → canvas → BarcodeDetector).
+  -->
+  <div id="qr-wrap" data-testid="qr-container"></div>
+
+  <div class="note">
+    <strong>Detection path:</strong> inline <code>&lt;svg&gt;</code> — no <code>otpauth://</code>
+    anchor, no <code>&lt;img&gt;</code>, no plain-text secret.<br><br>
+    Secret used: <code>JBSWY3DPEHPK3PXP</code> (public test value).
+  </div>
+</div>
+
+<script>
+  const URI = 'otpauth://totp/TestApp:demo@example.com?secret=JBSWY3DPEHPK3PXP&issuer=TestApp&algorithm=SHA1&digits=6&period=30';
+  const apiUrl = 'https://api.qrserver.com/v1/create-qr-code/?format=svg&size=180x180&data=' + encodeURIComponent(URI);
+
+  fetch(apiUrl)
+    .then(r => r.text())
+    .then(svgText => {
+      const wrap = document.getElementById('qr-wrap');
+      wrap.innerHTML = svgText;
+      // Ensure the SVG fills the container
+      const svg = wrap.querySelector('svg');
+      if (svg) { svg.setAttribute('width', '180'); svg.setAttribute('height', '180'); }
+    })
+    .catch(() => {
+      document.getElementById('qr-wrap').textContent = 'QR load failed';
+    });
+</script>
+</body>
+</html>
