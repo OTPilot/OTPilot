@@ -295,14 +295,20 @@ const QR_HINTS = ['qr', 'totp', 'otp', 'mfa', '2fa', 'seed', 'authenticator'];
 async function decodeQrFromImg(detector, img) {
   let barcodes = [];
   try { barcodes = await detector.detect(img); } catch {}
-  // Canvas fallback: handles data: URLs (fetch() doesn't work for them in content
-  // scripts) and images that haven't painted yet when detect(img) is called.
+  // Canvas fallback: load a fresh copy so we're not racing the original element's
+  // render state (e.g. data: URLs in fixed-position modals may have complete=true
+  // but naturalWidth=0 until the browser decodes them).
   if (!barcodes.length) {
     try {
+      const fresh = new Image();
+      await new Promise((res, rej) => { fresh.onload = res; fresh.onerror = rej; fresh.src = img.src; });
       const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth || img.width;
-      canvas.height = img.naturalHeight || img.height;
-      canvas.getContext('2d').drawImage(img, 0, 0);
+      canvas.width = fresh.naturalWidth;
+      canvas.height = fresh.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(fresh, 0, 0);
       barcodes = await detector.detect(canvas);
     } catch {}
   }
@@ -344,7 +350,9 @@ async function tryDecodeQrImages() {
   // Pass 2: fallback — any visible, reasonably-sized image not already scanned
   const fallbackImgs = [...document.querySelectorAll('img')].filter(img => {
     if (hintImgs.includes(img)) return false;
-    if (img.naturalWidth < 80 || img.naturalHeight < 80) return false;
+    // Allow naturalWidth=0 (not yet decoded) — decodeQrFromImg loads a fresh copy.
+    // Only exclude images that are loaded AND genuinely small (decorative).
+    if (img.naturalWidth > 0 && (img.naturalWidth < 80 || img.naturalHeight < 80)) return false;
     if (img.offsetParent === null && !img.closest('dialog, [role="dialog"]')) return false;
     return true;
   });
@@ -384,7 +392,12 @@ async function tryDecodeQrImages() {
       const canvas = document.createElement('canvas');
       canvas.width = canvasSize;
       canvas.height = canvasSize;
-      canvas.getContext('2d').drawImage(offscreen, 0, 0, canvasSize, canvasSize);
+      const ctx = canvas.getContext('2d');
+      // White background is required — SVG QR codes have no background rect, so
+      // dark modules on a transparent canvas produce an all-dark result.
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvasSize, canvasSize);
+      ctx.drawImage(offscreen, 0, 0, canvasSize, canvasSize);
       const barcodes = await detector.detect(canvas);
       const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
       if (uri) return uri;
