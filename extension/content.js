@@ -1,24 +1,12 @@
 // Runs on every page; bails out immediately unless an account URL matches.
 
-function safeStorageGet(keys) {
-  return new Promise(r => {
-    try { chrome.storage.local.get(keys, data => r(data)); }
-    catch { r({}); }
-  });
-}
-
-function safeStorageSet(items) {
-  return new Promise(r => {
-    try { chrome.storage.local.set(items, () => r()); }
-    catch { r(); }
-  });
-}
-
 function isSessionLocked() {
-  return safeStorageGet(['auth', 'sessionExpiry']).then(d => {
-    if (!d.auth) return false;
-    return !d.sessionExpiry || Date.now() >= d.sessionExpiry;
-  });
+  return new Promise(r =>
+    chrome.storage.local.get(['auth', 'sessionExpiry'], d => {
+      if (!d.auth) { r(false); return; }
+      r(!d.sessionExpiry || Date.now() >= d.sessionExpiry);
+    })
+  );
 }
 
 function matchesPattern(pattern, hostname) {
@@ -48,13 +36,17 @@ function findAllMatchingAccounts(accounts, hostname) {
 }
 
 function getActiveAccount(overrideIndex) {
-  return safeStorageGet(['accounts', 'activeIndex']).then(d => {
-    const accs = d.accounts || [];
-    const byUrl = findAccount(accs, location.hostname.toLowerCase());
-    if (byUrl) return byUrl;
-    const idx = overrideIndex ?? d.activeIndex ?? 0;
-    return accs[idx] || null;
-  });
+  return new Promise(r =>
+    chrome.storage.local.get(['accounts', 'activeIndex'], d => {
+      const accs = d.accounts || [];
+      // 1. Try URL-based match first
+      const byUrl = findAccount(accs, location.hostname.toLowerCase());
+      if (byUrl) { r(byUrl); return; }
+      // 2. Fall back to the account selected in the popup (or override from message)
+      const idx = overrideIndex ?? d.activeIndex ?? 0;
+      r(accs[idx] || null);
+    })
+  );
 }
 
 const OTP_SELECTORS = [
@@ -371,12 +363,15 @@ async function tryDecodeQrImages() {
       const blob = new Blob([svgData], { type: 'image/svg+xml' });
       const url = URL.createObjectURL(blob);
       const offscreen = new Image();
-      await new Promise((res, rej) => { offscreen.onload = res; offscreen.onerror = rej; offscreen.src = url; });
+      try {
+        await new Promise((res, rej) => { offscreen.onload = res; offscreen.onerror = rej; offscreen.src = url; });
+      } finally {
+        URL.revokeObjectURL(url);
+      }
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(rect.width);
       canvas.height = Math.round(rect.height);
       canvas.getContext('2d').drawImage(offscreen, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(url);
       const barcodes = await detector.detect(canvas);
       const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
       if (uri) return uri;
@@ -446,6 +441,7 @@ function findPlainTextSecret() {
 
   // Some sites (e.g. Sentry) show the secret inside an <input> value rather than a text node.
   for (const el of document.querySelectorAll('input[type="text"], input[readonly], input:not([type]), textarea')) {
+    if (!el.offsetParent || el.disabled) continue;
     const raw = (el.value || '').trim();
     if (!raw) continue;
     const compact = raw.replace(/\s/g, '').toUpperCase();
@@ -530,10 +526,12 @@ function wirePwField(el, primaryBtn, primaryLabel, onSuccess) {
     primaryBtn.textContent = 'Verifying…';
 
     try {
-      const { auth, sessionDuration } = await safeStorageGet(['auth', 'sessionDuration']);
+      const { auth, sessionDuration } = await new Promise(r =>
+        chrome.storage.local.get(['auth', 'sessionDuration'], r)
+      );
       if (await verifyInContent(password, auth)) {
         const dur = sessionDuration || 86400000;
-        await safeStorageSet({ sessionExpiry: Date.now() + dur });
+        await new Promise(r => chrome.storage.local.set({ sessionExpiry: Date.now() + dur }, r));
         onSuccess();
       } else {
         errEl.textContent = 'Incorrect password';
@@ -554,6 +552,7 @@ function wirePwField(el, primaryBtn, primaryLabel, onSuccess) {
 }
 
 function showCodeRevealOverlay(name, code) {
+  if (document.getElementById('otpilot-code-reveal')) return;
   const el = makeOverlay('otpilot-code-reveal');
   const safeName = name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const formatted = code.slice(0, 3) + ' ' + code.slice(3);
@@ -606,15 +605,12 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   el.querySelector('.otpilot-secondary').onclick     = close;
 
   async function addAccount() {
-    const d = await safeStorageGet('accounts');
+    const d = await new Promise(r => chrome.storage.local.get('accounts', r));
     const accs = d.accounts || [];
     accs.push({ name, secret, urls: location.hostname, autofill: true, email });
-    await safeStorageSet({ accounts: accs, activeIndex: accs.length - 1 });
+    await new Promise(r => chrome.storage.local.set({ accounts: accs, activeIndex: accs.length - 1 }, r));
     _dismissedSecrets.add(secret);
     el.remove();
-
-    // On setup/enrollment pages show the current code so the user can paste it
-    // manually — don't auto-fill, which would race against form submission.
     let code = '';
     try { code = await generateTOTP(secret); } catch {}
     if (code) {
@@ -694,14 +690,17 @@ async function runDetection() {
     const parsed = uri ? parseOtpAuthUri(uri) : findPlainTextSecret();
     if (!parsed) return false;
 
-    const d = await safeStorageGet(['accounts', 'auth', 'sessionExpiry']);
-    if (!d.auth) return false;
-    if (_dismissedSecrets.has(parsed.secret)) return false;
-    const exists = (d.accounts || []).some(a => a.secret === parsed.secret);
-    if (exists) return false;
-    const locked = !d.sessionExpiry || Date.now() >= d.sessionExpiry;
-    showSuggestionOverlay(parsed.name, parsed.secret, parsed.email || '', locked);
-    return true;
+    return await new Promise(resolve => {
+      chrome.storage.local.get(['accounts', 'auth', 'sessionExpiry'], d => {
+        if (!d.auth) { resolve(false); return; }
+        if (_dismissedSecrets.has(parsed.secret)) { resolve(false); return; }
+        const exists = (d.accounts || []).some(a => a.secret === parsed.secret);
+        if (exists)  { resolve(false); return; }
+        const locked = !d.sessionExpiry || Date.now() >= d.sessionExpiry;
+        showSuggestionOverlay(parsed.name, parsed.secret, parsed.email || '', locked);
+        resolve(true);
+      });
+    });
   } finally {
     _detectionInFlight = false;
   }
@@ -753,11 +752,16 @@ async function runDetection() {
   let _lockDismissedFor    = null;
 
   function isEnrollmentPage() {
-    // If a base32 secret key is visible in any input we're on a 2FA setup page,
-    // not a login page — don't auto-fill the confirmation token field.
+    // Suppress auto-fill on 2FA setup/enrollment pages. Requires PATH_RE to match
+    // (same guard as findPlainTextSecret) so random pages with off-screen readonly
+    // inputs containing base32-looking strings don't silently break auto-fill.
+    const path = (location.pathname + location.search + location.hash).toLowerCase();
+    const PATH_RE = /(?:^|[/\-_.=?&#])(?:2fa|mfa|otp|totp|two[-_](?:factor|step)|multi[-_]?factor|enroll(?:ment)?|authenticator|security)(?=[/\-_.=?&#]|$)/;
+    if (!PATH_RE.test(path)) return false;
     return [...document.querySelectorAll(
       'input[type="text"], input[readonly], input:not([type]), textarea'
     )].some(el => {
+      if (!el.offsetParent || el.disabled) return false;
       const v = (el.value || '').replace(/\s/g, '').toUpperCase();
       return v.length >= 16 && v.length <= 64 && /^[A-Z2-7]+$/.test(v) && /[2-7]/.test(v);
     });
@@ -766,7 +770,7 @@ async function runDetection() {
   async function tryAutoFill() {
     if (isEnrollmentPage()) return;
 
-    const { accounts = [] } = await safeStorageGet('accounts');
+    const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
     const hostname = location.hostname.toLowerCase();
     const matching = findAllMatchingAccounts(accounts, hostname).filter(a => a.autofill !== false);
     if (matching.length === 0) return;
