@@ -10,6 +10,6 @@ export default async function globalSetup() {
   const testConfig = path.join(root, 'config.test.js');
   const backup     = path.join(root, 'config.js.bak');
 
-  if (existsSync(config)) copyFileSync(config, backup);
+  if (existsSync(config) && !existsSync(backup)) copyFileSync(config, backup);
   copyFileSync(testConfig, config);
 }

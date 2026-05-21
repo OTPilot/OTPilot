@@ -387,8 +387,11 @@ async function tryDecodeQrImages() {
       } finally {
         URL.revokeObjectURL(url);
       }
-      // Render at ≥400px so each QR module is large enough for BarcodeDetector.
-      const canvasSize = Math.max(Math.round(rect.width), 400);
+      // Render at an integer multiple of the viewBox so modules align exactly
+      // to pixel boundaries — anti-aliased edges confuse ZXing on Linux.
+      const vbSize = Math.max(svg.viewBox?.baseVal?.width || 0, svg.viewBox?.baseVal?.height || 0);
+      const scale = vbSize > 0 ? Math.max(1, Math.ceil(400 / vbSize)) : 1;
+      const canvasSize = vbSize > 0 ? vbSize * scale : Math.max(Math.round(rect.width), 400);
       const canvas = document.createElement('canvas');
       canvas.width = canvasSize;
       canvas.height = canvasSize;

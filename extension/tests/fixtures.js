@@ -17,6 +17,9 @@ export const test = base.extend({
       args: [
         `--disable-extensions-except=${extensionPath}`,
         `--load-extension=${extensionPath}`,
+        // BarcodeDetector requires an explicit opt-in on Linux in Playwright's
+        // Chromium bundle — without this flag detect() silently returns [].
+        '--enable-blink-features=BarcodeDetection',
       ],
     });
     await use(context);
