@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Enrollment – Authenticator App – OTPilot Test Page</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1c1b23;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #2d2b38;
+      border: 1px solid #3d3b4a;
+      border-radius: 8px;
+      padding: 32px 28px;
+      width: 100%;
+      max-width: 560px;
+    }
+    .warning {
+      background: #433a1a;
+      border: 1px solid #7a6220;
+      border-radius: 6px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #e2c97e;
+      line-height: 1.5;
+      margin-bottom: 24px;
+    }
+    h1 { font-size: 18px; font-weight: 600; margin-bottom: 20px; }
+    .section-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .5px; color: #94a3b8; margin-bottom: 16px;
+    }
+    .row {
+      display: flex;
+      border-top: 1px solid #3d3b4a;
+      padding: 16px 0;
+      align-items: center;
+      gap: 16px;
+    }
+    .row-label { font-size: 14px; color: #94a3b8; width: 200px; flex-shrink: 0; }
+    .row-value { flex: 1; }
+    input[name="authenticator_secret"],
+    input[name="authenticator_token"] {
+      width: 100%;
+      background: #1c1b23;
+      border: 1px solid #3d3b4a;
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 14px;
+      color: #e2e8f0;
+    }
+    input[name="authenticator_secret"] {
+      font-family: monospace;
+      letter-spacing: 1px;
+    }
+    input[name="authenticator_token"]:focus {
+      outline: none;
+      border-color: #6366f1;
+    }
+    .required { color: #f87171; margin-left: 2px; }
+    .actions {
+      display: flex;
+      justify-content: flex-end;
+      padding-top: 20px;
+      border-top: 1px solid #3d3b4a;
+    }
+    button[type="submit"] {
+      padding: 9px 24px;
+      background: #6366f1;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .note {
+      margin-top: 24px;
+      padding: 14px 16px;
+      background: #252232;
+      border: 1px solid #3d3b4a;
+      border-radius: 8px;
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.6;
+    }
+    .note strong { color: #e2e8f0; }
+    .note code { background: #1c1b23; padding: 1px 5px; border-radius: 3px; font-family: monospace; font-size: 11px; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="warning">
+    Your account is currently linked to an authenticator application. To link to a new
+    device or application, or to update your secret key, click "Confirm" below.
+  </div>
+
+  <h1>Enroll authenticator app</h1>
+  <div class="section-title">Configuration</div>
+
+  <form id="enrollment-form">
+    <div class="row">
+      <div class="row-label">Authenticator secret</div>
+      <div class="row-value">
+        <!--
+          Secret in readonly <input> — simulates Sentry.
+          OTPilot detects this via the input-value scanning pass in findPlainTextSecret().
+        -->
+        <input
+          name="authenticator_secret"
+          type="text"
+          readonly
+          value="JBSWY3DPEHPK3PXP"
+          aria-label="Authenticator secret"
+          data-testid="authenticator-secret"
+        >
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="row-label">
+        Authenticator token <span class="required">*</span>
+      </div>
+      <div class="row-value">
+        <!--
+          Token confirmation input — OTPilot must NOT auto-fill this.
+          The enrollment guard (isEnrollmentPage) blocks tryAutoFill() when the
+          secret input above is visible.
+        -->
+        <input
+          name="authenticator_token"
+          type="text"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          placeholder="Enter 6-digit code"
+          data-testid="authenticator-token"
+        >
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit">Confirm</button>
+    </div>
+  </form>
+
+  <div class="note">
+    <strong>What OTPilot should do:</strong>
+    <ol style="margin-top:8px;padding-left:16px;display:flex;flex-direction:column;gap:4px;">
+      <li>Detect the secret from the readonly input → show "Add account" overlay.</li>
+      <li>After clicking "Add account" → show code-reveal overlay (6-digit code + Copy button).</li>
+      <li><strong>Not</strong> auto-fill the "Authenticator token" field — that would race against
+          form submission and could cause Sentry to regenerate a new secret on each failed attempt.</li>
+    </ol><br>
+    Secret used: <code>JBSWY3DPEHPK3PXP</code> (public test value).
+  </div>
+</div>
+</body>
+</html>

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>2FA Setup – Acme 2 (bob@acme.test)</title>
+  <title>2FA Setup – Acme 1 (alice@acme.test)</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -17,7 +17,7 @@
 
     .badge {
       display: inline-block;
-      background: #0ea5e9;
+      background: #6366f1;
       color: #fff;
       font-size: 11px;
       font-weight: 700;
@@ -63,29 +63,36 @@
       border-top: 1px solid #e2e8f0;
       padding-top: 16px;
     }
+
+    .sibling {
+      margin-top: 20px;
+      font-size: 13px;
+      color: #64748b;
+    }
+    .sibling a { color: #6366f1; }
   </style>
 </head>
 <body>
 
-<div class="badge">Acme 2 · bob@acme.test</div>
+<div class="badge">Acme 1 · alice@acme.test</div>
 <h1>Set up two-factor authentication</h1>
 <p>Scan the QR code with your authenticator app, or enter the setup key manually.</p>
 
 <div class="qr-wrap">
-  <a href="otpauth://totp/Acme:bob@acme.test?secret=MFRGGZDFMZTWQ2LK&issuer=Acme&algorithm=SHA1&digits=6&period=30">
+  <a href="otpauth://totp/Acme:alice@acme.test?secret=JBSWY3DPEHPK3PXP&issuer=Acme&algorithm=SHA1&digits=6&period=30">
     <img
-      src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=otpauth%3A%2F%2Ftotp%2FAcme%3Abob%40acme.test%3Fsecret%3DMFRGGZDFMZTWQ2LK%26issuer%3DAcme%26algorithm%3DSHA1%26digits%3D6%26period%3D30"
-      alt="QR code for Acme 2 (bob)"
+      src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAALQAAAC0AQAAAAAVtjufAAABvElEQVR4nM2YMW4lMQxDn4P09A3m/seaG9AneFvMT4AAf6uoiEsVlEBTlOwl7875eBuGvxdfa+2999prnXPW2WutPYaP0ZBWqaLRdAr/E1bwsIOLuMvKNG9rk5ud9nT/Aud/8TYHel/nOr/BeXMeuoNU61dgCn+5ID9CB3LP1a9KhBhpVB2r/4O9zvLecg7IzT5nUv9YkxJAwZI5/rEJULGNJu0gP/hqWFIlpklH+xeWJ24W3avcXJP6hxZKmqSlMZP6sWy4WuCEwp7VT1ssD/uatqP3m4akodSkZlY/UIgJtAntIP+IpUkMlpoyil+pxVZCk8po/YE0jVUb4qg/CKZgYl/byhz+B8cuoov7QGJLB/Vv2j7lUxJH/QcjkRolIGUUX9NUqAZIOnq/kaepqKQ1na2/2hZfI1gZ9Z8mofShPqQM7ifY2pfplGf9HNQ/ptJH+KFqGZ+/Ka+bAJ31z9bQUuqTaNY/fTqArw0izvYvkNSndmkyq89okhQjmpjx98udQ2Cx2rU4HX4/7nNxH5ru3eaa20++4xu4TiT0TL9fnhHfSB6zntZPSl8CZXS+f+J3Hr/y+Rf/Ad6ff02jvSqrrrEqAAAAAElFTkSuQmCC"
+      alt="QR code for Acme 1 (alice)"
     >
   </a>
 </div>
 
 <div class="label">Setup key (manual entry)</div>
-<div class="manual-key">MFRGGZDFMZTWQ2LK</div>
+<div class="manual-key">JBSWY3DPEHPK3PXP</div>
 
 <p class="note">
-  Test page for OTPilot — multi-account picker. Open OTPilot while on this page to auto-detect and save <strong>bob@acme.test</strong>.<br><br>
-  Then visit <a href="autofill.html">autofill.html</a> to test the picker — both ACME accounts will appear.
+  Test page for OTPilot — multi-account picker. Open OTPilot while on this page to auto-detect and save <strong>alice@acme.test</strong>.<br><br>
+  Then also visit <a href="multi-bob.html">multi-bob.html</a> to add the second account, and test the picker on <a href="autofill.html">autofill.html</a>.
 </p>
 
 </body>

@@ -22,6 +22,7 @@ api/rustc-ice-*.txt
 
 # extension config — use config.example.js as template
 extension/config.js
+extension/config.js.bak
 extension/config-dev.js
 extension/config-prod.js
 docs/.vercel

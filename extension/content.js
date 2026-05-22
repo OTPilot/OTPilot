@@ -292,33 +292,100 @@ function showLockOverlay(accountName, onUnlock, onDismiss) {
 
 const QR_HINTS = ['qr', 'totp', 'otp', 'mfa', '2fa', 'seed', 'authenticator'];
 
-async function decodeQrFromImg(detector, img) {
-  let barcodes = [];
-  try { barcodes = await detector.detect(img); } catch {}
-  if (!barcodes.length) {
+// Tries BarcodeDetector (native, fast) then jsQR (pure-JS fallback for Linux CI
+// where Playwright's Chromium may lack a working ZXing backend).
+async function scanCanvas(canvas) {
+  if ('BarcodeDetector' in window) {
+    try {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      const barcodes = await detector.detect(canvas);
+      const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
+      if (uri) return uri;
+    } catch {}
+  }
+  if (typeof jsQR === 'function') {
+    try {
+      const ctx = canvas.getContext('2d');
+      const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const result = jsQR(data, width, height);
+      if (result?.data?.startsWith('otpauth://')) return result.data;
+    } catch {}
+  }
+  return null;
+}
+
+async function decodeQrFromImg(img) {
+  // Draw onto a canvas first so both BarcodeDetector and jsQR can consume it.
+  // Canvas fallback: load a fresh copy so we're not racing the original element's
+  // render state (e.g. data: URLs in fixed-position modals may have complete=true
+  // but naturalWidth=0 until the browser decodes them).
+  const drawAndScan = async (src) => {
+    const fresh = new Image();
+    await new Promise((res, rej) => { fresh.onload = res; fresh.onerror = rej; fresh.src = src; });
+    const canvas = document.createElement('canvas');
+    canvas.width = fresh.naturalWidth;
+    canvas.height = fresh.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(fresh, 0, 0);
+    return scanCanvas(canvas);
+  };
+
+  // Direct element detection (BarcodeDetector only — jsQR needs a canvas)
+  if ('BarcodeDetector' in window) {
+    try {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      const barcodes = await detector.detect(img);
+      const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
+      if (uri) return uri;
+    } catch {}
+  }
+
+  // Canvas redraw (works for both BarcodeDetector and jsQR)
+  try {
+    const uri = await drawAndScan(img.src);
+    if (uri) return uri;
+  } catch {}
+
+  // Same-origin fetch → canvas
+  if (!img.src.startsWith('data:')) {
     try {
       const res  = await fetch(img.src);
       const blob = await res.blob();
-      const bmp  = await createImageBitmap(blob);
-      barcodes   = await detector.detect(bmp);
-    } catch {}
-  }
-  // CORS fallback: route the fetch through the background service worker
-  if (!barcodes.length && img.src.startsWith('http') && chrome.runtime?.id) {
-    try {
-      const resp = await chrome.runtime.sendMessage({ action: 'fetchImageBuffer', url: img.src });
-      if (resp?.ok) {
-        const bmp = await createImageBitmap(new Blob([new Uint8Array(resp.data)]));
-        barcodes  = await detector.detect(bmp);
+      const url  = URL.createObjectURL(blob);
+      try {
+        const uri = await drawAndScan(url);
+        if (uri) return uri;
+      } finally {
+        URL.revokeObjectURL(url);
       }
     } catch {}
   }
-  return barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://')) || null;
+
+  // CORS fallback: route the fetch through the background service worker
+  if (img.src.startsWith('http') && chrome.runtime?.id) {
+    try {
+      const resp = await chrome.runtime.sendMessage({ action: 'fetchImageBuffer', url: img.src });
+      if (resp?.ok) {
+        const url = URL.createObjectURL(new Blob([new Uint8Array(resp.data)]));
+        try {
+          const uri = await drawAndScan(url);
+          if (uri) return uri;
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      }
+    } catch {}
+  }
+
+  return null;
 }
 
 async function tryDecodeQrImages() {
-  if (!('BarcodeDetector' in window)) return null;
-  const detector = new BarcodeDetector({ formats: ['qr_code'] });
+  const hasDetector = 'BarcodeDetector' in window;
+  const hasJsQR = typeof jsQR === 'function';
+  if (!hasDetector && !hasJsQR) return null;
 
   // Pass 1: hint-filtered (fast path — covers images with qr/otp/mfa/etc in alt or src)
   const hintImgs = [...document.querySelectorAll('img')].filter(img => {
@@ -326,19 +393,21 @@ async function tryDecodeQrImages() {
     return QR_HINTS.some(h => text.includes(h));
   });
   for (const img of hintImgs) {
-    const uri = await decodeQrFromImg(detector, img);
+    const uri = await decodeQrFromImg(img);
     if (uri) return uri;
   }
 
   // Pass 2: fallback — any visible, reasonably-sized image not already scanned
   const fallbackImgs = [...document.querySelectorAll('img')].filter(img => {
     if (hintImgs.includes(img)) return false;
-    if (img.naturalWidth < 80 || img.naturalHeight < 80) return false;
+    // Allow naturalWidth=0 (not yet decoded) — decodeQrFromImg loads a fresh copy.
+    // Only exclude images that are loaded AND genuinely small (decorative).
+    if (img.naturalWidth > 0 && (img.naturalWidth < 80 || img.naturalHeight < 80)) return false;
     if (img.offsetParent === null && !img.closest('dialog, [role="dialog"]')) return false;
     return true;
   });
   for (const img of fallbackImgs) {
-    const uri = await decodeQrFromImg(detector, img);
+    const uri = await decodeQrFromImg(img);
     if (uri) return uri;
   }
 
@@ -347,8 +416,7 @@ async function tryDecodeQrImages() {
     if (canvas.width < 80 || canvas.height < 80) continue;
     if (canvas.offsetParent === null && !canvas.closest('dialog, [role="dialog"]')) continue;
     try {
-      const barcodes = await detector.detect(canvas);
-      const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
+      const uri = await scanCanvas(canvas);
       if (uri) return uri;
     } catch {}
   }
@@ -368,12 +436,21 @@ async function tryDecodeQrImages() {
       } finally {
         URL.revokeObjectURL(url);
       }
+      // Render at an integer multiple of the viewBox so modules align exactly
+      // to pixel boundaries — anti-aliased edges at fractional scale confuse decoders.
+      const vbSize = Math.max(svg.viewBox?.baseVal?.width || 0, svg.viewBox?.baseVal?.height || 0);
+      const scale = vbSize > 0 ? Math.max(1, Math.ceil(400 / vbSize)) : 1;
+      const canvasSize = vbSize > 0 ? vbSize * scale : Math.max(Math.round(rect.width), 400);
       const canvas = document.createElement('canvas');
-      canvas.width = Math.round(rect.width);
-      canvas.height = Math.round(rect.height);
-      canvas.getContext('2d').drawImage(offscreen, 0, 0, canvas.width, canvas.height);
-      const barcodes = await detector.detect(canvas);
-      const uri = barcodes.map(b => b.rawValue).find(v => v.startsWith('otpauth://'));
+      canvas.width = canvasSize;
+      canvas.height = canvasSize;
+      const ctx = canvas.getContext('2d');
+      // White background is required — SVG QR codes have no background rect, so
+      // dark modules on a transparent canvas produce an all-dark result.
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvasSize, canvasSize);
+      ctx.drawImage(offscreen, 0, 0, canvasSize, canvasSize);
+      const uri = await scanCanvas(canvas);
       if (uri) return uri;
     } catch {}
   }
@@ -560,7 +637,7 @@ function showCodeRevealOverlay(name, code) {
     <div style="padding:12px 14px;">
       <div style="color:#94a3b8;font-size:11px;margin-bottom:6px;">${safeName} added — copy your code:</div>
       <div style="display:flex;align-items:center;gap:8px;">
-        <span style="flex:1;font-size:22px;font-weight:700;letter-spacing:3px;color:#f1f5f9;font-family:monospace;">${formatted}</span>
+        <span class="otpilot-reveal-code" style="flex:1;font-size:22px;font-weight:700;letter-spacing:3px;color:#f1f5f9;font-family:monospace;">${formatted}</span>
         <button class="otpilot-copy-code" style="padding:6px 12px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Copy</button>
       </div>
     </div>`;
