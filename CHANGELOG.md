@@ -4,6 +4,8 @@
 
 ### Extension
 
+- **Auto-fill on localhost with port** — Fixed auto-fill not triggering for accounts whose URL pattern includes a port (e.g. `localhost:8000/`). `matchesPattern` was comparing `localhost:8000` against `location.hostname` which returns `localhost` without a port, causing the match to always fail. The port is now stripped from the pattern before comparison.
+
 - **QR detection reliability** — Canvas fallback in `decodeQrFromImg` now loads a fresh copy of the image before drawing, avoiding a race condition where `naturalWidth=0` on data-URL images inside fixed-position modals caused the canvas to be blank. The canvas is also pre-filled with a white background before drawing, which is required for QR codes rendered on transparent backgrounds (inline SVG, some PNGs).
 - **SVG QR pixel-perfect rendering** — The SVG-to-canvas pass now renders at an integer multiple of the SVG viewBox size instead of a fixed 400 px, ensuring QR modules align exactly to pixel boundaries and eliminating sub-pixel anti-aliasing that could prevent detection on Linux.
 - **jsQR fallback decoder** — Bundled jsQR 1.4.0 as a content script. A new `scanCanvas()` helper tries `BarcodeDetector` first (native, fast), then falls back to jsQR (pure JS). This fixes QR detection on Linux where Playwright's Chromium does not include a working ZXing backend, making all 17 E2E tests pass on CI regardless of platform.
