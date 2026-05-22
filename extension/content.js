@@ -11,7 +11,7 @@ function isSessionLocked() {
 
 function matchesPattern(pattern, hostname) {
   // Strip protocol and path, just match hostname portion
-  const host = pattern.trim().replace(/^https?:\/\//, '').split('/')[0].toLowerCase();
+  const host = pattern.trim().replace(/^https?:\/\//, '').split('/')[0].replace(/:\d+$/, '').toLowerCase();
   if (!host) return false;
   if (host.startsWith('*.')) {
     const base = host.slice(2);
