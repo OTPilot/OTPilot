@@ -2,6 +2,33 @@
 
 ## v1.0.2 (Unreleased — in development)
 
+### Extension
+
+- **QR detection reliability** — Canvas fallback in `decodeQrFromImg` now loads a fresh copy of the image before drawing, avoiding a race condition where `naturalWidth=0` on data-URL images inside fixed-position modals caused the canvas to be blank. The canvas is also pre-filled with a white background before drawing, which is required for QR codes rendered on transparent backgrounds (inline SVG, some PNGs).
+- **SVG QR pixel-perfect rendering** — The SVG-to-canvas pass now renders at an integer multiple of the SVG viewBox size instead of a fixed 400 px, ensuring QR modules align exactly to pixel boundaries and eliminating sub-pixel anti-aliasing that could prevent detection on Linux.
+- **jsQR fallback decoder** — Bundled jsQR 1.4.0 as a content script. A new `scanCanvas()` helper tries `BarcodeDetector` first (native, fast), then falls back to jsQR (pure JS). This fixes QR detection on Linux where Playwright's Chromium does not include a working ZXing backend, making all 17 E2E tests pass on CI regardless of platform.
+
+### E2E test suite
+
+- **17 Playwright tests** running on every pull request via GitHub Actions (headed Chrome with `xvfb-run` on Linux):
+
+  | Area | Test |
+  |---|---|
+  | Setup — anchor | Detects `otpauth://` in `<a>` tag → suggestion overlay appears |
+  | Setup — anchor | No overlay when account already saved |
+  | Setup — anchor | No overlay when no master password configured |
+  | Setup — anchor | Dismiss overlay via "Not now" |
+  | Setup — modal QR | Detects QR image dynamically injected into a modal |
+  | Setup — SVG QR | Detects inline `<svg>` QR code (qrcode.react / Sentry pattern) |
+  | Setup — plaintext | Detects base32 secret in a text node |
+  | Setup — input secret | Detects base32 secret inside an `<input>` value |
+  | Setup — enrollment | Code-reveal overlay appears after adding account on enrollment page |
+  | Setup — enrollment | Auto-fill is suppressed on enrollment pages (guard works) |
+  | Autofill | OTP input field is present and has correct attributes |
+  | Autofill | Content script fills OTP field via extension message |
+  | Autofill | Filled input gets `.filled` CSS class |
+
+- **Test pages** (`extension/test/`) — dedicated HTML pages that simulate realistic 2FA flows: `qr-anchor.html`, `qr-img-modal.html`, `qr-img.html`, `qr-svg.html`, `2fa-plaintext.html`, `2fa-input-secret.html`, `enrollment.html`, `autofill.html`, `multi-alice.html`, `multi-bob.html`.
 
 ## v1.0.1
 
