@@ -2,6 +2,9 @@
 
 ## v1.0.3 (Unreleased — in development)
 
+### Extension
+
+- **Canvas `willReadFrequently` warning** — Added `{ willReadFrequently: true }` to all three `getContext('2d')` calls that precede `getImageData` (jsQR fallback in `scanCanvas`, image redraw in `drawAndScan`, SVG-to-canvas in Pass 4). Eliminates the repeated browser console warning on pages with `<canvas>` elements (e.g. investing.com).
 
 ## v1.0.2
 
