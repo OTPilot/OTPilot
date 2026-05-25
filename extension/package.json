@@ -1,6 +1,6 @@
 {
   "name": "otpilot",
-  "version": "1.0.1",
+  "version": "2",
   "description": "TOTP authenticator for Chrome and Edge — auto-detects 2FA setup pages, saves secrets in one click, and auto-fills codes on login.",
   "main": "content.js",
   "type": "module",

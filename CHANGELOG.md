@@ -1,6 +1,10 @@
 # Changelog
 
-## v1.0.2 (Unreleased — in development)
+## v1.0.3 (Unreleased — in development)
+
+
+
+## v1.0.2
 
 ### Extension
 
