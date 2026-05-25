@@ -3,8 +3,11 @@
 ## v1.0.3 (Unreleased — in development)
 
 
-
 ## v1.0.2
+
+### API
+
+- **Security: jsonwebtoken upgraded to 10.4.0** — resolves a type-confusion vulnerability (CVE pending) where a claim value with the wrong JSON type (e.g. `nbf` as a string instead of a number) would silently skip validation rather than reject the token.
 
 ### Extension
 
