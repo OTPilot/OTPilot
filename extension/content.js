@@ -305,7 +305,7 @@ async function scanCanvas(canvas) {
   }
   if (typeof jsQR === 'function') {
     try {
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const result = jsQR(data, width, height);
       if (result?.data?.startsWith('otpauth://')) return result.data;
@@ -325,7 +325,7 @@ async function decodeQrFromImg(img) {
     const canvas = document.createElement('canvas');
     canvas.width = fresh.naturalWidth;
     canvas.height = fresh.naturalHeight;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(fresh, 0, 0);
@@ -444,7 +444,7 @@ async function tryDecodeQrImages() {
       const canvas = document.createElement('canvas');
       canvas.width = canvasSize;
       canvas.height = canvasSize;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       // White background is required — SVG QR codes have no background rect, so
       // dark modules on a transparent canvas produce an all-dark result.
       ctx.fillStyle = '#fff';
