@@ -4,7 +4,7 @@
 
 ### Extension
 
-- **Canvas `willReadFrequently` warning** — Added `{ willReadFrequently: true }` to all three `getContext('2d')` calls that precede `getImageData` (jsQR fallback in `scanCanvas`, image redraw in `drawAndScan`, SVG-to-canvas in Pass 4). Eliminates the repeated browser console warning on pages with `<canvas>` elements (e.g. investing.com).
+- **Canvas `willReadFrequently` warning** — Eliminated the repeated browser console warning on pages with `<canvas>` elements (e.g. instagram.com, investing.com). For canvases we create (`drawAndScan`, SVG Pass 4), `{ willReadFrequently: true }` is passed directly to `getContext('2d')`. For page-owned canvases (Pass 3), the jsQR branch now copies the canvas into a fresh offscreen canvas before calling `getImageData` — calling `getContext` with the hint on an existing page canvas is silently ignored by the browser.
 
 ## v1.0.2
 

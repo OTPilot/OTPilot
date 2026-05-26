@@ -305,8 +305,15 @@ async function scanCanvas(canvas) {
   }
   if (typeof jsQR === 'function') {
     try {
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      // Copy into a fresh canvas we own so willReadFrequently takes effect.
+      // Calling getContext('2d', { willReadFrequently }) on a page-owned canvas
+      // returns the already-existing context and silently ignores the hint.
+      const offscreen = document.createElement('canvas');
+      offscreen.width  = canvas.width;
+      offscreen.height = canvas.height;
+      const ctx = offscreen.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(canvas, 0, 0);
+      const { data, width, height } = ctx.getImageData(0, 0, offscreen.width, offscreen.height);
       const result = jsQR(data, width, height);
       if (result?.data?.startsWith('otpauth://')) return result.data;
     } catch {}
