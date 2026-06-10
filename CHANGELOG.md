@@ -10,6 +10,10 @@
 
 - **Support link** — Added a `?` icon button in the popup header (alongside the `+` and lock buttons) that opens `otpilot.app/support` in a new tab, which auto-launches the Crisp chat.
 
+### Web (continued)
+
+- **Google Analytics 4** — Replaced Vercel Analytics with GA4 (`G-ZHPZHHRP8R`) via gtag.js in `index.html`. Tracks all pages automatically including SPA navigation.
+
 ### Dev
 
 - **Vite dev server fixed to port 5175** — Added `server: { port: 5175 }` to `vite.config.ts` so `npm run dev` always binds to the same port, matching the Supabase redirect URL whitelist and the extension's `config-dev.js`.
