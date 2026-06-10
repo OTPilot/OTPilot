@@ -45,7 +45,13 @@ const SupabaseAuth = (() => {
       headers: { 'Content-Type': 'application/json', apikey: ANON_KEY },
       body: JSON.stringify({ refresh_token: refreshToken }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // Permanent auth failure (expired/revoked token) — clear dead session so
+      // getSession() returns null and the UI shows the sign-in screen.
+      // On transient errors (5xx, network) we leave the session intact to retry.
+      if (res.status === 400 || res.status === 401) await clearSession();
+      return null;
+    }
     const d = await res.json();
     const s = {
       access_token:  d.access_token,
@@ -64,6 +70,19 @@ const SupabaseAuth = (() => {
   }
 
   async function getAccessToken() {
+    // In popup/content-script contexts (window exists), delegate to the background
+    // SW via message passing. This ensures only one context ever calls refreshToken()
+    // at a time, preventing concurrent refresh races that trigger Supabase's
+    // token-reuse detection and revoke the entire session.
+    if (typeof window !== 'undefined') {
+      return new Promise(resolve => {
+        chrome.runtime.sendMessage({ action: 'getAccessToken' }, resp => {
+          if (chrome.runtime.lastError) { resolve(null); return; }
+          resolve(resp?.token ?? null);
+        });
+      });
+    }
+    // Background SW path: perform the refresh directly.
     const s = await loadSession();
     if (!s) return null;
     if (Date.now() > s.expires_at - 60000) {
