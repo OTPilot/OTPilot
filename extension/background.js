@@ -10,6 +10,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
+  // Single point for token refresh — prevents popup + background from refreshing
+  // concurrently and triggering Supabase's refresh-token-reuse revocation.
+  if (msg.action === 'getAccessToken') {
+    SupabaseAuth.getAccessToken()
+      .then(token => sendResponse({ token }))
+      .catch(() => sendResponse({ token: null }));
+    return true;
+  }
   if (msg.action === 'fetchImageBuffer') {
     let parsed;
     try { parsed = new URL(msg.url); } catch { sendResponse({ ok: false, error: 'Invalid URL' }); return true; }

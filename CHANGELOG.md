@@ -4,6 +4,10 @@
 
 ### Extension
 
+- **Session expiry / sync stops working after a few days** — Fixed two related bugs in `supabase.js` that caused sync to silently break until the user manually logged out and back in:
+  1. *Dead session not cleared*: when Supabase returned 400/401 on a token refresh (expired or revoked session), the old session was left in storage. `getSession()` kept returning a non-null value so the UI showed the user as logged in, but every sync call failed with "Not signed in" and the error was swallowed silently. Now a 400/401 from Supabase calls `clearSession()`, so the next popup open correctly shows the sign-in screen.
+  2. *Concurrent refresh race*: the background service worker (polling every 5 min) and the popup each maintained separate in-memory caches of the session. If both detected a near-expired token at the same time, they both called `refreshToken()` with the same refresh token. Supabase's token-reuse detection would revoke the entire session on the second use. Fixed by routing all `getAccessToken()` calls from the popup through a new `getAccessToken` message handler in the background SW, making it the single point where token refreshes occur.
+
 - **Canvas `willReadFrequently` warning** — Added `{ willReadFrequently: true }` to all three `getContext('2d')` calls that precede `getImageData` (jsQR fallback in `scanCanvas`, image redraw in `drawAndScan`, SVG-to-canvas in Pass 4). Eliminates the repeated browser console warning on pages with `<canvas>` elements (e.g. investing.com).
 
 ## v1.0.2

@@ -1187,8 +1187,8 @@ async function doSync() {
     syncSetStatus('ok', `Synced · ${new Date().toLocaleTimeString()}`);
   } catch (e) {
     const msg = e.message ?? 'Sync failed';
-    if (/401/.test(msg)) {
-      // Account deleted or token revoked — sign out cleanly
+    if (/401/.test(msg) || /not signed in/i.test(msg)) {
+      // Token revoked, session expired, or dead session — clear and re-show sign-in.
       _syncInProgress = false;
       await SupabaseAuth.signOut();
       await renderSyncPanel();
@@ -1382,7 +1382,7 @@ async function silentPullSync() {
     await doSync();
   } catch (e) {
     const msg = e?.message ?? '';
-    if (/401/.test(msg)) {
+    if (/401/.test(msg) || /not signed in/i.test(msg)) {
       await SupabaseAuth.signOut();
       await renderSyncPanel();
     }

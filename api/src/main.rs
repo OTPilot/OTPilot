@@ -113,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8082".to_string());
     let addr = format!("0.0.0.0:{port}");
     tracing::info!("listening on {addr}");
 
