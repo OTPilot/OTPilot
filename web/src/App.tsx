@@ -1,5 +1,4 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import { Analytics } from '@vercel/analytics/react'
 import Landing from './pages/Landing'
 import Callback from './pages/auth/Callback'
 import Login from './pages/auth/Login'
@@ -13,6 +12,7 @@ import Tos from './pages/legal/Tos'
 import Privacy from './pages/legal/Privacy'
 import Refunds from './pages/legal/Refunds'
 import Gdpr from './pages/legal/Gdpr'
+import Support from './pages/Support'
 
 export default function App() {
   return (
@@ -30,12 +30,12 @@ export default function App() {
           <Route path="settings" element={<Settings />} />
         </Route>
 
+        <Route path="/support" element={<Support />} />
         <Route path="/tos" element={<Tos />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/refunds" element={<Refunds />} />
         <Route path="/gdpr" element={<Gdpr />} />
       </Routes>
-      <Analytics />
     </BrowserRouter>
   )
 }

@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.0.5 (Unreleased — in development)
+
+### Web
+
+- **Crisp support chat** — Added live chat via Crisp across the web app. The widget loads on the landing page and dashboard (bubble in corner, closed by default). `/support` is a dedicated page that auto-opens the chat — this is the target for the extension's support link. On the dashboard the user's email and name are passed to Crisp automatically. On `/support`, if the user is logged in they are identified; anonymous users can chat freely. The chat closes when navigating away from `/support` so it doesn't persist open across other pages.
+
+### Extension
+
+- **Support link** — Added a `?` icon button in the popup header (alongside the `+` and lock buttons) that opens `otpilot.app/support` in a new tab, which auto-launches the Crisp chat.
+
+### Web (continued)
+
+- **Google Analytics 4** — Replaced Vercel Analytics with GA4 (`G-ZHPZHHRP8R`) via gtag.js in `index.html`. Tracks all pages automatically including SPA navigation.
+
+### Dev
+
+- **Vite dev server fixed to port 5175** — Added `server: { port: 5175 }` to `vite.config.ts` so `npm run dev` always binds to the same port, matching the Supabase redirect URL whitelist and the extension's `config-dev.js`.
+
 ## v1.0.4
 
 ### Extension
