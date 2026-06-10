@@ -1,6 +1,7 @@
 import { NavLink, Outlet, Navigate, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../../lib/useAuth'
+import { useCrisp } from '../../lib/useCrisp'
 import { supabase } from '../../lib/supabase'
 import Logo from '../../components/Logo'
 
@@ -15,6 +16,7 @@ const navItems = [
 export default function DashboardLayout() {
   const { user, loading } = useAuth()
   const navigate = useNavigate()
+  useCrisp({ email: user?.email, name: user?.user_metadata?.full_name })
   const queryClient = useQueryClient()
 
   if (loading) {
