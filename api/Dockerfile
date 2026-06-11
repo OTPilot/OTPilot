@@ -1,6 +1,6 @@
 FROM rust:1-slim-bookworm AS builder
 WORKDIR /app
-RUN apt-get update && apt-get install -y pkg-config && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
 # Cache dependencies layer
 COPY Cargo.toml Cargo.lock ./
