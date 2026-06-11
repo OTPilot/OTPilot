@@ -1,6 +1,12 @@
 # Changelog
 
-## v1.0.5 (Unreleased — in development)
+## v1.1.0 (Unreleased — in development)
+
+### Extension
+
+- **Email code auto-fill** — OTPilot now reads one-time codes from open webmail tabs (Gmail, Outlook, Yahoo Mail, Proton Mail, Fastmail, Zoho Mail) and fills them automatically when a login page requests an email OTP. Works passively (MutationObserver pushes new codes as they arrive) and on-demand (scans the inbox the moment a code is needed). If the webmail tab was open before the extension loaded, a `scripting.executeScript` fallback runs the scan inline without requiring a page refresh. Toggle in Settings; a brief toast confirms each fill.
+- **Split OTP inputs** — `fillInputValue` now detects multi-box OTP fields (one digit per input, e.g. Spotify) and distributes the code digit-by-digit. Also switches to the native `HTMLInputElement` value setter so React-controlled inputs register the fill correctly.
+- **E2E tests for email reader** — 8 new Playwright tests covering per-provider scan (Gmail, Outlook, Yahoo, Proton, Fastmail, Zoho), empty inbox → null, and split-input fill.
 
 ### Web
 

@@ -151,6 +151,82 @@ function showToast(text, ok = true) {
   setTimeout(() => el.remove(), 2800);
 }
 
+function fillInputValue(input, code) {
+  // React (and other framework) inputs ignore direct .value = assignment because the
+  // framework tracks the previous value internally. Using the native prototype setter
+  // bypasses that check so the synthetic 'input' event is treated as a real user edit.
+  const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  function setVal(el, val) {
+    if (nativeSetter) nativeSetter.call(el, val); else el.value = val;
+    el.dispatchEvent(new Event('input',  { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  // Detect split OTP (e.g. Spotify, GitHub): multiple autocomplete="one-time-code"
+  // inputs inside the same form/container — each box holds one digit.
+  const container = input.closest('form, [role="group"], [role="dialog"]')
+    ?? input.parentElement?.parentElement?.parentElement;
+  const group = container
+    ? [...container.querySelectorAll('input[autocomplete="one-time-code"]')]
+        .filter(el => el.offsetParent !== null && !el.disabled && !el.readOnly)
+    : [];
+
+  if (group.length > 1) {
+    group.forEach((el, i) => { el.focus(); setVal(el, code[i] ?? ''); });
+    return;
+  }
+
+  input.focus();
+  setVal(input, code);
+}
+
+function showEmailOtpBanner(code, input) {
+  if (document.getElementById('otpilot-email-banner')) return;
+
+  const banner = document.createElement('div');
+  banner.id = 'otpilot-email-banner';
+  Object.assign(banner.style, {
+    position: 'fixed', top: '20px', left: '50%', transform: 'translateX(-50%)',
+    zIndex: '2147483647', display: 'flex', alignItems: 'center', gap: '10px',
+    padding: '10px 14px',
+    background: '#1e293b',
+    border: '1px solid #334155',
+    borderLeft: '3px solid #38bdf8',
+    borderRadius: '8px',
+    boxShadow: '0 4px 20px rgba(0,0,0,.4)',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontSize: '13px', color: '#e2e8f0',
+    maxWidth: '320px',
+  });
+
+  const label = document.createElement('span');
+  label.textContent = `📧 Email code: ${code}`;
+
+  const btn = document.createElement('button');
+  btn.textContent = 'Fill';
+  Object.assign(btn.style, {
+    padding: '4px 10px', background: '#38bdf8', color: '#0f172a',
+    border: 'none', borderRadius: '5px', fontSize: '12px',
+    fontWeight: '700', cursor: 'pointer', flexShrink: '0',
+  });
+  btn.addEventListener('click', () => {
+    fillInputValue(input, code);
+    banner.remove();
+  });
+
+  const close = document.createElement('button');
+  close.textContent = '✕';
+  Object.assign(close.style, {
+    background: 'none', border: 'none', color: '#64748b',
+    fontSize: '13px', cursor: 'pointer', padding: '0 2px', flexShrink: '0',
+  });
+  close.addEventListener('click', () => banner.remove());
+
+  banner.append(label, btn, close);
+  document.body.appendChild(banner);
+  setTimeout(() => banner.remove(), 30000);
+}
+
 async function fillOTP(accountIndexHint) {
   const acc = await getActiveAccount(accountIndexHint);
   if (!acc)         return { ok: false, msg: 'No account configured for this URL' };
@@ -163,10 +239,7 @@ async function fillOTP(accountIndexHint) {
   try { code = await generateTOTP(acc.secret); }
   catch (e) { return { ok: false, msg: 'Invalid secret: ' + e.message }; }
 
-  input.focus();
-  input.value = code;
-  input.dispatchEvent(new Event('input',  { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
+  fillInputValue(input, code);
 
   return { ok: true, code, input };
 }
@@ -196,10 +269,7 @@ async function fillOTPWithAccount(acc) {
   let code;
   try { code = await generateTOTP(acc.secret); }
   catch (e) { return { ok: false, msg: 'Invalid secret: ' + e.message }; }
-  input.focus();
-  input.value = code;
-  input.dispatchEvent(new Event('input',  { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
+  fillInputValue(input, code);
   return { ok: true, code, input };
 }
 
@@ -850,10 +920,39 @@ async function runDetection() {
     const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
     const hostname = location.hostname.toLowerCase();
     const matching = findAllMatchingAccounts(accounts, hostname).filter(a => a.autofill !== false);
-    if (matching.length === 0) return;
 
     const input = findOTPInput();
-    if (!input) return;
+    if (!input) {
+      console.debug('[OTPilot] tryAutoFill: no OTP input found on page');
+      return;
+    }
+
+    // Email OTP fallback: if no TOTP account matches, try reading from Gmail/Outlook.
+    if (matching.length === 0) {
+      console.debug('[OTPilot] tryAutoFill: no matching TOTP account — trying email OTP');
+      if (!chrome.runtime?.id) return;
+      const stored = await new Promise(r => chrome.storage.local.get('emailAutoFill', r));
+      const emailAutoFill = stored.emailAutoFill ?? true;
+      const resp = await new Promise(r =>
+        chrome.runtime.sendMessage({ action: 'getEmailOtp' }, r)
+      ).catch(() => null);
+      const code = resp?.code ?? null;
+      if (!code) {
+        console.debug('[OTPilot] tryAutoFill: email OTP not found (no webmail tab open or no code in inbox)');
+        return;
+      }
+      if (input === _lastFilledInput) return;
+      if (emailAutoFill) {
+        console.debug('[OTPilot] tryAutoFill: filling email OTP', code);
+        _lastFilledInput = input;
+        fillInputValue(input, code);
+        showToast('📧 Email code filled: ' + code);
+      } else {
+        console.debug('[OTPilot] tryAutoFill: showing email OTP banner (auto-fill disabled)', code);
+        showEmailOtpBanner(code, input);
+      }
+      return;
+    }
 
     if (matching.length === 1) {
       if (input === _lastFilledInput) return;
