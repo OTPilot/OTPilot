@@ -37,7 +37,8 @@ async fn main() -> anyhow::Result<()> {
             dsn,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
-                traces_sample_rate: 0.2,
+                traces_sample_rate: 1.0,
+                enable_logs: true,
                 ..Default::default()
             },
         ))
