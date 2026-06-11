@@ -12,7 +12,12 @@
 
 ### Web (continued)
 
-- **Google Analytics 4** — Replaced Vercel Analytics with GA4 (`G-ZHPZHHRP8R`) via gtag.js in `index.html`. Tracks all pages automatically including SPA navigation.
+- **Google Analytics 4** — Replaced Vercel Analytics with GA4 via `index.html`. DSN in `VITE_GA_ID`.
+- **Sentry** — Error tracking via `@sentry/react`. Initialized in `main.tsx` when `VITE_SENTRY_DSN` is set.
+
+### API
+
+- **Sentry** — Error tracking via the `sentry` crate. Initialized in `main.rs` when `SENTRY_DSN` is set.
 
 ### Dev
 

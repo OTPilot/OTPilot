@@ -25,6 +25,7 @@ thiserror = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 hmac = "0.12"
 sha2 = "0.10"
+sentry = { version = "0.38", features = ["anyhow", "tracing", "tower", "tower-axum-matched-path"] }
 
 [profile.release]
 opt-level = 3

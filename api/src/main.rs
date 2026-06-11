@@ -32,6 +32,17 @@ pub struct AppState {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
+    let _sentry = std::env::var("SENTRY_DSN").ok().map(|dsn| {
+        sentry::init((
+            dsn,
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                traces_sample_rate: 0.2,
+                ..Default::default()
+            },
+        ))
+    });
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
