@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Split OTP inputs – OTPilot test</title>
+  <style>
+    body { font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #f1f5f9; }
+    .card { background: #fff; border-radius: 12px; padding: 40px; max-width: 360px; width: 100%; box-shadow: 0 4px 24px rgba(0,0,0,.08); }
+    h1 { font-size: 18px; margin-bottom: 8px; }
+    p { font-size: 13px; color: #64748b; margin-bottom: 24px; }
+    .slots { display: flex; gap: 8px; margin-bottom: 20px; }
+    .slots input {
+      width: 44px; height: 52px; text-align: center; font-size: 22px; font-weight: 700;
+      border: 2px solid #e2e8f0; border-radius: 8px; outline: none;
+    }
+    .slots input:focus { border-color: #6366f1; }
+    #result { margin-top: 16px; font-size: 13px; color: #15803d; font-weight: 600; min-height: 20px; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Enter the 6-digit code sent to your email</h1>
+  <p>Check your inbox and enter the code below.</p>
+  <form id="form">
+    <div class="slots">
+      <input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1" aria-label="Digit 1 of 6">
+      <input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1" aria-label="Digit 2 of 6">
+      <input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1" aria-label="Digit 3 of 6">
+      <input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1" aria-label="Digit 4 of 6">
+      <input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1" aria-label="Digit 5 of 6">
+      <input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1" aria-label="Digit 6 of 6">
+    </div>
+    <div id="result"></div>
+  </form>
+</div>
+<script>
+  // Show filled code for test assertions
+  document.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const all = [...document.querySelectorAll('input')].map(i => i.value).join('');
+      document.getElementById('result').textContent = all.length === 6 ? 'Filled: ' + all : '';
+    });
+  });
+</script>
+</body>
+</html>

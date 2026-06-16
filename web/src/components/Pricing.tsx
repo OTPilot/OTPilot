@@ -19,6 +19,7 @@ export default function Pricing() {
         'Unlimited TOTP accounts',
         'Auto-fill on any site',
         'Auto-detect 2FA setup',
+        'Email code auto-fill',
         'Master password lock',
         'Local encrypted backup',
         'Chrome, Firefox & Edge',
@@ -56,6 +57,7 @@ export default function Pricing() {
       highlight: false,
       features: [
         'Everything in Personal',
+        'Email code auto-fill (no tab needed)',
         '5 seats included',
         'Shared TOTP accounts',
         'Invite & revoke access',

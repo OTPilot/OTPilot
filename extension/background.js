@@ -2,6 +2,13 @@
 
 importScripts('config.js', 'supabase.js');
 
+// Latest email OTP detected by email-reader.js (expires after 10 min).
+let _emailOtp = null;
+
+// Recognised webmail origins. localhost/127.0.0.1 are included for the
+// localhost-gated test override (?otpilot_test_provider) in email-reader.js.
+const WEBMAIL_RE = /^https?:\/\/(mail\.google\.com|outlook\.live\.com|outlook\.office\.com|mail\.yahoo\.com|mail\.proton\.me|app\.fastmail\.com|mail\.zoho\.com|localhost|127\.0\.0\.1)(?::\d+)?\//;
+
 // Handles OAuth from the background so the popup closing doesn't kill the flow.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === 'signInWithGoogle') {
@@ -10,6 +17,116 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
+  // Passive push from email-reader.js when a new OTP email arrives.
+  if (msg.action === 'emailOtpDetected') {
+    // Defense-in-depth: only accept pushes from a real webmail tab, so a
+    // malicious page can't poison _emailOtp with an attacker-controlled code.
+    if (!WEBMAIL_RE.test(_sender?.tab?.url ?? '')) {
+      console.debug('[OTPilot] emailOtpDetected: rejecting push from non-webmail sender', _sender?.tab?.url);
+      sendResponse({ ok: false });
+      return true;
+    }
+    _emailOtp = { code: msg.code, expiresAt: Date.now() + 10 * 60 * 1000 };
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // Active request from content.js when an OTP field needs a code.
+  if (msg.action === 'getEmailOtp') {
+    if (_emailOtp && Date.now() < _emailOtp.expiresAt) {
+      sendResponse({ code: _emailOtp.code });
+      return true;
+    }
+    chrome.tabs.query({}, tabs => {
+      const emailTab = tabs.find(t => WEBMAIL_RE.test(t.url ?? ''));
+      if (!emailTab) {
+        console.debug('[OTPilot] getEmailOtp: no webmail tab found');
+        sendResponse({ code: null }); return;
+      }
+
+      function handleCode(code) {
+        if (code) _emailOtp = { code, expiresAt: Date.now() + 10 * 60 * 1000 };
+        sendResponse({ code: code ?? null });
+      }
+
+      // Try messaging the pre-injected content script first.
+      // If the tab was open before the extension loaded (MV3 doesn't re-inject into
+      // existing tabs), sendMessage fails → fall back to scripting.executeScript.
+      chrome.tabs.sendMessage(emailTab.id, { action: 'scanEmailOtp' }, r => {
+        if (!chrome.runtime.lastError && r?.code != null) { handleCode(r.code); return; }
+        console.debug('[OTPilot] getEmailOtp: content script not responding, falling back to scripting.executeScript');
+        // Fallback: inline scan via scripting API (no pre-injected script needed).
+        chrome.scripting.executeScript({
+          target: { tabId: emailTab.id },
+          // ⚠️ INVARIANT: this duplicates the scan logic in email-reader.js
+          // (getOpenEmailBodies + getRows + pickBestCode). Keep both in sync.
+          // Must be fully self-contained — no references to outer scope.
+          func: (provider) => {
+            const CODE_RE = /\b\d{4,8}\b/g;
+            const OTP_KEYWORDS = /(c[oó]digo|code|verificaci[oó]n|verification|passcode|one[- ]?time|2fa|otp|pin|security|seguridad|c[oó]d\.?|auth)/i;
+            const bodySelectors = {
+              gmail:    '.a3s',
+              outlook:  '[role="document"], div[aria-label*="essage body"]',
+              yahoo:    '[data-test-id="message-view-body"], .msg-body',
+              proton:   '.message-content',
+              fastmail: '.v-Message-body, [class*="MessageView"]',
+              zoho:     '.zmail-msg-content, .msgBodyDiv',
+            };
+            const rowSelectors = {
+              gmail:    'tr[jsmodel]',
+              outlook:  '[role="option"][data-convid]',
+              yahoo:    '[data-item-id]',
+              proton:   '[data-element-id]',
+              fastmail: '[data-msg-id]',
+              zoho:     '.maillist-item[data-id]',
+            };
+            function pickBestCode(text) {
+              if (!text) return null;
+              const matches = [];
+              for (const m of text.matchAll(CODE_RE)) matches.push({ code: m[0], idx: m.index });
+              if (!matches.length) return null;
+              let best = null, bestScore = -Infinity;
+              for (let i = 0; i < matches.length; i++) {
+                const { code, idx } = matches[i];
+                let score = 0;
+                const ctx = text.slice(Math.max(0, idx - 40), idx + code.length + 40);
+                if (OTP_KEYWORDS.test(ctx)) score += 100;
+                if (code.length === 6) score += 10;
+                if (code.length === 4 && /^(19|20)\d\d$/.test(code)) score -= 50;
+                score -= i;
+                if (score > bestScore) { bestScore = score; best = code; }
+              }
+              return best;
+            }
+            const bodies = Array.from(document.querySelectorAll(bodySelectors[provider] || '.a3s')).slice(0, 5);
+            for (const body of bodies) {
+              const code = pickBestCode(body.innerText || '');
+              if (code) return code;
+            }
+            const rows = Array.from(document.querySelectorAll(rowSelectors[provider] || 'tr[jsmodel]')).slice(0, 5);
+            for (const row of rows) {
+              const code = pickBestCode(row.innerText || '');
+              if (code) return code;
+            }
+            return null;
+          },
+          args: [
+            /mail\.google\.com/.test(emailTab.url)     ? 'gmail'    :
+            /outlook\.(live|office)\.com/.test(emailTab.url) ? 'outlook' :
+            /mail\.yahoo\.com/.test(emailTab.url)      ? 'yahoo'    :
+            /mail\.proton\.me/.test(emailTab.url)      ? 'proton'   :
+            /app\.fastmail\.com/.test(emailTab.url)    ? 'fastmail' :
+            'zoho',
+          ],
+        }, results => {
+          if (chrome.runtime.lastError) { sendResponse({ code: null }); return; }
+          handleCode(results?.[0]?.result ?? null);
+        });
+      });
+    });
+    return true;
+  }
+
   // Single point for token refresh — prevents popup + background from refreshing
   // concurrently and triggering Supabase's refresh-token-reuse revocation.
   if (msg.action === 'getAccessToken') {

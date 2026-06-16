@@ -569,7 +569,16 @@ function showView(view) {
   document.getElementById('nav-sync').classList.toggle('active',     view === 'sync');
   if (view === 'accounts') renderAccountsList();
   if (view === 'sync') renderSyncPanel();
+  if (view === 'settings') {
+    chrome.storage.local.get('emailAutoFill', d => {
+      document.getElementById('toggle-email-autofill').checked = d.emailAutoFill ?? true;
+    });
+  }
 }
+
+document.getElementById('toggle-email-autofill').addEventListener('change', e => {
+  chrome.storage.local.set({ emailAutoFill: e.target.checked });
+});
 
 document.getElementById('nav-home').addEventListener('click',    () => showView('home'));
 document.getElementById('nav-settings').addEventListener('click', () => showView('accounts'));
