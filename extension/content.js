@@ -180,8 +180,13 @@ function fillInputValue(input, code) {
   setVal(input, code);
 }
 
-function showEmailOtpBanner(code, input) {
+function showEmailOtpBanner(code, input, onClose) {
   if (document.getElementById('otpilot-email-banner')) return;
+
+  // Run onClose at most once, however the banner is dismissed (Fill / ✕ / timeout),
+  // so the caller can avoid re-showing it for the same input.
+  let _closed = false;
+  const dismiss = () => { if (!_closed) { _closed = true; onClose?.(); } };
 
   const banner = document.createElement('div');
   banner.id = 'otpilot-email-banner';
@@ -211,6 +216,7 @@ function showEmailOtpBanner(code, input) {
   });
   btn.addEventListener('click', () => {
     fillInputValue(input, code);
+    dismiss();
     banner.remove();
   });
 
@@ -220,11 +226,11 @@ function showEmailOtpBanner(code, input) {
     background: 'none', border: 'none', color: '#64748b',
     fontSize: '13px', cursor: 'pointer', padding: '0 2px', flexShrink: '0',
   });
-  close.addEventListener('click', () => banner.remove());
+  close.addEventListener('click', () => { dismiss(); banner.remove(); });
 
   banner.append(label, btn, close);
   document.body.appendChild(banner);
-  setTimeout(() => banner.remove(), 30000);
+  setTimeout(() => { dismiss(); banner.remove(); }, 30000);
 }
 
 async function fillOTP(accountIndexHint) {
@@ -895,6 +901,8 @@ async function runDetection() {
   let _lastFilledInput     = null;
   let _pickerDismissed     = false;
   let _pickerDismissedFor  = null;
+  let _emailBannerDismissed    = false;
+  let _emailBannerDismissedFor = null;
   let _lockDismissed       = false;
   let _lockDismissedFor    = null;
 
@@ -948,8 +956,15 @@ async function runDetection() {
         fillInputValue(input, code);
         showToast('📧 Email code filled: ' + code);
       } else {
+        // Same input the user already dismissed the banner for → don't re-show.
+        // Different input (SPA navigated to a new step) → reset and re-show.
+        if (_emailBannerDismissed && input === _emailBannerDismissedFor) return;
+        _emailBannerDismissed = false;
         console.debug('[OTPilot] tryAutoFill: showing email OTP banner (auto-fill disabled)', code);
-        showEmailOtpBanner(code, input);
+        showEmailOtpBanner(code, input, () => {
+          _emailBannerDismissed = true;
+          _emailBannerDismissedFor = input;
+        });
       }
       return;
     }

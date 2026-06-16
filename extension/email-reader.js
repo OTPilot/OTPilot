@@ -16,8 +16,11 @@ const PROVIDER =
   HOST === 'mail.proton.me'                                      ? 'proton'   :
   HOST === 'app.fastmail.com'                                    ? 'fastmail' :
   HOST === 'mail.zoho.com'                                       ? 'zoho'     :
-  // Test-only override: ?otpilot_test_provider=gmail
-  new URLSearchParams(location.search).get('otpilot_test_provider') || null;
+  // Test-only override: ?otpilot_test_provider=gmail — gated to localhost so a
+  // malicious page can't use it to activate the OTP watcher in production.
+  ((HOST === 'localhost' || HOST === '127.0.0.1')
+    ? new URLSearchParams(location.search).get('otpilot_test_provider')
+    : null) || null;
 
 if (!PROVIDER) return; // no-op on every other page
 

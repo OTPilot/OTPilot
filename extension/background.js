@@ -5,6 +5,10 @@ importScripts('config.js', 'supabase.js');
 // Latest email OTP detected by email-reader.js (expires after 10 min).
 let _emailOtp = null;
 
+// Recognised webmail origins. localhost/127.0.0.1 are included for the
+// localhost-gated test override (?otpilot_test_provider) in email-reader.js.
+const WEBMAIL_RE = /^https?:\/\/(mail\.google\.com|outlook\.live\.com|outlook\.office\.com|mail\.yahoo\.com|mail\.proton\.me|app\.fastmail\.com|mail\.zoho\.com|localhost|127\.0\.0\.1)(?::\d+)?\//;
+
 // Handles OAuth from the background so the popup closing doesn't kill the flow.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === 'signInWithGoogle') {
@@ -15,6 +19,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   // Passive push from email-reader.js when a new OTP email arrives.
   if (msg.action === 'emailOtpDetected') {
+    // Defense-in-depth: only accept pushes from a real webmail tab, so a
+    // malicious page can't poison _emailOtp with an attacker-controlled code.
+    if (!WEBMAIL_RE.test(_sender?.tab?.url ?? '')) {
+      console.debug('[OTPilot] emailOtpDetected: rejecting push from non-webmail sender', _sender?.tab?.url);
+      sendResponse({ ok: false });
+      return true;
+    }
     _emailOtp = { code: msg.code, expiresAt: Date.now() + 10 * 60 * 1000 };
     sendResponse({ ok: true });
     return true;
@@ -27,9 +38,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return true;
     }
     chrome.tabs.query({}, tabs => {
-      const emailTab = tabs.find(t =>
-        /^https:\/\/(mail\.google\.com|outlook\.live\.com|outlook\.office\.com|mail\.yahoo\.com|mail\.proton\.me|app\.fastmail\.com|mail\.zoho\.com)/.test(t.url ?? '')
-      );
+      const emailTab = tabs.find(t => WEBMAIL_RE.test(t.url ?? ''));
       if (!emailTab) {
         console.debug('[OTPilot] getEmailOtp: no webmail tab found');
         sendResponse({ code: null }); return;
