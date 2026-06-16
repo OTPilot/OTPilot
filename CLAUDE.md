@@ -147,3 +147,8 @@ Plain-text TOTP secret scanning only runs when the page URL path matches `PATH_R
 
 ### Extension context invalidation (`extension/content.js`)
 Content scripts outlive extension reloads on long-lived tabs (Gmail, SPAs). All debounced MutationObserver callbacks check `chrome.runtime?.id` before calling any Chrome API — if falsy, they disconnect their observer and return. Any new observer or recurring timer that calls `chrome.storage` or `chrome.runtime` must include this guard.
+
+### Email OTP scan logic (`extension/email-reader.js`)
+`email-reader.js` scans the opened email body (`getOpenEmailBodies()`) first, then inbox rows (`getRows()`), and picks the code via `pickBestCode()` — which scores every 4-8 digit run by proximity to OTP keywords so distractor numbers (years, order refs) are skipped. The **same selectors + `pickBestCode` logic are duplicated inside the `chrome.scripting.executeScript` fallback in `background.js`** (used when the content script wasn't pre-injected into a pre-existing tab). The injected `func` must stay self-contained (no outer-scope refs) and in sync with `email-reader.js`. If you change a body/row selector or the scoring, update both places.
+
+Note: Proton renders email bodies in a sandboxed iframe the content script can't read (manifest has no `all_frames`), so Proton body scanning is best-effort; it still works via the inbox subject/snippet.

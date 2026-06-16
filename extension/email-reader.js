@@ -1,7 +1,8 @@
 'use strict';
 
 // Email OTP reader — runs on webmail providers only.
-// Scans inbox subject lines for one-time codes and reports them to the background SW.
+// Scans the opened email body and inbox subject lines/snippets for one-time
+// codes and reports them to the background SW.
 // Nothing is stored beyond a 10-minute in-memory window in the background SW.
 
 (function () {
@@ -23,7 +24,39 @@ if (!PROVIDER) return; // no-op on every other page
 // No language-specific subject filter — OTP emails arrive in any language.
 // We rely on the 4-8 digit code pattern and the context (content.js only
 // requests a code when an OTP input is present on the active page).
-const CODE_RE = /\b(\d{4,8})\b/;
+//
+// ⚠️ INVARIANT: the selectors + pickBestCode logic below are duplicated inside
+// the scripting.executeScript fallback in background.js (used when the content
+// script isn't pre-injected into a pre-existing tab). Keep both in sync.
+const CODE_RE = /\b\d{4,8}\b/g;
+const OTP_KEYWORDS = /(c[oó]digo|code|verificaci[oó]n|verification|passcode|one[- ]?time|2fa|otp|pin|security|seguridad|c[oó]d\.?|auth)/i;
+
+// Picks the most likely OTP from a block of text by scoring every 4-8 digit run
+// on its proximity to an OTP keyword (handles bodies with distractor numbers
+// like "expires in 60 minutes" or a year). Falls back to the first match.
+function pickBestCode(text) {
+  if (!text) return null;
+  const matches = [];
+  for (const m of text.matchAll(CODE_RE)) matches.push({ code: m[0], idx: m.index });
+  if (!matches.length) return null;
+
+  let best = null, bestScore = -Infinity;
+  for (let i = 0; i < matches.length; i++) {
+    const { code, idx } = matches[i];
+    let score = 0;
+    // Keyword within ~40 chars before or after the digits → strong signal.
+    const ctx = text.slice(Math.max(0, idx - 40), idx + code.length + 40);
+    if (OTP_KEYWORDS.test(ctx)) score += 100;
+    // 6-digit codes are the most common OTP length.
+    if (code.length === 6) score += 10;
+    // A bare 4-digit year is rarely the code.
+    if (code.length === 4 && /^(19|20)\d\d$/.test(code)) score -= 50;
+    // Tie-break toward earlier matches.
+    score -= i;
+    if (score > bestScore) { bestScore = score; best = code; }
+  }
+  return best;
+}
 
 function getRows() {
   switch (PROVIDER) {
@@ -44,6 +77,27 @@ function getRows() {
   }
 }
 
+// Containers for the body of an *opened* email (reading pane). The OTP often
+// lives in the body and is truncated from the inbox-row snippet, so we scan
+// these with higher priority than the inbox rows.
+// NOTE: real webmail DOMs change often; these selectors are best-effort and
+// fall back gracefully (an empty list just means we scan inbox rows instead).
+function getOpenEmailBodies() {
+  let sel;
+  switch (PROVIDER) {
+    case 'gmail':    sel = '.a3s'; break;
+    case 'outlook':  sel = '[role="document"], div[aria-label*="essage body"]'; break;
+    case 'yahoo':    sel = '[data-test-id="message-view-body"], .msg-body'; break;
+    // Proton renders the body inside a sandboxed iframe the content script can't
+    // read (manifest has no all_frames); this only matches non-iframe markup.
+    case 'proton':   sel = '.message-content'; break;
+    case 'fastmail': sel = '.v-Message-body, [class*="MessageView"]'; break;
+    case 'zoho':     sel = '.zmail-msg-content, .msgBodyDiv'; break;
+    default:         return [];
+  }
+  return Array.from(document.querySelectorAll(sel)).slice(0, 5);
+}
+
 function getInboxRoot() {
   switch (PROVIDER) {
     case 'gmail':    return document.querySelector('[role="main"]');
@@ -60,11 +114,17 @@ function getInboxRoot() {
   }
 }
 
-function scanInboxForOtp() {
+function scanForOtp() {
+  // Opened email body first — the strongest signal and where codes most often
+  // sit (and get truncated out of inbox snippets).
+  for (const body of getOpenEmailBodies()) {
+    const code = pickBestCode(body.innerText || '');
+    if (code) return code;
+  }
+  // Fall back to inbox-row subjects/snippets.
   for (const row of getRows()) {
-    const text = row.innerText || '';
-    const m = text.match(CODE_RE);
-    if (m) return m[1];
+    const code = pickBestCode(row.innerText || '');
+    if (code) return code;
   }
   return null;
 }
@@ -99,14 +159,14 @@ function showDetectedToast(code) {
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (!chrome.runtime?.id) return;
   if (msg.action === 'scanEmailOtp') {
-    const rows = getRows();
-    console.debug(`[OTPilot] email-reader (${PROVIDER}): scanning ${rows.length} inbox rows`);
-    const code = scanInboxForOtp() ?? null;
+    const bodies = getOpenEmailBodies(), rows = getRows();
+    console.debug(`[OTPilot] email-reader (${PROVIDER}): scanning ${bodies.length} open bodies + ${rows.length} inbox rows`);
+    const code = scanForOtp() ?? null;
     if (code) {
       console.debug(`[OTPilot] email-reader (${PROVIDER}): found code`, code);
       showDetectedToast(code);
     } else {
-      console.debug(`[OTPilot] email-reader (${PROVIDER}): no code found in inbox`);
+      console.debug(`[OTPilot] email-reader (${PROVIDER}): no code found`);
     }
     reply({ code });
     return true;
@@ -119,7 +179,7 @@ let _lastSentCode = null;
 
 function maybeSendCode() {
   if (!chrome.runtime?.id) { observer.disconnect(); return; }
-  const code = scanInboxForOtp();
+  const code = scanForOtp();
   if (code && code !== _lastSentCode) {
     console.debug(`[OTPilot] email-reader (${PROVIDER}): passive scan detected new code`, code);
     _lastSentCode = code;

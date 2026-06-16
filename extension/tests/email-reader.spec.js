@@ -104,6 +104,69 @@ test('returns null when inbox has no digit codes', async ({ context, extensionId
   expect(result?.code).toBeNull();
 });
 
+// ── Opened-email body scan tests ─────────────────────────────────────────────
+// The code lives in the body of an opened email (not the subject/snippet), with
+// distractor numbers (a year, an order/ticket reference) the scanner must skip.
+
+test('Gmail: detects code in opened email body', async ({ context, extensionId }) => {
+  const popup = await seedUnlocked(context, extensionId);
+  const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-gmail-body.html');
+
+  const result = await scanEmailTab(popup, tabId);
+  expect(result?.code).toBe('672880');
+});
+
+test('Outlook: detects code in opened email body', async ({ context, extensionId }) => {
+  const popup = await seedUnlocked(context, extensionId);
+  const { tabId } = await openEmailPage(context, popup, 'outlook', 'email-outlook-body.html');
+
+  const result = await scanEmailTab(popup, tabId);
+  expect(result?.code).toBe('847291');
+});
+
+test('Yahoo: detects code in opened email body', async ({ context, extensionId }) => {
+  const popup = await seedUnlocked(context, extensionId);
+  const { tabId } = await openEmailPage(context, popup, 'yahoo', 'email-yahoo-body.html');
+
+  const result = await scanEmailTab(popup, tabId);
+  expect(result?.code).toBe('562938');
+});
+
+test('Proton: detects code in opened email body', async ({ context, extensionId }) => {
+  const popup = await seedUnlocked(context, extensionId);
+  const { tabId } = await openEmailPage(context, popup, 'proton', 'email-proton-body.html');
+
+  const result = await scanEmailTab(popup, tabId);
+  expect(result?.code).toBe('193847');
+});
+
+test('Fastmail: detects code in opened email body', async ({ context, extensionId }) => {
+  const popup = await seedUnlocked(context, extensionId);
+  const { tabId } = await openEmailPage(context, popup, 'fastmail', 'email-fastmail-body.html');
+
+  const result = await scanEmailTab(popup, tabId);
+  expect(result?.code).toBe('774421');
+});
+
+test('Zoho: detects code in opened email body', async ({ context, extensionId }) => {
+  const popup = await seedUnlocked(context, extensionId);
+  const { tabId } = await openEmailPage(context, popup, 'zoho', 'email-zoho-body.html');
+
+  const result = await scanEmailTab(popup, tabId);
+  expect(result?.code).toBe('309182');
+});
+
+test('keyword proximity: picks the OTP over distractor numbers in the body', async ({ context, extensionId }) => {
+  const popup = await seedUnlocked(context, extensionId);
+  // email-gmail-body.html has the year 2026 and order ref 90014772 alongside the
+  // real code 672880, which sits next to "Code will expire" — proximity must win.
+  const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-gmail-body.html');
+
+  const result = await scanEmailTab(popup, tabId);
+  expect(result?.code).toBe('672880');
+  expect(result?.code).not.toBe('90014772');
+});
+
 // ── Split input fill test ────────────────────────────────────────────────────
 
 test('fills split OTP inputs (one digit per box) correctly', async ({ context, extensionId }) => {

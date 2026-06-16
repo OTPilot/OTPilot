@@ -49,9 +49,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         // Fallback: inline scan via scripting API (no pre-injected script needed).
         chrome.scripting.executeScript({
           target: { tabId: emailTab.id },
+          // ⚠️ INVARIANT: this duplicates the scan logic in email-reader.js
+          // (getOpenEmailBodies + getRows + pickBestCode). Keep both in sync.
+          // Must be fully self-contained — no references to outer scope.
           func: (provider) => {
-            const CODE_RE = /\b(\d{4,8})\b/;
-            const selectors = {
+            const CODE_RE = /\b\d{4,8}\b/g;
+            const OTP_KEYWORDS = /(c[oó]digo|code|verificaci[oó]n|verification|passcode|one[- ]?time|2fa|otp|pin|security|seguridad|c[oó]d\.?|auth)/i;
+            const bodySelectors = {
+              gmail:    '.a3s',
+              outlook:  '[role="document"], div[aria-label*="essage body"]',
+              yahoo:    '[data-test-id="message-view-body"], .msg-body',
+              proton:   '.message-content',
+              fastmail: '.v-Message-body, [class*="MessageView"]',
+              zoho:     '.zmail-msg-content, .msgBodyDiv',
+            };
+            const rowSelectors = {
               gmail:    'tr[jsmodel]',
               outlook:  '[role="option"][data-convid]',
               yahoo:    '[data-item-id]',
@@ -59,10 +71,33 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               fastmail: '[data-msg-id]',
               zoho:     '.maillist-item[data-id]',
             };
-            const rows = Array.from(document.querySelectorAll(selectors[provider] || 'tr[jsmodel]')).slice(0, 5);
+            function pickBestCode(text) {
+              if (!text) return null;
+              const matches = [];
+              for (const m of text.matchAll(CODE_RE)) matches.push({ code: m[0], idx: m.index });
+              if (!matches.length) return null;
+              let best = null, bestScore = -Infinity;
+              for (let i = 0; i < matches.length; i++) {
+                const { code, idx } = matches[i];
+                let score = 0;
+                const ctx = text.slice(Math.max(0, idx - 40), idx + code.length + 40);
+                if (OTP_KEYWORDS.test(ctx)) score += 100;
+                if (code.length === 6) score += 10;
+                if (code.length === 4 && /^(19|20)\d\d$/.test(code)) score -= 50;
+                score -= i;
+                if (score > bestScore) { bestScore = score; best = code; }
+              }
+              return best;
+            }
+            const bodies = Array.from(document.querySelectorAll(bodySelectors[provider] || '.a3s')).slice(0, 5);
+            for (const body of bodies) {
+              const code = pickBestCode(body.innerText || '');
+              if (code) return code;
+            }
+            const rows = Array.from(document.querySelectorAll(rowSelectors[provider] || 'tr[jsmodel]')).slice(0, 5);
             for (const row of rows) {
-              const m = (row.innerText || '').match(CODE_RE);
-              if (m) return m[1];
+              const code = pickBestCode(row.innerText || '');
+              if (code) return code;
             }
             return null;
           },
