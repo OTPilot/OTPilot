@@ -156,6 +156,56 @@
     }
     .acc-overflow-check { color: #38bdf8; font-size: 10px; flex-shrink: 0; }
 
+    /* ── Category filter bar ── */
+    .cat-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .cat-bar {
+      display: flex; gap: 6px; padding: 7px 10px;
+      overflow-x: auto; scrollbar-width: none;
+      border-bottom: 1px solid #1e3a5f;
+    }
+    .cat-bar::-webkit-scrollbar { display: none; }
+    .cat-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; flex-shrink: 0;
+      background: transparent; border: 1px solid #1e3a5f; border-radius: 20px;
+      color: #64748b; font-size: 11px; font-weight: 600; cursor: pointer;
+      font-family: inherit; transition: border-color .15s, color .15s, background .15s;
+    }
+    .cat-pill:hover { color: #94a3b8; border-color: #334155; }
+    .cat-pill .count { color: #475569; font-weight: 700; }
+    .cat-pill.active { border-color: #38bdf8; background: rgba(56,189,248,0.08); color: #e2e8f0; }
+    .cat-pill.active .count { color: #38bdf8; }
+
+    /* ── Category tag (vault row + chip dot) ── */
+    .cat-tag {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 9px; font-weight: 700; color: #94a3b8;
+      padding: 1px 6px 1px 5px; border: 1px solid #1e3a5f; border-radius: 10px;
+      flex-shrink: 0; text-transform: uppercase; letter-spacing: .3px;
+      max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .acc-head-sub { display: flex; align-items: center; gap: 5px; min-width: 0; }
+    .acc-head-sub .acc-head-email { min-width: 0; }
+
+    /* ── Category chooser (editor / add) ── */
+    .cat-choose { display: flex; flex-wrap: wrap; gap: 6px; }
+    .cat-choice {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 11px; border: 1px solid #1e3a5f; border-radius: 20px;
+      background: transparent; color: #94a3b8; font-size: 11px; font-weight: 600;
+      cursor: pointer; font-family: inherit; transition: all .15s;
+    }
+    .cat-choice:hover { border-color: #334155; }
+    .cat-choice.sel { border-color: #38bdf8; background: rgba(56,189,248,0.1); color: #e2e8f0; }
+    .cat-choice.new { border-style: dashed; color: #475569; }
+    .cat-choice.new:hover { border-color: #38bdf8; color: #38bdf8; }
+    .cat-new-input {
+      width: 100%; margin-top: 8px; padding: 6px 9px;
+      background: #0f172a; border: 1px solid #38bdf8; border-radius: 5px;
+      color: #e2e8f0; font-size: 12px; font-family: inherit; outline: none;
+    }
+    .cat-new-input::placeholder { color: #475569; }
+
     /* ── OTP display ── */
     .code-section {
       padding: 14px 16px 10px;
@@ -730,6 +780,7 @@
 
 <!-- Home view -->
 <div id="home-view">
+  <div id="home-cat-bar" class="cat-bar" style="display:none"></div>
   <div id="account-bar"></div>
   <div id="account-overflow-panel" class="acc-overflow-panel" style="display:none">
     <div class="acc-overflow-search">
@@ -768,6 +819,7 @@
       <input id="acc-search" type="text" placeholder="Search accounts…" autocomplete="off">
     </div>
   </div>
+  <div id="vault-cat-bar" class="cat-bar" style="display:none"></div>
   <div class="acc-toolbar">
     <span class="acc-count" id="acc-count"></span>
   </div>
