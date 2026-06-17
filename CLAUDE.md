@@ -53,7 +53,7 @@ Requires `web/.env.local` with `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `V
 docker compose up                     # starts postgres on :5442
 docker compose --profile api up       # also starts the API container
 ```
-Copy `.env.example` → `.env` at the repo root and fill in values before using the api profile.
+The api profile reads `api/.env` (`env_file: ./api/.env` in `docker-compose.yml`) — copy `api/.env.example` → `api/.env` and fill in values before using it.
 
 ---
 
