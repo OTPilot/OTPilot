@@ -184,3 +184,45 @@ test('assigning a new category in the editor persists and tags the account', asy
   await page.click('#nav-settings');
   await expect(page.locator('.acc-head .cat-tag')).toContainText('Work');
 });
+
+test('adding an account while a category filter is active keeps it visible and pre-assigns the category', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+  await page.evaluate(([auth, expiry, secret]) => {
+    return new Promise(r => chrome.storage.local.set({
+      auth,
+      sessionExpiry: expiry,
+      categoryFilter: 'Work',
+      accounts: [
+        { name: 'GitHub', secret, urls: '', email: '', category: 'Work' },
+        { name: 'AWS',    secret, urls: '', email: '', category: 'Work' },
+        { name: 'Gmail',  secret, urls: '', email: '', category: 'Personal' },
+      ],
+    }, r));
+  }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+
+  await page.reload();
+  await page.click('#nav-settings');
+
+  // Vault opens filtered to Work: 2 visible rows
+  const visibleBefore = await page.locator('.acc-row').evaluateAll(els =>
+    els.filter(el => el.style.display !== 'none').length);
+  expect(visibleBefore).toBe(2);
+
+  // Add an account while the Work filter is active
+  await page.click('#btn-add');
+
+  // The new row is visible (not hidden by the filter) → 3 visible rows
+  const visibleAfter = await page.locator('.acc-row').evaluateAll(els =>
+    els.filter(el => el.style.display !== 'none').length);
+  expect(visibleAfter).toBe(3);
+
+  // …and the new row's chooser is pre-assigned to the active category
+  await expect(page.locator('.acc-body.open .cat-choose')).toHaveAttribute('data-value', 'Work');
+
+  // The "Work" pill badge counts the draft (now 3), matching the visible rows
+  await expect(
+    page.locator('#vault-cat-bar .cat-pill', { hasText: 'Work' }).locator('.count')
+  ).toHaveText('3');
+});

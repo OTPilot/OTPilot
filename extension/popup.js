@@ -144,21 +144,21 @@ function categoryColor(name) {
 
 let categoryFilter = ''; // '' = All
 
-// Unique, sorted category labels present across all saved accounts.
-function getCategories() {
-  return [...new Set(accounts.map(a => (a.category || '').trim()).filter(Boolean))]
+// Unique, sorted category labels present in a list of accounts (defaults to the
+// saved set; the vault passes its in-progress `draft` so counts match the rows).
+function getCategories(list = accounts) {
+  return [...new Set(list.map(a => (a.category || '').trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b));
 }
 
-function categoryCount(name) {
-  return accounts.filter(a => (a.category || '').trim() === name).length;
+function categoryCount(name, list = accounts) {
+  return list.filter(a => (a.category || '').trim() === name).length;
 }
 
 // Categories present in the in-progress vault draft (so a label created on one
 // account is immediately offered on the others).
 function draftCategories() {
-  return [...new Set(draft.map(a => (a.category || '').trim()).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b));
+  return getCategories(draft);
 }
 
 function catDot(name) {
@@ -167,9 +167,9 @@ function catDot(name) {
 
 // Builds a filter pill bar (All + one pill per category). Hidden when there are
 // no categories. `onPick` re-renders the relevant view after updating the filter.
-function renderCategoryBar(barEl, onPick) {
+function renderCategoryBar(barEl, onPick, source = accounts) {
   if (!barEl) return;
-  const cats = getCategories();
+  const cats = getCategories(source);
   if (cats.length === 0) { barEl.style.display = 'none'; barEl.innerHTML = ''; return; }
 
   // A previously-selected category that no longer exists falls back to All.
@@ -190,8 +190,8 @@ function renderCategoryBar(barEl, onPick) {
     return pill;
   };
 
-  barEl.appendChild(mkPill('All', '', `<span class="cat-dot" style="background:#64748b"></span>`, accounts.length));
-  for (const c of cats) barEl.appendChild(mkPill(c, c, catDot(c), categoryCount(c)));
+  barEl.appendChild(mkPill('All', '', `<span class="cat-dot" style="background:#64748b"></span>`, source.length));
+  for (const c of cats) barEl.appendChild(mkPill(c, c, catDot(c), categoryCount(c, source)));
 }
 
 function accountMatchesFilter(acc) {
@@ -504,10 +504,12 @@ function applyVaultSearch() {
 }
 
 function renderVaultCatBar() {
+  // Pass `draft` so the pill badge counts match the rows the vault actually
+  // shows (which are filtered through the in-progress draft, not saved state).
   renderCategoryBar(document.getElementById('vault-cat-bar'), () => {
     renderVaultCatBar();
     applyVaultSearch();
-  });
+  }, draft);
 }
 
 function rebuildAccountsDOM() {
@@ -583,6 +585,7 @@ function rebuildAccountsDOM() {
       syncOpenAccToDraft();
       openAccIdx = isOpen ? -1 : i;
       rebuildAccountsDOM();
+      renderVaultCatBar();
       applyVaultSearch();
     });
 
@@ -591,6 +594,7 @@ function rebuildAccountsDOM() {
       draft.splice(i, 1);
       openAccIdx = -1;
       rebuildAccountsDOM();
+      renderVaultCatBar();
       applyVaultSearch();
     });
 
@@ -646,9 +650,14 @@ function esc(s = '') {
 
 document.getElementById('btn-add').addEventListener('click', () => {
   syncOpenAccToDraft();
-  draft.push({ name: '', email: '', secret: '', urls: '', autofill: true, category: '' });
+  // Adding while a category filter is active pre-assigns that category, so the
+  // new row matches the active filter and stays visible (instead of being
+  // hidden by applyVaultSearch the moment it's created).
+  draft.push({ name: '', email: '', secret: '', urls: '', autofill: true, category: categoryFilter });
   openAccIdx = draft.length - 1;
   rebuildAccountsDOM();
+  renderVaultCatBar();
+  applyVaultSearch();
   document.getElementById('accounts-list').lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
 
