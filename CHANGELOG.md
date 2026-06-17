@@ -14,6 +14,7 @@
 
 ### Web
 
+- **Social links in the footer** — Added X ([@otpilotapp](https://x.com/otpilotapp)) and YouTube ([@otpilotapp](https://www.youtube.com/@otpilotapp)) icon links to the landing footer.
 - **Crisp support chat** — Added live chat via Crisp across the web app. The widget loads on the landing page and dashboard (bubble in corner, closed by default). `/support` is a dedicated page that auto-opens the chat — this is the target for the extension's support link. On the dashboard the user's email and name are passed to Crisp automatically. On `/support`, if the user is logged in they are identified; anonymous users can chat freely. The chat closes when navigating away from `/support` so it doesn't persist open across other pages.
 
 ### Extension
@@ -27,6 +28,7 @@
 
 ### API
 
+- **Transactional emails** — Welcome email on first account creation (free plan), sent once from `sync_user` (gated on the `users` INSERT actually inserting a row; the new-device notice is suppressed on the first device of a brand-new account to avoid a double email). Confirmation email when a user upgrades to **Personal** via the Stripe webhook (recipient taken from the checkout session). Both go through the shared `email::send` helper (Resend), no-op unless `SEND_EMAILS=true`. (Team Lite email deferred until that tier ships.)
 - **Domain favicon service** (`POST /icons/resolve`) — Resolves a per-domain favicon, deduplicated into one shared object per domain. On a cache miss it fetches the icon server-side (page `<link rel=icon>` hint validated same-domain → `/favicon.ico`, with SSRF guards that reject private IPs), falling back to the registrable parent domain via the Public Suffix List (`psl` crate) when the exact host has no icon (e.g. `ap.www.namecheap.com` → `namecheap.com`), re-encodes it to a 64×64 PNG (`image` crate), and uploads it to a public S3/R2 bucket (`rust-s3`). Results (including a negative `none`) are cached in the new `domain_icons` table with a 30-day TTL. The endpoint is **public** so free / not-signed-in users also get icons; abuse is bounded by the SSRF guards, a 50-domain-per-request cap, negative caching, and a global concurrent-fetch semaphore. Feature is optional — disabled when the `S3_*` env vars are unset (`api/migrations/0008_create_domain_icons.sql`, `S3_ENDPOINT`/`S3_BUCKET`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_REGION`/`S3_PUBLIC_BASE_URL`).
 - **Sentry** — Error tracking via the `sentry` crate. Initialized in `main.rs` when `SENTRY_DSN` is set.
 
