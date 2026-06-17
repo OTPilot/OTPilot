@@ -54,10 +54,11 @@ async function syncActiveIndexToUrl() {
 
 function loadState() {
   return new Promise(r =>
-    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], d => {
+    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'categoryFilter'], d => {
       accounts       = d.accounts || [];
       activeIndex    = Math.min(d.activeIndex ?? 0, Math.max(accounts.length - 1, 0));
       obfuscated     = d.obfuscated ?? true;
+      categoryFilter = d.categoryFilter ?? '';
       localChangedAt = d.localChangedAt ?? null;
       lastSyncedAt   = d.lastSyncedAt   ?? null;
       tombstones     = d.tombstones     ?? {};
@@ -124,6 +125,79 @@ function nameInitials(name) {
   return (name || '').split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?';
 }
 
+// ── Categories ────────────────────────────────────────────────────────────────
+// A category is just a free-text label stored on each account (acc.category).
+// It travels inside the encrypted sync blob automatically. Colors are derived
+// deterministically from the label, so the same category looks identical on
+// every device without needing to sync a separate registry.
+
+const CATEGORY_COLORS = [
+  '#38bdf8','#4ade80','#fbbf24','#a78bfa',
+  '#fb7185','#34d399','#f97316','#22d3ee',
+];
+
+function categoryColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
+  return CATEGORY_COLORS[Math.abs(h) % CATEGORY_COLORS.length];
+}
+
+let categoryFilter = ''; // '' = All
+
+// Unique, sorted category labels present across all saved accounts.
+function getCategories() {
+  return [...new Set(accounts.map(a => (a.category || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function categoryCount(name) {
+  return accounts.filter(a => (a.category || '').trim() === name).length;
+}
+
+// Categories present in the in-progress vault draft (so a label created on one
+// account is immediately offered on the others).
+function draftCategories() {
+  return [...new Set(draft.map(a => (a.category || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function catDot(name) {
+  return `<span class="cat-dot" style="background:${categoryColor(name)}"></span>`;
+}
+
+// Builds a filter pill bar (All + one pill per category). Hidden when there are
+// no categories. `onPick` re-renders the relevant view after updating the filter.
+function renderCategoryBar(barEl, onPick) {
+  if (!barEl) return;
+  const cats = getCategories();
+  if (cats.length === 0) { barEl.style.display = 'none'; barEl.innerHTML = ''; return; }
+
+  // A previously-selected category that no longer exists falls back to All.
+  if (categoryFilter && !cats.includes(categoryFilter)) categoryFilter = '';
+
+  barEl.style.display = '';
+  barEl.innerHTML = '';
+
+  const mkPill = (label, value, dot, count) => {
+    const pill = document.createElement('button');
+    pill.className = 'cat-pill' + (categoryFilter === value ? ' active' : '');
+    pill.innerHTML = `${dot}${esc(label)} <span class="count">${count}</span>`;
+    pill.addEventListener('click', () => {
+      categoryFilter = value;
+      chrome.storage.local.set({ categoryFilter });
+      onPick();
+    });
+    return pill;
+  };
+
+  barEl.appendChild(mkPill('All', '', `<span class="cat-dot" style="background:#64748b"></span>`, accounts.length));
+  for (const c of cats) barEl.appendChild(mkPill(c, c, catDot(c), categoryCount(c)));
+}
+
+function accountMatchesFilter(acc) {
+  return !categoryFilter || (acc.category || '').trim() === categoryFilter;
+}
+
 const CHIP_COUNT = 3;
 let overflowOpen = false;
 
@@ -135,14 +209,29 @@ function closeOverflow() {
 
 function renderAccountBar() {
   closeOverflow();
+  renderCategoryBar(document.getElementById('home-cat-bar'), renderAccountBar);
+
   const bar = document.getElementById('account-bar');
   bar.innerHTML = '';
 
-  accounts.slice(0, CHIP_COUNT).forEach((acc, i) => {
+  // Preserve original indices (activeIndex / codes reference the full array)
+  // while only showing accounts in the selected category.
+  const entries = accounts
+    .map((acc, i) => ({ acc, i }))
+    .filter(e => accountMatchesFilter(e.acc));
+
+  entries.slice(0, CHIP_COUNT).forEach(({ acc, i }) => {
     const chip = document.createElement('button');
     chip.className = 'acc-chip' + (i === activeIndex ? ' active' : '');
     chip.addEventListener('mouseenter', () => showChipTooltip(chip, acc.name, acc.email));
     chip.addEventListener('mouseleave', hideChipTooltip);
+
+    if ((acc.category || '').trim()) {
+      const dot = document.createElement('span');
+      dot.className = 'cat-dot';
+      dot.style.background = categoryColor(acc.category.trim());
+      chip.appendChild(dot);
+    }
 
     const av = document.createElement('span');
     av.className = 'acc-av';
@@ -163,12 +252,12 @@ function renderAccountBar() {
     bar.appendChild(chip);
   });
 
-  if (accounts.length > CHIP_COUNT) {
-    const hasActiveInOverflow = activeIndex >= CHIP_COUNT;
+  if (entries.length > CHIP_COUNT) {
+    const hasActiveInOverflow = entries.slice(CHIP_COUNT).some(e => e.i === activeIndex);
     const btn = document.createElement('button');
     btn.id = 'account-overflow-btn';
     btn.className = 'acc-overflow-btn' + (hasActiveInOverflow ? ' has-active' : '');
-    const hidden = accounts.length - CHIP_COUNT;
+    const hidden = entries.length - CHIP_COUNT;
     btn.textContent = hidden + ' more';
     btn.title = `${hidden} more account${hidden === 1 ? '' : 's'}`;
     btn.addEventListener('click', e => {
@@ -192,6 +281,7 @@ function renderOverflowList(filter) {
   list.innerHTML = '';
   const q = filter.toLowerCase();
   accounts.forEach((acc, i) => {
+    if (!accountMatchesFilter(acc)) return;
     const name = acc.name || 'Unnamed';
     const email = acc.email || '';
     if (q && !name.toLowerCase().includes(q) && !email.toLowerCase().includes(q)) return;
@@ -369,7 +459,9 @@ function renderAccountsList() {
   draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   openAccIdx = -1;
   document.getElementById('acc-search').value = '';
+  renderVaultCatBar();
   rebuildAccountsDOM();
+  applyVaultSearch();
 }
 
 // Flush the currently open accordion row's inputs into draft before any re-render.
@@ -384,6 +476,7 @@ function syncOpenAccToDraft() {
   draft[openAccIdx].secret   = body.querySelector('.acc-secret').value.trim();
   draft[openAccIdx].urls     = body.querySelector('.acc-urls').value.trim();
   draft[openAccIdx].autofill = body.querySelector('.acc-autofill').checked;
+  draft[openAccIdx].category = (body.querySelector('.cat-choose')?.dataset.value || '').trim();
 }
 
 function updateVaultCount() {
@@ -401,12 +494,20 @@ function applyVaultSearch() {
   document.querySelectorAll('.acc-row').forEach(row => {
     const i = parseInt(row.dataset.i, 10);
     const acc = draft[i];
-    const match = !q
+    const textMatch = !q
       || (acc.name  || '').toLowerCase().includes(q)
       || (acc.email || '').toLowerCase().includes(q);
-    row.style.display = match ? '' : 'none';
+    const catMatch = !categoryFilter || (acc.category || '').trim() === categoryFilter;
+    row.style.display = (textMatch && catMatch) ? '' : 'none';
   });
   updateVaultCount();
+}
+
+function renderVaultCatBar() {
+  renderCategoryBar(document.getElementById('vault-cat-bar'), () => {
+    renderVaultCatBar();
+    applyVaultSearch();
+  });
 }
 
 function rebuildAccountsDOM() {
@@ -424,11 +525,15 @@ function rebuildAccountsDOM() {
     // ── Collapsed header ──
     const head = document.createElement('button');
     head.className = 'acc-head' + (isOpen ? ' open' : '');
+    const cat = (acc.category || '').trim();
     head.innerHTML = `
       <span class="acc-av acc-av-md" style="background:${color}">${esc(nameInitials(acc.name))}</span>
       <span class="acc-head-text">
         <span class="acc-head-name">${esc(acc.name) || `Account ${i + 1}`}</span>
-        ${acc.email ? `<span class="acc-head-email">${esc(acc.email)}</span>` : ''}
+        ${cat || acc.email ? `<span class="acc-head-sub">
+          ${cat ? `<span class="cat-tag">${catDot(cat)}${esc(cat)}</span>` : ''}
+          ${acc.email ? `<span class="acc-head-email">${esc(acc.email)}</span>` : ''}
+        </span>` : ''}
       </span>
       <span class="acc-chevron">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
@@ -448,6 +553,14 @@ function rebuildAccountsDOM() {
       <div class="acc-field">
         <label>Email (optional)</label>
         <input class="acc-email" type="email" placeholder="e.g. user@example.com" value="${esc(acc.email || '')}">
+      </div>
+      <div class="acc-field">
+        <label>Category</label>
+        <div class="cat-choose" data-value="${esc(cat)}">
+          <button type="button" class="cat-choice${cat ? '' : ' sel'}" data-cat=""><span class="cat-dot" style="background:#64748b"></span>None</button>
+          ${draftCategories().map(c => `<button type="button" class="cat-choice${cat === c ? ' sel' : ''}" data-cat="${esc(c)}">${catDot(c)}${esc(c)}</button>`).join('')}
+          <button type="button" class="cat-choice new">+ New</button>
+        </div>
       </div>
       <div class="acc-field">
         <label>Secret (base32 or hex)</label>
@@ -489,6 +602,36 @@ function rebuildAccountsDOM() {
       btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
     });
 
+    // ── Category chooser ──
+    const choose = body.querySelector('.cat-choose');
+    choose.querySelectorAll('.cat-choice:not(.new)').forEach(btn => {
+      btn.addEventListener('click', () => {
+        choose.dataset.value = btn.dataset.cat;
+        choose.querySelectorAll('.cat-choice').forEach(b => b.classList.remove('sel'));
+        btn.classList.add('sel');
+        choose.parentElement.querySelector('.cat-new-input')?.remove();
+      });
+    });
+    choose.querySelector('.cat-choice.new').addEventListener('click', () => {
+      const field = choose.parentElement;
+      let inp = field.querySelector('.cat-new-input');
+      if (inp) { inp.focus(); return; }
+      inp = document.createElement('input');
+      inp.className = 'cat-new-input';
+      inp.placeholder = 'New category name';
+      inp.maxLength = 24;
+      inp.value = '';
+      inp.addEventListener('input', () => {
+        const v = inp.value.trim();
+        choose.dataset.value = v;
+        // A typed value supersedes any selected pill.
+        choose.querySelectorAll('.cat-choice').forEach(b => b.classList.remove('sel'));
+      });
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
+      field.appendChild(inp);
+      inp.focus();
+    });
+
     row.appendChild(head);
     row.appendChild(body);
     container.appendChild(row);
@@ -503,7 +646,7 @@ function esc(s = '') {
 
 document.getElementById('btn-add').addEventListener('click', () => {
   syncOpenAccToDraft();
-  draft.push({ name: '', email: '', secret: '', urls: '', autofill: true });
+  draft.push({ name: '', email: '', secret: '', urls: '', autofill: true, category: '' });
   openAccIdx = draft.length - 1;
   rebuildAccountsDOM();
   document.getElementById('accounts-list').lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -530,7 +673,8 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
     const old = oldMap.get(acc.name);
     const changed = !old ||
       old.secret !== acc.secret || old.urls !== acc.urls ||
-      old.email !== acc.email || old.autofill !== acc.autofill;
+      old.email !== acc.email || old.autofill !== acc.autofill ||
+      (old.category || '') !== (acc.category || '');
     acc._updatedAt = changed ? now : (old._updatedAt ?? now);
   }
 
