@@ -9,6 +9,7 @@ let obfuscated = true;
 let localChangedAt = null;  // ISO string: last time accounts were modified locally
 let lastSyncedAt   = null;  // ISO string: last completed bidirectional sync
 let tombstones     = {};    // { [accountName]: ISO } — deleted accounts
+let iconCache      = {};    // { [domain]: { dataUrl: string|null, fetchedAt: number } }
 
 // ── Plan helpers ─────────────────────────────────────────────────────────────
 
@@ -54,11 +55,12 @@ async function syncActiveIndexToUrl() {
 
 function loadState() {
   return new Promise(r =>
-    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'categoryFilter'], d => {
+    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'categoryFilter', 'iconCache'], d => {
       accounts       = d.accounts || [];
       activeIndex    = Math.min(d.activeIndex ?? 0, Math.max(accounts.length - 1, 0));
       obfuscated     = d.obfuscated ?? true;
       categoryFilter = d.categoryFilter ?? '';
+      iconCache      = d.iconCache ?? {};
       localChangedAt = d.localChangedAt ?? null;
       lastSyncedAt   = d.lastSyncedAt   ?? null;
       tombstones     = d.tombstones     ?? {};
@@ -198,6 +200,69 @@ function accountMatchesFilter(acc) {
   return !categoryFilter || (acc.category || '').trim() === categoryFilter;
 }
 
+// ── Site icons ────────────────────────────────────────────────────────────────
+// The avatar shows the site's favicon when one is cached locally (resolved by the
+// background SW from the backend), falling back to the letter avatar.
+
+// Mirror of normalizeIconDomain in background.js / api/src/routes/icons.rs.
+function normalizeIconDomain(input) {
+  if (!input) return null;
+  let d = String(input).trim().toLowerCase()
+    .replace(/^\*\./, '').replace(/^https?:\/\//, '').replace(/^www\./, '');
+  d = d.split('/')[0].split(':')[0].replace(/\.+$/, '');
+  if (!d || d.length > 253 || !d.includes('.')) return null;
+  if (!/^[a-z0-9.-]+$/.test(d)) return null;
+  return d;
+}
+
+function accountIconDomain(acc) {
+  return normalizeIconDomain(acc.domain) || normalizeIconDomain((acc.urls || '').split('\n')[0]);
+}
+
+function accountIconDataUrl(acc) {
+  const d = accountIconDomain(acc);
+  const e = d && iconCache[d];
+  return e && e.dataUrl ? e.dataUrl : null;
+}
+
+function avatarHTML(acc, extraClass = '') {
+  const cls = ('acc-av ' + extraClass).trim();
+  const url = accountIconDataUrl(acc);
+  if (url) return `<img class="${cls}" src="${url}" alt="">`;
+  return `<span class="${cls}" style="background:${accentColor(acc.name || '')}">${esc(nameInitials(acc.name))}</span>`;
+}
+
+function avatarNode(acc, extraClass = '') {
+  const tmp = document.createElement('template');
+  tmp.innerHTML = avatarHTML(acc, extraClass);
+  return tmp.content.firstChild;
+}
+
+// All distinct icon domains across saved accounts.
+function iconDomains() {
+  return [...new Set(accounts.map(accountIconDomain).filter(Boolean))];
+}
+
+// Ask the background SW to resolve+cache any missing icons, then re-render.
+function requestIcons() {
+  if (!chrome.runtime?.id) return;
+  const domains = iconDomains();
+  if (!domains.length) return;
+  // prune: this is the full account set, so the SW can evict icons for deleted accounts.
+  chrome.runtime.sendMessage({ action: 'resolveIcons', domains, prune: true }, resp => {
+    if (chrome.runtime.lastError) return;
+    const updated = resp?.updated || {};
+    if (!Object.keys(updated).length) return;
+    Object.assign(iconCache, updated);
+    renderAccountBar();
+    // Refresh vault rows too, but only when no row is being edited.
+    if (document.getElementById('settings-panel')?.style.display !== 'none' && openAccIdx < 0) {
+      rebuildAccountsDOM();
+      applyVaultSearch();
+    }
+  });
+}
+
 const CHIP_COUNT = 3;
 let overflowOpen = false;
 
@@ -233,10 +298,7 @@ function renderAccountBar() {
       chip.appendChild(dot);
     }
 
-    const av = document.createElement('span');
-    av.className = 'acc-av';
-    av.style.background = accentColor(acc.name || '');
-    av.textContent = nameInitials(acc.name);
+    const av = avatarNode(acc);
 
     const lbl = document.createElement('span');
     lbl.className = 'acc-chip-name';
@@ -289,10 +351,7 @@ function renderOverflowList(filter) {
     const item = document.createElement('button');
     item.className = 'acc-overflow-item' + (i === activeIndex ? ' active' : '');
 
-    const av = document.createElement('span');
-    av.className = 'acc-av acc-av-md';
-    av.style.background = accentColor(name);
-    av.textContent = nameInitials(name);
+    const av = avatarNode(acc, 'acc-av-md');
 
     const text = document.createElement('span');
     text.className = 'acc-overflow-text';
@@ -518,7 +577,6 @@ function rebuildAccountsDOM() {
 
   draft.forEach((acc, i) => {
     const isOpen = i === openAccIdx;
-    const color  = accentColor(acc.name || '');
 
     const row = document.createElement('div');
     row.className = 'acc-row';
@@ -529,7 +587,7 @@ function rebuildAccountsDOM() {
     head.className = 'acc-head' + (isOpen ? ' open' : '');
     const cat = (acc.category || '').trim();
     head.innerHTML = `
-      <span class="acc-av acc-av-md" style="background:${color}">${esc(nameInitials(acc.name))}</span>
+      ${avatarHTML(acc, 'acc-av-md')}
       <span class="acc-head-text">
         <span class="acc-head-name">${esc(acc.name) || `Account ${i + 1}`}</span>
         ${cat || acc.email ? `<span class="acc-head-sub">
@@ -703,6 +761,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 
   openAccIdx = -1;
   renderAccountBar();
+  requestIcons(); // pick up icons for any newly-added domains
   startTimer();
   showView('home');
   setStatus('Saved');
@@ -1557,6 +1616,7 @@ async function silentPullSync() {
   await loadState();
   await syncActiveIndexToUrl();
   renderAccountBar();
+  requestIcons(); // resolve+cache site favicons, then re-render when ready
   startTimer();
   if (justAuthenticated) tryAutoFillCurrentTab();
   chrome.storage.local.remove('pendingServerSync');

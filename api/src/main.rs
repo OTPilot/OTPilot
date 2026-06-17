@@ -26,6 +26,8 @@ pub struct AppState {
     pub send_emails: bool,
     pub supabase_url: String,
     pub supabase_service_key: String,
+    /// S3/R2 store for domain favicons. None when not configured (feature disabled).
+    pub icons: Option<routes::icons::IconStore>,
 }
 
 #[tokio::main]
@@ -95,6 +97,8 @@ async fn main() -> anyhow::Result<()> {
     let supabase_service_key =
         std::env::var("SUPABASE_SERVICE_ROLE_KEY").expect("SUPABASE_SERVICE_ROLE_KEY must be set");
 
+    let icons = routes::icons::IconStore::from_env();
+
     let state = AppState {
         db,
         jwt_keys: Arc::new(jwt_keys),
@@ -108,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
         send_emails,
         supabase_url,
         supabase_service_key,
+        icons,
     };
 
     let cors = CorsLayer::new()
@@ -121,6 +126,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::teams::router())
         .merge(routes::billing::router())
         .merge(routes::devices::router())
+        .merge(routes::icons::router())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

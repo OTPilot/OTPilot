@@ -7,4 +7,5 @@ const CONFIG = {
   DASHBOARD_URL:      'http://localhost:5175',
   SUPABASE_URL:       'https://YOUR_PROJECT.supabase.co',
   SUPABASE_ANON_KEY:  'your-anon-key-here',
+  S3_PUBLIC_BASE_URL: 'https://icons.otpilot.app',  // public R2/CDN base serving domain favicons
 }

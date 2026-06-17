@@ -53,7 +53,7 @@ Requires `web/.env.local` with `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `V
 docker compose up                     # starts postgres on :5442
 docker compose --profile api up       # also starts the API container
 ```
-Copy `.env.example` → `.env` at the repo root and fill in values before using the api profile.
+The api profile reads `api/.env` (`env_file: ./api/.env` in `docker-compose.yml`) — copy `api/.env.example` → `api/.env` and fill in values before using it.
 
 ---
 
@@ -72,11 +72,12 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 | `teams` | — | Stub, Phase 3 |
 | `devices` | `user_id`, `device_id`, `name`, `os`, `browser`, `pending_action` | Registered extension installs |
 | `sync_logs` | `user_id`, `device_id`, `action`, `accounts_count`, `created_at` | Trimmed automatically by trigger (keep last 10 per device) |
+| `domain_icons` | `domain` (PK), `status`, `storage_key`, `fetched_at` | Shared favicon cache, one row per domain; `status='none'` is a negative cache. Bytes live in S3/R2 |
 
 ### Extension JS modules
 - `totp.js` — TOTP code generation (loaded as content script alongside `content.js`)
 - `content.js` — 2FA detection (QR + plain-text), auto-fill, overlay UI
-- `background.js` — OAuth flow, background sync polling (every 5 min), image CORS proxy for QR scanning
+- `background.js` — OAuth flow, background sync polling (every 5 min), image CORS proxy for QR scanning, site-icon resolution (`resolveIcons`) + local `iconCache`
 - `popup.js` / `popup.html` — popup UI; manages accounts, TOTP display, session lock
 - `cloudSync.js` — all sync logic; accounts encrypted AES-GCM client-side before upload
 - `supabase.js` — Supabase Auth wrapper used by background and popup
@@ -105,7 +106,13 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | POST | `/devices/:id/erase` | Mark device for remote wipe |
 | POST | `/devices/:id/ack` | Device acknowledges pending action |
 | POST | `/devices/:id/leave` | Device unregisters itself |
+| POST | `/icons/resolve` | Resolve favicons for a batch of domains; fetches + stores any missing in S3/R2, returns `{domain: {status, url?}}` (**public** — so free / not-signed-in users get icons; abuse bounded by SSRF guards, 50-domain cap, negative cache, and a global fetch semaphore) |
 | GET | `/teams` | Stub — Phase 3 |
+
+### Domain favicons (`/icons`)
+`api/src/routes/icons.rs` resolves a per-domain favicon, deduplicated into one shared object per domain. On a cache miss it fetches the icon **server-side** (hint URL validated same-domain → homepage `<link rel=icon>` → `/favicon.ico`, with SSRF guards rejecting private IPs); if the exact host has no icon it falls back to the **registrable parent domain** via the Public Suffix List (`psl` crate — e.g. `ap.www.namecheap.com` → `namecheap.com`), storing the result under the original host key. It re-encodes to a 64×64 PNG (the `image` crate) and uploads to a **public** S3/R2 bucket (`rust-s3`). The result is cached in `domain_icons` (`status='none'` is a negative cache, 30-day TTL). The feature is **optional**: if the `S3_*` env vars are unset, `IconStore::from_env()` returns `None` and `/icons/resolve` reports `none` for every domain. The endpoint is **public** (no auth) so icons work for free / not-signed-in users; the extension always calls it (Bearer attached only when present). The extension caches the downloaded PNG locally as a `data:` URL (`iconCache` in `chrome.storage.local`, **not** in the encrypted sync blob) and renders it via `avatarHTML()`/`avatarNode()` in `popup.js`, falling back to the letter avatar.
+
+**Invariant:** `normalizeIconDomain()` is duplicated in three places — `api/src/routes/icons.rs` (`normalize_domain`), `extension/background.js`, and `extension/popup.js`. Keep them in sync (lowercase, strip `*.`/`www.`/path/port, require a dot).
 
 ### Web dashboard
 | Route | Component | Notes |

@@ -25,6 +25,10 @@ thiserror = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 hmac = "0.12"
 sha2 = "0.10"
+# Domain favicon pipeline: fetch + normalize to PNG + store in S3/R2.
+rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
+image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "webp", "gif"] }
+psl = "2"  # embedded Public Suffix List → registrable domain (eTLD+1) for the favicon parent-domain fallback
 sentry = { version = "0.48", features = ["anyhow", "tracing", "tower", "tower-axum-matched-path", "logs"] }
 
 [profile.release]
