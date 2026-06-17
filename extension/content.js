@@ -566,7 +566,7 @@ function findPlainTextSecret() {
   // Uses word-boundary matching (URL separators) so that 'otp' in '/otpilot/' does NOT match.
   // Also checks location.hash so hash-router SPAs (#/two-factor/setup) are covered.
   const path = (location.pathname + location.search + location.hash).toLowerCase();
-  const PATH_RE = /(?:^|[/\-_.=?&#])(?:2fa|mfa|otp|totp|two[-_](?:factor|step)|multi[-_]?factor|enroll(?:ment)?|authenticator|security)(?=[/\-_.=?&#]|$)/;
+  const PATH_RE = /(?:^|[/\-_.=?&#])(?:2fa|mfa|otp|totp|two[-_](?:factor|step)|multi[-_]?factor|enroll(?:ment)?|authenticat(?:or|ion)|security)(?=[/\-_.=?&#]|$)/;
   if (!PATH_RE.test(path)) return null;
 
   const bodyText = (document.body.innerText || '').toLowerCase();
@@ -660,6 +660,13 @@ function makeOverlay(id) {
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     overflow: 'hidden',
   });
+  // Isolate the overlay from the host page's global handlers. Many sites close
+  // their own modal on an outside pointerdown/click (Radix, Headless UI, etc.);
+  // without this, clicking an OTPilot button bubbles to document and dismisses
+  // the page's 2FA modal — which then rotates the secret (e.g. Vercel).
+  for (const ev of ['pointerdown', 'mousedown', 'mouseup', 'click', 'touchstart']) {
+    el.addEventListener(ev, e => e.stopPropagation());
+  }
   return el;
 }
 
@@ -877,17 +884,32 @@ async function runDetection() {
 
 (async function startDetection() {
   let observer;
-  const hardTimeoutId = setTimeout(() => { if (observer) observer.disconnect(); }, 30_000);
+  let idleTimer;
+
+  // Stop observing after 30s of *inactivity* (not 30s after page load), re-armed
+  // on any DOM mutation or user interaction. This keeps detection alive through
+  // slow flows — e.g. opening a 2FA modal a minute after landing on a settings
+  // page — while still releasing the observer on genuinely idle pages.
+  function stop() {
+    observer?.disconnect();
+    document.removeEventListener('pointerdown', armIdle, true);
+    document.removeEventListener('keydown', armIdle, true);
+  }
+  function armIdle() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(stop, 30_000);
+  }
 
   function scheduleDetection() {
     clearTimeout(_debounceTimer);
     _debounceTimer = setTimeout(() => {
-      if (!chrome.runtime?.id) { observer?.disconnect(); return; }
+      if (!chrome.runtime?.id) { stop(); return; }
       runDetection();
     }, 300);
   }
 
   function onMutation(mutations) {
+    armIdle();
     scheduleDetection();
     // If a newly-added img hasn't loaded yet, re-scan once it does
     for (const { addedNodes } of mutations) {
@@ -905,6 +927,9 @@ async function runDetection() {
 
   observer = new MutationObserver(onMutation);
   observer.observe(document.body, { childList: true, subtree: true });
+  document.addEventListener('pointerdown', armIdle, true);
+  document.addEventListener('keydown', armIdle, true);
+  armIdle();
 
   await runDetection();
 })();
@@ -927,7 +952,7 @@ async function runDetection() {
     // (same guard as findPlainTextSecret) so random pages with off-screen readonly
     // inputs containing base32-looking strings don't silently break auto-fill.
     const path = (location.pathname + location.search + location.hash).toLowerCase();
-    const PATH_RE = /(?:^|[/\-_.=?&#])(?:2fa|mfa|otp|totp|two[-_](?:factor|step)|multi[-_]?factor|enroll(?:ment)?|authenticator|security)(?=[/\-_.=?&#]|$)/;
+    const PATH_RE = /(?:^|[/\-_.=?&#])(?:2fa|mfa|otp|totp|two[-_](?:factor|step)|multi[-_]?factor|enroll(?:ment)?|authenticat(?:or|ion)|security)(?=[/\-_.=?&#]|$)/;
     if (!PATH_RE.test(path)) return false;
     return [...document.querySelectorAll(
       'input[type="text"], input[readonly], input:not([type]), textarea'
