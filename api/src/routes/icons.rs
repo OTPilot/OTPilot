@@ -463,27 +463,95 @@ async fn resolve_public_addr(host: &str) -> Option<std::net::SocketAddr> {
 
 fn ip_is_public(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            !(v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_unspecified()
-                || v4.octets()[0] == 0
-                || is_cgnat(v4))
-        }
+        IpAddr::V4(v4) => ipv4_is_public(v4),
         IpAddr::V6(v6) => {
-            let seg0 = v6.segments()[0];
+            let seg = v6.segments();
+            // IPv4-mapped ::ffff:a.b.c.d — an IPv4 address in an IPv6 wrapper that
+            // the OS connects to as raw IPv4; validate the embedded IPv4 instead.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return ipv4_is_public(v4);
+            }
+            // 6to4 (2002::/16) and NAT64 (64:ff9b::/96) also embed an IPv4 address.
+            if seg[0] == 0x2002 {
+                return ipv4_is_public(embed_v4(seg[1], seg[2]));
+            }
+            if seg[0] == 0x0064 && seg[1] == 0xff9b {
+                return ipv4_is_public(embed_v4(seg[6], seg[7]));
+            }
             !(v6.is_loopback()
                 || v6.is_unspecified()
-                || (seg0 & 0xfe00) == 0xfc00   // unique local fc00::/7
-                || (seg0 & 0xffc0) == 0xfe80) // link-local fe80::/10
+                || (seg[0] & 0xfe00) == 0xfc00   // unique local fc00::/7
+                || (seg[0] & 0xffc0) == 0xfe80) // link-local fe80::/10
         }
     }
+}
+
+fn ipv4_is_public(v4: Ipv4Addr) -> bool {
+    !(v4.is_private()
+        || v4.is_loopback()
+        || v4.is_link_local()
+        || v4.is_broadcast()
+        || v4.is_unspecified()
+        || v4.octets()[0] == 0
+        || is_cgnat(v4))
+}
+
+/// Reassembles an IPv4 address embedded in two IPv6 segments (6to4 / NAT64).
+fn embed_v4(hi: u16, lo: u16) -> Ipv4Addr {
+    Ipv4Addr::new(
+        (hi >> 8) as u8,
+        (hi & 0xff) as u8,
+        (lo >> 8) as u8,
+        (lo & 0xff) as u8,
+    )
 }
 
 /// Carrier-grade NAT range 100.64.0.0/10.
 fn is_cgnat(v4: Ipv4Addr) -> bool {
     let o = v4.octets();
     o[0] == 100 && (64..=127).contains(&o[1])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ip_is_public;
+    use std::net::IpAddr;
+    use std::str::FromStr;
+
+    fn is_public(s: &str) -> bool {
+        ip_is_public(IpAddr::from_str(s).unwrap())
+    }
+
+    #[test]
+    fn rejects_private_and_special_ipv4() {
+        for s in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1", // CGNAT
+            "0.0.0.0",
+        ] {
+            assert!(!is_public(s), "{s} should be non-public");
+        }
+        assert!(is_public("1.1.1.1"));
+        assert!(is_public("8.8.8.8"));
+    }
+
+    #[test]
+    fn rejects_private_ipv6_and_embedded_ipv4() {
+        for s in [
+            "::1",                    // loopback
+            "fc00::1",                // unique local
+            "fe80::1",                // link-local
+            "::ffff:169.254.169.254", // IPv4-mapped metadata
+            "::ffff:192.168.1.1",     // IPv4-mapped RFC1918
+            "2002:a9fe:a9fe::",       // 6to4 wrapping 169.254.169.254
+            "64:ff9b::a9fe:a9fe",     // NAT64 wrapping 169.254.169.254
+        ] {
+            assert!(!is_public(s), "{s} should be non-public");
+        }
+        assert!(is_public("2606:4700:4700::1111")); // public IPv6
+        assert!(is_public("::ffff:8.8.8.8")); // IPv4-mapped public
+    }
 }
