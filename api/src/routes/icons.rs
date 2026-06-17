@@ -139,13 +139,6 @@ async fn resolve(
         return Ok(Json(Value::Object(out)));
     };
 
-    let client = reqwest::Client::builder()
-        .user_agent("OTPilot-IconFetcher/1.0")
-        .timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::limited(3))
-        .build()
-        .map_err(|e| anyhow::anyhow!("client build: {e}"))?;
-
     // Cap how many domains a single call can trigger fetches for.
     for raw in body.domains.iter().take(50) {
         let Some(domain) = normalize_domain(raw) else {
@@ -173,8 +166,7 @@ async fn resolve(
         // outbound favicon fetches run concurrently across all callers.
         let _permit = store.fetch_sem.clone().acquire_owned().await.ok();
         let hint = body.hints.get(raw).or_else(|| body.hints.get(&domain));
-        let status = match fetch_and_store(&client, &store, &domain, hint.map(String::as_str)).await
-        {
+        let status = match fetch_and_store(&store, &domain, hint.map(String::as_str)).await {
             Ok(true) => "ok",
             Ok(false) => "none",
             Err(e) => {
@@ -224,13 +216,12 @@ async fn upsert_icon(db: &sqlx::PgPool, domain: &str, status: &str) -> Result<()
 /// Returns Ok(true) if a usable icon was stored, Ok(false) if none was found.
 /// Err only on transient/unexpected failures (so the caller marks it `pending`).
 async fn fetch_and_store(
-    client: &reqwest::Client,
     store: &IconStore,
     domain: &str,
     hint: Option<&str>,
 ) -> anyhow::Result<bool> {
     // 1) The exact account host (using the page's hint when present).
-    if let Some(png) = fetch_icon_png(client, domain, hint).await {
+    if let Some(png) = fetch_icon_png(domain, hint).await {
         store.put_png(domain, &png).await?;
         return Ok(true);
     }
@@ -240,7 +231,7 @@ async fn fetch_and_store(
     //    The icon is stored under the ORIGINAL host key so the account still matches.
     if let Some(parent) = registrable_domain(domain) {
         if parent != domain {
-            if let Some(png) = fetch_icon_png(client, &parent, None).await {
+            if let Some(png) = fetch_icon_png(&parent, None).await {
                 store.put_png(domain, &png).await?;
                 return Ok(true);
             }
@@ -252,27 +243,23 @@ async fn fetch_and_store(
 
 /// Tries hint (same-domain) → homepage `<link rel=icon>` → `/favicon.ico` for one
 /// domain, returning the normalized 64×64 PNG bytes if any source yields an image.
-async fn fetch_icon_png(
-    client: &reqwest::Client,
-    domain: &str,
-    hint: Option<&str>,
-) -> Option<Vec<u8>> {
+async fn fetch_icon_png(domain: &str, hint: Option<&str>) -> Option<Vec<u8>> {
     if let Some(h) = hint {
         if let Ok(u) = reqwest::Url::parse(h) {
             if u.scheme() == "https" && host_matches_domain(u.host_str(), domain) {
-                if let Some(png) = download_and_normalize(client, u.as_str()).await {
+                if let Some(png) = download_and_normalize(u.as_str()).await {
                     return Some(png);
                 }
             }
         }
     }
-    if let Some(href) = discover_link_icon(client, domain).await {
-        if let Some(png) = download_and_normalize(client, &href).await {
+    if let Some(href) = discover_link_icon(domain).await {
+        if let Some(png) = download_and_normalize(&href).await {
             return Some(png);
         }
     }
     let fav = format!("https://{domain}/favicon.ico");
-    download_and_normalize(client, &fav).await
+    download_and_normalize(&fav).await
 }
 
 /// Registrable domain (eTLD+1) per the Public Suffix List, e.g.
@@ -283,26 +270,16 @@ fn registrable_domain(domain: &str) -> Option<String> {
 
 /// Downloads bytes (with SSRF + size guards) and re-encodes to a 64×64 PNG.
 /// Returns None if the host is non-public, the download fails, or it isn't an image.
-async fn download_and_normalize(client: &reqwest::Client, url: &str) -> Option<Vec<u8>> {
-    let parsed = reqwest::Url::parse(url).ok()?;
-    if parsed.scheme() != "https" {
-        return None;
-    }
-    if !host_is_public(parsed.host_str()?).await {
-        return None;
-    }
-    let bytes = fetch_capped(client, url).await?;
+async fn download_and_normalize(url: &str) -> Option<Vec<u8>> {
+    let bytes = fetch_bytes(url).await?;
     normalize_to_png(&bytes)
 }
 
 /// Fetches the homepage HTML and extracts the best `<link rel="...icon...">` href,
 /// resolved to an absolute URL on the same domain.
-async fn discover_link_icon(client: &reqwest::Client, domain: &str) -> Option<String> {
+async fn discover_link_icon(domain: &str) -> Option<String> {
     let base = format!("https://{domain}/");
-    if !host_is_public(domain).await {
-        return None;
-    }
-    let html_bytes = fetch_capped(client, &base).await?;
+    let html_bytes = fetch_bytes(&base).await?;
     let html = String::from_utf8_lossy(&html_bytes);
     let href = extract_icon_href(&html)?;
     let abs = reqwest::Url::parse(&base).ok()?.join(&href).ok()?;
@@ -313,21 +290,61 @@ async fn discover_link_icon(client: &reqwest::Client, domain: &str) -> Option<St
     }
 }
 
-async fn fetch_capped(client: &reqwest::Client, url: &str) -> Option<Vec<u8>> {
-    let resp = client.get(url).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    if let Some(len) = resp.content_length() {
-        if len as usize > MAX_DOWNLOAD {
+/// Max redirect hops to follow when fetching an icon/homepage.
+const MAX_REDIRECTS: usize = 4;
+
+/// HTTPS-only GET with SSRF protection. Redirects are followed **manually**, one
+/// hop at a time, so EVERY hop (not just the first) is re-validated: the host
+/// must resolve to only-public IPs and the connection is **pinned to that IP** so
+/// reqwest can't independently re-resolve to an internal address (closing both
+/// the redirect-SSRF and the DNS-rebinding TOCTOU). Following apex→www etc. keeps
+/// icon coverage high. Body size is capped.
+async fn fetch_bytes(url: &str) -> Option<Vec<u8>> {
+    let mut current = reqwest::Url::parse(url).ok()?;
+
+    for _ in 0..=MAX_REDIRECTS {
+        if current.scheme() != "https" {
+            return None; // refuse http (and any downgrade via redirect)
+        }
+        let host = current.host_str()?.to_string();
+        let addr = resolve_public_addr(&host).await?;
+
+        let client = reqwest::Client::builder()
+            .user_agent("OTPilot-IconFetcher/1.0")
+            .timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve(&host, addr)
+            .build()
+            .ok()?;
+
+        let resp = client.get(current.clone()).send().await.ok()?;
+        let status = resp.status();
+
+        if status.is_redirection() {
+            let loc = resp
+                .headers()
+                .get(reqwest::header::LOCATION)?
+                .to_str()
+                .ok()?;
+            current = current.join(loc).ok()?; // re-validated + re-pinned next iteration
+            continue;
+        }
+        if !status.is_success() {
             return None;
         }
+        if let Some(len) = resp.content_length() {
+            if len as usize > MAX_DOWNLOAD {
+                return None;
+            }
+        }
+        let bytes = resp.bytes().await.ok()?;
+        if bytes.len() > MAX_DOWNLOAD {
+            return None;
+        }
+        return Some(bytes.to_vec());
     }
-    let bytes = resp.bytes().await.ok()?;
-    if bytes.len() > MAX_DOWNLOAD {
-        return None;
-    }
-    Some(bytes.to_vec())
+
+    None // too many redirects
 }
 
 fn normalize_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
@@ -340,7 +357,11 @@ fn normalize_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
 
 /// Minimal scan for `<link rel="...icon...">` → href, no HTML parser dependency.
 fn extract_icon_href(html: &str) -> Option<String> {
-    let lower = html.to_lowercase();
+    // ASCII-only lowercasing preserves byte length, so offsets into `lower` stay
+    // valid char boundaries in `html` (Unicode to_lowercase() can change length
+    // — e.g. Turkish İ — and panic when slicing the original). Tag/attr names are
+    // ASCII; hrefs are read from `html` so their case is preserved.
+    let lower = html.to_ascii_lowercase();
     let mut search_from = 0;
     let mut fallback: Option<String> = None;
     while let Some(rel_pos) = lower[search_from..].find("<link") {
@@ -370,7 +391,8 @@ fn extract_icon_href(html: &str) -> Option<String> {
 
 /// Extracts a quoted attribute value (case-insensitive name) from a tag fragment.
 fn attr_value(tag: &str, name: &str) -> Option<String> {
-    let lower = tag.to_lowercase();
+    // ASCII lowercasing keeps byte offsets aligned with `tag` (see extract_icon_href).
+    let lower = tag.to_ascii_lowercase();
     let key = format!("{name}=");
     let idx = lower.find(&key)? + key.len();
     let rest = &tag[idx..];
@@ -426,19 +448,17 @@ fn host_matches_domain(host: Option<&str>, domain: &str) -> bool {
     }
 }
 
-/// True only if the host resolves and every resolved address is a public IP.
-async fn host_is_public(host: &str) -> bool {
-    let Ok(addrs) = tokio::net::lookup_host((host, 443u16)).await else {
-        return false;
-    };
-    let mut any = false;
-    for sa in addrs {
-        any = true;
-        if !ip_is_public(sa.ip()) {
-            return false;
-        }
+/// Resolves `host` and returns one public socket address to pin the connection
+/// to. None if it doesn't resolve or ANY resolved address is non-public.
+async fn resolve_public_addr(host: &str) -> Option<std::net::SocketAddr> {
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, 443u16))
+        .await
+        .ok()?
+        .collect();
+    if addrs.is_empty() || addrs.iter().any(|sa| !ip_is_public(sa.ip())) {
+        return None;
     }
-    any
+    Some(addrs[0])
 }
 
 fn ip_is_public(ip: IpAddr) -> bool {

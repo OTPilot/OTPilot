@@ -152,7 +152,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // Resolve domain favicons: ask the backend (when signed in) or the public CDN
   // for each domain, download the PNG once, and cache it locally as a data URL.
   if (msg.action === 'resolveIcons') {
-    handleResolveIcons(msg.domains || [], msg.hints || {})
+    handleResolveIcons(msg.domains || [], msg.hints || {}, msg.prune === true)
       .then(updated => sendResponse({ updated }))
       .catch(() => sendResponse({ updated: {} }));
     return true;
@@ -231,17 +231,29 @@ async function resolveIconUrls(domains, hints) {
   return out;
 }
 
-async function handleResolveIcons(rawDomains, hints) {
+// `prune` is set when `rawDomains` is the full current account set (popup), so
+// stale iconCache entries for deleted accounts can be evicted. It must NOT be set
+// for single-domain calls (e.g. enrollment) or they'd wipe the rest of the cache.
+async function handleResolveIcons(rawDomains, hints, prune) {
   const domains = [...new Set(rawDomains.map(normalizeIconDomain).filter(Boolean))];
   if (!domains.length) return {};
 
   const { iconCache = {} } = await new Promise(r => chrome.storage.local.get('iconCache', r));
+  let changed = false;
+
+  // Evict cached icons for domains no longer present in the account set.
+  if (prune) {
+    const keep = new Set(domains);
+    for (const d of Object.keys(iconCache)) {
+      if (!keep.has(d)) { delete iconCache[d]; changed = true; }
+    }
+  }
+
   const now = Date.now();
   const need = domains.filter(d => {
     const e = iconCache[d];
     return !e || (now - e.fetchedAt) > ICON_TTL_MS;
   });
-  if (!need.length) return {};
 
   // Remap hints onto normalized domains.
   const normHints = {};
@@ -250,25 +262,27 @@ async function handleResolveIcons(rawDomains, hints) {
     if (nd && v) normHints[nd] = v;
   }
 
-  const resolved = await resolveIconUrls(need, normHints);
   const updated = {};
-
-  for (const d of need) {
-    const info = resolved[d] || {};
-    if (info.none) { iconCache[d] = updated[d] = { dataUrl: null, fetchedAt: now }; continue; }
-    if (!info.url) continue; // unknown/pending → retry later, don't cache
-    try {
-      const r = await fetch(info.url);
-      if (r.ok) {
-        const buf = await r.arrayBuffer();
-        const ct  = r.headers.get('content-type') || 'image/png';
-        iconCache[d] = updated[d] = { dataUrl: bytesToDataUrl(buf, ct), fetchedAt: now };
-      }
-      // non-ok (e.g. 404 on a CDN guess) → leave uncached so it retries later
-    } catch { /* transient — leave uncached to retry */ }
+  if (need.length) {
+    const resolved = await resolveIconUrls(need, normHints);
+    for (const d of need) {
+      const info = resolved[d] || {};
+      if (info.none) { iconCache[d] = updated[d] = { dataUrl: null, fetchedAt: now }; continue; }
+      if (!info.url) continue; // unknown/pending → retry later, don't cache
+      try {
+        const r = await fetch(info.url);
+        if (r.ok) {
+          const buf = await r.arrayBuffer();
+          const ct  = r.headers.get('content-type') || 'image/png';
+          iconCache[d] = updated[d] = { dataUrl: bytesToDataUrl(buf, ct), fetchedAt: now };
+        }
+        // non-ok (e.g. 404 on a CDN guess) → leave uncached so it retries later
+      } catch { /* transient — leave uncached to retry */ }
+    }
+    if (Object.keys(updated).length) changed = true;
   }
 
-  if (Object.keys(updated).length) await new Promise(r => chrome.storage.local.set({ iconCache }, r));
+  if (changed) await new Promise(r => chrome.storage.local.set({ iconCache }, r));
   return updated;
 }
 

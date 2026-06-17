@@ -248,7 +248,8 @@ function requestIcons() {
   if (!chrome.runtime?.id) return;
   const domains = iconDomains();
   if (!domains.length) return;
-  chrome.runtime.sendMessage({ action: 'resolveIcons', domains }, resp => {
+  // prune: this is the full account set, so the SW can evict icons for deleted accounts.
+  chrome.runtime.sendMessage({ action: 'resolveIcons', domains, prune: true }, resp => {
     if (chrome.runtime.lastError) return;
     const updated = resp?.updated || {};
     if (!Object.keys(updated).length) return;
