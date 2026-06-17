@@ -731,6 +731,20 @@ function showCodeRevealOverlay(name, code) {
   setTimeout(close, 15_000);
 }
 
+// Ask the background SW to fetch + cache this site's favicon, passing the page's
+// declared <link rel="icon"> as a same-domain hint (best-effort).
+function requestSiteIcon(hostname) {
+  if (!chrome.runtime?.id) return;
+  let hint;
+  try {
+    const link = document.querySelector('link[rel~="icon"], link[rel="apple-touch-icon"], link[rel="shortcut icon"]');
+    const href = link?.getAttribute('href');
+    if (href) hint = new URL(href, location.href).href;
+  } catch { /* ignore */ }
+  const hints = hint ? { [hostname]: hint } : {};
+  try { chrome.runtime.sendMessage({ action: 'resolveIcons', domains: [hostname], hints }); } catch { /* ignore */ }
+}
+
 function showSuggestionOverlay(name, secret, email = '', locked = false) {
   if (document.getElementById('otpilot-suggestion')) return;
 
@@ -760,9 +774,11 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   async function addAccount() {
     const d = await new Promise(r => chrome.storage.local.get('accounts', r));
     const accs = d.accounts || [];
-    accs.push({ name, secret, urls: location.hostname, autofill: true, email });
+    accs.push({ name, secret, urls: location.hostname, autofill: true, email, domain: location.hostname });
     await new Promise(r => chrome.storage.local.set({ accounts: accs, activeIndex: accs.length - 1 }, r));
     _dismissedSecrets.add(secret);
+    // Capture the site's icon now, passing the page's declared favicon as a hint.
+    requestSiteIcon(location.hostname);
     el.remove();
     let code = '';
     try { code = await generateTOTP(secret); } catch {}

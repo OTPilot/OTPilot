@@ -148,13 +148,130 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
+
+  // Resolve domain favicons: ask the backend (when signed in) or the public CDN
+  // for each domain, download the PNG once, and cache it locally as a data URL.
+  if (msg.action === 'resolveIcons') {
+    handleResolveIcons(msg.domains || [], msg.hints || {})
+      .then(updated => sendResponse({ updated }))
+      .catch(() => sendResponse({ updated: {} }));
+    return true;
+  }
 });
 
 // ── Background sync polling ───────────────────────────────────────────────────
 
-const API_URL      = CONFIG.API_URL;
-const ALARM_NAME   = 'otpilot-sync-poll';
-const POLL_MINUTES = 5;
+const API_URL            = CONFIG.API_URL;
+const S3_PUBLIC_BASE_URL = (CONFIG.S3_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+const ALARM_NAME         = 'otpilot-sync-poll';
+const POLL_MINUTES       = 5;
+
+// ── Domain favicon resolution + local cache ───────────────────────────────────
+
+const ICON_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Mirror of the backend's domain normalization (api/src/routes/icons.rs).
+function normalizeIconDomain(input) {
+  if (!input) return null;
+  let d = String(input).trim().toLowerCase()
+    .replace(/^\*\./, '').replace(/^https?:\/\//, '').replace(/^www\./, '');
+  d = d.split('/')[0].split(':')[0].replace(/\.+$/, '');
+  if (!d || d.length > 253 || !d.includes('.')) return null;
+  if (!/^[a-z0-9.-]+$/.test(d)) return null;
+  return d;
+}
+
+// ArrayBuffer → data URL, without FileReader (unavailable in service workers).
+function bytesToDataUrl(buf, contentType) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return `data:${contentType || 'image/png'};base64,${btoa(bin)}`;
+}
+
+// Per domain returns one of:
+//   { url }     → download these bytes
+//   { none:true}→ authoritative "no icon" (safe to negative-cache)
+//   {}          → unknown/pending → retry next time (do NOT negative-cache)
+// /icons/resolve is public, so we always call it (icons work for free /
+// not-signed-in users too); the Bearer token is attached only when present.
+// On network failure we fall back to a deterministic CDN guess (a 404 there is
+// only "unknown", so it must not be cached as authoritative "none").
+async function resolveIconUrls(domains, hints) {
+  const out = {};
+  let token = null;
+  try { token = await SupabaseAuth.getAccessToken(); } catch { /* not signed in */ }
+
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API_URL}/icons/resolve`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ domains, hints }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      for (const d of domains) {
+        const r = data[d];
+        if (r && r.status === 'ok' && r.url) out[d] = { url: r.url };
+        else if (r && r.status === 'none') out[d] = { none: true };
+        else out[d] = {}; // pending / missing → retry later
+      }
+      return out;
+    }
+  } catch { /* offline / API down → CDN guess below */ }
+
+  for (const d of domains) {
+    out[d] = S3_PUBLIC_BASE_URL ? { url: `${S3_PUBLIC_BASE_URL}/icons/${d}.png` } : {};
+  }
+  return out;
+}
+
+async function handleResolveIcons(rawDomains, hints) {
+  const domains = [...new Set(rawDomains.map(normalizeIconDomain).filter(Boolean))];
+  if (!domains.length) return {};
+
+  const { iconCache = {} } = await new Promise(r => chrome.storage.local.get('iconCache', r));
+  const now = Date.now();
+  const need = domains.filter(d => {
+    const e = iconCache[d];
+    return !e || (now - e.fetchedAt) > ICON_TTL_MS;
+  });
+  if (!need.length) return {};
+
+  // Remap hints onto normalized domains.
+  const normHints = {};
+  for (const [k, v] of Object.entries(hints || {})) {
+    const nd = normalizeIconDomain(k);
+    if (nd && v) normHints[nd] = v;
+  }
+
+  const resolved = await resolveIconUrls(need, normHints);
+  const updated = {};
+
+  for (const d of need) {
+    const info = resolved[d] || {};
+    if (info.none) { iconCache[d] = updated[d] = { dataUrl: null, fetchedAt: now }; continue; }
+    if (!info.url) continue; // unknown/pending → retry later, don't cache
+    try {
+      const r = await fetch(info.url);
+      if (r.ok) {
+        const buf = await r.arrayBuffer();
+        const ct  = r.headers.get('content-type') || 'image/png';
+        iconCache[d] = updated[d] = { dataUrl: bytesToDataUrl(buf, ct), fetchedAt: now };
+      }
+      // non-ok (e.g. 404 on a CDN guess) → leave uncached so it retries later
+    } catch { /* transient — leave uncached to retry */ }
+  }
+
+  if (Object.keys(updated).length) await new Promise(r => chrome.storage.local.set({ iconCache }, r));
+  return updated;
+}
+
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: POLL_MINUTES });
