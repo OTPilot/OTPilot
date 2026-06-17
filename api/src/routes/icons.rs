@@ -50,15 +50,18 @@ impl IconStore {
         let public_base = std::env::var("S3_PUBLIC_BASE_URL").ok()?;
         let region_name = std::env::var("S3_REGION").unwrap_or_else(|_| "auto".into());
 
-        let region = s3::Region::Custom { region: region_name, endpoint };
-        let creds = match s3::creds::Credentials::new(Some(&access), Some(&secret), None, None, None)
-        {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("icons: invalid S3 credentials: {e}");
-                return None;
-            }
+        let region = s3::Region::Custom {
+            region: region_name,
+            endpoint,
         };
+        let creds =
+            match s3::creds::Credentials::new(Some(&access), Some(&secret), None, None, None) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("icons: invalid S3 credentials: {e}");
+                    return None;
+                }
+            };
         match s3::Bucket::new(&bucket_name, region, creds) {
             Ok(b) => {
                 tracing::info!("icons: S3/R2 storage enabled (bucket={bucket_name})");
@@ -342,7 +345,10 @@ fn extract_icon_href(html: &str) -> Option<String> {
     let mut fallback: Option<String> = None;
     while let Some(rel_pos) = lower[search_from..].find("<link") {
         let start = search_from + rel_pos;
-        let end = lower[start..].find('>').map(|e| start + e).unwrap_or(lower.len());
+        let end = lower[start..]
+            .find('>')
+            .map(|e| start + e)
+            .unwrap_or(lower.len());
         let tag = &html[start..end];
         let tag_lower = &lower[start..end];
         search_from = end;
@@ -401,7 +407,10 @@ fn normalize_domain(input: &str) -> Option<String> {
     if d.is_empty() || d.len() > 253 || !d.contains('.') {
         return None;
     }
-    if !d.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') {
+    if !d
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    {
         return None;
     }
     Some(d)
@@ -448,7 +457,7 @@ fn ip_is_public(ip: IpAddr) -> bool {
             !(v6.is_loopback()
                 || v6.is_unspecified()
                 || (seg0 & 0xfe00) == 0xfc00   // unique local fc00::/7
-                || (seg0 & 0xffc0) == 0xfe80)   // link-local fe80::/10
+                || (seg0 & 0xffc0) == 0xfe80) // link-local fe80::/10
         }
     }
 }
