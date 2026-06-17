@@ -46,7 +46,7 @@ async fn sync_user(
 ) -> Result<Json<SyncUserResponse>> {
     let body: SyncUserRequest = serde_json::from_slice(&raw).unwrap_or_default();
 
-    sqlx::query(
+    let insert = sqlx::query(
         r#"
         INSERT INTO users (id, plan, created_at)
         VALUES ($1, 'free', $2)
@@ -57,6 +57,20 @@ async fn sync_user(
     .bind(Utc::now())
     .execute(&state.db)
     .await?;
+
+    // rows_affected == 1 means the row was just inserted → brand-new account.
+    let is_new_user = insert.rows_affected() == 1;
+    if is_new_user {
+        if let Some(email) = auth.email.as_deref() {
+            crate::email::send_welcome_email(
+                state.send_emails,
+                state.resend_api_key.as_deref(),
+                &state.from_email,
+                email,
+            )
+            .await;
+        }
+    }
 
     let plan: String = sqlx::query_scalar("SELECT plan FROM users WHERE id = $1")
         .bind(auth.id)
@@ -96,7 +110,9 @@ async fn sync_user(
         .execute(&state.db)
         .await;
 
-        if is_new {
+        // Skip on the first device of a brand-new account — that user just got
+        // the welcome email; this notice is for new devices on existing accounts.
+        if is_new && !is_new_user {
             if let Some(email) = auth.email.as_deref() {
                 crate::email::send_new_device_email(
                     state.send_emails,

@@ -112,6 +112,21 @@ async fn webhook(
             .await?;
 
         tracing::info!("upgraded user {user_id} to personal plan");
+
+        // Confirmation email (Stripe collected the email at checkout).
+        let email = session["customer_details"]["email"]
+            .as_str()
+            .or_else(|| session["customer_email"].as_str())
+            .unwrap_or("");
+        if !email.is_empty() {
+            crate::email::send_personal_upgrade_email(
+                state.send_emails,
+                state.resend_api_key.as_deref(),
+                &state.from_email,
+                email,
+            )
+            .await;
+        }
     }
 
     Ok(Json(json!({ "received": true })))
