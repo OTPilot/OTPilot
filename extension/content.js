@@ -661,10 +661,18 @@ function makeOverlay(id) {
     overflow: 'hidden',
   });
   // Isolate the overlay from the host page's global handlers. Many sites close
-  // their own modal on an outside pointerdown/click (Radix, Headless UI, etc.);
-  // without this, clicking an OTPilot button bubbles to document and dismisses
-  // the page's 2FA modal — which then rotates the secret (e.g. Vercel).
-  for (const ev of ['pointerdown', 'mousedown', 'mouseup', 'click', 'touchstart']) {
+  // their own modal on an outside pointerdown/click; without this, clicking an
+  // OTPilot button bubbles to document and dismisses the page's 2FA modal — which
+  // then rotates the secret (verified on Vercel, whose dismiss is bubble-phase).
+  //
+  // Limitation: this only stops BUBBLE-phase handlers. Libraries that register
+  // their outside-click guard in the CAPTURE phase (e.g. Radix DismissableLayer:
+  // document.addEventListener('pointerdown', h, { capture: true })) fire before
+  // the event reaches this element, so the modal could still be dismissed there.
+  // A capture-phase guard can't help without also swallowing our own buttons'
+  // events; the robust fix for those sites would be hosting the overlay in an
+  // iframe. Revisit if a Radix-style site is reported.
+  for (const ev of ['pointerdown', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend']) {
     el.addEventListener(ev, e => e.stopPropagation());
   }
   return el;
