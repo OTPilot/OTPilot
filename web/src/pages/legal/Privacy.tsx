@@ -8,12 +8,22 @@ export default function Privacy() {
           ← Back to home
         </Link>
         <h1 className="text-3xl font-bold text-white mb-2">Privacy Policy</h1>
-        <p className="text-zinc-500 text-sm mb-10">Last updated: May 2026</p>
+        <p className="text-zinc-500 text-sm mb-10">Last updated: June 2026</p>
 
         <div className="space-y-8 text-zinc-400 leading-relaxed text-sm">
           <section>
             <h2 className="text-white font-semibold text-lg mb-3">Extension — local mode</h2>
             <p>When using OTPilot without a cloud account, <strong className="text-zinc-300">no data is transmitted to any server</strong>. All TOTP secrets, account names, and settings are stored exclusively in your browser's local storage (<code className="bg-white/5 px-1.5 py-0.5 rounded text-zinc-300">chrome.storage.local</code>). We have no access to this data.</p>
+          </section>
+
+          <section>
+            <h2 className="text-white font-semibold text-lg mb-3">Email code auto-fill (processed locally)</h2>
+            <p>If you enable email-code auto-fill, OTPilot reads the visible content of your open webmail tabs (Gmail, Outlook, Yahoo Mail, Proton Mail, Fastmail, Zoho Mail) to find one-time login codes. This happens <strong className="text-zinc-300">entirely on your device</strong> — the email content is never sent to us or any third party. A detected code is held in memory only (for up to 10 minutes) so it can be filled into the matching login field, then discarded. We do not read, store, or transmit your emails. You can turn this off in the extension's Settings.</p>
+          </section>
+
+          <section>
+            <h2 className="text-white font-semibold text-lg mb-3">Site icons</h2>
+            <p>To show each account's logo, OTPilot may send that account's <strong className="text-zinc-300">domain</strong> (e.g. <code className="bg-white/5 px-1.5 py-0.5 rounded text-zinc-300">github.com</code>) to our server, which fetches and caches the site's public favicon. Only the domain is sent — never your secrets, codes, or browsing activity — and the icon is then cached in your browser for offline use.</p>
           </section>
 
           <section>
@@ -78,7 +88,7 @@ export default function Privacy() {
               <li><strong className="text-zinc-300">Supabase</strong> — authentication (magic links, OAuth). GDPR-compliant, EU hosting available.</li>
               <li><strong className="text-zinc-300">Railway</strong> — API and database hosting.</li>
               <li><strong className="text-zinc-300">Stripe</strong> — payment processing. PCI DSS compliant.</li>
-              <li><strong className="text-zinc-300">Resend</strong> — transactional email delivery (new device alerts).</li>
+              <li><strong className="text-zinc-300">Resend</strong> — transactional email delivery (welcome, new-device, and plan-upgrade emails).</li>
               <li><strong className="text-zinc-300">Vercel</strong> — web frontend hosting and anonymous traffic analytics.</li>
               <li><strong className="text-zinc-300">Sentry</strong> — error monitoring and crash reporting.</li>
             </ul>
