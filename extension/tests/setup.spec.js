@@ -128,6 +128,47 @@ test('detects base32 secret in a text node', async ({ context, extensionId }) =>
   await expect(overlay.locator('.otpilot-primary')).toContainText('Add account');
 });
 
+// ── settings-authentication.html: Vercel-style /authentication path ──────────
+// The URL path contains "authentication" (not "authenticator"), so detection
+// only fires because PATH_RE matches the "authenticat(?:or|ion)" alternation.
+
+test('detects secret on an /authentication path (Vercel-style)', async ({ context, extensionId }) => {
+  const popupPage = await context.newPage();
+  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedStorage(popupPage);
+  await popupPage.close();
+
+  const page = await context.newPage();
+  await page.goto('http://localhost:8765/test/settings-authentication.html');
+
+  const overlay = page.locator('#otpilot-suggestion');
+  await expect(overlay).toBeVisible({ timeout: 5000 });
+  await expect(overlay).toContainText('Vercel');
+  await expect(overlay.locator('.otpilot-primary')).toContainText('Add account');
+});
+
+// ── 2fa-host-modal.html: overlay must not dismiss the host page's modal ───────
+// Sites like Vercel close their 2FA modal on an outside pointerdown (which then
+// rotates the secret). Clicking an OTPilot overlay button must not trigger that.
+
+test('OTPilot overlay does not dismiss the host page modal', async ({ context, extensionId }) => {
+  const popupPage = await context.newPage();
+  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedStorage(popupPage);
+  await popupPage.close();
+
+  const page = await context.newPage();
+  await page.goto('http://localhost:8765/test/2fa-host-modal.html');
+
+  const overlay = page.locator('#otpilot-suggestion');
+  await expect(overlay).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('#host-modal')).toBeVisible();
+
+  // Clicking OTPilot's "Add account" must not bubble out and close the host modal.
+  await overlay.locator('.otpilot-primary').click();
+  await expect(page.locator('#host-modal')).toBeVisible();
+});
+
 // ── 2fa-input-secret.html: base32 in <input> value (Sentry secret field) ─────
 
 test('detects base32 secret inside an input value', async ({ context, extensionId }) => {

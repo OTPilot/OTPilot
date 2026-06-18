@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta property="og:site_name" content="HostApp">
+  <title>2fa setup</title>
+</head>
+<body>
+  <!-- A host modal that closes on an outside pointerdown, like Radix/Headless UI
+       dialogs (and Vercel's 2FA modal). The path contains "2fa" so detection runs;
+       the secret is shown as plain text so the OTPilot suggestion overlay appears. -->
+  <div id="host-modal" role="dialog">
+    <h2>Set up authenticator app</h2>
+    <p>Scan the QR code with your authenticator app, or copy the secret if you can't scan it.</p>
+    <p class="mono">JBSWY3DPEHPK3PXP</p>
+  </div>
+  <script>
+    document.addEventListener('pointerdown', (e) => {
+      const m = document.getElementById('host-modal');
+      if (m && !m.contains(e.target)) m.remove();
+    });
+  </script>
+</body>
+</html>
