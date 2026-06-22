@@ -34,10 +34,12 @@ if (!PROVIDER) return; // no-op on every other page
 const CODE_RE = /\b\d{4,8}\b/g;
 const OTP_KEYWORDS = /(c[oó]digo|code|verificaci[oó]n|verification|passcode|one[- ]?time|2fa|otp|pin|security|seguridad|c[oó]d\.?|auth)/i;
 
-// Picks the most likely OTP from a block of text by scoring every 4-8 digit run
-// on its proximity to an OTP keyword (handles bodies with distractor numbers
-// like "expires in 60 minutes" or a year). Falls back to the first match.
-function pickBestCode(text) {
+// Picks the most likely OTP from a block of text.
+// REQUIRES an OTP keyword within ~40 chars of the digits — if no candidate has
+// one, returns null (never invents a code from a random number in the inbox).
+// When expectedLength is given (the number of digits the login page asks for),
+// only digit-runs of exactly that length are considered.
+function pickBestCode(text, expectedLength) {
   if (!text) return null;
   const matches = [];
   for (const m of text.matchAll(CODE_RE)) matches.push({ code: m[0], idx: m.index });
@@ -46,11 +48,15 @@ function pickBestCode(text) {
   let best = null, bestScore = -Infinity;
   for (let i = 0; i < matches.length; i++) {
     const { code, idx } = matches[i];
-    let score = 0;
-    // Keyword within ~40 chars before or after the digits → strong signal.
+    // Length filter: the page tells us how many digits to expect.
+    if (expectedLength && code.length !== expectedLength) continue;
+    // Hard gate: a candidate is only valid with an OTP keyword nearby.
     const ctx = text.slice(Math.max(0, idx - 40), idx + code.length + 40);
-    if (OTP_KEYWORDS.test(ctx)) score += 100;
-    // 6-digit codes are the most common OTP length.
+    if (!OTP_KEYWORDS.test(ctx)) continue;
+
+    let score = 100;
+    // 6-digit codes are the most common OTP length (only matters when the
+    // expected length is unknown).
     if (code.length === 6) score += 10;
     // A bare 4-digit year is rarely the code.
     if (code.length === 4 && /^(19|20)\d\d$/.test(code)) score -= 50;
@@ -59,6 +65,28 @@ function pickBestCode(text) {
     if (score > bestScore) { bestScore = score; best = code; }
   }
   return best;
+}
+
+// Best-effort recency check for an inbox row: only reject when a machine-readable
+// timestamp confidently parses to more than ~30 min ago. Anything unparseable is
+// treated as recent (don't over-reject and miss a real code).
+const MAX_AGE_MS = 30 * 60 * 1000;
+function rowIsRecent(row) {
+  const candidates = [];
+  for (const t of row.querySelectorAll('time[datetime]')) candidates.push(t.getAttribute('datetime'));
+  for (const el of row.querySelectorAll('[title], [aria-label]')) {
+    candidates.push(el.getAttribute('title'), el.getAttribute('aria-label'));
+  }
+  let sawValidDate = false;
+  for (const c of candidates) {
+    if (!c) continue;
+    const ms = Date.parse(c);
+    if (Number.isNaN(ms)) continue;
+    sawValidDate = true;
+    if (Date.now() - ms <= MAX_AGE_MS) return true; // a recent timestamp wins
+  }
+  // If we only ever saw old valid dates, it's stale; otherwise assume recent.
+  return !sawValidDate;
 }
 
 function getRows() {
@@ -117,16 +145,18 @@ function getInboxRoot() {
   }
 }
 
-function scanForOtp() {
+function scanForOtp(expectedLength) {
   // Opened email body first — the strongest signal and where codes most often
-  // sit (and get truncated out of inbox snippets).
+  // sit (and get truncated out of inbox snippets). The open body is the email
+  // the user is looking at, so no recency check here.
   for (const body of getOpenEmailBodies()) {
-    const code = pickBestCode(body.innerText || '');
+    const code = pickBestCode(body.innerText || '', expectedLength);
     if (code) return code;
   }
-  // Fall back to inbox-row subjects/snippets.
+  // Fall back to inbox-row subjects/snippets — skip clearly-old rows.
   for (const row of getRows()) {
-    const code = pickBestCode(row.innerText || '');
+    if (!rowIsRecent(row)) continue;
+    const code = pickBestCode(row.innerText || '', expectedLength);
     if (code) return code;
   }
   return null;
@@ -163,8 +193,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (!chrome.runtime?.id) return;
   if (msg.action === 'scanEmailOtp') {
     const bodies = getOpenEmailBodies(), rows = getRows();
-    console.debug(`[OTPilot] email-reader (${PROVIDER}): scanning ${bodies.length} open bodies + ${rows.length} inbox rows`);
-    const code = scanForOtp() ?? null;
+    console.debug(`[OTPilot] email-reader (${PROVIDER}): scanning ${bodies.length} open bodies + ${rows.length} inbox rows (expectedLength=${msg.expectedLength ?? 'any'})`);
+    const code = scanForOtp(msg.expectedLength) ?? null;
     if (code) {
       console.debug(`[OTPilot] email-reader (${PROVIDER}): found code`, code);
       showDetectedToast(code);

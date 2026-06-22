@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Gmail mock — mixed code lengths</title></head>
+<body>
+<!-- Two OTP emails: a 4-digit code and a 6-digit code, each next to a keyword.
+     The scan should pick the one matching the page's expected length. -->
+<div role="main">
+  <table>
+    <tbody>
+      <tr jsmodel="row1">
+        <td>Acme</td>
+        <td>Your verification code: 1234</td>
+      </tr>
+      <tr jsmodel="row2">
+        <td>Globex</td>
+        <td>Your login code is 654321</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

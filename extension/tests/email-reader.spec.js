@@ -30,11 +30,12 @@ async function openEmailPage(context, popup, provider, fixture) {
   return { emailPage, tabId };
 }
 
-// Helper: send scanEmailOtp to email tab and return result
-async function scanEmailTab(popup, tabId) {
-  return popup.evaluate(id =>
-    chrome.tabs.sendMessage(id, { action: 'scanEmailOtp' })
-  , tabId);
+// Helper: send scanEmailOtp to email tab and return result.
+// `expectedLength` (optional) restricts the scan to codes of that digit length.
+async function scanEmailTab(popup, tabId, expectedLength) {
+  return popup.evaluate(([id, len]) =>
+    chrome.tabs.sendMessage(id, { action: 'scanEmailOtp', expectedLength: len ?? undefined })
+  , [tabId, expectedLength ?? null]);
 }
 
 // ── Per-provider scan tests ──────────────────────────────────────────────────
@@ -165,6 +166,35 @@ test('keyword proximity: picks the OTP over distractor numbers in the body', asy
   const result = await scanEmailTab(popup, tabId);
   expect(result?.code).toBe('672880');
   expect(result?.code).not.toBe('90014772');
+});
+
+// ── Confidence gate / length / recency ───────────────────────────────────────
+
+test('returns null when numbers are present but no OTP keyword is near them', async ({ context, extensionId }) => {
+  const popup = await seedUnlocked(context, extensionId);
+  // Distractor numbers (order #, price, counts, year) with no OTP keyword nearby.
+  const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-no-keyword.html');
+
+  const result = await scanEmailTab(popup, tabId);
+  expect(result?.code).toBeNull();
+});
+
+test('expectedLength selects the matching-length code', async ({ context, extensionId }) => {
+  const popup = await seedUnlocked(context, extensionId);
+  // email-lengths.html has "code: 1234" (4-digit) and "code is 654321" (6-digit).
+  const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-lengths.html');
+
+  expect((await scanEmailTab(popup, tabId, 6))?.code).toBe('654321');
+  expect((await scanEmailTab(popup, tabId, 4))?.code).toBe('1234');
+});
+
+test('skips a stale OTP row and uses the recent one', async ({ context, extensionId }) => {
+  const popup = await seedUnlocked(context, extensionId);
+  // Row 1 (code 111111) has a 2020 timestamp → skipped; row 2 (222222) wins.
+  const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-recency.html');
+
+  const result = await scanEmailTab(popup, tabId);
+  expect(result?.code).toBe('222222');
 });
 
 // ── Split input fill test ────────────────────────────────────────────────────

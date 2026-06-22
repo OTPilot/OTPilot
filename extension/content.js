@@ -164,12 +164,7 @@ function fillInputValue(input, code) {
 
   // Detect split OTP (e.g. Spotify, GitHub): multiple autocomplete="one-time-code"
   // inputs inside the same form/container — each box holds one digit.
-  const container = input.closest('form, [role="group"], [role="dialog"]')
-    ?? input.parentElement?.parentElement?.parentElement;
-  const group = container
-    ? [...container.querySelectorAll('input[autocomplete="one-time-code"]')]
-        .filter(el => el.offsetParent !== null && !el.disabled && !el.readOnly)
-    : [];
+  const group = findSplitGroup(input);
 
   if (group.length > 1) {
     group.forEach((el, i) => { el.focus(); setVal(el, code[i] ?? ''); });
@@ -178,6 +173,39 @@ function fillInputValue(input, code) {
 
   input.focus();
   setVal(input, code);
+}
+
+// Returns the group of single-digit OTP boxes the input belongs to (split OTP
+// fields), or [] when it's a normal single field.
+function findSplitGroup(input) {
+  const container = input.closest('form, [role="group"], [role="dialog"]')
+    ?? input.parentElement?.parentElement?.parentElement;
+  return container
+    ? [...container.querySelectorAll('input[autocomplete="one-time-code"]')]
+        .filter(el => el.offsetParent !== null && !el.disabled && !el.readOnly)
+    : [];
+}
+
+// How many digits the page's OTP field expects, or null if it doesn't say.
+// Used to look for a code of exactly that length in the email (4→4, 6→6, 8→8).
+function getExpectedOtpLength(input) {
+  // Only return lengths CODE_RE can actually match (4-8); anything else → null
+  // (fall back to keyword-only scanning) rather than filtering out every match.
+  const inRange = n => (n >= 4 && n <= 8 ? n : null);
+
+  const group = findSplitGroup(input);
+  if (group.length > 1) return inRange(group.length);
+
+  const ml = parseInt(input.getAttribute('maxlength'), 10);
+  if (ml >= 4 && ml <= 8) return ml;
+
+  // Fixed-length pattern only (e.g. \d{6} or [0-9]{6}); ranges like {4,8} mean a
+  // variable length, so we don't pin one.
+  const pat = input.getAttribute('pattern') || '';
+  const m = pat.match(/(?:\\d|\[0-9\])\{(\d+)\}/);
+  if (m) return inRange(parseInt(m[1], 10));
+
+  return null;
 }
 
 function showEmailOtpBanner(code, input, onClose) {
@@ -990,8 +1018,9 @@ async function runDetection() {
       if (!chrome.runtime?.id) return;
       const stored = await new Promise(r => chrome.storage.local.get('emailAutoFill', r));
       const emailAutoFill = stored.emailAutoFill ?? true;
+      const expectedLength = getExpectedOtpLength(input);
       const resp = await new Promise(r =>
-        chrome.runtime.sendMessage({ action: 'getEmailOtp' }, r)
+        chrome.runtime.sendMessage({ action: 'getEmailOtp', expectedLength }, r)
       ).catch(() => null);
       const code = resp?.code ?? null;
       if (!code) {

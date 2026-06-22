@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Gmail mock — stale vs recent OTP</title></head>
+<body>
+<!-- First row is an old OTP (machine-readable timestamp from 2020) and must be
+     skipped; the second row (no timestamp → treated as recent) wins. -->
+<div role="main">
+  <table>
+    <tbody>
+      <tr jsmodel="row1">
+        <td>OldService</td>
+        <td>Your verification code: 111111
+          <time datetime="2020-01-01T00:00:00Z">Jan 1, 2020</time>
+        </td>
+      </tr>
+      <tr jsmodel="row2">
+        <td>NewService</td>
+        <td>Your verification code: 222222</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>
