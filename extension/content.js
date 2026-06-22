@@ -189,13 +189,22 @@ function findSplitGroup(input) {
 // How many digits the page's OTP field expects, or null if it doesn't say.
 // Used to look for a code of exactly that length in the email (4→4, 6→6, 8→8).
 function getExpectedOtpLength(input) {
+  // Only return lengths CODE_RE can actually match (4-8); anything else → null
+  // (fall back to keyword-only scanning) rather than filtering out every match.
+  const inRange = n => (n >= 4 && n <= 8 ? n : null);
+
   const group = findSplitGroup(input);
-  if (group.length > 1) return group.length;
+  if (group.length > 1) return inRange(group.length);
+
   const ml = parseInt(input.getAttribute('maxlength'), 10);
   if (ml >= 4 && ml <= 8) return ml;
+
+  // Fixed-length pattern only (e.g. \d{6} or [0-9]{6}); ranges like {4,8} mean a
+  // variable length, so we don't pin one.
   const pat = input.getAttribute('pattern') || '';
-  const m = pat.match(/\\d\{(\d+)\}/);
-  if (m) { const n = parseInt(m[1], 10); if (n >= 4 && n <= 8) return n; }
+  const m = pat.match(/(?:\\d|\[0-9\])\{(\d+)\}/);
+  if (m) return inRange(parseInt(m[1], 10));
+
   return null;
 }
 

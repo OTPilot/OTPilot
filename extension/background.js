@@ -26,6 +26,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ ok: false });
       return true;
     }
+    // Only cache a valid 4-8 digit code, so a code-less/garbage message can't
+    // poison the cache (and later throw on _emailOtp.code.length).
+    if (!/^\d{4,8}$/.test(msg.code ?? '')) {
+      sendResponse({ ok: false });
+      return true;
+    }
     _emailOtp = { code: msg.code, expiresAt: Date.now() + 10 * 60 * 1000 };
     sendResponse({ ok: true });
     return true;
@@ -37,7 +43,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     const expectedLength = msg.expectedLength;
     // Use the cache only if fresh AND its length matches what the page expects.
     if (_emailOtp && Date.now() < _emailOtp.expiresAt &&
-        (!expectedLength || _emailOtp.code.length === expectedLength)) {
+        (!expectedLength || _emailOtp.code?.length === expectedLength)) {
       sendResponse({ code: _emailOtp.code });
       return true;
     }
@@ -85,7 +91,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               zoho:     '.maillist-item[data-id]',
             };
             // Requires an OTP keyword near the digits; honours expectedLength.
-            function pickBestCode(text) {
+            // Signature kept identical to email-reader.js pickBestCode (invariant).
+            function pickBestCode(text, expectedLength) {
               if (!text) return null;
               const matches = [];
               for (const m of text.matchAll(CODE_RE)) matches.push({ code: m[0], idx: m.index });
@@ -123,13 +130,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             }
             const bodies = Array.from(document.querySelectorAll(bodySelectors[provider] || '.a3s')).slice(0, 5);
             for (const body of bodies) {
-              const code = pickBestCode(body.innerText || '');
+              const code = pickBestCode(body.innerText || '', expectedLength);
               if (code) return code;
             }
             const rows = Array.from(document.querySelectorAll(rowSelectors[provider] || 'tr[jsmodel]')).slice(0, 5);
             for (const row of rows) {
               if (!rowIsRecent(row)) continue;
-              const code = pickBestCode(row.innerText || '');
+              const code = pickBestCode(row.innerText || '', expectedLength);
               if (code) return code;
             }
             return null;
