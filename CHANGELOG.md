@@ -3,6 +3,16 @@
 
 ## v1.2.0 (Unreleased — in development)
 
+## v1.1.1
+
+### Extension
+
+- **Email OTP no longer fills an invented code** — The email-code scanner used to return the best-scored 4-8 digit run from the open webmail tab even when no OTP keyword was anywhere near it, so with a webmail tab open but no real OTP email it could fill a random distractor number (an order #, price, count). Fixes:
+  1. **Keyword required** — `pickBestCode` now only accepts a number with an OTP keyword (`code`/`código`/`verification`/`OTP`/`PIN`…) within ~40 chars; if none qualifies it returns `null` and nothing is filled.
+  2. **Length matches the page** — `getExpectedOtpLength()` reads how many digits the login field expects (split-input boxes / `maxlength` / `pattern`) and the scan looks for a code of exactly that length; the 10-min background cache is also length-validated before reuse.
+  3. **Recency (best-effort)** — inbox rows with a machine-readable timestamp older than ~30 min are skipped, so a stale code left in the inbox isn't picked.
+  Logic lives in `email-reader.js` and is mirrored in the `background.js` `executeScript` fallback. Tests added (no-keyword → null, expected-length selection, stale-row skip).
+
 ## v1.1.0
 
 ### Extension

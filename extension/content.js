@@ -164,12 +164,7 @@ function fillInputValue(input, code) {
 
   // Detect split OTP (e.g. Spotify, GitHub): multiple autocomplete="one-time-code"
   // inputs inside the same form/container — each box holds one digit.
-  const container = input.closest('form, [role="group"], [role="dialog"]')
-    ?? input.parentElement?.parentElement?.parentElement;
-  const group = container
-    ? [...container.querySelectorAll('input[autocomplete="one-time-code"]')]
-        .filter(el => el.offsetParent !== null && !el.disabled && !el.readOnly)
-    : [];
+  const group = findSplitGroup(input);
 
   if (group.length > 1) {
     group.forEach((el, i) => { el.focus(); setVal(el, code[i] ?? ''); });
@@ -178,6 +173,30 @@ function fillInputValue(input, code) {
 
   input.focus();
   setVal(input, code);
+}
+
+// Returns the group of single-digit OTP boxes the input belongs to (split OTP
+// fields), or [] when it's a normal single field.
+function findSplitGroup(input) {
+  const container = input.closest('form, [role="group"], [role="dialog"]')
+    ?? input.parentElement?.parentElement?.parentElement;
+  return container
+    ? [...container.querySelectorAll('input[autocomplete="one-time-code"]')]
+        .filter(el => el.offsetParent !== null && !el.disabled && !el.readOnly)
+    : [];
+}
+
+// How many digits the page's OTP field expects, or null if it doesn't say.
+// Used to look for a code of exactly that length in the email (4→4, 6→6, 8→8).
+function getExpectedOtpLength(input) {
+  const group = findSplitGroup(input);
+  if (group.length > 1) return group.length;
+  const ml = parseInt(input.getAttribute('maxlength'), 10);
+  if (ml >= 4 && ml <= 8) return ml;
+  const pat = input.getAttribute('pattern') || '';
+  const m = pat.match(/\\d\{(\d+)\}/);
+  if (m) { const n = parseInt(m[1], 10); if (n >= 4 && n <= 8) return n; }
+  return null;
 }
 
 function showEmailOtpBanner(code, input, onClose) {
@@ -990,8 +1009,9 @@ async function runDetection() {
       if (!chrome.runtime?.id) return;
       const stored = await new Promise(r => chrome.storage.local.get('emailAutoFill', r));
       const emailAutoFill = stored.emailAutoFill ?? true;
+      const expectedLength = getExpectedOtpLength(input);
       const resp = await new Promise(r =>
-        chrome.runtime.sendMessage({ action: 'getEmailOtp' }, r)
+        chrome.runtime.sendMessage({ action: 'getEmailOtp', expectedLength }, r)
       ).catch(() => null);
       const code = resp?.code ?? null;
       if (!code) {

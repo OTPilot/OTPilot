@@ -33,7 +33,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   // Active request from content.js when an OTP field needs a code.
   if (msg.action === 'getEmailOtp') {
-    if (_emailOtp && Date.now() < _emailOtp.expiresAt) {
+    // expectedLength = number of digits the login page asks for (or undefined).
+    const expectedLength = msg.expectedLength;
+    // Use the cache only if fresh AND its length matches what the page expects.
+    if (_emailOtp && Date.now() < _emailOtp.expiresAt &&
+        (!expectedLength || _emailOtp.code.length === expectedLength)) {
       sendResponse({ code: _emailOtp.code });
       return true;
     }
@@ -52,7 +56,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // Try messaging the pre-injected content script first.
       // If the tab was open before the extension loaded (MV3 doesn't re-inject into
       // existing tabs), sendMessage fails → fall back to scripting.executeScript.
-      chrome.tabs.sendMessage(emailTab.id, { action: 'scanEmailOtp' }, r => {
+      chrome.tabs.sendMessage(emailTab.id, { action: 'scanEmailOtp', expectedLength }, r => {
         if (!chrome.runtime.lastError && r?.code != null) { handleCode(r.code); return; }
         console.debug('[OTPilot] getEmailOtp: content script not responding, falling back to scripting.executeScript');
         // Fallback: inline scan via scripting API (no pre-injected script needed).
@@ -61,7 +65,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // ⚠️ INVARIANT: this duplicates the scan logic in email-reader.js
           // (getOpenEmailBodies + getRows + pickBestCode). Keep both in sync.
           // Must be fully self-contained — no references to outer scope.
-          func: (provider) => {
+          func: (provider, expectedLength) => {
             const CODE_RE = /\b\d{4,8}\b/g;
             const OTP_KEYWORDS = /(c[oó]digo|code|verificaci[oó]n|verification|passcode|one[- ]?time|2fa|otp|pin|security|seguridad|c[oó]d\.?|auth)/i;
             const bodySelectors = {
@@ -80,6 +84,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               fastmail: '[data-msg-id]',
               zoho:     '.maillist-item[data-id]',
             };
+            // Requires an OTP keyword near the digits; honours expectedLength.
             function pickBestCode(text) {
               if (!text) return null;
               const matches = [];
@@ -88,15 +93,33 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               let best = null, bestScore = -Infinity;
               for (let i = 0; i < matches.length; i++) {
                 const { code, idx } = matches[i];
-                let score = 0;
+                if (expectedLength && code.length !== expectedLength) continue;
                 const ctx = text.slice(Math.max(0, idx - 40), idx + code.length + 40);
-                if (OTP_KEYWORDS.test(ctx)) score += 100;
+                if (!OTP_KEYWORDS.test(ctx)) continue;
+                let score = 100;
                 if (code.length === 6) score += 10;
                 if (code.length === 4 && /^(19|20)\d\d$/.test(code)) score -= 50;
                 score -= i;
                 if (score > bestScore) { bestScore = score; best = code; }
               }
               return best;
+            }
+            const MAX_AGE_MS = 30 * 60 * 1000;
+            function rowIsRecent(row) {
+              const cands = [];
+              for (const t of row.querySelectorAll('time[datetime]')) cands.push(t.getAttribute('datetime'));
+              for (const el of row.querySelectorAll('[title], [aria-label]')) {
+                cands.push(el.getAttribute('title'), el.getAttribute('aria-label'));
+              }
+              let sawValid = false;
+              for (const c of cands) {
+                if (!c) continue;
+                const ms = Date.parse(c);
+                if (Number.isNaN(ms)) continue;
+                sawValid = true;
+                if (Date.now() - ms <= MAX_AGE_MS) return true;
+              }
+              return !sawValid;
             }
             const bodies = Array.from(document.querySelectorAll(bodySelectors[provider] || '.a3s')).slice(0, 5);
             for (const body of bodies) {
@@ -105,6 +128,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             }
             const rows = Array.from(document.querySelectorAll(rowSelectors[provider] || 'tr[jsmodel]')).slice(0, 5);
             for (const row of rows) {
+              if (!rowIsRecent(row)) continue;
               const code = pickBestCode(row.innerText || '');
               if (code) return code;
             }
@@ -117,6 +141,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             /mail\.proton\.me/.test(emailTab.url)      ? 'proton'   :
             /app\.fastmail\.com/.test(emailTab.url)    ? 'fastmail' :
             'zoho',
+            expectedLength ?? null,
           ],
         }, results => {
           if (chrome.runtime.lastError) { sendResponse({ code: null }); return; }
