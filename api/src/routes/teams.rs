@@ -598,13 +598,25 @@ pub(crate) async fn accept_invite_inner(
         return Err(ApiError::BadRequest("seat_limit_reached".into()));
     }
 
-    sqlx::query(
-        "INSERT INTO team_members (team_id, user_id, role) VALUES ($1,$2,'member') ON CONFLICT DO NOTHING",
+    // ON CONFLICT (team_id, user_id) swallows only a same-team re-accept. A
+    // different-team insert instead violates the UNIQUE(user_id) backstop (a
+    // distinct constraint), which surfaces here as a unique violation even under
+    // a concurrent-accept race — map it to a clean "already_in_team".
+    let res = sqlx::query(
+        "INSERT INTO team_members (team_id, user_id, role) VALUES ($1,$2,'member') ON CONFLICT (team_id, user_id) DO NOTHING",
     )
     .bind(inv.team_id)
     .bind(user_id)
     .execute(&mut *tx)
-    .await?;
+    .await;
+    if let Err(e) = res {
+        if e.as_database_error()
+            .is_some_and(|d| d.is_unique_violation())
+        {
+            return Err(ApiError::BadRequest("already_in_team".into()));
+        }
+        return Err(e.into());
+    }
     sqlx::query("UPDATE pending_invites SET accepted_at = NOW() WHERE token = $1")
         .bind(token)
         .execute(&mut *tx)
@@ -650,11 +662,18 @@ async fn remove_member(
             "owner cannot remove themselves".into(),
         ));
     }
-    sqlx::query("DELETE FROM team_members WHERE team_id = $1 AND user_id = $2")
+    // Only downgrade if the target was actually a member of THIS team — otherwise
+    // an owner who knows another user's UUID could force-downgrade an arbitrary
+    // user (who may be in a different team or on a personal plan).
+    let deleted = sqlx::query("DELETE FROM team_members WHERE team_id = $1 AND user_id = $2")
         .bind(id)
         .bind(uid)
         .execute(&state.db)
-        .await?;
+        .await?
+        .rows_affected();
+    if deleted == 0 {
+        return Err(ApiError::NotFound);
+    }
     downgrade_user(&state.db, uid).await?;
     audit(
         &state.db,
