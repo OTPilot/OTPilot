@@ -83,7 +83,7 @@ const CloudSync = (() => {
     return JSON.stringify({ v: 1, iv: enc(iv), data: enc(ct) });
   }
 
-  // Returns { accounts, tombstones }. Handles old blobs that encrypted an array directly.
+  // Returns { accounts, tombstones, teamKey }. Handles old blobs (array or no teamKey).
   async function decrypt(blob, keyB64) {
     const { v, iv, data } = JSON.parse(blob);
     if (v !== 1) throw new Error('Unknown sync format version');
@@ -92,8 +92,21 @@ const CloudSync = (() => {
       { name: 'AES-GCM', iv: dec(iv) }, raw, dec(data)
     );
     const parsed = JSON.parse(new TextDecoder().decode(plain));
-    if (Array.isArray(parsed)) return { accounts: parsed, tombstones: {} };
-    return { accounts: parsed.accounts ?? [], tombstones: parsed.tombstones ?? {} };
+    if (Array.isArray(parsed)) return { accounts: parsed, tombstones: {}, teamKey: null };
+    return { accounts: parsed.accounts ?? [], tombstones: parsed.tombstones ?? {}, teamKey: parsed.teamKey ?? null };
+  }
+
+  // Adopt the team keypair carried in a decrypted vault, so every device of this
+  // user shares one keypair (and can unwrap shares wrapped to its public key).
+  // If the key changed, re-upload the matching public key so the server's record
+  // matches what this device can actually unwrap.
+  async function adoptTeamKey(teamKey) {
+    if (teamKey && typeof TeamKeys !== 'undefined') {
+      try {
+        const changed = await TeamKeys.adoptPrivJwk(teamKey);
+        if (changed) await syncUser();
+      } catch { /* ignore */ }
+    }
   }
 
   // ── API helpers ────────────────────────────────────────────────────────────
@@ -116,6 +129,10 @@ const CloudSync = (() => {
   // Creates the users row in the API DB on first sign-in.
   async function syncUser() {
     const devicePayload = await getDevicePayload();
+    // Upload the team public key so other members can wrap shared-code keys to it.
+    if (typeof TeamKeys !== 'undefined') {
+      try { devicePayload.public_key = await TeamKeys.getPublicKeyB64(); } catch { /* ignore */ }
+    }
     const res = await apiFetch('/auth/sync-user', {
       method: 'POST',
       body: JSON.stringify(devicePayload),
@@ -142,7 +159,9 @@ const CloudSync = (() => {
     if (!res.ok) throw new Error(`pull ${res.status}`);
     const body = await res.json();
     if (!body) return null;
-    return decrypt(body.encrypted_blob, keyB64);
+    const out = await decrypt(body.encrypted_blob, keyB64);
+    await adoptTeamKey(out.teamKey);
+    return out;
   }
 
   // Fetch server state. Returns { accounts, tombstones, updatedAt, command } or null.
@@ -160,7 +179,8 @@ const CloudSync = (() => {
       return command ? { accounts: [], tombstones: {}, updatedAt: null, command } : null;
     }
 
-    const { accounts, tombstones } = await decrypt(body.encrypted_blob, keyB64);
+    const { accounts, tombstones, teamKey } = await decrypt(body.encrypted_blob, keyB64);
+    await adoptTeamKey(teamKey);
     return { accounts, tombstones, updatedAt: body.updated_at, command };
   }
 
@@ -180,11 +200,16 @@ const CloudSync = (() => {
     }
   }
 
-  // Encrypt + push { accounts, tombstones } to server.
+  // Encrypt + push { accounts, tombstones, teamKey } to server. The team private
+  // key rides inside the E2E blob so it's portable across the user's devices.
   async function push(accounts, tombstones, updatedAt) {
     const keyB64        = await getSyncKey();
     if (!keyB64) throw new Error('No sync key');
-    const encrypted_blob = await encrypt({ accounts, tombstones }, keyB64);
+    let teamKey = null;
+    if (typeof TeamKeys !== 'undefined') {
+      try { teamKey = await TeamKeys.exportPrivJwk(); } catch { /* ignore */ }
+    }
+    const encrypted_blob = await encrypt({ accounts, tombstones, teamKey }, keyB64);
     const devicePayload  = await getDevicePayload();
     const res = await apiFetch('/accounts', {
       method: 'PUT',

@@ -30,6 +30,61 @@ async fn send(
         .await;
 }
 
+/// Team invitation. `recipient_has_account` picks the copy: existing users get a
+/// direct accept link; new users are told to install the extension and sign up
+/// with this email (the invite auto-accepts on first sync).
+#[allow(clippy::too_many_arguments)]
+pub async fn send_team_invite_email(
+    enabled: bool,
+    api_key: Option<&str>,
+    from: &str,
+    to: &str,
+    inviter: &str,
+    team_name: &str,
+    accept_url: &str,
+    recipient_has_account: bool,
+) {
+    let (subject, body) = if recipient_has_account {
+        (
+            format!("{inviter} invited you to \"{team_name}\" on OTPilot"),
+            format!(
+                "{inviter} invited you to join the team \"{team_name}\" on OTPilot.\n\n\
+                 Accept the invitation:\n{accept_url}\n\n\
+                 This invite expires in 48 hours.",
+            ),
+        )
+    } else {
+        (
+            "You've been invited to OTPilot".to_string(),
+            format!(
+                "{inviter} invited you to join \"{team_name}\" on OTPilot.\n\n\
+                 Install the OTPilot extension and create your account with this email \
+                 address — the invitation will be accepted automatically.\n\n\
+                 https://otpilot.app\n\nThis invite expires in 48 hours.",
+            ),
+        )
+    };
+    send(enabled, api_key, from, to, &subject, &body).await;
+}
+
+/// Notifies a recipient that a teammate shared a TOTP code with them.
+pub async fn send_shared_code_email(
+    enabled: bool,
+    api_key: Option<&str>,
+    from: &str,
+    to: &str,
+    sharer: &str,
+    account_name: &str,
+) {
+    let subject = format!("{sharer} shared a code with you on OTPilot");
+    let body = format!(
+        "{sharer} shared the 2FA code for \"{account_name}\" with you on OTPilot.\n\n\
+         Open the OTPilot extension — it appears under \"Shared with you\" with a live code.\n\n\
+         Manage shared codes: https://otpilot.app/dashboard/team",
+    );
+    send(enabled, api_key, from, to, &subject, &body).await;
+}
+
 /// Welcome email sent once, when a user's account is first created (free plan).
 pub async fn send_welcome_email(enabled: bool, api_key: Option<&str>, from: &str, to: &str) {
     let subject = "Welcome to OTPilot 🎉";

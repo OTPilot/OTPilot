@@ -29,6 +29,10 @@ sha2 = "0.10"
 rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
 image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "webp", "gif"] }
 psl = "2"  # embedded Public Suffix List → registrable domain (eTLD+1) for the favicon parent-domain fallback
+# Team shared codes (2-of-2): reconstruct K = K1 XOR K2, AES-GCM-decrypt the secret, generate the live TOTP.
+totp-rs = "5"
+aes-gcm = "0.10"
+base64 = "0.22"
 sentry = { version = "0.48", features = ["anyhow", "tracing", "tower", "tower-axum-matched-path", "logs"] }
 
 [profile.release]

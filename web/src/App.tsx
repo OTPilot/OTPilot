@@ -13,6 +13,8 @@ import Privacy from './pages/legal/Privacy'
 import Refunds from './pages/legal/Refunds'
 import Gdpr from './pages/legal/Gdpr'
 import Support from './pages/Support'
+import AcceptInvite from './pages/AcceptInvite'
+import Security from './pages/legal/Security'
 
 export default function App() {
   return (
@@ -30,6 +32,8 @@ export default function App() {
           <Route path="settings" element={<Settings />} />
         </Route>
 
+        <Route path="/teams/accept/:token" element={<AcceptInvite />} />
+        <Route path="/security" element={<Security />} />
         <Route path="/support" element={<Support />} />
         <Route path="/tos" element={<Tos />} />
         <Route path="/privacy" element={<Privacy />} />

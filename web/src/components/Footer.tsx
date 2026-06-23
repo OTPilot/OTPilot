@@ -12,6 +12,7 @@ export default function Footer() {
         <div className="flex flex-wrap justify-center gap-6">
           <a href="/tos" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">Terms of Service</a>
           <a href="/privacy" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">Privacy Policy</a>
+          <a href="/security" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">Security</a>
           <a href="/gdpr" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">GDPR</a>
           <a href="/refunds" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">Refund Policy</a>
           <a

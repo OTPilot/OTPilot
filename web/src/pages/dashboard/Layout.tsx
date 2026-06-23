@@ -1,8 +1,10 @@
+import { useEffect } from 'react'
 import { NavLink, Outlet, Navigate, useNavigate } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { useAuth } from '../../lib/useAuth'
 import { useCrisp } from '../../lib/useCrisp'
 import { supabase } from '../../lib/supabase'
+import { apiFetch } from '../../lib/api'
 import Logo from '../../components/Logo'
 
 const navItems = [
@@ -18,6 +20,27 @@ export default function DashboardLayout() {
   const navigate = useNavigate()
   useCrisp({ email: user?.email, name: user?.user_metadata?.full_name })
   const queryClient = useQueryClient()
+
+  // Drop any cached data from a previous account when the signed-in user changes
+  // (e.g. switching Supabase accounts in the same browser profile) so one user
+  // never sees another's plan/team/devices.
+  useEffect(() => {
+    if (user?.id) queryClient.clear()
+  }, [user?.id, queryClient])
+
+  // Hide Billing from team members who aren't the owner (the owner manages billing).
+  const { data: me } = useQuery<{ id: string }>({
+    queryKey: ['user-plan'],
+    queryFn: () => apiFetch('/auth/sync-user', { method: 'POST' }).then((r) => r.json()),
+    enabled: !!user,
+  })
+  const { data: team } = useQuery<{ owner_id: string } | null>({
+    queryKey: ['team'],
+    queryFn: () => apiFetch('/teams').then((r) => (r.ok ? r.json() : null)),
+    enabled: !!user,
+  })
+  const isNonOwnerMember = !!team && !!me && team.owner_id !== me.id
+  const items = navItems.filter((i) => i.to !== '/dashboard/billing' || !isNonOwnerMember)
 
   if (loading) {
     return (
@@ -48,7 +71,7 @@ export default function DashboardLayout() {
         </a>
 
         <nav className="flex gap-1">
-          {navItems.map(({ to, label, end }) => (
+          {items.map(({ to, label, end }) => (
             <NavLink
               key={to}
               to={to}
