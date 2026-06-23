@@ -755,6 +755,10 @@ async fn share_code(
         )?;
     }
 
+    // Persist the code + every recipient atomically: if any recipient isn't a
+    // member (or an insert fails), the whole thing rolls back — no orphaned or
+    // partially-shared code row is left behind.
+    let mut tx = state.db.begin().await?;
     let code_id: Uuid = sqlx::query_scalar(
         r#"
         INSERT INTO shared_codes (owner_id, team_id, account_name, account_email, encrypted_secret, sharing_key_iv)
@@ -767,13 +771,21 @@ async fn share_code(
     .bind(&body.account_email)
     .bind(&body.encrypted_secret)
     .bind(&body.iv)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
 
-    let sharer = auth.email.as_deref().unwrap_or("A teammate");
     for r in &body.recipients {
         // Recipients must be members of this team.
-        require_member(&state.db, id, r.user_id).await?;
+        let is_member: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2)",
+        )
+        .bind(id)
+        .bind(r.user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !is_member {
+            return Err(ApiError::Forbidden); // tx dropped here → rollback
+        }
         sqlx::query(
             r#"
             INSERT INTO share_access (shared_code_id, user_id, server_share, encrypted_user_share)
@@ -784,10 +796,15 @@ async fn share_code(
         .bind(r.user_id)
         .bind(&r.server_share)
         .bind(&r.encrypted_user_share)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
+    }
+    tx.commit().await?;
 
-        // Notify the recipient by email.
+    // Post-commit: notify recipients by email + record the audit entry. (Kept out
+    // of the transaction so a slow/failed email never rolls back the share.)
+    let sharer = auth.email.as_deref().unwrap_or("A teammate");
+    for r in &body.recipients {
         let to: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
             .bind(r.user_id)
             .fetch_optional(&state.db)
