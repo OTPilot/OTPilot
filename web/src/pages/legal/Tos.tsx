@@ -8,7 +8,7 @@ export default function Tos() {
           ← Back to home
         </Link>
         <h1 className="text-3xl font-bold text-white mb-2">Terms of Service</h1>
-        <p className="text-zinc-500 text-sm mb-10">Last updated: May 2026</p>
+        <p className="text-zinc-500 text-sm mb-10">Last updated: June 2026</p>
 
         <div className="prose prose-sm prose-invert max-w-none space-y-8 text-zinc-400 leading-relaxed">
           <section>
@@ -52,6 +52,11 @@ export default function Tos() {
           <section>
             <h2 className="text-white font-semibold text-lg mb-3">7. Local functionality</h2>
             <p>The browser extension's local functionality — including TOTP generation and local storage — will remain fully operational regardless of the status of the cloud service. Cloud-dependent features will cease to function upon service shutdown, but your locally stored data will never be affected.</p>
+          </section>
+
+          <section>
+            <h2 className="text-white font-semibold text-lg mb-3">7A. Teams and shared codes</h2>
+            <p>On a team plan, the team owner is responsible for managing members, seats, and what is shared. Sharing a code grants the recipient access to the <strong className="text-zinc-300">live, time-based code only</strong> — never the underlying secret — and the owner (or the member who shared it) can revoke that access at any time. You agree to share codes only for accounts you are authorized to share, and to use codes shared with you solely for their intended purpose. Seats are billed per the team plan; the team owner is responsible for all charges on the team subscription, including extra seats. Cancelling the team subscription dissolves the team and revokes all shared access.</p>
           </section>
 
           <section>

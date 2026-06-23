@@ -66,7 +66,7 @@ export default function Gdpr() {
           ← Back to home
         </Link>
         <h1 className="text-3xl font-bold text-white mb-2">GDPR Compliance</h1>
-        <p className="text-zinc-500 text-sm mb-2">Last updated: May 2026</p>
+        <p className="text-zinc-500 text-sm mb-2">Last updated: June 2026</p>
         <p className="text-zinc-400 text-sm mb-10">
           This document describes how OTPilot complies with the EU General Data Protection Regulation (GDPR).
           For a general overview of what data we collect and why, see our{' '}
@@ -138,6 +138,10 @@ export default function Gdpr() {
                   <tr>
                     <td className="py-2.5 pr-4">Encrypted accounts blob</td>
                     <td className="py-2.5">Deleted immediately upon account deletion</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2.5 pr-4">Team data (membership, shared codes, activity log)</td>
+                    <td className="py-2.5">Deleted when you leave/delete the team, or on account deletion</td>
                   </tr>
                   <tr>
                     <td className="py-2.5 pr-4">IP address logs</td>
