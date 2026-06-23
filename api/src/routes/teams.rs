@@ -255,6 +255,24 @@ async fn require_owner(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Resul
     }
 }
 
+/// Remove all of `user_id`'s received share_access on codes in `team_id` (when
+/// they leave or are removed). Deleting orphans their wrapped K1 — same as the
+/// un-share path — so they can't reconstruct K even with a cached cid.
+async fn revoke_user_share_access(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Result<()> {
+    sqlx::query(
+        r#"
+        DELETE FROM share_access
+        WHERE user_id = $1
+          AND shared_code_id IN (SELECT id FROM shared_codes WHERE team_id = $2)
+        "#,
+    )
+    .bind(user_id)
+    .bind(team_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 // ── Team CRUD ───────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -646,6 +664,10 @@ async fn leave_team(
         .bind(auth.id)
         .execute(&state.db)
         .await?;
+    // Drop any codes that were shared TO this user in this team so they lose
+    // access (the membership guard on generate_totp already blocks them, this
+    // keeps the data and recipient counts clean).
+    revoke_user_share_access(&state.db, id, auth.id).await?;
     downgrade_user(&state.db, auth.id).await?;
     audit(&state.db, id, auth.id, "leave", Some(auth.id), json!({})).await;
     Ok(Json(json!({ "ok": true })))
@@ -674,6 +696,7 @@ async fn remove_member(
     if deleted == 0 {
         return Err(ApiError::NotFound);
     }
+    revoke_user_share_access(&state.db, id, uid).await?;
     downgrade_user(&state.db, uid).await?;
     audit(
         &state.db,
@@ -999,6 +1022,10 @@ async fn generate_totp(
     {
         return Err(ApiError::TooManyRequests);
     }
+
+    // Must still be a member of the team — share_access alone isn't enough, or a
+    // removed/departed member could keep generating live codes with a cached cid.
+    require_member(&state.db, id, auth.id).await?;
 
     // The requester must have an active share_access row for this code.
     #[derive(sqlx::FromRow)]
