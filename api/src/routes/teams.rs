@@ -91,6 +91,25 @@ pub(crate) async fn downgrade_user(db: &sqlx::PgPool, user_id: Uuid) -> Result<(
     Ok(())
 }
 
+/// Atomically downgrades every member and deletes the team in one transaction, so
+/// there's no window where the team is gone but members are still on `team_lite`.
+pub(crate) async fn dissolve_team(db: &sqlx::PgPool, team_id: Uuid) -> Result<()> {
+    let mut tx = db.begin().await?;
+    sqlx::query(
+        "UPDATE users SET plan = CASE WHEN has_personal_cloud THEN 'personal' ELSE 'free' END \
+         WHERE id IN (SELECT user_id FROM team_members WHERE team_id = $1)",
+    )
+    .bind(team_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM teams WHERE id = $1")
+        .bind(team_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 async fn audit(
     db: &sqlx::PgPool,
     team_id: Uuid,
@@ -121,7 +140,12 @@ async fn audit(
 /// activity log isn't flooded by the 30s auto-refresh, while still showing that a
 /// recipient is actively viewing a shared code. Explicit actions (copy/autofill/
 /// refresh) are audited separately and always.
-async fn audit_totp_view_throttled(db: &sqlx::PgPool, team_id: Uuid, actor_id: Uuid, code_id: Uuid) {
+async fn audit_totp_view_throttled(
+    db: &sqlx::PgPool,
+    team_id: Uuid,
+    actor_id: Uuid,
+    code_id: Uuid,
+) {
     let res = sqlx::query(
         r#"
         INSERT INTO audit_logs (team_id, actor_id, action, target_id, metadata)
@@ -158,8 +182,11 @@ fn valid_email(s: &str) -> bool {
     }
     match s.split_once('@') {
         Some((local, domain)) => {
-            !local.is_empty() && domain.contains('.') && !domain.starts_with('.')
-                && !domain.ends_with('.') && !s.contains(char::is_whitespace)
+            !local.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+                && !s.contains(char::is_whitespace)
         }
         None => false,
     }
@@ -375,22 +402,7 @@ async fn delete_team(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>> {
     require_owner(&state.db, id, auth.id).await?;
-
-    // Downgrade every member before the cascade removes the membership rows.
-    let member_ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT user_id FROM team_members WHERE team_id = $1")
-            .bind(id)
-            .fetch_all(&state.db)
-            .await?;
-
-    sqlx::query("DELETE FROM teams WHERE id = $1")
-        .bind(id)
-        .execute(&state.db)
-        .await?;
-
-    for uid in member_ids {
-        downgrade_user(&state.db, uid).await?;
-    }
+    dissolve_team(&state.db, id).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -411,10 +423,11 @@ async fn invite_member(
 
     // Rate-limit invites per owner: re-inviting after expiry would otherwise let
     // an owner use our domain/Resend to email-bomb arbitrary addresses.
-    if !state
-        .rate_limiter
-        .check(&format!("invite:{}", auth.id), 20, Duration::from_secs(3600))
-    {
+    if !state.rate_limiter.check(
+        &format!("invite:{}", auth.id),
+        20,
+        Duration::from_secs(3600),
+    ) {
         return Err(ApiError::TooManyRequests);
     }
 
@@ -721,7 +734,11 @@ async fn share_code(
     if let Some(email) = body.account_email.as_deref() {
         check_len(email, MAX_EMAIL_LEN, "account_email")?;
     }
-    check_len(&body.encrypted_secret, MAX_SECRET_BLOB_LEN, "encrypted_secret")?;
+    check_len(
+        &body.encrypted_secret,
+        MAX_SECRET_BLOB_LEN,
+        "encrypted_secret",
+    )?;
     check_len(&body.iv, 64, "iv")?;
     if body.recipients.is_empty() {
         return Err(ApiError::BadRequest("recipients_required".into()));
@@ -731,7 +748,11 @@ async fn share_code(
     }
     for r in &body.recipients {
         check_len(&r.server_share, 64, "server_share")?;
-        check_len(&r.encrypted_user_share, MAX_SECRET_BLOB_LEN, "encrypted_user_share")?;
+        check_len(
+            &r.encrypted_user_share,
+            MAX_SECRET_BLOB_LEN,
+            "encrypted_user_share",
+        )?;
     }
 
     let code_id: Uuid = sqlx::query_scalar(

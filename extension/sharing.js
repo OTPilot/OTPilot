@@ -39,7 +39,7 @@ const Sharing = (() => {
     for (const r of rows) {
       try {
         const k1 = await TeamKeys.unwrapUserShare(r.encrypted_user_share);
-        out.push({ id: r.id, account_name: r.account_name, owner_email: r.owner_email, k1 });
+        out.push({ id: r.id, account_name: r.account_name, account_email: r.account_email, owner_email: r.owner_email, k1 });
       } catch { /* can't unwrap (e.g. key from another device) → skip */ }
     }
     return out;

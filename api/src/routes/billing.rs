@@ -341,18 +341,8 @@ async fn webhook(
                     .fetch_optional(&state.db)
                     .await?;
             if let Some((team_id,)) = team {
-                let members: Vec<uuid::Uuid> =
-                    sqlx::query_scalar("SELECT user_id FROM team_members WHERE team_id = $1")
-                        .bind(team_id)
-                        .fetch_all(&state.db)
-                        .await?;
-                sqlx::query("DELETE FROM teams WHERE id = $1")
-                    .bind(team_id)
-                    .execute(&state.db)
-                    .await?;
-                for uid in members {
-                    crate::routes::teams::downgrade_user(&state.db, uid).await?;
-                }
+                // Atomic: downgrade all members + delete the team in one transaction.
+                crate::routes::teams::dissolve_team(&state.db, team_id).await?;
                 tracing::info!("team {team_id} dissolved on subscription cancel");
             }
         }
