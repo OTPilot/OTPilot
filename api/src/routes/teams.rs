@@ -4,7 +4,18 @@
 //! a key K; per recipient the server stores K2 (server_share) and an opaque
 //! K1-wrapped-to-the-recipient blob (encrypted_user_share). To produce a live
 //! TOTP the recipient sends K1, the server reconstructs K = K1 XOR K2, decrypts
-//! the secret, generates the code, and discards K. Neither side can decrypt alone.
+//! the secret, generates the code, and discards K.
+//!
+//! Trust model — be precise about what the split does and does not protect:
+//!   * Protects against an **at-rest database compromise**: a dump contains the
+//!     ciphertext, K2 and K1-wrapped-to-pubkey, but NOT the recipient's private
+//!     key (that lives only in the E2E sync vault), so K1 — and therefore K —
+//!     can't be recovered from the database alone.
+//!   * Does NOT protect against a **malicious/compromised server at runtime**: the
+//!     server reconstructs K and sees the plaintext secret on every generate_totp,
+//!     and it distributes recipients' public keys with no out-of-band fingerprint
+//!     check, so it could substitute a key it controls. The runtime server is a
+//!     trusted party by design. (Unlike personal sync, which is fully E2E.)
 
 use axum::{
     extract::{Path, State},
@@ -14,6 +25,7 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::{
@@ -87,7 +99,9 @@ async fn audit(
     target_id: Option<Uuid>,
     metadata: Value,
 ) {
-    let _ = sqlx::query(
+    // Audit logging is accountability-critical, so surface failures rather than
+    // dropping them silently — a missing entry is a security-relevant gap.
+    if let Err(e) = sqlx::query(
         "INSERT INTO audit_logs (team_id, actor_id, action, target_id, metadata) VALUES ($1,$2,$3,$4,$5)",
     )
     .bind(team_id)
@@ -96,7 +110,67 @@ async fn audit(
     .bind(target_id)
     .bind(metadata)
     .execute(db)
+    .await
+    {
+        tracing::error!("audit log insert failed (team={team_id} action={action}): {e}");
+    }
+}
+
+/// Records a throttled "totp_view" audit entry for a *passive* code fetch (initial
+/// display / auto-refresh). At most one row per (actor, code) per 10 minutes so the
+/// activity log isn't flooded by the 30s auto-refresh, while still showing that a
+/// recipient is actively viewing a shared code. Explicit actions (copy/autofill/
+/// refresh) are audited separately and always.
+async fn audit_totp_view_throttled(db: &sqlx::PgPool, team_id: Uuid, actor_id: Uuid, code_id: Uuid) {
+    let res = sqlx::query(
+        r#"
+        INSERT INTO audit_logs (team_id, actor_id, action, target_id, metadata)
+        SELECT $1, $2, 'totp_view', $3, '{}'::jsonb
+        WHERE NOT EXISTS (
+            SELECT 1 FROM audit_logs
+            WHERE team_id = $1 AND actor_id = $2 AND action = 'totp_view' AND target_id = $3
+              AND created_at > NOW() - INTERVAL '10 minutes'
+        )
+        "#,
+    )
+    .bind(team_id)
+    .bind(actor_id)
+    .bind(code_id)
+    .execute(db)
     .await;
+    if let Err(e) = res {
+        tracing::error!("audit totp_view insert failed (team={team_id}): {e}");
+    }
+}
+
+// ── Input validation helpers ────────────────────────────────────────────────────
+
+const MAX_NAME_LEN: usize = 200;
+const MAX_EMAIL_LEN: usize = 320; // RFC 5321 max addr length
+const MAX_SECRET_BLOB_LEN: usize = 4096; // base64 ciphertext / share material
+const MAX_RECIPIENTS: usize = 50;
+
+/// Best-effort email shape check (server-side gate; not a full RFC validator).
+fn valid_email(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() || s.len() > MAX_EMAIL_LEN {
+        return false;
+    }
+    match s.split_once('@') {
+        Some((local, domain)) => {
+            !local.is_empty() && domain.contains('.') && !domain.starts_with('.')
+                && !domain.ends_with('.') && !s.contains(char::is_whitespace)
+        }
+        None => false,
+    }
+}
+
+/// Rejects an over-long free-text field.
+fn check_len(value: &str, max: usize, field: &str) -> Result<()> {
+    if value.len() > max {
+        return Err(ApiError::BadRequest(format!("{field}_too_long")));
+    }
+    Ok(())
 }
 
 // ── Membership / team lookup ────────────────────────────────────────────────────
@@ -178,7 +252,8 @@ async fn create_team(
         return Err(ApiError::Forbidden);
     }
     let name = body.name.unwrap_or_else(|| "My Team".to_string());
-    let team = create_team_row(&state.db, auth.id, &name, None).await?;
+    check_len(name.trim(), MAX_NAME_LEN, "name")?;
+    let team = create_team_row(&state.db, auth.id, name.trim(), None).await?;
     Ok(Json(json!(team)))
 }
 
@@ -281,8 +356,13 @@ async fn rename_team(
     Json(body): Json<RenameRequest>,
 ) -> Result<Json<Value>> {
     require_owner(&state.db, id, auth.id).await?;
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("name_required".into()));
+    }
+    check_len(name, MAX_NAME_LEN, "name")?;
     sqlx::query("UPDATE teams SET name = $1 WHERE id = $2")
-        .bind(&body.name)
+        .bind(name)
         .bind(id)
         .execute(&state.db)
         .await?;
@@ -329,29 +409,19 @@ async fn invite_member(
 ) -> Result<Json<Value>> {
     require_owner(&state.db, id, auth.id).await?;
 
-    let team = sqlx::query_as::<_, TeamRow>(
-        "SELECT id, name, owner_id, seat_limit, stripe_subscription_id FROM teams WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
-
-    // Seats: current members + outstanding (unexpired, unaccepted) invites.
-    let used: i64 = sqlx::query_scalar(
-        r#"
-        SELECT (SELECT COUNT(*) FROM team_members WHERE team_id = $1)
-             + (SELECT COUNT(*) FROM pending_invites
-                WHERE team_id = $1 AND accepted_at IS NULL AND expires_at > NOW())
-        "#,
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
-    if used >= team.seat_limit as i64 {
-        return Err(ApiError::BadRequest("seat_limit_reached".into()));
+    // Rate-limit invites per owner: re-inviting after expiry would otherwise let
+    // an owner use our domain/Resend to email-bomb arbitrary addresses.
+    if !state
+        .rate_limiter
+        .check(&format!("invite:{}", auth.id), 20, Duration::from_secs(3600))
+    {
+        return Err(ApiError::TooManyRequests);
     }
 
     let email = body.email.trim().to_lowercase();
+    if !valid_email(&email) {
+        return Err(ApiError::BadRequest("invalid_email".into()));
+    }
 
     // If a user with this email already belongs to another team, reject up front
     // (a user can be in at most one team). Accept-time also guards against races.
@@ -372,6 +442,31 @@ async fn invite_member(
         return Err(ApiError::BadRequest("user_already_in_team".into()));
     }
 
+    // Lock the team row so the seat check + invite insert are atomic against
+    // concurrent invites/accepts — otherwise the seat_limit can be overrun (TOCTOU).
+    let mut tx = state.db.begin().await?;
+    let team = sqlx::query_as::<_, TeamRow>(
+        "SELECT id, name, owner_id, seat_limit, stripe_subscription_id FROM teams WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Seats: current members + outstanding (unexpired, unaccepted) invites.
+    let used: i64 = sqlx::query_scalar(
+        r#"
+        SELECT (SELECT COUNT(*) FROM team_members WHERE team_id = $1)
+             + (SELECT COUNT(*) FROM pending_invites
+                WHERE team_id = $1 AND accepted_at IS NULL AND expires_at > NOW())
+        "#,
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if used >= team.seat_limit as i64 {
+        return Err(ApiError::BadRequest("seat_limit_reached".into()));
+    }
+
     let token = Uuid::new_v4().simple().to_string();
     sqlx::query(
         "INSERT INTO pending_invites (email, team_id, invited_by, token) VALUES ($1,$2,$3,$4)",
@@ -380,8 +475,9 @@ async fn invite_member(
     .bind(id)
     .bind(auth.id)
     .bind(&token)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let accept_url = format!("{}/teams/accept/{}", state.app_base_url, token);
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
@@ -474,13 +570,16 @@ pub(crate) async fn accept_invite_inner(
         return Err(ApiError::BadRequest("already_in_team".into()));
     }
 
+    // Lock the team row so the seat check + membership insert are atomic against
+    // concurrent accepts/invites — otherwise the seat_limit can be overrun (TOCTOU).
+    let mut tx = db.begin().await?;
+    let limit: i32 = sqlx::query_scalar("SELECT seat_limit FROM teams WHERE id = $1 FOR UPDATE")
+        .bind(inv.team_id)
+        .fetch_one(&mut *tx)
+        .await?;
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM team_members WHERE team_id = $1")
         .bind(inv.team_id)
-        .fetch_one(db)
-        .await?;
-    let limit: i32 = sqlx::query_scalar("SELECT seat_limit FROM teams WHERE id = $1")
-        .bind(inv.team_id)
-        .fetch_one(db)
+        .fetch_one(&mut *tx)
         .await?;
     if used >= limit as i64 {
         return Err(ApiError::BadRequest("seat_limit_reached".into()));
@@ -491,16 +590,17 @@ pub(crate) async fn accept_invite_inner(
     )
     .bind(inv.team_id)
     .bind(user_id)
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
     sqlx::query("UPDATE pending_invites SET accepted_at = NOW() WHERE token = $1")
         .bind(token)
-        .execute(db)
+        .execute(&mut *tx)
         .await?;
     sqlx::query("UPDATE users SET plan = 'team_lite' WHERE id = $1")
         .bind(user_id)
-        .execute(db)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(inv.team_id)
 }
 
@@ -611,6 +711,29 @@ async fn share_code(
 ) -> Result<Json<Value>> {
     require_member(&state.db, id, auth.id).await?;
 
+    // Validate sizes/shapes before persisting — guards against DB bloat and
+    // malformed share material.
+    let account_name = body.account_name.trim();
+    if account_name.is_empty() {
+        return Err(ApiError::BadRequest("account_name_required".into()));
+    }
+    check_len(account_name, MAX_NAME_LEN, "account_name")?;
+    if let Some(email) = body.account_email.as_deref() {
+        check_len(email, MAX_EMAIL_LEN, "account_email")?;
+    }
+    check_len(&body.encrypted_secret, MAX_SECRET_BLOB_LEN, "encrypted_secret")?;
+    check_len(&body.iv, 64, "iv")?;
+    if body.recipients.is_empty() {
+        return Err(ApiError::BadRequest("recipients_required".into()));
+    }
+    if body.recipients.len() > MAX_RECIPIENTS {
+        return Err(ApiError::BadRequest("too_many_recipients".into()));
+    }
+    for r in &body.recipients {
+        check_len(&r.server_share, 64, "server_share")?;
+        check_len(&r.encrypted_user_share, MAX_SECRET_BLOB_LEN, "encrypted_user_share")?;
+    }
+
     let code_id: Uuid = sqlx::query_scalar(
         r#"
         INSERT INTO shared_codes (owner_id, team_id, account_name, account_email, encrypted_secret, sharing_key_iv)
@@ -619,7 +742,7 @@ async fn share_code(
     )
     .bind(auth.id)
     .bind(id)
-    .bind(&body.account_name)
+    .bind(account_name)
     .bind(&body.account_email)
     .bind(&body.encrypted_secret)
     .bind(&body.iv)
@@ -657,7 +780,7 @@ async fn share_code(
                 &state.from_email,
                 &to,
                 sharer,
-                &body.account_name,
+                account_name,
             )
             .await;
         }
@@ -669,7 +792,7 @@ async fn share_code(
         auth.id,
         "share",
         Some(code_id),
-        json!({ "account_name": body.account_name, "recipients": body.recipients.len() }),
+        json!({ "account_name": account_name, "recipients": body.recipients.len() }),
     )
     .await;
     Ok(Json(json!({ "id": code_id })))
@@ -811,6 +934,15 @@ async fn generate_totp(
     Path((id, cid)): Path<(Uuid, Uuid)>,
     Json(body): Json<TotpRequest>,
 ) -> Result<Json<Value>> {
+    // Rate-limit code generation per requester (covers the 30s auto-refresh of
+    // every shared row while still bounding runaway/abusive generation).
+    if !state
+        .rate_limiter
+        .check(&format!("totp:{}", auth.id), 120, Duration::from_secs(60))
+    {
+        return Err(ApiError::TooManyRequests);
+    }
+
     // The requester must have an active share_access row for this code.
     #[derive(sqlx::FromRow)]
     struct Access {
@@ -840,9 +972,12 @@ async fn generate_totp(
         &acc.sharing_key_iv,
     )?;
 
-    // Only log explicit user actions, not passive display / 30s auto-refresh.
-    if let Some(reason) = body.reason.as_deref() {
-        if matches!(reason, "copy" | "autofill" | "refresh") {
+    // Explicit user actions (copy/autofill/refresh) are always audited. Passive
+    // display / 30s auto-refresh is audited too but throttled to one entry per
+    // 10 min per (viewer, code), so accessing a shared code is never invisible to
+    // the owner while the activity log isn't flooded by auto-refresh.
+    match body.reason.as_deref() {
+        Some(reason @ ("copy" | "autofill" | "refresh")) => {
             audit(
                 &state.db,
                 id,
@@ -853,6 +988,7 @@ async fn generate_totp(
             )
             .await;
         }
+        _ => audit_totp_view_throttled(&state.db, id, auth.id, cid).await,
     }
     Ok(Json(json!({ "code": code })))
 }
@@ -957,5 +1093,24 @@ mod tests {
             &B64.encode(iv),
         );
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn valid_email_accepts_and_rejects() {
+        assert!(valid_email("user@example.com"));
+        assert!(valid_email("a.b+tag@sub.example.co"));
+        assert!(!valid_email("noatsign.com"));
+        assert!(!valid_email("user@nodot"));
+        assert!(!valid_email("user@.com"));
+        assert!(!valid_email("user@example.")); // trailing dot in domain
+        assert!(!valid_email("has space@example.com"));
+        assert!(!valid_email(""));
+        assert!(!valid_email(&format!("{}@example.com", "a".repeat(400))));
+    }
+
+    #[test]
+    fn check_len_enforces_cap() {
+        assert!(check_len("short", 10, "f").is_ok());
+        assert!(check_len("waytoolong", 5, "f").is_err());
     }
 }

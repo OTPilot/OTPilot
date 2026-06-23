@@ -32,6 +32,8 @@ pub struct AppState {
     pub supabase_service_key: String,
     /// S3/R2 store for domain favicons. None when not configured (feature disabled).
     pub icons: Option<routes::icons::IconStore>,
+    /// In-process rate limiter for sensitive endpoints (TOTP generation, invites).
+    pub rate_limiter: Arc<middleware::rate_limit::RateLimiter>,
 }
 
 #[tokio::main]
@@ -130,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
         supabase_url,
         supabase_service_key,
         icons,
+        rate_limiter: Arc::new(middleware::rate_limit::RateLimiter::new()),
     };
 
     let cors = CorsLayer::new()
