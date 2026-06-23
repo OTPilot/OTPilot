@@ -593,6 +593,7 @@ async fn share_code(
     .fetch_one(&state.db)
     .await?;
 
+    let sharer = auth.email.as_deref().unwrap_or("A teammate");
     for r in &body.recipients {
         // Recipients must be members of this team.
         require_member(&state.db, id, r.user_id).await?;
@@ -608,6 +609,25 @@ async fn share_code(
         .bind(&r.encrypted_user_share)
         .execute(&state.db)
         .await?;
+
+        // Notify the recipient by email.
+        let to: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+            .bind(r.user_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+        if let Some(to) = to {
+            crate::email::send_shared_code_email(
+                state.send_emails,
+                state.resend_api_key.as_deref(),
+                &state.from_email,
+                &to,
+                sharer,
+                &body.account_name,
+            )
+            .await;
+        }
     }
 
     audit(
