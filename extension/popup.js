@@ -1764,7 +1764,10 @@ async function renderTeamPanel() {
         if (res.ok) { input.value = ''; setStatus(`Invited ${email}`); renderTeamPanel(); }
         else {
           const j = await res.json().catch(() => ({}));
-          setStatus(j.error === 'seat_limit_reached' ? 'Seat limit reached' : 'Invite failed', false);
+          const msg = j.error === 'seat_limit_reached' ? 'Seat limit reached'
+            : j.error === 'user_already_in_team' ? 'Already in a team'
+            : 'Invite failed';
+          setStatus(msg, false);
         }
       } catch { setStatus('Invite failed', false); }
       btn.disabled = false;

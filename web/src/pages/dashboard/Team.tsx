@@ -101,7 +101,10 @@ function TeamView({ teamId, meId }: { teamId: string; meId: string }) {
     const res = await apiFetch(`/teams/${teamId}/invite`, { method: 'POST', body: JSON.stringify({ email: inviteEmail }) })
     if (!res.ok) {
       const j = await res.json().catch(() => ({}))
-      setErr(j.error === 'seat_limit_reached' ? 'Seat limit reached — add a seat in Billing.' : 'Invite failed')
+      const msg = j.error === 'seat_limit_reached' ? 'Seat limit reached — add a seat in Billing.'
+        : j.error === 'user_already_in_team' ? 'That person already belongs to a team.'
+        : 'Invite failed'
+      setErr(msg)
       return
     }
     setInviteEmail('')

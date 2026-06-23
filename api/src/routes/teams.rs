@@ -352,6 +352,26 @@ async fn invite_member(
     }
 
     let email = body.email.trim().to_lowercase();
+
+    // If a user with this email already belongs to another team, reject up front
+    // (a user can be in at most one team). Accept-time also guards against races.
+    let already_in_team: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+          SELECT 1 FROM team_members tm JOIN users u ON u.id = tm.user_id
+          WHERE lower(u.email) = $1 AND tm.team_id <> $2
+        )
+        "#,
+    )
+    .bind(&email)
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false);
+    if already_in_team {
+        return Err(ApiError::BadRequest("user_already_in_team".into()));
+    }
+
     let token = Uuid::new_v4().simple().to_string();
     sqlx::query(
         "INSERT INTO pending_invites (email, team_id, invited_by, token) VALUES ($1,$2,$3,$4)",
@@ -439,6 +459,19 @@ pub(crate) async fn accept_invite_inner(
 
     if inv.invite_email.to_lowercase() != email.to_lowercase() {
         return Err(ApiError::Forbidden);
+    }
+
+    // A user can belong to at most one team. Block joining a second one (joining
+    // the same team again is a no-op below).
+    let other_team: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1 AND team_id <> $2)",
+    )
+    .bind(user_id)
+    .bind(inv.team_id)
+    .fetch_one(db)
+    .await?;
+    if other_team {
+        return Err(ApiError::BadRequest("already_in_team".into()));
     }
 
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM team_members WHERE team_id = $1")
