@@ -79,18 +79,6 @@ fn is_team_plan(plan: &str) -> bool {
     matches!(plan, "team_lite" | "team_pro")
 }
 
-/// After leaving/losing a team, restore the user to 'personal' if they paid for
-/// Personal Cloud, else 'free'.
-pub(crate) async fn downgrade_user(db: &sqlx::PgPool, user_id: Uuid) -> Result<()> {
-    sqlx::query(
-        "UPDATE users SET plan = CASE WHEN has_personal_cloud THEN 'personal' ELSE 'free' END WHERE id = $1",
-    )
-    .bind(user_id)
-    .execute(db)
-    .await?;
-    Ok(())
-}
-
 /// Atomically downgrades every member and deletes the team in one transaction, so
 /// there's no window where the team is gone but members are still on `team_lite`.
 pub(crate) async fn dissolve_team(db: &sqlx::PgPool, team_id: Uuid) -> Result<()> {
@@ -255,10 +243,22 @@ async fn require_owner(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Resul
     }
 }
 
-/// Remove all of `user_id`'s received share_access on codes in `team_id` (when
-/// they leave or are removed). Deleting orphans their wrapped K1 — same as the
-/// un-share path — so they can't reconstruct K even with a cached cid.
-async fn revoke_user_share_access(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Result<()> {
+/// Atomically removes `user_id` from `team_id`: deletes their membership, revokes
+/// any codes shared TO them in this team (orphaning their wrapped K1 so they can't
+/// reconstruct K even with a cached cid), and downgrades their plan — all in one
+/// transaction so a partial failure can't leave them on `team_lite` with no team.
+/// Returns the number of membership rows deleted (0 if they weren't a member).
+async fn remove_member_atomic(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Result<u64> {
+    let mut tx = db.begin().await?;
+    let deleted = sqlx::query("DELETE FROM team_members WHERE team_id = $1 AND user_id = $2")
+        .bind(team_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if deleted == 0 {
+        return Ok(0); // tx dropped without commit → nothing changed
+    }
     sqlx::query(
         r#"
         DELETE FROM share_access
@@ -268,9 +268,16 @@ async fn revoke_user_share_access(db: &sqlx::PgPool, team_id: Uuid, user_id: Uui
     )
     .bind(user_id)
     .bind(team_id)
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
-    Ok(())
+    sqlx::query(
+        "UPDATE users SET plan = CASE WHEN has_personal_cloud THEN 'personal' ELSE 'free' END WHERE id = $1",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(deleted)
 }
 
 // ── Team CRUD ───────────────────────────────────────────────────────────────────
@@ -659,16 +666,8 @@ async fn leave_team(
             "owner cannot leave; delete the team".into(),
         ));
     }
-    sqlx::query("DELETE FROM team_members WHERE team_id = $1 AND user_id = $2")
-        .bind(id)
-        .bind(auth.id)
-        .execute(&state.db)
-        .await?;
-    // Drop any codes that were shared TO this user in this team so they lose
-    // access (the membership guard on generate_totp already blocks them, this
-    // keeps the data and recipient counts clean).
-    revoke_user_share_access(&state.db, id, auth.id).await?;
-    downgrade_user(&state.db, auth.id).await?;
+    // Delete membership + revoke received shares + downgrade, atomically.
+    remove_member_atomic(&state.db, id, auth.id).await?;
     audit(&state.db, id, auth.id, "leave", Some(auth.id), json!({})).await;
     Ok(Json(json!({ "ok": true })))
 }
@@ -684,20 +683,14 @@ async fn remove_member(
             "owner cannot remove themselves".into(),
         ));
     }
-    // Only downgrade if the target was actually a member of THIS team — otherwise
-    // an owner who knows another user's UUID could force-downgrade an arbitrary
-    // user (who may be in a different team or on a personal plan).
-    let deleted = sqlx::query("DELETE FROM team_members WHERE team_id = $1 AND user_id = $2")
-        .bind(id)
-        .bind(uid)
-        .execute(&state.db)
-        .await?
-        .rows_affected();
+    // Delete membership + revoke received shares + downgrade, atomically. Only
+    // downgrade if the target was actually a member of THIS team (deleted > 0) —
+    // otherwise an owner who knows another user's UUID could force-downgrade an
+    // arbitrary user (who may be in a different team or on a personal plan).
+    let deleted = remove_member_atomic(&state.db, id, uid).await?;
     if deleted == 0 {
         return Err(ApiError::NotFound);
     }
-    revoke_user_share_access(&state.db, id, uid).await?;
-    downgrade_user(&state.db, uid).await?;
     audit(
         &state.db,
         id,
