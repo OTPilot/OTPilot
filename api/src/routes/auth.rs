@@ -36,6 +36,9 @@ struct SyncUserRequest {
     os: Option<String>,
     #[serde(default)]
     browser: Option<String>,
+    /// ECDH P-256 public key (SPKI base64) for team shared-code key wrapping.
+    #[serde(default)]
+    public_key: Option<String>,
 }
 
 /// Called by the extension after login to ensure a `users` row exists.
@@ -69,6 +72,53 @@ async fn sync_user(
                 email,
             )
             .await;
+        }
+    }
+
+    // Persist the email (from the JWT) so team features can show it.
+    if let Some(email) = auth.email.as_deref() {
+        let _ = sqlx::query("UPDATE users SET email = $1 WHERE id = $2")
+            .bind(email)
+            .bind(auth.id)
+            .execute(&state.db)
+            .await;
+    }
+
+    // Store/refresh the user's public key (for team shared-code key wrapping).
+    if let Some(pk) = body.public_key.as_deref() {
+        let _ = sqlx::query("UPDATE users SET public_key = $1 WHERE id = $2")
+            .bind(pk)
+            .bind(auth.id)
+            .execute(&state.db)
+            .await;
+    }
+
+    // Auto-accept a pending team invite addressed to this user's email (e.g. a
+    // brand-new account created from an invite link) when not already in a team.
+    if let Some(email) = auth.email.as_deref() {
+        let already_member: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1)")
+                .bind(auth.id)
+                .fetch_one(&state.db)
+                .await
+                .unwrap_or(true);
+        if !already_member {
+            let token: Option<String> = sqlx::query_scalar(
+                r#"
+                SELECT token FROM pending_invites
+                WHERE lower(email) = lower($1) AND accepted_at IS NULL AND expires_at > NOW()
+                ORDER BY created_at DESC LIMIT 1
+                "#,
+            )
+            .bind(email)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
+            if let Some(token) = token {
+                let _ =
+                    crate::routes::teams::accept_invite_inner(&state.db, &token, auth.id, email)
+                        .await;
+            }
         }
     }
 

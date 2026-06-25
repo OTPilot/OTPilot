@@ -64,6 +64,11 @@ export default function Privacy() {
           </section>
 
           <section>
+            <h2 className="text-white font-semibold text-lg mb-3">Teams &amp; shared codes</h2>
+            <p>On a team plan, you can share an individual TOTP code with teammates. Shared codes use a <strong className="text-zinc-300">two-of-two key split</strong>: the secret is encrypted with a key whose halves are split between the recipient's device and our server, so neither can read it alone. To generate the live 6-digit code, our server <strong className="text-zinc-300">momentarily reconstructs the key in memory</strong> — this is the only case where the server touches shared secret material, and only the resulting code is returned (the secret is never stored in clear or logged). Revoking a teammate deletes the server's half, making their half useless instantly. We also store: team membership, your email (to show teammates who shared what), your public key (to wrap shared keys to you), and a team activity log (who invited/shared/revoked). Recipients receive an email when a code is shared with them.</p>
+          </section>
+
+          <section>
             <h2 className="text-white font-semibold text-lg mb-3">What we never collect</h2>
             <ul className="space-y-1.5">
               {[
@@ -88,7 +93,7 @@ export default function Privacy() {
               <li><strong className="text-zinc-300">Supabase</strong> — authentication (magic links, OAuth). GDPR-compliant, EU hosting available.</li>
               <li><strong className="text-zinc-300">Railway</strong> — API and database hosting.</li>
               <li><strong className="text-zinc-300">Stripe</strong> — payment processing. PCI DSS compliant.</li>
-              <li><strong className="text-zinc-300">Resend</strong> — transactional email delivery (welcome, new-device, and plan-upgrade emails).</li>
+              <li><strong className="text-zinc-300">Resend</strong> — transactional email delivery (welcome, new-device, plan-upgrade, team-invite, and shared-code notifications).</li>
               <li><strong className="text-zinc-300">Vercel</strong> — web frontend hosting and anonymous traffic analytics.</li>
               <li><strong className="text-zinc-300">Sentry</strong> — error monitoring and crash reporting.</li>
             </ul>

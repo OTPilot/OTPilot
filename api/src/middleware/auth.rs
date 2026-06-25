@@ -2,7 +2,7 @@ use axum::{
     extract::FromRequestParts,
     http::{request::Parts, HeaderMap},
 };
-use jsonwebtoken::{decode, decode_header, Validation};
+use jsonwebtoken::{decode, decode_header, Algorithm, Validation};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -37,6 +37,20 @@ impl FromRequestParts<AppState> for AuthUser {
             ApiError::Unauthorized
         })?;
 
+        // Pin the allowed algorithms to the asymmetric ones Supabase signs with.
+        // The header's `alg` is attacker-controlled, so reject anything else up
+        // front — in particular any symmetric (HS*) algorithm, which would enable
+        // an alg-substitution attack (sign with the public key as an HMAC secret).
+        // This guard is the pinning: `Validation::new(header.alg)` below then only
+        // accepts that exact (now-constrained) algorithm. We deliberately don't set
+        // `validation.algorithms` to the full list — jsonwebtoken rejects a list
+        // that mixes key families (RSA vs EC) against an EC key with InvalidAlgorithm.
+        const ALLOWED_ALGS: [Algorithm; 2] = [Algorithm::ES256, Algorithm::RS256];
+        if !ALLOWED_ALGS.contains(&header.alg) {
+            tracing::warn!("JWT alg {:?} not allowed", header.alg);
+            return Err(ApiError::Unauthorized);
+        }
+
         let kid = header.kid.as_deref().unwrap_or("");
         let key = state.jwt_keys.get(kid).ok_or_else(|| {
             tracing::warn!("JWT kid={kid} not found in key set");
@@ -45,6 +59,12 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let mut validation = Validation::new(header.alg);
         validation.set_audience(&["authenticated"]);
+        // Supabase sets `iss` to `<SUPABASE_URL>/auth/v1` (confirmed against a live
+        // token); pin it so a token from any other issuer is rejected.
+        validation.set_issuer(&[format!(
+            "{}/auth/v1",
+            state.supabase_url.trim_end_matches('/')
+        )]);
 
         let data = decode::<Claims>(token, key, &validation).map_err(|e| {
             tracing::warn!("JWT validation failed: {e}");

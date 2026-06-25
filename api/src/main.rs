@@ -19,6 +19,10 @@ pub struct AppState {
     pub stripe_secret_key: String,
     pub stripe_webhook_secret: String,
     pub stripe_personal_price_id: String,
+    pub stripe_team_lite_monthly_price_id: String,
+    pub stripe_team_lite_annual_price_id: String,
+    pub stripe_extra_seat_price_id: String,
+    pub app_base_url: String,
     pub success_url: String,
     pub cancel_url: String,
     pub resend_api_key: Option<String>,
@@ -28,6 +32,8 @@ pub struct AppState {
     pub supabase_service_key: String,
     /// S3/R2 store for domain favicons. None when not configured (feature disabled).
     pub icons: Option<routes::icons::IconStore>,
+    /// In-process rate limiter for sensitive endpoints (TOTP generation, invites).
+    pub rate_limiter: Arc<middleware::rate_limit::RateLimiter>,
 }
 
 #[tokio::main]
@@ -85,6 +91,15 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("STRIPE_WEBHOOK_SECRET").expect("STRIPE_WEBHOOK_SECRET must be set");
     let stripe_personal_price_id =
         std::env::var("STRIPE_PERSONAL_PRICE_ID").expect("STRIPE_PERSONAL_PRICE_ID must be set");
+    // Team plan prices are optional (feature unconfigured → empty string).
+    let stripe_team_lite_monthly_price_id =
+        std::env::var("STRIPE_TEAM_LITE_MONTHLY_PRICE_ID").unwrap_or_default();
+    let stripe_team_lite_annual_price_id =
+        std::env::var("STRIPE_TEAM_LITE_ANNUAL_PRICE_ID").unwrap_or_default();
+    let stripe_extra_seat_price_id =
+        std::env::var("STRIPE_EXTRA_SEAT_PRICE_ID").unwrap_or_default();
+    let app_base_url =
+        std::env::var("APP_BASE_URL").unwrap_or_else(|_| "https://otpilot.app".into());
     let success_url = std::env::var("SUCCESS_URL")
         .unwrap_or_else(|_| "http://localhost:5173/dashboard?upgraded=1".into());
     let cancel_url =
@@ -105,6 +120,10 @@ async fn main() -> anyhow::Result<()> {
         stripe_secret_key,
         stripe_webhook_secret,
         stripe_personal_price_id,
+        stripe_team_lite_monthly_price_id,
+        stripe_team_lite_annual_price_id,
+        stripe_extra_seat_price_id,
+        app_base_url,
         success_url,
         cancel_url,
         resend_api_key,
@@ -113,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
         supabase_url,
         supabase_service_key,
         icons,
+        rate_limiter: Arc::new(middleware::rate_limit::RateLimiter::new()),
     };
 
     let cors = CorsLayer::new()

@@ -18,6 +18,10 @@ const faqs = [
     a: 'Your extension reverts to local-only mode. Cloud sync stops immediately — the Personal Cloud plan and the Team plan are independent, so cancelling Team does not grant Personal sync. All locally stored accounts remain intact. Shared codes that teammates accessed via your team become inaccessible to them, but their own local accounts are unaffected.',
   },
   {
+    q: 'How secure is sharing a code with my team?',
+    a: 'Shared codes use a two-of-two key split: the secret is encrypted with a key whose two halves live separately — one on the recipient\'s device, one on our server — so neither can decrypt it alone. The server only briefly combines them in memory to produce the live 6-digit code; the secret is never stored in clear. Revoking a teammate deletes the server\'s half, making their half useless instantly. (Your personal vault stays fully end-to-end encrypted — this split applies only to codes you choose to share.)',
+  },
+  {
     q: 'Is OTPilot open source?',
     a: 'Yes. The extension is GPL v3 and the backend is AGPL v3 — both OSI-approved open source licenses. You can read, audit, and fork every line. The copyleft terms mean that anyone who distributes a modified version must also keep it open source under the same license.',
   },

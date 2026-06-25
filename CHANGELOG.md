@@ -1,7 +1,23 @@
 # Changelog
 
 
-## v1.2.0 (Unreleased — in development)
+## v1.2.0
+
+### Teams + shared OTP codes (Team Lite)
+
+- **Team Lite plan** — Owner pays a subscription ($8/mo · $80/yr) for 5 seats of cloud sync plus shared codes; extra seats are a $2/seat/mo Stripe addon. Team is auto-created by the subscription webhook (1 team per owner). `has_personal_cloud` now persists Personal Cloud across a team downgrade. New env: `STRIPE_TEAM_LITE_MONTHLY_PRICE_ID`, `STRIPE_TEAM_LITE_ANNUAL_PRICE_ID`, `STRIPE_EXTRA_SEAT_PRICE_ID`, `APP_BASE_URL`.
+- **Shared OTP codes with 2-of-2 encryption** — A member can share an individual TOTP code with specific teammates. The secret is encrypted with key `K`; per recipient the server keeps `K2 = K XOR K1` and an opaque `K1` wrapped to the recipient's ECDH P-256 public key. The live code is generated only when the recipient sends `K1` and the server reconstructs `K` momentarily — neither side can decrypt alone, and revoking a recipient orphans their `K1` instantly. Personal sync stays fully E2E.
+- **Invites** — Invite by email (48h expiry) with Resend emails for existing and new users; new users auto-accept on first `sync-user`. Seat limit enforced.
+- **Audit log** — Every team action (invite/accept/remove/leave, share/revoke, TOTP access) is recorded and shown in the dashboard.
+- **Extension** — New `keys.js` (ECDH P-256 keypair; public key uploaded via `sync-user`) and `sharing.js`; a "Shared with you" section in the popup shows live shared codes (server-generated, auto-refresh), the team name in the sync panel, and a toast when a new code is shared with you. Share creation is also available from the extension (it has the decrypted vault).
+- **Web dashboard** — `/dashboard/team` (members, invites, share modal, codes I share / shared with me, audit, leave), Team Lite checkout + extra-seat in Billing, `/teams/accept/:token` page, and a new `/security` page explaining the encryption model (linked from the footer). The web share modal asks for the recovery key to decrypt the vault in-browser (`web/src/lib/teamCrypto.ts`).
+- **Backend tests** — 2-of-2 round-trip (reconstruct K → decrypt → TOTP matches a direct computation) and tamper-rejection.
+- **Refinements** — Members/shares show email (persisted `users.email`, migration 0013) and the shared account's email (migration 0014) so two accounts on the same site are distinguishable. The audit log only records a code access on an explicit action (copy/autofill/refresh), not on passive display/auto-refresh. The extension gained a **Team** nav tab (members + invite for the owner) and a "↗ Share with team" button per vault account; shared codes now respect the hide/show (obfuscate) toggle and have a Copy button. Billing adds a prominent "Add a seat" panel (with a confirm step) and a **Stripe billing portal** button (`POST /billing/portal`) to cancel / change seats / download invoices; the Team Lite card has a monthly/yearly toggle. Billing is hidden for non-owner members.
+- **Stable team keypair across devices** — The team ECDH keypair rides inside the E2E-encrypted sync vault, so all of a user's devices share one keypair (restored with the recovery key) and shares stay readable after switching device/profile. The server still only sees the public key + the opaque blob.
+- **One team per user** — Joining or being invited to a second team is blocked (at invite time and accept time).
+- **Recipient self-removal** — A recipient can remove their own access to a code shared with them.
+- **Share notifications** — Recipients get an email when a code is shared with them; the owner can rename the team.
+- **Sync robustness** — "Start fresh" now force-replaces the server blob (previously it failed trying to decrypt the old blob with the new key); a transient `serverHasData` error no longer mints a new key.
 
 ## v1.1.1
 

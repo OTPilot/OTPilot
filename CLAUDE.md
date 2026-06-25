@@ -69,7 +69,13 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 |---|---|---|
 | `users` | `id`, `plan`, `stripe_customer_id`, `created_at`, `pending_deletion_at` | One row per Supabase user |
 | `accounts` | `user_id`, `encrypted_blob`, `updated_at` | AES-GCM ciphertext only |
-| `teams` | — | Stub, Phase 3 |
+| `teams` | `id`, `name`, `owner_id`, `stripe_subscription_id`, `seat_limit` | Team Lite; 1 team per owner |
+| `team_members` | `team_id`, `user_id`, `role` | `role` = owner/member |
+| `pending_invites` | `email`, `team_id`, `token`, `expires_at`, `accepted_at` | 48h expiry; auto-accepted in `sync-user` by email |
+| `shared_codes` | `owner_id`, `team_id`, `account_name`, `encrypted_secret`, `sharing_key_iv` | `encrypted_secret` = AES-GCM(secret, K) |
+| `share_access` | `shared_code_id`, `user_id`, `server_share`, `encrypted_user_share` | 2-of-2: `server_share`=K2, `encrypted_user_share`=K1 wrapped to recipient pubkey |
+| `audit_logs` | `team_id`, `actor_id`, `action`, `metadata` | Team activity (invite/share/revoke/totp_access…) |
+| `users` (team cols) | `has_personal_cloud`, `public_key` | `has_personal_cloud` survives team downgrade; `public_key` = ECDH P-256 for share wrapping |
 | `devices` | `user_id`, `device_id`, `name`, `os`, `browser`, `pending_action` | Registered extension installs |
 | `sync_logs` | `user_id`, `device_id`, `action`, `accounts_count`, `created_at` | Trimmed automatically by trigger (keep last 10 per device) |
 | `domain_icons` | `domain` (PK), `status`, `storage_key`, `fetched_at` | Shared favicon cache, one row per domain; `status='none'` is a negative cache. Bytes live in S3/R2 |
@@ -83,6 +89,11 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 - `supabase.js` — Supabase Auth wrapper used by background and popup
 - `links.js` — shared URL constants (dashboard, billing, etc.)
 - `config.js` — active config (API_URL, SUPABASE_URL, etc.); swapped by `make dev/prod`
+- `keys.js` — team ECDH P-256 keypair (private key local; public uploaded via `sync-user`) for wrapping shared-code keys
+- `sharing.js` — team shared-codes (consume): list codes shared with you, unwrap K1, fetch live TOTP
+
+### Teams / shared codes (2-of-2)
+Team Lite lets a member share an individual TOTP code. The secret is encrypted client-side with key `K`; per recipient the server stores `K2 = K XOR K1` (`share_access.server_share`) and an opaque `K1` wrapped to the recipient's ECDH public key (`encrypted_user_share`). To produce a live code the recipient sends `K1`; the server reconstructs `K`, decrypts, generates the TOTP (`totp-rs`, `new_unchecked` to allow <128-bit secrets), and discards `K`. **Trust model:** the split protects against an **at-rest DB compromise** (a dump has the ciphertext + `K2` + `K1`-wrapped-to-pubkey, but not the recipient's private key, which lives only in the E2E sync vault → `K1`/`K` unrecoverable from the DB alone). It does **not** protect against a malicious/compromised server at runtime — the server sees the plaintext secret on every `generate_totp` and distributes recipients' public keys with no out-of-band fingerprint, so the runtime server is a trusted party by design (unlike personal sync, which is fully E2E). Revoking a recipient deletes their `share_access` row (orphans their `K1`). Reads of a shared code are audited: explicit actions (`copy`/`autofill`/`refresh`) → `totp_access`; passive display/auto-refresh → `totp_view`, throttled to one entry per 10 min per (viewer, code). **Share creation** needs the plaintext secret, which is E2E — so it happens where the vault is decrypted: the **extension** (has the synced vault) or the **web dashboard** after the user pastes their recovery key (`web/src/lib/teamCrypto.ts` mirrors the extension crypto). The 2-of-2 logic for TOTP secrets is distinct from the **email-OTP** plan and from personal sync, which stays fully E2E. New env: `STRIPE_TEAM_LITE_*_PRICE_ID`, `STRIPE_EXTRA_SEAT_PRICE_ID`, `APP_BASE_URL`.
 
 ### Extension ↔ API sync
 `cloudSync.js` owns all sync logic. Accounts are AES-GCM encrypted client-side using a locally-generated key; the API stores only the opaque blob. `POST /auth/sync-user` upserts the user row, registers the device, and returns plan + stats. The extension caches `userPlan` in `chrome.storage.local` to gate UI (e.g. hiding the Ko-fi footer for paid users).
@@ -107,7 +118,17 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | POST | `/devices/:id/ack` | Device acknowledges pending action |
 | POST | `/devices/:id/leave` | Device unregisters itself |
 | POST | `/icons/resolve` | Resolve favicons for a batch of domains; fetches + stores any missing in S3/R2, returns `{domain: {status, url?}}` (**public** — so free / not-signed-in users get icons; abuse bounded by SSRF guards, 50-domain cap, negative cache, and a global fetch semaphore) |
-| GET | `/teams` | Stub — Phase 3 |
+| POST/GET | `/teams` | Create (idempotent, team plan) / get the user's team |
+| GET/PATCH/DELETE | `/teams/:id` | Detail (members + seats) / rename / delete (downgrades all) |
+| POST | `/teams/:id/invite` | Invite by email (seat check + Resend email) |
+| POST | `/teams/accept/:token` | Accept an invite (also auto-accepted in `sync-user`) |
+| DELETE | `/teams/:id/leave`, `/teams/:id/members/:uid` | Leave / remove (downgrade) |
+| GET | `/teams/:id/audit` | Team activity log (owner) |
+| POST/GET | `/teams/:id/codes` | Share a code (2-of-2 payload) / list codes shared with me |
+| GET | `/teams/:id/codes/mine` | List codes I share |
+| DELETE | `/teams/:id/codes/:cid`, `…/access/:uid` | Revoke a code / one recipient's access |
+| POST | `/teams/:id/codes/:cid/totp` | Live TOTP — client sends K1, server reconstructs K=K1⊕K2, decrypts, generates |
+| POST | `/billing/checkout/team`, `/billing/extra-seat` | Team Lite subscription / add a seat |
 
 ### Domain favicons (`/icons`)
 `api/src/routes/icons.rs` resolves a per-domain favicon, deduplicated into one shared object per domain. On a cache miss it fetches the icon **server-side** (hint URL validated same-domain → homepage `<link rel=icon>` → `/favicon.ico`, with SSRF guards rejecting private IPs); if the exact host has no icon it falls back to the **registrable parent domain** via the Public Suffix List (`psl` crate — e.g. `ap.www.namecheap.com` → `namecheap.com`), storing the result under the original host key. It re-encodes to a 64×64 PNG (the `image` crate) and uploads to a **public** S3/R2 bucket (`rust-s3`). The result is cached in `domain_icons` (`status='none'` is a negative cache, 30-day TTL). The feature is **optional**: if the `S3_*` env vars are unset, `IconStore::from_env()` returns `None` and `/icons/resolve` reports `none` for every domain. The endpoint is **public** (no auth) so icons work for free / not-signed-in users; the extension always calls it (Bearer attached only when present). The extension caches the downloaded PNG locally as a `data:` URL (`iconCache` in `chrome.storage.local`, **not** in the encrypted sync blob) and renders it via `avatarHTML()`/`avatarNode()` in `popup.js`, falling back to the letter avatar.

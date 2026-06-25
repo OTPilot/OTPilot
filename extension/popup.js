@@ -481,6 +481,7 @@ document.getElementById('btn-obfuscate').addEventListener('click', () => {
   chrome.storage.local.set({ obfuscated });
   applyObfuscateBtn();
   refreshDisplay();
+  _repaintSharedCodes?.(); // shared codes respect the same hide/show setting
 });
 
 // ── Copy / Fill ───────────────────────────────────────────────────────────────
@@ -637,7 +638,11 @@ function rebuildAccountsDOM() {
         <input type="checkbox" class="acc-autofill" ${acc.autofill !== false ? 'checked' : ''}>
         <span class="toggle-track"></span>
         <span class="toggle-label">Auto-fill on matching pages</span>
-      </label>`;
+      </label>
+      <div class="acc-share">
+        <button type="button" class="btn-share-team">↗ Share with team</button>
+        <div class="share-picker" style="display:none"></div>
+      </div>`;
 
     head.addEventListener('click', () => {
       syncOpenAccToDraft();
@@ -662,6 +667,12 @@ function rebuildAccountsDOM() {
       const reveal = inp.type === 'password';
       inp.type = reveal ? 'text' : 'password';
       btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
+    });
+
+    // ── Share with team ──
+    body.querySelector('.btn-share-team').addEventListener('click', () => {
+      syncOpenAccToDraft();
+      openSharePicker(body.querySelector('.share-picker'), draft[i]);
     });
 
     // ── Category chooser ──
@@ -775,12 +786,15 @@ function showView(view) {
   document.getElementById('settings-panel').style.display = view === 'accounts' ? '' : 'none';
   document.getElementById('config-panel').style.display   = view === 'settings' ? '' : 'none';
   document.getElementById('sync-panel').style.display     = view === 'sync'     ? '' : 'none';
+  document.getElementById('team-panel').style.display     = view === 'team'     ? '' : 'none';
   document.getElementById('nav-home').classList.toggle('active',     view === 'home');
   document.getElementById('nav-settings').classList.toggle('active', view === 'accounts');
   document.getElementById('nav-config').classList.toggle('active',   view === 'settings');
   document.getElementById('nav-sync').classList.toggle('active',     view === 'sync');
+  document.getElementById('nav-team').classList.toggle('active',     view === 'team');
   if (view === 'accounts') renderAccountsList();
   if (view === 'sync') renderSyncPanel();
+  if (view === 'team') renderTeamPanel();
   if (view === 'settings') {
     chrome.storage.local.get('emailAutoFill', d => {
       document.getElementById('toggle-email-autofill').checked = d.emailAutoFill ?? true;
@@ -796,6 +810,7 @@ document.getElementById('nav-home').addEventListener('click',    () => showView(
 document.getElementById('nav-settings').addEventListener('click', () => showView('accounts'));
 document.getElementById('nav-config').addEventListener('click',   () => showView('settings'));
 document.getElementById('nav-sync').addEventListener('click',     () => showView('sync'));
+document.getElementById('nav-team').addEventListener('click',     () => showView('team'));
 
 document.getElementById('btn-quick-add').addEventListener('click', () => {
   showView('accounts');
@@ -1343,9 +1358,10 @@ async function renderSyncPanel() {
         syncShowView('sv-newkey');
       }
     } catch {
-      const newKey = await CloudSync.generateSyncKey();
-      setSyncKeyDisplay(newKey);
-      syncShowView('sv-newkey');
+      // Couldn't determine whether the server has data (offline/transient). Don't
+      // silently mint a new key (that risks overwriting). Show restore — the user
+      // can paste their key or explicitly "Start fresh".
+      syncShowView('sv-restore');
     }
     return;
   }
@@ -1463,13 +1479,25 @@ document.getElementById('btn-copy-synckey').addEventListener('click', async () =
 });
 
 // New key: confirm saved
+let _startFresh = false;
 document.getElementById('btn-confirm-newkey').addEventListener('click', async () => {
   syncShowView('sv-active');
   syncSetStatus('syncing', 'Uploading…');
   try {
     await CloudSync.syncUser();
-    await stampLocalChange(); // force initial push so other devices can detect existing sync
-    await doSync();
+    if (_startFresh) {
+      // Overwrite the server blob with the new key directly — do NOT read/merge
+      // the existing blob (it was encrypted with a different key and can't be
+      // decrypted, which would otherwise fail the whole sync).
+      _startFresh = false;
+      const now = new Date().toISOString();
+      await CloudSync.push(accounts, tombstones, now);
+      await writeLastSyncedAt(now);
+      syncSetStatus('ok', 'Synced');
+    } else {
+      await stampLocalChange(); // force initial push so other devices can detect existing sync
+      await doSync();
+    }
   } catch (e) {
     syncSetStatus('error', e.message);
   }
@@ -1514,8 +1542,9 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
   }
 });
 
-// Restore: start fresh
+// Restore: start fresh (replaces server data with a new key)
 document.getElementById('btn-overwrite-server').addEventListener('click', async () => {
+  _startFresh = true;
   const newKey = await CloudSync.generateSyncKey();
   setSyncKeyDisplay(newKey);
   syncShowView('sv-newkey');
@@ -1620,7 +1649,13 @@ async function silentPullSync() {
   startTimer();
   if (justAuthenticated) tryAutoFillCurrentTab();
   chrome.storage.local.remove('pendingServerSync');
+  // Keep the user row current (plan + team public key) on every open, so a
+  // logged-in member can receive shares even before setting up personal sync.
+  (async () => {
+    try { if (await SupabaseAuth.getSession()) await CloudSync.syncUser(); } catch { /* ignore */ }
+  })();
   silentPullSync(); // fire-and-forget
+  renderSharedCodes(); // team "Shared with you" section (no-op if not in a team)
 
   // If the user is logged in but has no local sync key, go to Sync automatically.
   // renderSyncPanel() will show the correct view (sv-restore, sv-newkey, or sv-free).
@@ -1637,3 +1672,203 @@ async function silentPullSync() {
     if (msg.action === 'serverDataChanged') silentPullSync();
   });
 })();
+
+// ── Share an account with the team (from the vault) ─────────────────────────────
+
+async function openSharePicker(container, acc) {
+  if (!container) return;
+  if (container.style.display !== 'none') { container.style.display = 'none'; return; }
+  if (!acc?.secret) { setStatus('This account has no secret to share', false); return; }
+
+  container.style.display = '';
+  container.innerHTML = '<div class="share-msg">Loading…</div>';
+
+  const team = await Sharing.getMyTeam().catch(() => null);
+  if (!team || !team.id) {
+    container.innerHTML = `<div class="share-msg">You're not in a team. <a href="${CONFIG.DASHBOARD_URL}/dashboard/team" target="_blank">Manage team ↗</a></div>`;
+    return;
+  }
+  let myId = null;
+  try { myId = (await SupabaseAuth.getSession())?.user?.id ?? null; } catch { /* ignore */ }
+  const members = (await Sharing.getMembers(team.id).catch(() => [])).filter(m => m.user_id !== myId);
+
+  if (!members.length) {
+    container.innerHTML = `<div class="share-msg">No teammates yet. <a href="${CONFIG.DASHBOARD_URL}/dashboard/team" target="_blank">Invite ↗</a></div>`;
+    return;
+  }
+
+  container.innerHTML = members.map(m => `
+    <label class="share-recip">
+      <input type="checkbox" value="${esc(m.user_id)}" ${m.public_key ? '' : 'disabled'}>
+      ${esc(m.email || m.user_id)}${m.public_key ? '' : ' <span class="share-dim">(not set up)</span>'}
+    </label>`).join('') +
+    `<button type="button" class="btn-share-confirm">Share</button>`;
+
+  container.querySelector('.btn-share-confirm').addEventListener('click', async () => {
+    const picked = [...container.querySelectorAll('input:checked')].map(cb => cb.value);
+    const recipients = members.filter(m => picked.includes(m.user_id));
+    if (!recipients.length) { setStatus('Pick at least one teammate', false); return; }
+    try {
+      const ok = await Sharing.shareCode(team.id, acc.name, acc.email, acc.secret, recipients);
+      if (ok) { setStatus(`Shared "${acc.name}" ✓`); container.style.display = 'none'; }
+      else setStatus('Share failed', false);
+    } catch (e) {
+      setStatus(e?.message || 'Share failed', false);
+    }
+  });
+}
+
+// ── Team panel (nav tab) ────────────────────────────────────────────────────────
+
+async function renderTeamPanel() {
+  const nameEl = document.getElementById('team-panel-name');
+  const membersEl = document.getElementById('team-members');
+  const inviteRow = document.getElementById('team-invite-row');
+  document.getElementById('team-web-link').href = CONFIG.DASHBOARD_URL + '/dashboard/team';
+  nameEl.textContent = 'Loading…';
+  membersEl.innerHTML = '';
+  inviteRow.style.display = 'none';
+
+  const team = await Sharing.getMyTeam().catch(() => null);
+  if (!team || !team.id) { nameEl.textContent = 'No team'; return; }
+  nameEl.textContent = team.name;
+
+  let myId = null;
+  try { myId = (await SupabaseAuth.getSession())?.user?.id ?? null; } catch { /* ignore */ }
+  const isOwner = team.owner_id === myId;
+
+  const members = await Sharing.getMembers(team.id).catch(() => []);
+  membersEl.innerHTML = members.map(m => `
+    <div class="acc-overflow-item" style="cursor:default">
+      <span class="acc-av acc-av-md" style="background:${accentColor(m.email || m.user_id)}">${esc(nameInitials(m.email || '?'))}</span>
+      <span class="acc-overflow-text">
+        <span class="acc-overflow-name">${esc(m.email || m.user_id)}${m.user_id === myId ? ' (you)' : ''}</span>
+        <span class="acc-overflow-email">${esc(m.role)}</span>
+      </span>
+    </div>`).join('');
+
+  if (isOwner) {
+    inviteRow.style.display = 'flex';
+    const btn = document.getElementById('team-invite-btn');
+    const input = document.getElementById('team-invite-email');
+    btn.onclick = async () => {
+      const email = input.value.trim();
+      if (!email) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${CONFIG.API_URL}/teams/${team.id}/invite`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await SupabaseAuth.getAccessToken()}` },
+          body: JSON.stringify({ email }),
+        });
+        if (res.ok) { input.value = ''; setStatus(`Invited ${email}`); renderTeamPanel(); }
+        else {
+          const j = await res.json().catch(() => ({}));
+          const msg = j.error === 'seat_limit_reached' ? 'Seat limit reached'
+            : j.error === 'user_already_in_team' ? 'Already in a team'
+            : 'Invite failed';
+          setStatus(msg, false);
+        }
+      } catch { setStatus('Invite failed', false); }
+      btn.disabled = false;
+    };
+  }
+}
+
+// ── Team shared codes ("Shared with you") ──────────────────────────────────────
+
+const SVG_REFRESH = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>`;
+
+let _sharedRefreshTimer = null;
+
+async function renderSharedCodes() {
+  if (typeof Sharing === 'undefined') return;
+  const section = document.getElementById('shared-section');
+  const list = document.getElementById('shared-list');
+  if (!section || !list) return;
+
+  let team, codes;
+  try {
+    team = await Sharing.getMyTeam();
+    // Show the Team nav tab whenever the user belongs to a team.
+    document.getElementById('nav-team').style.display = (team && team.id) ? '' : 'none';
+    if (!team || !team.id) { section.style.display = 'none'; return; }
+    // Team name in the sync panel.
+    const nameEl = document.getElementById('sync-team-name');
+    if (nameEl && team.name) {
+      nameEl.innerHTML = `👥 ${esc(team.name)} · <a href="${CONFIG.DASHBOARD_URL}/dashboard/team" target="_blank" style="color:#38bdf8;text-decoration:none">Manage ↗</a>`;
+      nameEl.style.display = '';
+    }
+    codes = await Sharing.getSharedCodes(team.id);
+  } catch { section.style.display = 'none'; return; }
+
+  if (!codes.length) { section.style.display = 'none'; return; }
+
+  // Notify on newly-shared codes (diff against the last known id set).
+  try {
+    const ids = codes.map(c => c.id).sort();
+    const { knownSharedIds = [] } = await new Promise(r => chrome.storage.local.get('knownSharedIds', r));
+    const fresh = ids.filter(id => !knownSharedIds.includes(id));
+    if (fresh.length && knownSharedIds.length) {
+      const c = codes.find(x => x.id === fresh[0]);
+      setStatus(`📥 New shared code: ${c?.account_name ?? 'code'}`);
+    }
+    await new Promise(r => chrome.storage.local.set({ knownSharedIds: ids }, r));
+  } catch { /* ignore */ }
+
+  section.style.display = '';
+  list.innerHTML = '';
+
+  // Paints a row's code respecting the global obfuscate setting (data-code holds
+  // the real value once fetched; Copy still works while hidden).
+  const paint = (row) => {
+    const code = row.dataset.code || '';
+    const el = row.querySelector('.shared-code');
+    el.textContent = !code ? '•••••' : (obfuscated ? '••• •••' : code.slice(0, 3) + ' ' + code.slice(3));
+  };
+
+  for (const c of codes) {
+    const row = document.createElement('div');
+    row.className = 'shared-row';
+    const sub = [c.account_email, c.owner_email && '↗ ' + c.owner_email].filter(Boolean).join(' · ');
+    row.innerHTML = `
+      <span class="acc-av" style="background:${accentColor(c.account_name || '')}">${esc(nameInitials(c.account_name))}</span>
+      <span class="shared-info">
+        <span class="shared-name">${esc(c.account_name)}</span>
+        <span class="shared-owner">${esc(sub || 'shared')}</span>
+      </span>
+      <span class="shared-code">•••••</span>
+      <button class="shared-copy" title="Copy">Copy</button>
+      <button class="shared-refresh" title="Refresh">${SVG_REFRESH}</button>`;
+
+    // Passive display fetch — no reason → not audited.
+    const fetchCode = async (reason) => {
+      try {
+        const code = await Sharing.requestTotp(team.id, c.id, c.k1, reason);
+        row.dataset.code = code || '';
+        paint(row);
+        return code;
+      } catch { return null; }
+    };
+    row.querySelector('.shared-refresh').addEventListener('click', () => fetchCode('refresh'));
+    row.querySelector('.shared-copy').addEventListener('click', async () => {
+      const code = await fetchCode('copy'); // audited
+      if (!code) { setStatus('Could not fetch code', false); return; }
+      try { await navigator.clipboard.writeText(code); setStatus('Copied!'); }
+      catch { setStatus('Clipboard unavailable', false); }
+    });
+    list.appendChild(row);
+    fetchCode(); // initial display, no audit
+  }
+
+  // Re-paint (not re-fetch) when the obfuscate toggle flips.
+  _repaintSharedCodes = () => list.querySelectorAll('.shared-row').forEach(paint);
+
+  // Auto-refresh every 30s on the TOTP boundary while the popup is open (no audit).
+  clearInterval(_sharedRefreshTimer);
+  _sharedRefreshTimer = setInterval(() => {
+    if (Math.floor(Date.now() / 1000) % 30 === 0) renderSharedCodes();
+  }, 1000);
+}
+
+let _repaintSharedCodes = null;

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OTPilot",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Detects 2FA setup pages and saves accounts in one click. Auto-fills TOTP codes on login pages — no phone needed.",
   "background": {
     "service_worker": "background.js"
