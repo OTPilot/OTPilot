@@ -101,7 +101,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               for (let i = 0; i < matches.length; i++) {
                 const { code, idx } = matches[i];
                 if (expectedLength && code.length !== expectedLength) continue;
-                const ctx = text.slice(Math.max(0, idx - 40), idx + code.length + 40);
+                const ctx = text.slice(Math.max(0, idx - 80), idx + code.length + 80);
                 if (!OTP_KEYWORDS.test(ctx)) continue;
                 let score = 100;
                 if (code.length === 6) score += 10;

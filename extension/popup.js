@@ -26,7 +26,13 @@ function matchesPattern(pattern, hostname) {
     const base = host.slice(2);
     return hostname === base || hostname.endsWith('.' + base);
   }
-  return hostname === host;
+  // A bare domain also matches its subdomains — and vice-versa. 2FA/login pages
+  // frequently live on a deeper host than where the account was saved (e.g. the
+  // account is saved as namecheap.com or www.namecheap.com but the OTP page is
+  // ap.www.namecheap.com). Kept in sync with content.js matchesPattern().
+  return hostname === host
+    || hostname.endsWith('.' + host)
+    || host.endsWith('.' + hostname);
 }
 
 function findAccountIndexByHostname(hostname) {

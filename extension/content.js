@@ -17,7 +17,14 @@ function matchesPattern(pattern, hostname) {
     const base = host.slice(2);
     return hostname === base || hostname.endsWith('.' + base);
   }
-  return hostname === host;
+  // A bare domain also matches its subdomains — and vice-versa. 2FA/login pages
+  // frequently live on a deeper host than where the account was saved (e.g. the
+  // account is saved as namecheap.com or www.namecheap.com but the OTP page is
+  // ap.www.namecheap.com). Both directions of the subdomain relation match. This
+  // is safe because auto-fill still requires an actual OTP input on the page.
+  return hostname === host
+    || hostname.endsWith('.' + host)
+    || host.endsWith('.' + hostname);
 }
 
 function findAccount(accounts, hostname) {
@@ -156,8 +163,9 @@ function fillInputValue(input, code) {
   // framework tracks the previous value internally. Using the native prototype setter
   // bypasses that check so the synthetic 'input' event is treated as a real user edit.
   const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  const setRaw = (el, val) => { if (nativeSetter) nativeSetter.call(el, val); else el.value = val; };
   function setVal(el, val) {
-    if (nativeSetter) nativeSetter.call(el, val); else el.value = val;
+    setRaw(el, val);
     el.dispatchEvent(new Event('input',  { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
@@ -171,8 +179,22 @@ function fillInputValue(input, code) {
     return;
   }
 
+  // Single field. Some widgets render one <input> behind decorative per-digit
+  // boxes (e.g. Disney+) and consume only ONE character from a bulk value
+  // assignment. Emulate real typing: set the value cumulatively and fire a
+  // per-character InputEvent so both "read target.value" and "read event.data"
+  // implementations capture the whole code.
   input.focus();
-  setVal(input, code);
+  setRaw(input, '');
+  let acc = '';
+  for (const ch of code) {
+    acc += ch;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+    setRaw(input, acc);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
+  }
+  input.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 // Returns the group of single-digit OTP boxes the input belongs to (split OTP
@@ -612,6 +634,14 @@ function findPlainTextSecret() {
       /^[A-Z2-7]+$/.test(compact) &&
       /[2-7]/.test(compact)
     ) {
+      // Natural-language guard: on a 2FA settings page, prose like "Last used on
+      // 22 June" collapses into a valid-looking base32 string. Real secrets are
+      // shown contiguous or in uniform groups (e.g. "JBSW Y3DP EHPK"); reject
+      // multi-word text whose space-separated chunks aren't all the same length.
+      if (/\s/.test(raw)) {
+        const parts = raw.split(/\s+/);
+        if (!parts.every(p => p.length === parts[0].length)) continue;
+      }
       // Reject if the secret is buried inside a larger paragraph — real secret
       // displays are standalone, not embedded in prose.
       const parentText = (node.parentElement?.innerText || '').replace(/\s/g, '');
@@ -982,6 +1012,8 @@ async function runDetection() {
   let _emailBannerDismissedFor = null;
   let _lockDismissed       = false;
   let _lockDismissedFor    = null;
+  let _emailPollTimer      = null;
+  let _emailPollFor        = null;
 
   function isEnrollmentPage() {
     // Suppress auto-fill on 2FA setup/enrollment pages. Requires PATH_RE to match
@@ -997,6 +1029,58 @@ async function runDetection() {
       const v = (el.value || '').replace(/\s/g, '').toUpperCase();
       return v.length >= 16 && v.length <= 64 && /^[A-Z2-7]+$/.test(v) && /[2-7]/.test(v);
     });
+  }
+
+  // Requests an email OTP for `input` from the background SW and fills it (or
+  // shows the banner when auto-fill is off). Returns true when a code was
+  // handled (filled, or banner shown/suppressed), false when none was found yet.
+  async function attemptEmailOtp(input) {
+    if (!chrome.runtime?.id) return false;
+    const stored = await new Promise(r => chrome.storage.local.get('emailAutoFill', r));
+    const emailAutoFill = stored.emailAutoFill ?? true;
+    const expectedLength = getExpectedOtpLength(input);
+    const resp = await new Promise(r =>
+      chrome.runtime.sendMessage({ action: 'getEmailOtp', expectedLength }, r)
+    ).catch(() => null);
+    const code = resp?.code ?? null;
+    if (!code) return false;
+    if (input === _lastFilledInput) return true;
+    if (emailAutoFill) {
+      console.debug('[OTPilot] attemptEmailOtp: filling email OTP', code);
+      _lastFilledInput = input;
+      fillInputValue(input, code);
+      showToast('📧 Email code filled: ' + code);
+    } else {
+      // Same input the user already dismissed the banner for → don't re-show.
+      // Different input (SPA navigated to a new step) → reset and re-show.
+      if (_emailBannerDismissed && input === _emailBannerDismissedFor) return true;
+      _emailBannerDismissed = false;
+      console.debug('[OTPilot] attemptEmailOtp: showing email OTP banner (auto-fill disabled)', code);
+      showEmailOtpBanner(code, input, () => {
+        _emailBannerDismissed = true;
+        _emailBannerDismissedFor = input;
+      });
+    }
+    return true;
+  }
+
+  // Re-checks for an email OTP every 2s for up to 60s. Started when we're on a
+  // passcode page but the code hasn't landed yet; stops on success, when the
+  // input goes away, or on timeout. Guards against stacking multiple pollers.
+  function startEmailOtpPoll(input) {
+    if (_emailPollTimer && _emailPollFor === input) return;
+    clearInterval(_emailPollTimer);
+    _emailPollFor = input;
+    const startedAt = Date.now();
+    const stop = () => { clearInterval(_emailPollTimer); _emailPollTimer = null; _emailPollFor = null; };
+    _emailPollTimer = setInterval(async () => {
+      if (!chrome.runtime?.id) { clearInterval(_emailPollTimer); _emailPollTimer = null; return; }
+      if (Date.now() - startedAt > 60_000 || !input.isConnected || input === _lastFilledInput) {
+        stop();
+        return;
+      }
+      if (await attemptEmailOtp(input)) stop();
+    }, 2000);
   }
 
   async function tryAutoFill() {
@@ -1015,34 +1099,13 @@ async function runDetection() {
     // Email OTP fallback: if no TOTP account matches, try reading from Gmail/Outlook.
     if (matching.length === 0) {
       console.debug('[OTPilot] tryAutoFill: no matching TOTP account — trying email OTP');
-      if (!chrome.runtime?.id) return;
-      const stored = await new Promise(r => chrome.storage.local.get('emailAutoFill', r));
-      const emailAutoFill = stored.emailAutoFill ?? true;
-      const expectedLength = getExpectedOtpLength(input);
-      const resp = await new Promise(r =>
-        chrome.runtime.sendMessage({ action: 'getEmailOtp', expectedLength }, r)
-      ).catch(() => null);
-      const code = resp?.code ?? null;
-      if (!code) {
-        console.debug('[OTPilot] tryAutoFill: email OTP not found (no webmail tab open or no code in inbox)');
-        return;
-      }
-      if (input === _lastFilledInput) return;
-      if (emailAutoFill) {
-        console.debug('[OTPilot] tryAutoFill: filling email OTP', code);
-        _lastFilledInput = input;
-        fillInputValue(input, code);
-        showToast('📧 Email code filled: ' + code);
-      } else {
-        // Same input the user already dismissed the banner for → don't re-show.
-        // Different input (SPA navigated to a new step) → reset and re-show.
-        if (_emailBannerDismissed && input === _emailBannerDismissedFor) return;
-        _emailBannerDismissed = false;
-        console.debug('[OTPilot] tryAutoFill: showing email OTP banner (auto-fill disabled)', code);
-        showEmailOtpBanner(code, input, () => {
-          _emailBannerDismissed = true;
-          _emailBannerDismissedFor = input;
-        });
+      const handled = await attemptEmailOtp(input);
+      if (!handled) {
+        // The code often hasn't arrived yet — the user lands on the passcode
+        // page first and only then opens the email. The page DOM is static, so
+        // the MutationObserver won't re-trigger us; poll for the code instead.
+        console.debug('[OTPilot] tryAutoFill: email OTP not found yet — polling for the code');
+        startEmailOtpPoll(input);
       }
       return;
     }

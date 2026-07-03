@@ -35,8 +35,10 @@ const CODE_RE = /\b\d{4,8}\b/g;
 const OTP_KEYWORDS = /(c[oó]digo|code|verificaci[oó]n|verification|passcode|one[- ]?time|2fa|otp|pin|security|seguridad|c[oó]d\.?|auth)/i;
 
 // Picks the most likely OTP from a block of text.
-// REQUIRES an OTP keyword within ~40 chars of the digits — if no candidate has
+// REQUIRES an OTP keyword within ~80 chars of the digits — if no candidate has
 // one, returns null (never invents a code from a random number in the inbox).
+// (~80 because emails often phrase it as "código … que vencerá en 15 minutos.\n123456",
+// pushing the keyword well past a tighter window.)
 // When expectedLength is given (the number of digits the login page asks for),
 // only digit-runs of exactly that length are considered.
 function pickBestCode(text, expectedLength) {
@@ -51,7 +53,7 @@ function pickBestCode(text, expectedLength) {
     // Length filter: the page tells us how many digits to expect.
     if (expectedLength && code.length !== expectedLength) continue;
     // Hard gate: a candidate is only valid with an OTP keyword nearby.
-    const ctx = text.slice(Math.max(0, idx - 40), idx + code.length + 40);
+    const ctx = text.slice(Math.max(0, idx - 80), idx + code.length + 80);
     if (!OTP_KEYWORDS.test(ctx)) continue;
 
     let score = 100;

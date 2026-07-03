@@ -135,6 +135,8 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 
 **Invariant:** `normalizeIconDomain()` is duplicated in three places — `api/src/routes/icons.rs` (`normalize_domain`), `extension/background.js`, and `extension/popup.js`. Keep them in sync (lowercase, strip `*.`/`www.`/path/port, require a dot).
 
+**Invariant:** `matchesPattern()` (account URL ↔ page hostname matching) is duplicated in `extension/content.js` (drives auto-fill) and `extension/popup.js` (highlights the active account on popup open). Keep them in sync. A bare pattern matches its subdomains **in both directions** at a dot boundary (so `namecheap.com` ⇄ `ap.www.namecheap.com` match); `*.base` is an explicit wildcard. Auto-fill stays gated by `findOTPInput()`, so the looser match can't fire on pages without an OTP field.
+
 ### Web dashboard
 | Route | Component | Notes |
 |---|---|---|
