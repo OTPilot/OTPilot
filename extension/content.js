@@ -914,14 +914,25 @@ function showSaveUrlOverlay(acc, idx, hostname) {
   el.querySelector('.otpilot-primary').onclick = async () => {
     const d = await new Promise(r => chrome.storage.local.get('accounts', r));
     const accs = d.accounts || [];
-    // Use the index we resolved the account at, not a secret search — two
-    // accounts can share a secret, and searching by secret alone risks
-    // updating the wrong one. Re-check identity at that index in case storage
-    // shifted (account deleted/reordered) while the overlay sat open.
-    if (accs[idx] && accs[idx].secret === acc.secret) {
-      const existing = (accs[idx].urls || '').trim();
-      accs[idx] = {
-        ...accs[idx],
+    // Prefer the index we resolved the account at — fast path, correct as
+    // long as nothing reordered the list while the prompt sat open. A secret
+    // match alone isn't enough to trust it (two accounts can share a secret,
+    // and a reorder could put a different one at this exact index), so
+    // compare the full record. If it no longer matches there, fall back to a
+    // full-list search by the same full-record identity, and only write if
+    // that's unambiguous — guessing between duplicates risks tagging the
+    // wrong account.
+    const matchesFully = a => a && a.secret === acc.secret && a.name === acc.name
+      && a.urls === acc.urls && a.email === acc.email;
+    let targetIdx = matchesFully(accs[idx]) ? idx : -1;
+    if (targetIdx === -1) {
+      const matches = accs.map((a, i) => matchesFully(a) ? i : -1).filter(i => i !== -1);
+      if (matches.length === 1) targetIdx = matches[0];
+    }
+    if (targetIdx !== -1) {
+      const existing = (accs[targetIdx].urls || '').trim();
+      accs[targetIdx] = {
+        ...accs[targetIdx],
         urls: existing ? existing + '\n' + hostname : hostname,
         domain: hostname,
         _updatedAt: new Date().toISOString(),

@@ -227,6 +227,50 @@ test('regression: saving the URL updates the exact filled account, not the first
   expect(stored[1].urls).toBe('localhost'); // Work Vercel (index 1, the one actually filled)
 });
 
+test('regression: reordering accounts while the save prompt is open does not mis-save a different account', async ({ context, extensionId }) => {
+  const popupPage = await context.newPage();
+  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
+
+  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+    chrome.storage.local.set({
+      auth, sessionExpiry: expiry,
+      accounts: [
+        { name: 'Personal Vercel', secret, urls: '', email: '' },
+        { name: 'Work Vercel',     secret, urls: '', email: '' },
+      ],
+      activeIndex: 1,
+    }, r)
+  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+
+  const autofillPage = await context.newPage();
+  await autofillPage.goto('http://localhost:8765/test/autofill.html');
+  await autofillPage.waitForLoadState('networkidle');
+
+  // Filled "Work Vercel" (index 1) — the prompt is now up, holding index 1.
+  await sendFillMessage(popupPage, autofillPage, 1);
+  await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Work Vercel');
+
+  // While it's open, the popup reorders the list — "Personal Vercel" (a
+  // different account, same secret) now sits at index 1 instead.
+  await popupPage.evaluate(() => new Promise(r =>
+    chrome.storage.local.get('accounts', d => {
+      const [a, b] = d.accounts;
+      chrome.storage.local.set({ accounts: [b, a] }, r);
+    })
+  ));
+
+  // Confirming the (stale) prompt must still land on "Work Vercel" by
+  // content, not on whichever account now happens to sit at index 1.
+  await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
+
+  const stored = await popupPage.evaluate(() =>
+    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  const personal = stored.find(a => a.name === 'Personal Vercel');
+  const work = stored.find(a => a.name === 'Work Vercel');
+  expect(personal.urls).toBe('');
+  expect(work.urls).toBe('localhost');
+});
+
 test('regression: auto-submit is delayed while the save-URL prompt is up, instead of racing it off the page', async ({ context, extensionId }) => {
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
