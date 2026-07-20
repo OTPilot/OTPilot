@@ -939,10 +939,12 @@ function showSaveUrlOverlay(acc, idx, hostname) {
       };
       await new Promise(r => chrome.storage.local.set({ accounts: accs }, r));
       requestSiteIcon(hostname);
+      showToast(`Saved — ${acc.name} will auto-fill here next time`);
+    } else {
+      showToast('Could not save site — account changed', false);
     }
     _dismissedUrlPrompts.add(dismissKey);
     close();
-    showToast(`Saved — ${acc.name} will auto-fill here next time`);
   };
 
   setTimeout(close, 20_000);

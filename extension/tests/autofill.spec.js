@@ -271,6 +271,39 @@ test('regression: reordering accounts while the save prompt is open does not mis
   expect(work.urls).toBe('localhost');
 });
 
+test('regression: if the account is gone by the time Save is clicked, the toast reports failure instead of a false success', async ({ context, extensionId }) => {
+  const popupPage = await context.newPage();
+  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
+
+  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+    chrome.storage.local.set({
+      auth, sessionExpiry: expiry,
+      accounts: [{ name: 'Vercel', secret, urls: '', email: '' }],
+      activeIndex: 0,
+    }, r)
+  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+
+  const autofillPage = await context.newPage();
+  await autofillPage.goto('http://localhost:8765/test/autofill.html');
+  await autofillPage.waitForLoadState('networkidle');
+
+  await sendFillMessage(popupPage, autofillPage);
+  await expect(autofillPage.locator('#otpilot-save-url')).toBeVisible();
+
+  // The account is deleted from the popup while the prompt is still open —
+  // no index and no full-record match can resolve a target anymore.
+  await popupPage.evaluate(() => new Promise(r => chrome.storage.local.set({ accounts: [] }, r)));
+
+  await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
+
+  await expect(autofillPage.getByText('Could not save site — account changed')).toBeVisible();
+  await expect(autofillPage.getByText('Saved —', { exact: false })).toHaveCount(0);
+
+  const stored = await popupPage.evaluate(() =>
+    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  expect(stored).toEqual([]);
+});
+
 test('regression: auto-submit is delayed while the save-URL prompt is up, instead of racing it off the page', async ({ context, extensionId }) => {
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
