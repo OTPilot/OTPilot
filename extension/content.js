@@ -897,7 +897,10 @@ const _dismissedUrlPrompts = new Set();
 // an auto-submit that would navigate away.
 function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
   if (document.getElementById('otpilot-save-url')) { onResolve?.(); return; }
-  const dismissKey = idx + '|' + hostname;
+  // Keyed by the account's content, not its array index — an index-based key
+  // would let a reordered-in account inherit a dismissal that was never
+  // actually shown for it (see matchesFully below for the same reasoning).
+  const dismissKey = [acc.secret, acc.name, acc.urls, acc.email, hostname].join('|');
   if (_dismissedUrlPrompts.has(dismissKey)) { onResolve?.(); return; }
 
   const el = makeOverlay('otpilot-save-url');

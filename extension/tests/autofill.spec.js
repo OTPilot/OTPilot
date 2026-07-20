@@ -175,6 +175,46 @@ test('dismissing the save-URL prompt leaves the account unchanged and does not r
   await expect(autofillPage.locator('#otpilot-save-url')).toHaveCount(0);
 });
 
+test('regression: a dismissal does not carry over to a different account that reorders into the same index', async ({ context, extensionId }) => {
+  const popupPage = await context.newPage();
+  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
+
+  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+    chrome.storage.local.set({
+      auth, sessionExpiry: expiry,
+      accounts: [
+        { name: 'Personal Vercel', secret, urls: '', email: '' },
+        { name: 'Work Vercel',     secret, urls: '', email: '' },
+      ],
+      activeIndex: 1,
+    }, r)
+  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+
+  const autofillPage = await context.newPage();
+  await autofillPage.goto('http://localhost:8765/test/autofill.html');
+  await autofillPage.waitForLoadState('networkidle');
+
+  // Dismiss the prompt for "Work Vercel" (index 1).
+  await sendFillMessage(popupPage, autofillPage, 1);
+  await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Work Vercel');
+  await autofillPage.locator('#otpilot-save-url .otpilot-secondary').click();
+  await expect(autofillPage.locator('#otpilot-save-url')).toHaveCount(0);
+
+  // The list reorders — "Personal Vercel" (never shown or dismissed) now
+  // sits at index 1, the position the dismissal used to key off of.
+  await popupPage.evaluate(() => new Promise(r =>
+    chrome.storage.local.get('accounts', d => {
+      const [a, b] = d.accounts;
+      chrome.storage.local.set({ accounts: [b, a] }, r);
+    })
+  ));
+
+  // Filling "Personal Vercel" (now at index 1) must still show its own
+  // prompt — it never inherited Work Vercel's dismissal.
+  await sendFillMessage(popupPage, autofillPage, 1);
+  await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Personal Vercel');
+});
+
 test('a URL-matched account never triggers the save-URL prompt', async ({ context, extensionId }) => {
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
