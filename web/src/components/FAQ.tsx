@@ -37,6 +37,10 @@ const faqs = [
     q: 'Can I use OTPilot on multiple devices without paying?',
     a: 'Yes. On the free plan you can move your accounts between devices manually using the encrypted export/import feature, just export from one browser and import on another. Cloud sync (automatic, real-time) is available on the Personal plan.',
   },
+  {
+    q: "I'm currently using Google Authenticator, can I switch?",
+    a: 'Yes. Google Authenticator has a built-in "Transfer accounts" export that generates one or more QR codes. Screenshot them and select the images in OTPilot\'s Settings — your accounts are imported instantly, no retyping secrets. Everything is decoded locally on your device.',
+  },
 ]
 
 export default function FAQ() {

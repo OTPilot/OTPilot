@@ -1,6 +1,13 @@
 # Changelog
 
 
+## v1.3.0
+
+### Extension
+
+- **Import from Google Authenticator** — A new "From Google Authenticator" row in Settings lets you migrate accounts from GA's "Transfer accounts" export. GA encodes selected accounts as one or more `otpauth-migration://` QR codes (protobuf-encoded, split across multiple QR images via `batch_id`/`batch_index`/`batch_size` when you export many accounts at once). The flow is screenshot-based to stay simple inside a popup (no camera permission, no extra window): screenshot each exported QR on your phone, select those images in the popup, and they're decoded fully client-side with the already-vendored `jsqr.js` (`googleAuthMigration.js` adds a minimal hand-rolled protobuf reader — no new dependency). Decoded accounts flow into the existing import-review picker (dedup against your vault, pick which to keep) exactly like a JSON backup import. HOTP entries (counter-based, not supported by this extension's TOTP-only `totp.js`) are detected and skipped with a note rather than silently dropped or breaking the import.
+- **Settings redesigned as a drill-down list** — Export/Import and the new Google Authenticator import used to sit inline as buttons + always-visible instructions, cluttering the Settings tab. They're now list rows (icon, title, subtitle) that open a focused sub-screen with a back button, matching common list→detail settings patterns. Auto-fill email codes stays inline as a toggle row since it's a single on/off setting.
+
 ## v1.2.0
 
 ### Teams + shared OTP codes (Team Lite)

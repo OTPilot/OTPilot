@@ -6,7 +6,7 @@ EXTENSION_FILES := \
   manifest.json \
   popup.html popup.js \
   background.js \
-  jsqr.js content.js totp.js email-reader.js \
+  jsqr.js content.js totp.js email-reader.js googleAuthMigration.js \
   supabase.js cloudSync.js keys.js sharing.js \
   config.js links.js \
   icon16.png icon48.png icon128.png \
