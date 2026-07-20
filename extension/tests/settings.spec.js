@@ -160,6 +160,33 @@ test('change master password: successful change invalidates the old password and
   expect(newWorks).toBe(true);
 });
 
+test('regression: a successful password change renews the session instead of keeping the old near-expiry', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await unlock(page);
+  await page.evaluate(() => createAuth('oldpass123'));
+
+  // Session about to expire in 5 seconds — changing the password should
+  // renew it, not leave this stale near-expiry in place (setup/login both
+  // renew on successful auth; this flow just verified the current password
+  // too, so it should behave the same way).
+  const almostExpired = Date.now() + 5000;
+  await page.evaluate(exp => new Promise(r =>
+    chrome.storage.local.set({ sessionExpiry: exp, sessionDuration: 86400000 }, r)), almostExpired);
+
+  await page.click('#nav-config');
+  await page.click('#row-settings-password');
+  await page.fill('#change-pw-current', 'oldpass123');
+  await page.fill('#change-pw-new', 'newpass456');
+  await page.fill('#change-pw-confirm', 'newpass456');
+  await page.click('#change-pw-submit');
+  await expect(page.locator('#status-msg')).toHaveText('Master password updated');
+
+  const { sessionExpiry } = await page.evaluate(() =>
+    new Promise(r => chrome.storage.local.get('sessionExpiry', r)));
+  expect(sessionExpiry).toBeGreaterThan(almostExpired);
+});
+
 // ── Google Authenticator migration import ───────────────────────────────────
 
 test('parseMigrationUri decodes accounts, skipping HOTP and unsupported algorithm/digit settings', async ({ context, extensionId }) => {

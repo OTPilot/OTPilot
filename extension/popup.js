@@ -857,7 +857,7 @@ document.getElementById('change-pw-submit').addEventListener('click', async () =
 
   setLockButtonState(btn, true);
   try {
-    const { auth } = await loadAuthState();
+    const { auth, sessionDuration } = await loadAuthState();
     const ok = await verifyMasterPassword(current, auth);
     if (!ok) {
       err.textContent = 'Current password is incorrect.';
@@ -865,6 +865,9 @@ document.getElementById('change-pw-submit').addEventListener('click', async () =
       return;
     }
     await createAuth(next);
+    // Renew the session from now, like setup/login do — otherwise a change
+    // made near the old expiry could immediately re-lock the popup.
+    await saveSessionExpiry(sessionDuration ?? 86400000);
     ['change-pw-current', 'change-pw-new', 'change-pw-confirm'].forEach(id => document.getElementById(id).value = '');
     showSettingsSubview('settings-list');
     setStatus('Master password updated');
