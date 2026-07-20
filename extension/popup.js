@@ -825,6 +825,10 @@ function showSettingsSubview(id) {
   ['settings-list', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view'].forEach(v => {
     document.getElementById(v).style.display = v === id ? '' : 'none';
   });
+  // import-picker lives outside the subviews above (shared by Backup and Google
+  // Auth import) — close it on any navigation so a pending review can't linger
+  // and later be confirmed from an unrelated settings screen.
+  hideImportPicker();
 }
 
 document.getElementById('row-settings-backup').addEventListener('click', () => showSettingsSubview('settings-backup-view'));
@@ -1066,7 +1070,16 @@ async function handleGoogleAuthFiles(fileList) {
   const allOtp = payloads.flatMap(p => p.otpParameters);
   const totpOnly = allOtp.filter(o => o.type !== 1); // 1 = HOTP, not supported here
   const hotpSkipped = allOtp.length - totpOnly.length;
-  const mapped = totpOnly.map(o => ({
+
+  // totp.js only ever generates SHA-1, 6-digit codes (like every other import
+  // path in this app — see content.js's parseOtpAuthUri). Algorithm 0/1 =
+  // UNSPECIFIED/SHA1, digits 0/1 = UNSPECIFIED/SIX; anything else (SHA256/
+  // SHA512/MD5, or 8-digit) would silently produce codes the site rejects,
+  // so skip those instead of importing a broken account.
+  const supported = totpOnly.filter(o => (o.algorithm === 0 || o.algorithm === 1) && (o.digits === 0 || o.digits === 1));
+  const unsupportedSkipped = totpOnly.length - supported.length;
+
+  const mapped = supported.map(o => ({
     name: o.issuer || o.name,
     email: o.name,
     secret: base32Encode(o.secret),
@@ -1083,6 +1096,7 @@ async function handleGoogleAuthFiles(fileList) {
   const notes = [];
   if (unrecognized > 0) notes.push(`${unrecognized} image(s) not recognized`);
   if (hotpSkipped > 0) notes.push(`${hotpSkipped} HOTP account(s) skipped (not supported)`);
+  if (unsupportedSkipped > 0) notes.push(`${unsupportedSkipped} account(s) skipped (unsupported algorithm or digit count)`);
   for (const { batchSize, indices } of batchGroups.values()) {
     if (batchSize > 1 && indices.size < batchSize) {
       notes.push(`You selected ${indices.size} of ${batchSize} QR codes from this export — add the rest to get all your accounts`);
