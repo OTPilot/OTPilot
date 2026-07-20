@@ -310,18 +310,23 @@ async function fillAndSubmit(accountIndexHint, fromPopup = false) {
     const offerSaveUrl = fromPopup && !accountMatchesHostname(result.acc, hostname);
 
     const form = result.input.closest('form');
-    if (form) {
-      // A plain auto-submit fires in 600ms — too fast to notice or act on the
-      // save-URL prompt below before the page navigates and takes it with it.
-      // Give it a real window when that prompt is about to show.
-      setTimeout(() => {
-        const submitBtn = form.querySelector('[type="submit"]');
-        if (submitBtn) submitBtn.click();
-        else form.submit();
-      }, offerSaveUrl ? 4000 : 600);
-    }
+    const submit = () => {
+      if (!form) return;
+      const submitBtn = form.querySelector('[type="submit"]');
+      if (submitBtn) submitBtn.click();
+      else form.submit();
+    };
 
-    if (offerSaveUrl) showSaveUrlOverlay(result.acc, result.idx, hostname);
+    if (offerSaveUrl) {
+      // A plain auto-submit fires in 600ms — a login page that navigates on
+      // submit would take the save-URL prompt with it before a person could
+      // read or act on it. Hold the submit until the prompt actually
+      // resolves (Save, Not now, or its own timeout) instead of guessing at
+      // a fixed delay that may still be too short for a slower reader.
+      showSaveUrlOverlay(result.acc, result.idx, hostname, () => setTimeout(submit, 600));
+    } else if (form) {
+      setTimeout(submit, 600);
+    }
   } else if (fromPopup) {
     showToast(result.msg, false);
   }
@@ -886,10 +891,14 @@ const _dismissedUrlPrompts = new Set();
 // accounts (e.g. from Google Authenticator) start out this way since the
 // source never provides a site URL. Offer to save it so auto-fill picks the
 // right account here on its own next time.
-function showSaveUrlOverlay(acc, idx, hostname) {
-  if (document.getElementById('otpilot-save-url')) return;
+// `onResolve` fires exactly once, whenever the prompt is done with (saved,
+// dismissed, closed, or its own timeout) — callers use it to know when it's
+// safe to do something the prompt shouldn't be raced off the page by, like
+// an auto-submit that would navigate away.
+function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
+  if (document.getElementById('otpilot-save-url')) { onResolve?.(); return; }
   const dismissKey = idx + '|' + hostname;
-  if (_dismissedUrlPrompts.has(dismissKey)) return;
+  if (_dismissedUrlPrompts.has(dismissKey)) { onResolve?.(); return; }
 
   const el = makeOverlay('otpilot-save-url');
   const safeName = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -907,7 +916,11 @@ function showSaveUrlOverlay(acc, idx, hostname) {
     </div>`;
 
   document.body.appendChild(el);
-  const close = () => el.remove();
+  let resolved = false;
+  const close = () => {
+    el.remove();
+    if (!resolved) { resolved = true; onResolve?.(); }
+  };
 
   el.querySelector('.otpilot-overlay-close').onclick = close;
   el.querySelector('.otpilot-secondary').onclick = () => { _dismissedUrlPrompts.add(dismissKey); close(); };

@@ -324,12 +324,14 @@ test('regression: auto-submit is delayed while the save-URL prompt is up, instea
   await expect(autofillPage.locator('#otpilot-save-url')).toBeVisible();
 
   // The plain auto-submit fires at 600ms; the form's own submit handler flips
-  // #result visible. If the delay wasn't extended, the page would already
-  // have "submitted" (and, on a real site, navigated away) well before this.
-  await autofillPage.waitForTimeout(1200);
+  // #result visible. While the prompt is still up (nobody has answered it
+  // yet), submission must not have raced ahead and taken it off the page.
+  await autofillPage.waitForTimeout(1500);
   await expect(autofillPage.locator('#result')).toBeHidden();
   await expect(autofillPage.locator('#otpilot-save-url')).toBeVisible();
 
-  // ...but it does still auto-submit eventually.
-  await expect(autofillPage.locator('#result')).toBeVisible({ timeout: 5000 });
+  // Resolving the prompt (here: dismissing it) lets the deferred submit
+  // proceed shortly after — it's held, not cancelled.
+  await autofillPage.locator('#otpilot-save-url .otpilot-secondary').click();
+  await expect(autofillPage.locator('#result')).toBeVisible({ timeout: 3000 });
 });
