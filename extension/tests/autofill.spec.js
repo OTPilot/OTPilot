@@ -195,3 +195,64 @@ test('a URL-matched account never triggers the save-URL prompt', async ({ contex
   await expect(autofillPage.locator('input[name="otp_token"]')).toHaveValue(/^\d{6}$/, { timeout: 5000 });
   await expect(autofillPage.locator('#otpilot-save-url')).toHaveCount(0);
 });
+
+test('regression: saving the URL updates the exact filled account, not the first with the same secret', async ({ context, extensionId }) => {
+  const popupPage = await context.newPage();
+  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
+
+  // Two accounts sharing a secret (allowed — nothing enforces uniqueness).
+  // Manually filling the *second* one must not touch the first.
+  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+    chrome.storage.local.set({
+      auth, sessionExpiry: expiry,
+      accounts: [
+        { name: 'Personal Vercel', secret, urls: '', email: '' },
+        { name: 'Work Vercel',     secret, urls: '', email: '' },
+      ],
+      activeIndex: 1,
+    }, r)
+  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+
+  const autofillPage = await context.newPage();
+  await autofillPage.goto('http://localhost:8765/test/autofill.html');
+  await autofillPage.waitForLoadState('networkidle');
+
+  await sendFillMessage(popupPage, autofillPage, 1);
+  await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Work Vercel');
+  await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
+
+  const stored = await popupPage.evaluate(() =>
+    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  expect(stored[0].urls).toBe(''); // Personal Vercel (index 0) untouched
+  expect(stored[1].urls).toBe('localhost'); // Work Vercel (index 1, the one actually filled)
+});
+
+test('regression: auto-submit is delayed while the save-URL prompt is up, instead of racing it off the page', async ({ context, extensionId }) => {
+  const popupPage = await context.newPage();
+  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
+
+  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+    chrome.storage.local.set({
+      auth, sessionExpiry: expiry,
+      accounts: [{ name: 'Vercel', secret, urls: '', email: '' }],
+      activeIndex: 0,
+    }, r)
+  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+
+  const autofillPage = await context.newPage();
+  await autofillPage.goto('http://localhost:8765/test/autofill.html');
+  await autofillPage.waitForLoadState('networkidle');
+
+  await sendFillMessage(popupPage, autofillPage);
+  await expect(autofillPage.locator('#otpilot-save-url')).toBeVisible();
+
+  // The plain auto-submit fires at 600ms; the form's own submit handler flips
+  // #result visible. If the delay wasn't extended, the page would already
+  // have "submitted" (and, on a real site, navigated away) well before this.
+  await autofillPage.waitForTimeout(1200);
+  await expect(autofillPage.locator('#result')).toBeHidden();
+  await expect(autofillPage.locator('#otpilot-save-url')).toBeVisible();
+
+  // ...but it does still auto-submit eventually.
+  await expect(autofillPage.locator('#result')).toBeVisible({ timeout: 5000 });
+});

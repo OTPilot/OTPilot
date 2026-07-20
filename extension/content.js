@@ -45,11 +45,11 @@ function getActiveAccount(overrideIndex) {
     chrome.storage.local.get(['accounts', 'activeIndex'], d => {
       const accs = d.accounts || [];
       // 1. Try URL-based match first
-      const byUrl = findAccount(accs, location.hostname.toLowerCase());
-      if (byUrl) { r(byUrl); return; }
+      const byUrlIdx = accs.findIndex(acc => accountMatchesHostname(acc, location.hostname.toLowerCase()));
+      if (byUrlIdx !== -1) { r({ acc: accs[byUrlIdx], idx: byUrlIdx }); return; }
       // 2. Fall back to the account selected in the popup (or override from message)
       const idx = overrideIndex ?? d.activeIndex ?? 0;
-      r(accs[idx] || null);
+      r({ acc: accs[idx] || null, idx });
     })
   );
 }
@@ -282,7 +282,7 @@ function showEmailOtpBanner(code, input, onClose) {
 }
 
 async function fillOTP(accountIndexHint) {
-  const acc = await getActiveAccount(accountIndexHint);
+  const { acc, idx } = await getActiveAccount(accountIndexHint);
   if (!acc)         return { ok: false, msg: 'No account configured for this URL' };
   if (!acc.secret)  return { ok: false, msg: `No secret set for "${acc.name}"` };
 
@@ -295,28 +295,33 @@ async function fillOTP(accountIndexHint) {
 
   fillInputValue(input, code);
 
-  return { ok: true, code, input, acc };
+  return { ok: true, code, input, acc, idx };
 }
 
 async function fillAndSubmit(accountIndexHint, fromPopup = false) {
   const result = await fillOTP(accountIndexHint);
   if (result.ok) {
     showToast('OTP filled: ' + result.code);
-    const form = result.input.closest('form');
-    if (form) {
-      setTimeout(() => {
-        const submitBtn = form.querySelector('[type="submit"]');
-        if (submitBtn) submitBtn.click();
-        else form.submit();
-      }, 600);
-    }
+
     // This account only filled via the popup's manual selection (not a URL
     // match, otherwise fillOTP would never have needed the index hint) — offer
     // to remember the site so it auto-fills here next time.
     const hostname = location.hostname.toLowerCase();
-    if (fromPopup && !accountMatchesHostname(result.acc, hostname)) {
-      showSaveUrlOverlay(result.acc, hostname);
+    const offerSaveUrl = fromPopup && !accountMatchesHostname(result.acc, hostname);
+
+    const form = result.input.closest('form');
+    if (form) {
+      // A plain auto-submit fires in 600ms — too fast to notice or act on the
+      // save-URL prompt below before the page navigates and takes it with it.
+      // Give it a real window when that prompt is about to show.
+      setTimeout(() => {
+        const submitBtn = form.querySelector('[type="submit"]');
+        if (submitBtn) submitBtn.click();
+        else form.submit();
+      }, offerSaveUrl ? 4000 : 600);
     }
+
+    if (offerSaveUrl) showSaveUrlOverlay(result.acc, result.idx, hostname);
   } else if (fromPopup) {
     showToast(result.msg, false);
   }
@@ -881,9 +886,9 @@ const _dismissedUrlPrompts = new Set();
 // accounts (e.g. from Google Authenticator) start out this way since the
 // source never provides a site URL. Offer to save it so auto-fill picks the
 // right account here on its own next time.
-function showSaveUrlOverlay(acc, hostname) {
+function showSaveUrlOverlay(acc, idx, hostname) {
   if (document.getElementById('otpilot-save-url')) return;
-  const dismissKey = acc.secret + '|' + hostname;
+  const dismissKey = idx + '|' + hostname;
   if (_dismissedUrlPrompts.has(dismissKey)) return;
 
   const el = makeOverlay('otpilot-save-url');
@@ -909,8 +914,11 @@ function showSaveUrlOverlay(acc, hostname) {
   el.querySelector('.otpilot-primary').onclick = async () => {
     const d = await new Promise(r => chrome.storage.local.get('accounts', r));
     const accs = d.accounts || [];
-    const idx = accs.findIndex(a => a.secret === acc.secret);
-    if (idx !== -1) {
+    // Use the index we resolved the account at, not a secret search — two
+    // accounts can share a secret, and searching by secret alone risks
+    // updating the wrong one. Re-check identity at that index in case storage
+    // shifted (account deleted/reordered) while the overlay sat open.
+    if (accs[idx] && accs[idx].secret === acc.secret) {
       const existing = (accs[idx].urls || '').trim();
       accs[idx] = {
         ...accs[idx],
