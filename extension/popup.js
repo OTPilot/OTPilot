@@ -822,7 +822,7 @@ document.getElementById('toggle-email-autofill').addEventListener('change', e =>
 // ── Settings drill-down navigation ──────────────────────────────────────────
 
 function showSettingsSubview(id) {
-  ['settings-list', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view'].forEach(v => {
+  ['settings-list', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view', 'settings-password-view'].forEach(v => {
     document.getElementById(v).style.display = v === id ? '' : 'none';
   });
   // import-picker lives outside the subviews above (shared by Backup and Google
@@ -836,6 +836,53 @@ document.getElementById('back-settings-backup').addEventListener('click', () => 
 document.getElementById('back-settings-google-import').addEventListener('click', () => showSettingsSubview('settings-list'));
 document.getElementById('row-settings-autofill').addEventListener('click', () => showSettingsSubview('settings-autofill-view'));
 document.getElementById('back-settings-autofill').addEventListener('click', () => showSettingsSubview('settings-list'));
+
+document.getElementById('row-settings-password').addEventListener('click', () => {
+  ['change-pw-current', 'change-pw-new', 'change-pw-confirm'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('change-pw-err').textContent = '';
+  showSettingsSubview('settings-password-view');
+});
+document.getElementById('back-settings-password').addEventListener('click', () => showSettingsSubview('settings-list'));
+
+document.getElementById('change-pw-submit').addEventListener('click', async () => {
+  const current = document.getElementById('change-pw-current').value;
+  const next    = document.getElementById('change-pw-new').value;
+  const confirm = document.getElementById('change-pw-confirm').value;
+  const err     = document.getElementById('change-pw-err');
+  const btn     = document.getElementById('change-pw-submit');
+
+  err.textContent = '';
+  if (!current || !next) { err.textContent = 'Fill in both password fields.'; return; }
+  if (next !== confirm)  { err.textContent = 'New passwords do not match.'; return; }
+
+  setLockButtonState(btn, true);
+  try {
+    const { auth, sessionDuration } = await loadAuthState();
+    const ok = await verifyMasterPassword(current, auth);
+    if (!ok) {
+      err.textContent = 'Current password is incorrect.';
+      setLockButtonState(btn, false);
+      return;
+    }
+    await createAuth(next);
+    // Renew the session from now, like setup/login do — otherwise a change
+    // made near the old expiry could immediately re-lock the popup.
+    await saveSessionExpiry(sessionDuration ?? 86400000);
+    ['change-pw-current', 'change-pw-new', 'change-pw-confirm'].forEach(id => document.getElementById(id).value = '');
+    showSettingsSubview('settings-list');
+    setStatus('Master password updated');
+  } catch {
+    err.textContent = 'Failed to update password. Try again.';
+  } finally {
+    setLockButtonState(btn, false);
+  }
+});
+
+['change-pw-current', 'change-pw-new', 'change-pw-confirm'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('change-pw-submit').click();
+  });
+});
 
 document.getElementById('nav-home').addEventListener('click',    () => showView('home'));
 document.getElementById('nav-settings').addEventListener('click', () => showView('accounts'));

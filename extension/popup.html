@@ -976,6 +976,40 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         </span>
       </button>
+
+      <button class="settings-row" id="row-settings-password">
+        <span class="settings-row-icon">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+        </span>
+        <span class="settings-row-text">
+          <span class="settings-row-title">Change master password</span>
+          <span class="settings-row-sub">Update your local unlock password</span>
+        </span>
+        <span class="settings-row-chevron">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </span>
+      </button>
+    </div>
+
+    <!-- Sub-view: Change master password -->
+    <div id="settings-password-view" class="settings-subview" style="display:none">
+      <div class="settings-subview-header">
+        <button class="settings-back" id="back-settings-password">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="settings-subview-title">Change master password</span>
+      </div>
+
+      <p style="font-size:10px;color:#475569;margin:0 0 10px;line-height:1.5">
+        This only changes the password that unlocks OTPilot on this device. It does not re-encrypt anything on the server — cloud sync uses a separate recovery key.
+      </p>
+      <input type="password" id="change-pw-current" class="lock-input" placeholder="Current password" autocomplete="current-password">
+      <input type="password" id="change-pw-new" class="lock-input" placeholder="New password" autocomplete="new-password" style="margin-top:8px">
+      <input type="password" id="change-pw-confirm" class="lock-input" placeholder="Confirm new password" autocomplete="new-password" style="margin-top:8px">
+      <div class="lock-err" id="change-pw-err"></div>
+      <button class="lock-btn" id="change-pw-submit">Update password</button>
     </div>
 
     <!-- Sub-view: Auto-fill email codes -->
