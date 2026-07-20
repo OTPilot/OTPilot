@@ -895,13 +895,26 @@ const _dismissedUrlPrompts = new Set();
 // dismissed, closed, or its own timeout) — callers use it to know when it's
 // safe to do something the prompt shouldn't be raced off the page by, like
 // an auto-submit that would navigate away.
+//
+// Only one prompt is shown at a time. A second manual fill (a different
+// account) while one is already up queues instead of being treated as
+// already resolved — otherwise its own save opportunity (and its caller's
+// deferred submit) would be skipped without the user ever seeing it.
+let _saveUrlShowing = false;
+const _saveUrlQueue = [];
+
 function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
-  if (document.getElementById('otpilot-save-url')) { onResolve?.(); return; }
   // Keyed by the account's content, not its array index — an index-based key
   // would let a reordered-in account inherit a dismissal that was never
   // actually shown for it (see matchesFully below for the same reasoning).
   const dismissKey = [acc.secret, acc.name, acc.urls, acc.email, hostname].join('|');
   if (_dismissedUrlPrompts.has(dismissKey)) { onResolve?.(); return; }
+
+  if (_saveUrlShowing) {
+    _saveUrlQueue.push({ acc, idx, hostname, onResolve });
+    return;
+  }
+  _saveUrlShowing = true;
 
   const el = makeOverlay('otpilot-save-url');
   const safeName = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -922,7 +935,12 @@ function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
   let resolved = false;
   const close = () => {
     el.remove();
-    if (!resolved) { resolved = true; onResolve?.(); }
+    if (resolved) return;
+    resolved = true;
+    _saveUrlShowing = false;
+    onResolve?.();
+    const next = _saveUrlQueue.shift();
+    if (next) showSaveUrlOverlay(next.acc, next.idx, next.hostname, next.onResolve);
   };
 
   el.querySelector('.otpilot-overlay-close').onclick = close;

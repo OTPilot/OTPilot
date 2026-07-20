@@ -215,6 +215,49 @@ test('regression: a dismissal does not carry over to a different account that re
   await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Personal Vercel');
 });
 
+test('regression: a second manual fill while a save-URL prompt is open queues its own prompt instead of skipping it', async ({ context, extensionId }) => {
+  const popupPage = await context.newPage();
+  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
+
+  await popupPage.evaluate(([auth, expiry, secretA, secretB]) => new Promise(r =>
+    chrome.storage.local.set({
+      auth, sessionExpiry: expiry,
+      accounts: [
+        { name: 'Account A', secret: secretA, urls: '', email: '' },
+        { name: 'Account B', secret: secretB, urls: '', email: '' },
+      ],
+      activeIndex: 0,
+    }, r)
+  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET, 'JBSWY3DPEHPK3PXQ']);
+
+  const autofillPage = await context.newPage();
+  await autofillPage.goto('http://localhost:8765/test/autofill.html');
+  await autofillPage.waitForLoadState('networkidle');
+
+  // Fill A — its prompt comes up.
+  await sendFillMessage(popupPage, autofillPage, 0);
+  await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Account A');
+
+  // Fill B (a different account) while A's prompt is still open. B must not
+  // be treated as already resolved — that would skip B's own prompt and let
+  // its deferred submit fire before anyone decided anything for it.
+  await sendFillMessage(popupPage, autofillPage, 1);
+  await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Account A');
+  await expect(autofillPage.locator('#result')).toBeHidden();
+
+  // Resolving A's prompt lets B's own prompt take its turn right after.
+  await autofillPage.locator('#otpilot-save-url .otpilot-secondary').click();
+  await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Account B');
+
+  await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
+  await expect(autofillPage.locator('#otpilot-save-url')).toHaveCount(0);
+
+  const stored = await popupPage.evaluate(() =>
+    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  expect(stored[0].urls).toBe(''); // Account A was dismissed, not saved
+  expect(stored[1].urls).toBe('localhost'); // Account B was saved
+});
+
 test('a URL-matched account never triggers the save-URL prompt', async ({ context, extensionId }) => {
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
