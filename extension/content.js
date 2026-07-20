@@ -945,6 +945,7 @@ function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
       const matches = accs.map((a, i) => matchesFully(a) ? i : -1).filter(i => i !== -1);
       if (matches.length === 1) targetIdx = matches[0];
     }
+    let saved = false;
     if (targetIdx !== -1) {
       const existing = (accs[targetIdx].urls || '').trim();
       accs[targetIdx] = {
@@ -953,7 +954,11 @@ function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
         domain: hostname,
         _updatedAt: new Date().toISOString(),
       };
-      await new Promise(r => chrome.storage.local.set({ accounts: accs }, r));
+      saved = await new Promise(resolve =>
+        chrome.storage.local.set({ accounts: accs }, () => resolve(!chrome.runtime.lastError))
+      );
+    }
+    if (saved) {
       requestSiteIcon(hostname);
       showToast(`Saved — ${acc.name} will auto-fill here next time`);
     } else {
