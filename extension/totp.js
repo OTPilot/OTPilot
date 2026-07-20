@@ -15,6 +15,18 @@ function base32Decode(input) {
   return out.slice(0, idx).buffer;
 }
 
+function base32Encode(bytes) {
+  const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0, val = 0, out = '';
+  for (const b of bytes) {
+    val = (val << 8) | b;
+    bits += 8;
+    while (bits >= 5) { out += alpha[(val >>> (bits - 5)) & 0x1f]; bits -= 5; }
+  }
+  if (bits > 0) out += alpha[(val << (5 - bits)) & 0x1f];
+  return out;
+}
+
 function hexDecode(hex) {
   hex = hex.replace(/\s/g, '');
   if (hex.length % 2 !== 0) throw new Error('Odd-length hex string');

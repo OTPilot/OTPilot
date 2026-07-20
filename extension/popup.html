@@ -537,6 +537,39 @@
     }
     .btn-backup:hover { border-color: #38bdf8; color: #38bdf8; }
 
+    /* ── Settings list rows (drill-down) ── */
+    .settings-row {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      padding: 9px 8px; margin-bottom: 3px;
+      background: transparent; border: none; border-radius: 7px;
+      color: inherit; font-family: inherit; text-align: left; cursor: pointer;
+      transition: background .12s;
+    }
+    button.settings-row:hover { background: rgba(56,189,248,0.06); }
+    .settings-row-icon {
+      width: 28px; height: 28px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: #1e293b; border: 1px solid #1e3a5f; border-radius: 8px;
+      color: #38bdf8;
+    }
+    .settings-row-text { flex: 1; min-width: 0; }
+    .settings-row-title { display: block; font-size: 12px; font-weight: 600; color: #e2e8f0; }
+    .settings-row-sub {
+      display: block; font-size: 10px; color: #64748b; margin-top: 1px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .settings-row-chevron { color: #334155; flex-shrink: 0; display: flex; align-items: center; }
+
+    .settings-subview-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .settings-back {
+      display: flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; padding: 0;
+      background: transparent; border: none; border-radius: 5px;
+      color: #94a3b8; cursor: pointer; transition: color .12s, background .12s;
+    }
+    .settings-back:hover { color: #38bdf8; background: rgba(56,189,248,0.08); }
+    .settings-subview-title { font-size: 13px; font-weight: 700; color: #f1f5f9; }
+
     #crypto-form {
       margin-top: 8px; padding: 10px;
       background: #0f172a; border: 1px solid #1e3a5f; border-radius: 6px;
@@ -862,8 +895,6 @@
     <button class="btn" id="btn-fill" disabled>Fill Page</button>
   </div>
 
-  <div id="status-msg"></div>
-
   <!-- Team shared codes (read-only). Hidden unless the user has codes shared with them. -->
   <div id="shared-section" style="display:none">
     <div class="shared-divider">Shared with you</div>
@@ -898,24 +929,134 @@
 <!-- Settings view -->
 <div id="config-panel" style="display:none">
   <div class="settings-body">
-    <div class="backup-row">
-      <button class="btn-backup" id="btn-export">↑ Export</button>
-      <button class="btn-backup" id="btn-import">↓ Import</button>
+
+    <!-- Top-level settings list -->
+    <div id="settings-list" class="settings-subview">
+      <button class="settings-row" id="row-settings-backup">
+        <span class="settings-row-icon">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </span>
+        <span class="settings-row-text">
+          <span class="settings-row-title">Backup &amp; Restore</span>
+          <span class="settings-row-sub">Export or import an encrypted backup file</span>
+        </span>
+        <span class="settings-row-chevron">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </span>
+      </button>
+
+      <button class="settings-row" id="row-settings-google-import">
+        <span class="settings-row-icon">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><line x1="14" y1="14" x2="21" y2="14"/><line x1="14" y1="21" x2="21" y2="21"/><line x1="17.5" y1="14" x2="17.5" y2="21"/>
+          </svg>
+        </span>
+        <span class="settings-row-text">
+          <span class="settings-row-title">From Google Authenticator</span>
+          <span class="settings-row-sub">Transfer accounts via QR code</span>
+        </span>
+        <span class="settings-row-chevron">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </span>
+      </button>
+
+      <button class="settings-row" id="row-settings-autofill">
+        <span class="settings-row-icon">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 4h16v16H4z" stroke="none"/><path d="M22 6l-10 7L2 6"/><rect x="2" y="4" width="20" height="16" rx="2"/>
+          </svg>
+        </span>
+        <span class="settings-row-text">
+          <span class="settings-row-title">Auto-fill email codes</span>
+          <span class="settings-row-sub" id="row-settings-autofill-sub">On</span>
+        </span>
+        <span class="settings-row-chevron">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </span>
+      </button>
     </div>
 
-    <div id="export-picker" style="display:none">
-      <div id="export-picker-list"></div>
-      <label class="export-select-all">
-        <input type="checkbox" id="export-select-all" checked>
-        <span>Select all</span>
-      </label>
-      <div class="field-row" style="margin-top:8px">
-        <button class="btn-crypto-ok" id="export-picker-confirm">Export selected</button>
-        <button class="btn-crypto-cancel" id="export-picker-cancel">✕</button>
+    <!-- Sub-view: Auto-fill email codes -->
+    <div id="settings-autofill-view" class="settings-subview" style="display:none">
+      <div class="settings-subview-header">
+        <button class="settings-back" id="back-settings-autofill">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="settings-subview-title">Auto-fill email codes</span>
       </div>
+
+      <label class="toggle">
+        <input type="checkbox" id="toggle-email-autofill" checked>
+        <span class="toggle-track"></span>
+        <span class="toggle-label">Enabled</span>
+      </label>
+      <p style="font-size:10px;color:#475569;margin-top:8px;line-height:1.5">
+        Reads subject lines from open Gmail or Outlook tabs to detect one-time codes. Nothing is stored or sent — the code is read locally and discarded after use.
+      </p>
     </div>
 
+    <!-- Sub-view: Backup & Restore -->
+    <div id="settings-backup-view" class="settings-subview" style="display:none">
+      <div class="settings-subview-header">
+        <button class="settings-back" id="back-settings-backup">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="settings-subview-title">Backup &amp; Restore</span>
+      </div>
+
+      <div class="backup-row">
+        <button class="btn-backup" id="btn-export">↑ Export</button>
+        <button class="btn-backup" id="btn-import">↓ Import</button>
+      </div>
+
+      <div id="export-picker" style="display:none">
+        <div id="export-picker-list"></div>
+        <label class="export-select-all">
+          <input type="checkbox" id="export-select-all" checked>
+          <span>Select all</span>
+        </label>
+        <div class="field-row" style="margin-top:8px">
+          <button class="btn-crypto-ok" id="export-picker-confirm">Export selected</button>
+          <button class="btn-crypto-cancel" id="export-picker-cancel">✕</button>
+        </div>
+      </div>
+
+      <div id="crypto-form" style="display:none">
+        <label id="crypto-label">Password</label>
+        <div class="field-row">
+          <input type="password" id="crypto-password" placeholder="Password for this backup" autocomplete="off">
+          <button class="btn-crypto-ok" id="crypto-confirm">OK</button>
+          <button class="btn-crypto-cancel" id="crypto-cancel">✕</button>
+        </div>
+      </div>
+
+      <input type="file" id="import-file" accept=".json" style="display:none">
+    </div>
+
+    <!-- Sub-view: Import from Google Authenticator -->
+    <div id="settings-google-import-view" class="settings-subview" style="display:none">
+      <div class="settings-subview-header">
+        <button class="settings-back" id="back-settings-google-import">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="settings-subview-title">Import from Google Authenticator</span>
+      </div>
+
+      <p style="font-size:11px;color:#94a3b8;line-height:1.5;margin:0 0 10px">
+        In Google Authenticator: ⋮ menu → <strong>Transfer accounts</strong> → <strong>Export accounts</strong> → select accounts.
+        Screenshot each QR code shown (there may be more than one if you have many accounts), then select those screenshots below.
+        This only copies your accounts — nothing is removed from Google Authenticator.
+      </p>
+      <div id="google-import-status" style="font-size:11px;color:#64748b;margin-bottom:8px"></div>
+      <button class="btn-crypto-ok" id="google-import-pick" style="width:100%">Select screenshots…</button>
+      <input type="file" id="google-import-file" accept="image/*" multiple style="display:none">
+    </div>
+
+    <!-- Shared: import review (fed by either Backup or Google Authenticator import) -->
     <div id="import-picker" style="display:none">
+      <div id="import-picker-notes" style="font-size:10px;color:#f59e0b;line-height:1.5;margin-bottom:8px;display:none"></div>
       <div id="import-picker-list"></div>
       <label class="export-select-all">
         <input type="checkbox" id="import-select-all" checked>
@@ -927,27 +1068,6 @@
       </div>
     </div>
 
-    <div id="crypto-form" style="display:none">
-      <label id="crypto-label">Password</label>
-      <div class="field-row">
-        <input type="password" id="crypto-password" placeholder="Password for this backup" autocomplete="off">
-        <button class="btn-crypto-ok" id="crypto-confirm">OK</button>
-        <button class="btn-crypto-cancel" id="crypto-cancel">✕</button>
-      </div>
-    </div>
-
-    <input type="file" id="import-file" accept=".json" style="display:none">
-
-    <div style="margin-top:14px;padding-top:12px;border-top:1px solid #1e293b">
-      <label class="toggle">
-        <input type="checkbox" id="toggle-email-autofill" checked>
-        <span class="toggle-track"></span>
-        <span class="toggle-label">Auto-fill email codes</span>
-      </label>
-      <p style="font-size:10px;color:#475569;margin-top:5px;line-height:1.5;margin-left:2px">
-        Reads subject lines from open Gmail or Outlook tabs to detect one-time codes. Nothing is stored or sent — the code is read locally and discarded after use.
-      </p>
-    </div>
   </div>
 </div>
 
@@ -1041,6 +1161,9 @@
   </div>
 </div>
 
+<!-- Global status toast — shared by all views (Home, Accounts, Settings, Sync, Team) -->
+<div id="status-msg"></div>
+
 <nav class="bottom-nav">
   <button class="nav-btn active" id="nav-home">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1093,6 +1216,8 @@
 <script src="sharing.js"></script>
 <script src="cloudSync.js"></script>
 <script src="totp.js"></script>
+<script src="jsqr.js"></script>
+<script src="googleAuthMigration.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

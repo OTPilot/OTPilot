@@ -178,10 +178,13 @@ function catDot(name) {
 function renderCategoryBar(barEl, onPick, source = accounts) {
   if (!barEl) return;
   const cats = getCategories(source);
-  if (cats.length === 0) { barEl.style.display = 'none'; barEl.innerHTML = ''; return; }
 
   // A previously-selected category that no longer exists falls back to All.
+  // Must run even when `cats` is empty — otherwise a stale filter survives
+  // the last account losing its category tag and hides everything.
   if (categoryFilter && !cats.includes(categoryFilter)) categoryFilter = '';
+
+  if (cats.length === 0) { barEl.style.display = 'none'; barEl.innerHTML = ''; return; }
 
   barEl.style.display = '';
   barEl.innerHTML = '';
@@ -803,14 +806,32 @@ function showView(view) {
   if (view === 'team') renderTeamPanel();
   if (view === 'settings') {
     chrome.storage.local.get('emailAutoFill', d => {
-      document.getElementById('toggle-email-autofill').checked = d.emailAutoFill ?? true;
+      const on = d.emailAutoFill ?? true;
+      document.getElementById('toggle-email-autofill').checked = on;
+      document.getElementById('row-settings-autofill-sub').textContent = on ? 'On' : 'Off';
     });
+    showSettingsSubview('settings-list');
   }
 }
 
 document.getElementById('toggle-email-autofill').addEventListener('change', e => {
   chrome.storage.local.set({ emailAutoFill: e.target.checked });
+  document.getElementById('row-settings-autofill-sub').textContent = e.target.checked ? 'On' : 'Off';
 });
+
+// ── Settings drill-down navigation ──────────────────────────────────────────
+
+function showSettingsSubview(id) {
+  ['settings-list', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view'].forEach(v => {
+    document.getElementById(v).style.display = v === id ? '' : 'none';
+  });
+}
+
+document.getElementById('row-settings-backup').addEventListener('click', () => showSettingsSubview('settings-backup-view'));
+document.getElementById('back-settings-backup').addEventListener('click', () => showSettingsSubview('settings-list'));
+document.getElementById('back-settings-google-import').addEventListener('click', () => showSettingsSubview('settings-list'));
+document.getElementById('row-settings-autofill').addEventListener('click', () => showSettingsSubview('settings-autofill-view'));
+document.getElementById('back-settings-autofill').addEventListener('click', () => showSettingsSubview('settings-list'));
 
 document.getElementById('nav-home').addEventListener('click',    () => showView('home'));
 document.getElementById('nav-settings').addEventListener('click', () => showView('accounts'));
@@ -948,8 +969,11 @@ document.getElementById('export-picker-cancel').addEventListener('click', hideEx
 
 let pendingImportAccounts = null;
 
-function showImportPicker(importedAccounts) {
+function showImportPicker(importedAccounts, notes = []) {
   pendingImportAccounts = importedAccounts;
+  const notesEl = document.getElementById('import-picker-notes');
+  notesEl.textContent = notes.join(' · ');
+  notesEl.style.display = notes.length ? '' : 'none';
   const existingSecrets = new Set(accounts.map(a => normSecret(a.secret)));
   const list = document.getElementById('import-picker-list');
   list.innerHTML = '';
@@ -970,6 +994,7 @@ function showImportPicker(importedAccounts) {
 
 function hideImportPicker() {
   document.getElementById('import-picker').style.display = 'none';
+  document.getElementById('import-picker-notes').style.display = 'none';
   pendingImportAccounts = null;
 }
 
@@ -992,6 +1017,102 @@ document.getElementById('import-picker-confirm').addEventListener('click', async
 });
 
 document.getElementById('import-picker-cancel').addEventListener('click', hideImportPicker);
+
+// ── Google Authenticator import ─────────────────────────────────────────────
+
+async function decodeQrFromImageFile(file) {
+  const bitmap = await createImageBitmap(file);
+  if ('BarcodeDetector' in window) {
+    try {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      const codes = await detector.detect(bitmap);
+      if (codes.length > 0) return codes[0].rawValue;
+    } catch { /* fall through to jsQR */ }
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0);
+  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const result = jsQR(data, width, height);
+  return result ? result.data : null;
+}
+
+async function handleGoogleAuthFiles(fileList) {
+  const statusEl = document.getElementById('google-import-status');
+  statusEl.textContent = 'Decoding…';
+
+  const payloads = [];
+  const seenParts = new Set();
+  let unrecognized = 0;
+
+  for (const file of fileList) {
+    let text = null;
+    try { text = await decodeQrFromImageFile(file); } catch { /* unreadable image */ }
+    const payload = text && text.startsWith('otpauth-migration://') ? parseMigrationUri(text) : null;
+    if (!payload) { unrecognized++; continue; }
+    const key = `${payload.batchId}:${payload.batchIndex}`;
+    if (seenParts.has(key)) continue;
+    seenParts.add(key);
+    payloads.push(payload);
+  }
+
+  if (payloads.length === 0) {
+    statusEl.textContent = 'No Google Authenticator QR code found in the selected image(s).';
+    return;
+  }
+
+  const allOtp = payloads.flatMap(p => p.otpParameters);
+  const totpOnly = allOtp.filter(o => o.type !== 1); // 1 = HOTP, not supported here
+  const hotpSkipped = allOtp.length - totpOnly.length;
+  const mapped = totpOnly.map(o => ({
+    name: o.issuer || o.name,
+    email: o.name,
+    secret: base32Encode(o.secret),
+    urls: '',
+    autofill: true,
+  }));
+
+  const batchGroups = new Map(); // batchId -> { batchSize, indices: Set<batchIndex> }
+  for (const p of payloads) {
+    if (!batchGroups.has(p.batchId)) batchGroups.set(p.batchId, { batchSize: p.batchSize, indices: new Set() });
+    batchGroups.get(p.batchId).indices.add(p.batchIndex);
+  }
+
+  const notes = [];
+  if (unrecognized > 0) notes.push(`${unrecognized} image(s) not recognized`);
+  if (hotpSkipped > 0) notes.push(`${hotpSkipped} HOTP account(s) skipped (not supported)`);
+  for (const { batchSize, indices } of batchGroups.values()) {
+    if (batchSize > 1 && indices.size < batchSize) {
+      notes.push(`You selected ${indices.size} of ${batchSize} QR codes from this export — add the rest to get all your accounts`);
+    }
+  }
+
+  if (mapped.length === 0) {
+    statusEl.textContent = notes.concat('No importable accounts found.').join(' · ');
+    return;
+  }
+
+  showSettingsSubview('settings-list');
+  showImportPicker(mapped, notes);
+}
+
+document.getElementById('row-settings-google-import').addEventListener('click', () => {
+  document.getElementById('google-import-status').textContent = '';
+  showSettingsSubview('settings-google-import-view');
+});
+
+document.getElementById('google-import-pick').addEventListener('click', () => {
+  document.getElementById('google-import-file').click();
+});
+
+document.getElementById('google-import-file').addEventListener('change', e => {
+  if (!e.target.files.length) return;
+  const files = [...e.target.files]; // snapshot — e.target.files is live and would empty on the reset below
+  e.target.value = '';
+  handleGoogleAuthFiles(files);
+});
 
 // ── Crypto form (shared for export & import) ──────────────────────────────────
 
