@@ -27,19 +27,17 @@ function matchesPattern(pattern, hostname) {
     || host.endsWith('.' + hostname);
 }
 
+function accountMatchesHostname(acc, hostname) {
+  const patterns = (acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
+  return patterns.some(p => matchesPattern(p, hostname));
+}
+
 function findAccount(accounts, hostname) {
-  for (const acc of accounts) {
-    const patterns = (acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
-    if (patterns.some(p => matchesPattern(p, hostname))) return acc;
-  }
-  return null;
+  return accounts.find(acc => accountMatchesHostname(acc, hostname)) || null;
 }
 
 function findAllMatchingAccounts(accounts, hostname) {
-  return accounts.filter(acc => {
-    const patterns = (acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
-    return patterns.some(p => matchesPattern(p, hostname));
-  });
+  return accounts.filter(acc => accountMatchesHostname(acc, hostname));
 }
 
 function getActiveAccount(overrideIndex) {
@@ -297,7 +295,7 @@ async function fillOTP(accountIndexHint) {
 
   fillInputValue(input, code);
 
-  return { ok: true, code, input };
+  return { ok: true, code, input, acc };
 }
 
 async function fillAndSubmit(accountIndexHint, fromPopup = false) {
@@ -311,6 +309,13 @@ async function fillAndSubmit(accountIndexHint, fromPopup = false) {
         if (submitBtn) submitBtn.click();
         else form.submit();
       }, 600);
+    }
+    // This account only filled via the popup's manual selection (not a URL
+    // match, otherwise fillOTP would never have needed the index hint) — offer
+    // to remember the site so it auto-fills here next time.
+    const hostname = location.hostname.toLowerCase();
+    if (fromPopup && !accountMatchesHostname(result.acc, hostname)) {
+      showSaveUrlOverlay(result.acc, hostname);
     }
   } else if (fromPopup) {
     showToast(result.msg, false);
@@ -867,6 +872,61 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   } else {
     primaryBtn.onclick = addAccount;
   }
+}
+
+const _dismissedUrlPrompts = new Set();
+
+// Shown after a manual "Fill Page" that only worked because the user picked
+// the account by hand (no URL on the account matched this site) — imported
+// accounts (e.g. from Google Authenticator) start out this way since the
+// source never provides a site URL. Offer to save it so auto-fill picks the
+// right account here on its own next time.
+function showSaveUrlOverlay(acc, hostname) {
+  if (document.getElementById('otpilot-save-url')) return;
+  const dismissKey = acc.secret + '|' + hostname;
+  if (_dismissedUrlPrompts.has(dismissKey)) return;
+
+  const el = makeOverlay('otpilot-save-url');
+  const safeName = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const safeHost = hostname.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  el.innerHTML = `${OVERLAY_HEADER}
+    <div style="padding:12px 14px;">
+      <div style="color:#cbd5e1;font-size:12px;margin-bottom:10px;">
+        Save <strong style="color:#f1f5f9;">${safeHost}</strong> to <strong style="color:#f1f5f9;">${safeName}</strong>? It'll auto-fill here next time.
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="otpilot-primary" style="flex:1;padding:7px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid #334155;border-radius:6px;color:#64748b;font-size:12px;cursor:pointer;">Not now</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(el);
+  const close = () => el.remove();
+
+  el.querySelector('.otpilot-overlay-close').onclick = close;
+  el.querySelector('.otpilot-secondary').onclick = () => { _dismissedUrlPrompts.add(dismissKey); close(); };
+  el.querySelector('.otpilot-primary').onclick = async () => {
+    const d = await new Promise(r => chrome.storage.local.get('accounts', r));
+    const accs = d.accounts || [];
+    const idx = accs.findIndex(a => a.secret === acc.secret);
+    if (idx !== -1) {
+      const existing = (accs[idx].urls || '').trim();
+      accs[idx] = {
+        ...accs[idx],
+        urls: existing ? existing + '\n' + hostname : hostname,
+        domain: hostname,
+        _updatedAt: new Date().toISOString(),
+      };
+      await new Promise(r => chrome.storage.local.set({ accounts: accs }, r));
+      requestSiteIcon(hostname);
+    }
+    _dismissedUrlPrompts.add(dismissKey);
+    close();
+    showToast(`Saved — ${acc.name} will auto-fill here next time`);
+  };
+
+  setTimeout(close, 20_000);
 }
 
 function showAccountPickerOverlay(matchingAccounts, onClose) {
