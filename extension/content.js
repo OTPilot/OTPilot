@@ -27,19 +27,17 @@ function matchesPattern(pattern, hostname) {
     || host.endsWith('.' + hostname);
 }
 
+function accountMatchesHostname(acc, hostname) {
+  const patterns = (acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
+  return patterns.some(p => matchesPattern(p, hostname));
+}
+
 function findAccount(accounts, hostname) {
-  for (const acc of accounts) {
-    const patterns = (acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
-    if (patterns.some(p => matchesPattern(p, hostname))) return acc;
-  }
-  return null;
+  return accounts.find(acc => accountMatchesHostname(acc, hostname)) || null;
 }
 
 function findAllMatchingAccounts(accounts, hostname) {
-  return accounts.filter(acc => {
-    const patterns = (acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
-    return patterns.some(p => matchesPattern(p, hostname));
-  });
+  return accounts.filter(acc => accountMatchesHostname(acc, hostname));
 }
 
 function getActiveAccount(overrideIndex) {
@@ -47,11 +45,11 @@ function getActiveAccount(overrideIndex) {
     chrome.storage.local.get(['accounts', 'activeIndex'], d => {
       const accs = d.accounts || [];
       // 1. Try URL-based match first
-      const byUrl = findAccount(accs, location.hostname.toLowerCase());
-      if (byUrl) { r(byUrl); return; }
+      const byUrlIdx = accs.findIndex(acc => accountMatchesHostname(acc, location.hostname.toLowerCase()));
+      if (byUrlIdx !== -1) { r({ acc: accs[byUrlIdx], idx: byUrlIdx }); return; }
       // 2. Fall back to the account selected in the popup (or override from message)
       const idx = overrideIndex ?? d.activeIndex ?? 0;
-      r(accs[idx] || null);
+      r({ acc: accs[idx] || null, idx });
     })
   );
 }
@@ -284,7 +282,7 @@ function showEmailOtpBanner(code, input, onClose) {
 }
 
 async function fillOTP(accountIndexHint) {
-  const acc = await getActiveAccount(accountIndexHint);
+  const { acc, idx } = await getActiveAccount(accountIndexHint);
   if (!acc)         return { ok: false, msg: 'No account configured for this URL' };
   if (!acc.secret)  return { ok: false, msg: `No secret set for "${acc.name}"` };
 
@@ -297,20 +295,44 @@ async function fillOTP(accountIndexHint) {
 
   fillInputValue(input, code);
 
-  return { ok: true, code, input };
+  return { ok: true, code, input, acc, idx };
 }
+
+// Guards against submitting the same form twice — several queued save-URL
+// prompts on one page can all end up deferring a submit of the same form,
+// and their onResolve callbacks now fire together once the whole chain
+// settles (see showSaveUrlOverlay).
+const _autoSubmittedForms = new WeakSet();
 
 async function fillAndSubmit(accountIndexHint, fromPopup = false) {
   const result = await fillOTP(accountIndexHint);
   if (result.ok) {
     showToast('OTP filled: ' + result.code);
+
+    // This account only filled via the popup's manual selection (not a URL
+    // match, otherwise fillOTP would never have needed the index hint) — offer
+    // to remember the site so it auto-fills here next time.
+    const hostname = location.hostname.toLowerCase();
+    const offerSaveUrl = fromPopup && !accountMatchesHostname(result.acc, hostname);
+
     const form = result.input.closest('form');
-    if (form) {
-      setTimeout(() => {
-        const submitBtn = form.querySelector('[type="submit"]');
-        if (submitBtn) submitBtn.click();
-        else form.submit();
-      }, 600);
+    const submit = () => {
+      if (!form || _autoSubmittedForms.has(form)) return;
+      _autoSubmittedForms.add(form);
+      const submitBtn = form.querySelector('[type="submit"]');
+      if (submitBtn) submitBtn.click();
+      else form.submit();
+    };
+
+    if (offerSaveUrl) {
+      // A plain auto-submit fires in 600ms — a login page that navigates on
+      // submit would take the save-URL prompt with it before a person could
+      // read or act on it. Hold the submit until the prompt actually
+      // resolves (Save, Not now, or its own timeout) instead of guessing at
+      // a fixed delay that may still be too short for a slower reader.
+      showSaveUrlOverlay(result.acc, result.idx, hostname, () => setTimeout(submit, 600));
+    } else if (form) {
+      setTimeout(submit, 600);
     }
   } else if (fromPopup) {
     showToast(result.msg, false);
@@ -867,6 +889,125 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   } else {
     primaryBtn.onclick = addAccount;
   }
+}
+
+const _dismissedUrlPrompts = new Set();
+
+// Shown after a manual "Fill Page" that only worked because the user picked
+// the account by hand (no URL on the account matched this site) — imported
+// accounts (e.g. from Google Authenticator) start out this way since the
+// source never provides a site URL. Offer to save it so auto-fill picks the
+// right account here on its own next time.
+// `onResolve` fires once the whole save-URL flow for this page is done —
+// not just this one prompt — so callers can safely do something the prompt
+// shouldn't be raced off the page by, like an auto-submit that would
+// navigate away. Only one prompt is shown at a time; a second manual fill
+// (a different account) while one is already up queues rather than being
+// treated as resolved, and *its* resolution is what actually matters: an
+// earlier fill's onResolve firing the moment its own prompt closes would let
+// its deferred submit navigate away while a later queued prompt is still
+// up. So every onResolve in the chain fires together, only once nothing is
+// showing or queued anymore.
+let _saveUrlShowing = false;
+const _saveUrlQueue = [];
+let _saveUrlChainResolvers = [];
+
+function saveUrlChainSettle() {
+  if (_saveUrlShowing || _saveUrlQueue.length > 0) return;
+  const resolvers = _saveUrlChainResolvers;
+  _saveUrlChainResolvers = [];
+  resolvers.forEach(fn => fn?.());
+}
+
+function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
+  if (onResolve) _saveUrlChainResolvers.push(onResolve);
+
+  // Keyed by the account's content, not its array index — an index-based key
+  // would let a reordered-in account inherit a dismissal that was never
+  // actually shown for it (see matchesFully below for the same reasoning).
+  const dismissKey = [acc.secret, acc.name, acc.urls, acc.email, hostname].join('|');
+  if (_dismissedUrlPrompts.has(dismissKey)) { saveUrlChainSettle(); return; }
+
+  if (_saveUrlShowing) {
+    _saveUrlQueue.push({ acc, idx, hostname });
+    return;
+  }
+  _saveUrlShowing = true;
+
+  const el = makeOverlay('otpilot-save-url');
+  const safeName = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const safeHost = hostname.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  el.innerHTML = `${OVERLAY_HEADER}
+    <div style="padding:12px 14px;">
+      <div style="color:#cbd5e1;font-size:12px;margin-bottom:10px;">
+        Save <strong style="color:#f1f5f9;">${safeHost}</strong> to <strong style="color:#f1f5f9;">${safeName}</strong>? It'll auto-fill here next time.
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="otpilot-primary" style="flex:1;padding:7px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid #334155;border-radius:6px;color:#64748b;font-size:12px;cursor:pointer;">Not now</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(el);
+  let resolved = false;
+  const close = () => {
+    el.remove();
+    if (resolved) return;
+    resolved = true;
+    _saveUrlShowing = false;
+    const next = _saveUrlQueue.shift();
+    // Advancing to the next queued prompt (if any) re-enters this function
+    // without a new onResolve — it was already collected into the chain
+    // above. Only once nothing is showing or queued does the chain settle.
+    if (next) showSaveUrlOverlay(next.acc, next.idx, next.hostname);
+    else saveUrlChainSettle();
+  };
+
+  el.querySelector('.otpilot-overlay-close').onclick = close;
+  el.querySelector('.otpilot-secondary').onclick = () => { _dismissedUrlPrompts.add(dismissKey); close(); };
+  el.querySelector('.otpilot-primary').onclick = async () => {
+    const d = await new Promise(r => chrome.storage.local.get('accounts', r));
+    const accs = d.accounts || [];
+    // Prefer the index we resolved the account at — fast path, correct as
+    // long as nothing reordered the list while the prompt sat open. A secret
+    // match alone isn't enough to trust it (two accounts can share a secret,
+    // and a reorder could put a different one at this exact index), so
+    // compare the full record. If it no longer matches there, fall back to a
+    // full-list search by the same full-record identity, and only write if
+    // that's unambiguous — guessing between duplicates risks tagging the
+    // wrong account.
+    const matchesFully = a => a && a.secret === acc.secret && a.name === acc.name
+      && a.urls === acc.urls && a.email === acc.email;
+    let targetIdx = matchesFully(accs[idx]) ? idx : -1;
+    if (targetIdx === -1) {
+      const matches = accs.map((a, i) => matchesFully(a) ? i : -1).filter(i => i !== -1);
+      if (matches.length === 1) targetIdx = matches[0];
+    }
+    let saved = false;
+    if (targetIdx !== -1) {
+      const existing = (accs[targetIdx].urls || '').trim();
+      accs[targetIdx] = {
+        ...accs[targetIdx],
+        urls: existing ? existing + '\n' + hostname : hostname,
+        domain: hostname,
+        _updatedAt: new Date().toISOString(),
+      };
+      saved = await new Promise(resolve =>
+        chrome.storage.local.set({ accounts: accs }, () => resolve(!chrome.runtime.lastError))
+      );
+    }
+    if (saved) {
+      requestSiteIcon(hostname);
+      showToast(`Saved — ${acc.name} will auto-fill here next time`);
+    } else {
+      showToast('Could not save site — account changed', false);
+    }
+    _dismissedUrlPrompts.add(dismissKey);
+    close();
+  };
+
+  setTimeout(close, 20_000);
 }
 
 function showAccountPickerOverlay(matchingAccounts, onClose) {
