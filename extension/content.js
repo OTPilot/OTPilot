@@ -298,6 +298,12 @@ async function fillOTP(accountIndexHint) {
   return { ok: true, code, input, acc, idx };
 }
 
+// Guards against submitting the same form twice — several queued save-URL
+// prompts on one page can all end up deferring a submit of the same form,
+// and their onResolve callbacks now fire together once the whole chain
+// settles (see showSaveUrlOverlay).
+const _autoSubmittedForms = new WeakSet();
+
 async function fillAndSubmit(accountIndexHint, fromPopup = false) {
   const result = await fillOTP(accountIndexHint);
   if (result.ok) {
@@ -311,7 +317,8 @@ async function fillAndSubmit(accountIndexHint, fromPopup = false) {
 
     const form = result.input.closest('form');
     const submit = () => {
-      if (!form) return;
+      if (!form || _autoSubmittedForms.has(form)) return;
+      _autoSubmittedForms.add(form);
       const submitBtn = form.querySelector('[type="submit"]');
       if (submitBtn) submitBtn.click();
       else form.submit();
@@ -891,27 +898,38 @@ const _dismissedUrlPrompts = new Set();
 // accounts (e.g. from Google Authenticator) start out this way since the
 // source never provides a site URL. Offer to save it so auto-fill picks the
 // right account here on its own next time.
-// `onResolve` fires exactly once, whenever the prompt is done with (saved,
-// dismissed, closed, or its own timeout) — callers use it to know when it's
-// safe to do something the prompt shouldn't be raced off the page by, like
-// an auto-submit that would navigate away.
-//
-// Only one prompt is shown at a time. A second manual fill (a different
-// account) while one is already up queues instead of being treated as
-// already resolved — otherwise its own save opportunity (and its caller's
-// deferred submit) would be skipped without the user ever seeing it.
+// `onResolve` fires once the whole save-URL flow for this page is done —
+// not just this one prompt — so callers can safely do something the prompt
+// shouldn't be raced off the page by, like an auto-submit that would
+// navigate away. Only one prompt is shown at a time; a second manual fill
+// (a different account) while one is already up queues rather than being
+// treated as resolved, and *its* resolution is what actually matters: an
+// earlier fill's onResolve firing the moment its own prompt closes would let
+// its deferred submit navigate away while a later queued prompt is still
+// up. So every onResolve in the chain fires together, only once nothing is
+// showing or queued anymore.
 let _saveUrlShowing = false;
 const _saveUrlQueue = [];
+let _saveUrlChainResolvers = [];
+
+function saveUrlChainSettle() {
+  if (_saveUrlShowing || _saveUrlQueue.length > 0) return;
+  const resolvers = _saveUrlChainResolvers;
+  _saveUrlChainResolvers = [];
+  resolvers.forEach(fn => fn?.());
+}
 
 function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
+  if (onResolve) _saveUrlChainResolvers.push(onResolve);
+
   // Keyed by the account's content, not its array index — an index-based key
   // would let a reordered-in account inherit a dismissal that was never
   // actually shown for it (see matchesFully below for the same reasoning).
   const dismissKey = [acc.secret, acc.name, acc.urls, acc.email, hostname].join('|');
-  if (_dismissedUrlPrompts.has(dismissKey)) { onResolve?.(); return; }
+  if (_dismissedUrlPrompts.has(dismissKey)) { saveUrlChainSettle(); return; }
 
   if (_saveUrlShowing) {
-    _saveUrlQueue.push({ acc, idx, hostname, onResolve });
+    _saveUrlQueue.push({ acc, idx, hostname });
     return;
   }
   _saveUrlShowing = true;
@@ -938,9 +956,12 @@ function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
     if (resolved) return;
     resolved = true;
     _saveUrlShowing = false;
-    onResolve?.();
     const next = _saveUrlQueue.shift();
-    if (next) showSaveUrlOverlay(next.acc, next.idx, next.hostname, next.onResolve);
+    // Advancing to the next queued prompt (if any) re-enters this function
+    // without a new onResolve — it was already collected into the chain
+    // above. Only once nothing is showing or queued does the chain settle.
+    if (next) showSaveUrlOverlay(next.acc, next.idx, next.hostname);
+    else saveUrlChainSettle();
   };
 
   el.querySelector('.otpilot-overlay-close').onclick = close;

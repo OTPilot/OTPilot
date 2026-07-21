@@ -245,12 +245,20 @@ test('regression: a second manual fill while a save-URL prompt is open queues it
   await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Account A');
   await expect(autofillPage.locator('#result')).toBeHidden();
 
-  // Resolving A's prompt lets B's own prompt take its turn right after.
+  // Resolving A's prompt lets B's own prompt take its turn right after — and
+  // must NOT itself trigger the deferred submit while B's prompt is now the
+  // one showing (that would navigate B's prompt away before it's answered).
   await autofillPage.locator('#otpilot-save-url .otpilot-secondary').click();
   await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Account B');
+  await autofillPage.waitForTimeout(1000);
+  await expect(autofillPage.locator('#result')).toBeHidden();
+  await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Account B');
 
+  // Only once B's prompt is also resolved does the (single, deferred) submit
+  // proceed.
   await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
   await expect(autofillPage.locator('#otpilot-save-url')).toHaveCount(0);
+  await expect(autofillPage.locator('#result')).toBeVisible({ timeout: 3000 });
 
   const stored = await popupPage.evaluate(() =>
     new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
