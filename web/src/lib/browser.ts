@@ -1,7 +1,9 @@
 export type Browser = 'chrome' | 'firefox' | 'edge' | 'safari' | 'other'
 
 export function detectBrowser(): Browser {
-  const ua = navigator.userAgent
+  // No `navigator` during SSG's server render pass (Landing renders there) —
+  // falls through to 'other', same fallback as an unrecognized browser.
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent
   if (ua.includes('Edg/')) return 'edge'
   if (ua.includes('Firefox/')) return 'firefox'
   if (ua.includes('Chrome/')) return 'chrome'
