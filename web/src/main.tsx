@@ -55,12 +55,15 @@ export const createRoot = ViteReactSSG({ routes }, ({ isClient }) => {
   if (!isClient) return
 
   // A stale tab can still hold a previous deploy's asset hashes; once Vercel
-  // ships a new build those chunks 404 on dynamic import. Reload once to
-  // pick up the current build instead of surfacing a broken page/error.
+  // ships a new build those chunks 404 on dynamic import. Reload to pick up
+  // the current build instead of surfacing a broken page/error. Guarded by
+  // a cooldown rather than a one-shot flag: a permanent flag would silently
+  // stop reloading on a later, unrelated deploy within the same tab session.
   window.addEventListener('vite:preloadError', () => {
-    const key = 'otpilot:reloaded-after-preload-error'
-    if (sessionStorage.getItem(key)) return
-    sessionStorage.setItem(key, '1')
+    const key = 'otpilot:preload-error-reload-at'
+    const last = Number(sessionStorage.getItem(key) || 0)
+    if (Date.now() - last < 10_000) return
+    sessionStorage.setItem(key, String(Date.now()))
     window.location.reload()
   })
 
