@@ -53,6 +53,17 @@ export const routes: RouteRecord[] = [
 export const createRoot = ViteReactSSG({ routes }, ({ isClient }) => {
   // Browser-only side effects (skipped during static build render).
   if (!isClient) return
+
+  // A stale tab can still hold a previous deploy's asset hashes; once Vercel
+  // ships a new build those chunks 404 on dynamic import. Reload once to
+  // pick up the current build instead of surfacing a broken page/error.
+  window.addEventListener('vite:preloadError', () => {
+    const key = 'otpilot:reloaded-after-preload-error'
+    if (sessionStorage.getItem(key)) return
+    sessionStorage.setItem(key, '1')
+    window.location.reload()
+  })
+
   if (import.meta.env.VITE_SENTRY_DSN) {
     Sentry.init({
       dsn: import.meta.env.VITE_SENTRY_DSN,
