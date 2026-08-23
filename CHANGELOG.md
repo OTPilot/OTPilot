@@ -1,6 +1,12 @@
 # Changelog
 
 
+## v1.3.2
+
+### Extension
+
+- **Site icons missing after import** — Accounts added via the import picker (Google Authenticator migration or an encrypted backup restore) never triggered icon resolution, unlike the manual account editor's save flow. Backup-restored accounts that already carry a URL now get their favicon fetched immediately instead of waiting for the next popup open; Google Authenticator imports still show a letter avatar until a URL is known (the migration format doesn't include one), same as before.
+
 ## v1.3.0
 
 ### Extension

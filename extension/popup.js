@@ -976,6 +976,7 @@ async function applyImport(selectedAccounts) {
   }
   renderAccountBar();
   renderAccountsList();
+  requestIcons(); // pick up icons for any newly-imported domains
   startTimer();
   return { added: toAdd.length, skipped: selectedAccounts.length - toAdd.length };
 }
