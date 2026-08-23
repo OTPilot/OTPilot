@@ -1,6 +1,12 @@
 # Changelog
 
 
+## v1.3.3
+
+### Extension
+
+- **Site icons missing after cloud sync** — Accounts pulled or merged in from another device via cloud sync didn't trigger icon resolution, so a new account added on one browser showed a letter avatar on your other browsers until the popup was closed and reopened. Sync now sweeps for accounts missing an icon and fetches them in the background right after a pull/merge, same as manual save and import already did.
+
 ## v1.3.2
 
 ### Extension

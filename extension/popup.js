@@ -1581,6 +1581,7 @@ async function doSync() {
       await saveState();
       await new Promise(r => chrome.storage.local.set({ tombstones }, r));
       renderAccountBar();
+      requestIcons(); // pick up icons for accounts pulled in from another device
       startTimer();
       await writeLastSyncedAt(serverMeta.updatedAt);
     } else if (!serverNewer && localNewer) {
@@ -1596,6 +1597,7 @@ async function doSync() {
       await saveState();
       await new Promise(r => chrome.storage.local.set({ tombstones }, r));
       renderAccountBar();
+      requestIcons(); // pick up icons for accounts merged in from another device
       startTimer();
       await CloudSync.push(merged, mergedTombs, now);
       await writeLastSyncedAt(now);
