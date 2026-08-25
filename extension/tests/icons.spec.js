@@ -19,19 +19,19 @@ async function seed(page) {
   }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET, PNG_DATA_URL]);
 }
 
-test('home chips render the cached favicon as <img>, fall back to a letter avatar', async ({ context, extensionId }) => {
+test('home list rows render the cached favicon as <img>, fall back to a letter avatar', async ({ context, extensionId }) => {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
   await seed(page);
   await page.reload();
 
   // The account with a cached icon renders an <img> avatar with the data URL.
-  const img = page.locator('.acc-chip img.acc-av');
+  const img = page.locator('#home-list img.acc-av');
   await expect(img).toHaveCount(1);
   await expect(img).toHaveAttribute('src', /^data:image\/png/);
 
   // The account without a cached icon keeps the letter avatar (a <span>).
-  await expect(page.locator('.acc-chip span.acc-av')).toHaveCount(1);
+  await expect(page.locator('#home-list span.acc-av')).toHaveCount(1);
 });
 
 test('vault rows render the cached favicon as <img>', async ({ context, extensionId }) => {

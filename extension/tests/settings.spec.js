@@ -47,29 +47,37 @@ async function unlock(page, accounts = [], extra = {}) {
   await page.reload();
 }
 
-// ── Settings drill-down navigation ──────────────────────────────────────────
+// ── Settings navigation (persistent menu + content, no drill-down) ──────────
 
-test('settings drill-down: each row opens its sub-view and the back arrow returns to the list', async ({ context, extensionId }) => {
+test('settings: the menu stays visible and each row selects its content pane', async ({ context, extensionId }) => {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
   await unlock(page);
   await page.click('#nav-config');
 
+  // Settings opens straight onto Appearance — the menu is a persistent column,
+  // not a screen you drill into and back out of.
+  await expect(page.locator('#settings-list')).toBeVisible();
+  await expect(page.locator('#settings-theme-view')).toBeVisible();
+  await expect(page.locator('#row-settings-theme')).toHaveClass(/sel/);
+
   const rows = [
-    ['row-settings-backup', 'settings-backup-view', 'back-settings-backup'],
-    ['row-settings-google-import', 'settings-google-import-view', 'back-settings-google-import'],
-    ['row-settings-autofill', 'settings-autofill-view', 'back-settings-autofill'],
-    ['row-settings-password', 'settings-password-view', 'back-settings-password'],
+    ['row-settings-backup', 'settings-backup-view'],
+    ['row-settings-google-import', 'settings-google-import-view'],
+    ['row-settings-autofill', 'settings-autofill-view'],
+    ['row-settings-password', 'settings-password-view'],
   ];
 
-  for (const [rowId, viewId, backId] of rows) {
+  for (const [rowId, viewId] of rows) {
     await page.click(`#${rowId}`);
     await expect(page.locator(`#${viewId}`)).toBeVisible();
-    await expect(page.locator('#settings-list')).toBeHidden();
+    await expect(page.locator('#settings-list')).toBeVisible(); // menu never hides
+    await expect(page.locator(`#${rowId}`)).toHaveClass(/sel/);
 
-    await page.click(`#${backId}`);
-    await expect(page.locator('#settings-list')).toBeVisible();
-    await expect(page.locator(`#${viewId}`)).toBeHidden();
+    // Every other subview is hidden while this one is selected.
+    for (const [, otherViewId] of rows) {
+      if (otherViewId !== viewId) await expect(page.locator(`#${otherViewId}`)).toBeHidden();
+    }
   }
 });
 
