@@ -7,11 +7,23 @@
     /* ── Theme tokens ──────────────────────────────────────────────────────
        Each theme is one block of CSS custom properties, selected by
        body[data-theme="…"] (set from Settings → Appearance, see popup.js
-       THEMES). :root holds "vault", the default — adding a theme later is:
+       THEMES). :root holds "original", the default — adding a theme later is:
        1) a new body[data-theme="x"] block below with the same token names,
        2) one entry in the THEMES array in popup.js. No other CSS changes.
     */
     :root {
+      --bg:        #0f172a; --bg-deep: #0c1525;
+      --surface:   #1e293b; --surface-2: #334155; --border: #1e3a5f;
+      --ink-0: #f1f5f9; --ink-1: #e2e8f0; --ink-2: #cbd5e1;
+      --ink-3: #94a3b8; --ink-4: #64748b; --ink-5: #475569;
+      --accent: #0ea5e9; --accent-2: #38bdf8; --on-accent: #ffffff;
+      --danger: #f87171; --warning: #f59e0b; --success: #4ade80;
+      --accent-2-rgb: 56,189,248; --danger-rgb: 248,113,113;
+      --warning-rgb: 245,158,11; --on-accent-rgb: 255,255,255;
+      --font-ui:   -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-code: 'Courier New', Courier, monospace;
+    }
+    body[data-theme="vault"] {
       --bg:        #1c1a17; --bg-deep: #15130f;
       --surface:   #242019; --surface-2: #332c22; --border: #3a3225;
       --ink-0: #f6f1e6; --ink-1: #efe7d8; --ink-2: #cfc5b0;
@@ -58,21 +70,6 @@
       --warning-rgb: 255,180,84; --on-accent-rgb: 42,14,8;
       --font-ui:   -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       --font-code: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    }
-    /* The original slate/sky-blue look this extension shipped with before
-       Appearance existed — kept verbatim (same hexes as the pre-theme CSS)
-       for anyone who preferred it. */
-    body[data-theme="original"] {
-      --bg:        #0f172a; --bg-deep: #0c1525;
-      --surface:   #1e293b; --surface-2: #334155; --border: #1e3a5f;
-      --ink-0: #f1f5f9; --ink-1: #e2e8f0; --ink-2: #cbd5e1;
-      --ink-3: #94a3b8; --ink-4: #64748b; --ink-5: #475569;
-      --accent: #0ea5e9; --accent-2: #38bdf8; --on-accent: #ffffff;
-      --danger: #f87171; --warning: #f59e0b; --success: #4ade80;
-      --accent-2-rgb: 56,189,248; --danger-rgb: 248,113,113;
-      --warning-rgb: 245,158,11; --on-accent-rgb: 255,255,255;
-      --font-ui:   -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      --font-code: 'Courier New', Courier, monospace;
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1008,7 +1005,7 @@
         </span>
         <span class="settings-row-text">
           <span class="settings-row-title">Appearance</span>
-          <span class="settings-row-sub" id="row-settings-theme-sub">Vault</span>
+          <span class="settings-row-sub" id="row-settings-theme-sub">Original</span>
         </span>
         <span class="settings-row-chevron">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
