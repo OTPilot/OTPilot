@@ -252,13 +252,37 @@ function iconDomains() {
   return [...new Set(accounts.map(accountIconDomain).filter(Boolean))];
 }
 
+// Best-effort: if the popup's active tab happens to be the site an account was
+// just saved for (the common case — filling in the account while sitting on its
+// 2FA page), grab its declared favicon so the backend doesn't have to blind-fetch
+// the homepage. Some sites (e.g. Binance) return an anti-bot challenge page to a
+// server-side fetch but obviously already rendered fine in the user's own tab.
+async function activeTabIconHint() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.startsWith('http')) return {};
+    const hostname = new URL(tab.url).hostname.toLowerCase();
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const link = document.querySelector('link[rel~="icon"], link[rel="apple-touch-icon"], link[rel="shortcut icon"]');
+        const href = link?.getAttribute('href');
+        return href ? new URL(href, location.href).href : null;
+      },
+    });
+    return result ? { [hostname]: result } : {};
+  } catch {
+    return {}; // no scripting access on this tab (chrome://, web store, etc.) — fine, best-effort
+  }
+}
+
 // Ask the background SW to resolve+cache any missing icons, then re-render.
-function requestIcons() {
+function requestIcons(hints = {}) {
   if (!chrome.runtime?.id) return;
   const domains = iconDomains();
   if (!domains.length) return;
   // prune: this is the full account set, so the SW can evict icons for deleted accounts.
-  chrome.runtime.sendMessage({ action: 'resolveIcons', domains, prune: true }, resp => {
+  chrome.runtime.sendMessage({ action: 'resolveIcons', domains, hints, prune: true }, resp => {
     if (chrome.runtime.lastError) return;
     const updated = resp?.updated || {};
     if (!Object.keys(updated).length) return;
@@ -781,7 +805,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 
   openAccIdx = -1;
   renderAccountBar();
-  requestIcons(); // pick up icons for any newly-added domains
+  activeTabIconHint().then(requestIcons); // pick up icons for any newly-added domains
   startTimer();
   showView('home');
   setStatus('Saved');
