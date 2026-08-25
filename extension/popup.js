@@ -622,6 +622,8 @@ function rebuildAccountsDOM() {
       syncOpenAccToDraft();
       openAccIdx = i;
       rebuildAccountsDOM();
+      renderVaultCatBar();
+      applyVaultSearch();
       renderAccDetail();
     });
 

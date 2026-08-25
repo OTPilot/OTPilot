@@ -557,7 +557,11 @@
     .settings-subview-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
     .settings-subview-title { font-size: 13px; font-weight: 700; color: var(--ink-0); }
 
-    .settings-body { flex: 1; display: flex; min-height: 0; }
+    /* Scoped to #config-panel — .settings-body is also (coincidentally) the
+       class name of #team-panel's plain vertical content wrapper, which must
+       NOT become a flex row. */
+    #config-panel .settings-body { flex: 1; display: flex; min-height: 0; }
+    #team-panel .settings-body { padding: 14px 16px; }
     #settings-list.lc-col { padding: 8px 6px; gap: 2px; }
     #settings-content.dc-col { padding: 16px 18px; }
 
