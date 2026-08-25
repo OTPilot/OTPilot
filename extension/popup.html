@@ -62,9 +62,15 @@
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    /* Chrome sizes the popup window from <html>'s own box, not just <body>'s —
+       without this, a single unexpectedly-wide paint (e.g. before dynamic text
+       is truncated, or a long unbroken string slipping through) can make Chrome
+       lock in a much wider popup than the content ever actually needs. */
+    html { width: 600px; max-width: 600px; overflow-x: hidden; }
+
     body {
-      width: 300px;
-      min-height: 365px;
+      width: 600px;
+      height: 580px;
       display: flex;
       flex-direction: column;
       font-family: var(--font-ui);
@@ -81,16 +87,68 @@
       padding: 12px 16px;
       background: var(--surface);
       border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
     }
     .header h1 { font-size: 15px; font-weight: 700; color: var(--ink-0); }
 
-    /* ── Account bar ── */
-    #account-bar {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      padding: 7px 10px;
+    /* ── App shell: left icon rail + whichever view is active ── */
+    .app-row { flex: 1; display: flex; min-height: 0; }
+    .rail {
+      width: 56px; flex-shrink: 0;
+      background: var(--bg-deep); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; align-items: center;
+      padding: 10px 0; gap: 3px;
     }
+    .rail-btn {
+      width: 42px; height: 42px; border-radius: 10px; border: none; background: none;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+      color: var(--ink-5); cursor: pointer; font-family: inherit; transition: color .15s, background .15s;
+    }
+    .rail-btn svg { width: 17px; height: 17px; }
+    .rail-btn span { font-size: 8px; font-weight: 700; }
+    .rail-btn:hover { color: var(--ink-3); }
+    .rail-btn.active { color: var(--accent-2); background: rgba(var(--accent-2-rgb),0.1); }
+
+    /* A view that uses the list+detail pattern (Home, Accounts). */
+    .app-split { flex: 1; display: flex; min-height: 0; }
+    .lc-col {
+      width: 210px; flex-shrink: 0;
+      border-right: 1px solid var(--border);
+      background: var(--bg-deep);
+      display: flex; flex-direction: column; min-height: 0;
+    }
+    .lc-search-wrap { position: relative; margin: 10px 10px 0; flex-shrink: 0; }
+    .lc-search-wrap svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; color: var(--ink-4); pointer-events: none; }
+    .lc-search {
+      width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+      padding: 7px 9px 7px 27px; font-size: 11.5px; color: var(--ink-1); font-family: inherit; outline: none;
+    }
+    .lc-search:focus { border-color: var(--accent-2); }
+    .lc-search::placeholder { color: var(--ink-4); }
+    .lc-count { font-size: 9.5px; color: var(--ink-5); padding: 8px 10px 2px; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; }
+    .lc-count .lc-add { color: var(--accent-2); font-weight: 700; cursor: pointer; }
+    .lc-list { flex: 1; overflow-y: auto; padding: 2px 6px 8px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    .lc-list::-webkit-scrollbar { width: 3px; }
+    .lc-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .lc-row {
+      display: flex; align-items: center; gap: 8px; padding: 7px; cursor: pointer;
+      border-radius: 7px; border-left: 2px solid transparent; width: 100%;
+      background: none; border-top: none; border-right: none; border-bottom: none; text-align: left; font-family: inherit; color: inherit; position: relative;
+    }
+    .lc-row:hover { background: rgba(var(--accent-2-rgb),0.05); }
+    .lc-row.sel { background: rgba(var(--accent-2-rgb),0.1); border-left-color: var(--accent-2); }
+    .lc-row-text { flex: 1; min-width: 0; }
+    .lc-row-name { display: block; font-size: 11px; font-weight: 600; color: var(--ink-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lc-row-sub { display: block; font-size: 9.5px; color: var(--ink-5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lc-row-tab-dot { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); width: 5px; height: 5px; border-radius: 50%; background: var(--accent-2); }
+    .lc-empty { padding: 20px 12px; text-align: center; font-size: 11px; color: var(--ink-4); line-height: 1.6; }
+
+    .dc-col { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
+    #home-detail { justify-content: center; }
+    .dc-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--ink-5); font-size: 12px; padding: 20px; text-align: center; }
+    .dc-empty svg { width: 26px; height: 26px; opacity: .5; }
+
+    /* A view with no list column (Settings, Sync, Team) still gets the rail. */
 
     .acc-av {
       display: inline-flex;
@@ -104,114 +162,6 @@
     }
     .acc-av.acc-av-md { width: 22px; height: 22px; font-size: 9px; }
     img.acc-av { object-fit: cover; background: var(--surface); }
-
-    .acc-chip {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      padding: 3px 8px 3px 4px;
-      flex: 0 1 auto;
-      min-width: 0;
-      max-width: 84px;
-      background: transparent;
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      color: var(--ink-4);
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-      font-family: inherit;
-      transition: border-color .15s, color .15s, background .15s;
-    }
-    .acc-chip:hover { color: var(--ink-3); border-color: var(--surface-2); }
-    .acc-chip.active { border-color: var(--accent-2); background: rgba(var(--accent-2-rgb),0.08); color: var(--accent-2); }
-    .acc-chip-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-    .acc-overflow-btn {
-      flex-shrink: 0;
-      margin-left: auto;
-      padding: 4px 8px;
-      background: transparent;
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      color: var(--ink-5);
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-      font-family: inherit;
-      transition: border-color .15s, color .15s;
-      position: relative;
-    }
-    .acc-overflow-btn:hover { border-color: var(--surface-2); color: var(--ink-3); }
-    .acc-overflow-btn.active { border-color: var(--accent-2); color: var(--accent-2); }
-    .acc-overflow-btn.has-active::after {
-      content: '';
-      position: absolute;
-      top: -3px; right: -3px;
-      width: 7px; height: 7px;
-      background: var(--accent-2);
-      border-radius: 50%;
-      border: 1.5px solid var(--bg);
-    }
-
-    .acc-overflow-panel {
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-    }
-    .acc-overflow-search {
-      padding: 7px 10px;
-      border-bottom: 1px solid var(--border);
-    }
-    .acc-overflow-search input {
-      width: 100%;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 5px 8px;
-      color: var(--ink-1);
-      font-size: 11px;
-      font-family: inherit;
-      outline: none;
-    }
-    .acc-overflow-search input:focus { border-color: var(--accent-2); }
-    .acc-overflow-search input::placeholder { color: var(--ink-5); }
-
-    .acc-overflow-list {
-      max-height: 150px;
-      overflow-y: auto;
-      scrollbar-width: thin;
-      scrollbar-color: var(--border) transparent;
-    }
-    .acc-overflow-list::-webkit-scrollbar { width: 3px; }
-    .acc-overflow-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-    .acc-overflow-item {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      padding: 6px 10px;
-      width: 100%;
-      background: transparent;
-      border: none;
-      cursor: pointer;
-      font-family: inherit;
-      text-align: left;
-      transition: background .1s;
-    }
-    .acc-overflow-item:hover { background: rgba(var(--accent-2-rgb),0.06); }
-    .acc-overflow-item.active { background: rgba(var(--accent-2-rgb),0.1); }
-    .acc-overflow-text { flex: 1; min-width: 0; }
-    .acc-overflow-name {
-      display: block;
-      font-size: 11px; font-weight: 600; color: var(--ink-1);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .acc-overflow-email {
-      display: block;
-      font-size: 10px; color: var(--ink-5);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .acc-overflow-check { color: var(--accent-2); font-size: 10px; flex-shrink: 0; }
 
     /* ── Share with team (vault) ── */
     .acc-share { margin-top: 10px; }
@@ -269,7 +219,8 @@
     .shared-copy:hover { color: var(--accent-2); border-color: var(--accent-2); }
 
     /* ── Category filter bar ── */
-    .cat-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .cat-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; vertical-align: middle; }
+    .lc-row-name .cat-dot { margin-right: 5px; margin-top: -1px; }
     .cat-bar {
       display: flex; gap: 6px; padding: 7px 10px;
       overflow-x: auto; scrollbar-width: none;
@@ -392,7 +343,8 @@
     /* ── Status ── */
     #status-msg {
       min-height: 18px; text-align: center;
-      font-size: 12px; padding: 0 16px 6px;
+      font-size: 12px; padding: 4px 16px 4px;
+      flex-shrink: 0; background: var(--surface); border-top: 1px solid var(--border);
     }
     #status-msg.ok  { color: var(--success); }
     #status-msg.err { color: var(--danger); }
@@ -405,25 +357,7 @@
     }
     .header-btn:hover { color: var(--ink-3); }
 
-    /* ── Bottom nav ── */
-    .bottom-nav {
-      display: flex;
-      background: var(--surface);
-      border-top: 1px solid var(--border);
-    }
-    .nav-btn {
-      flex: 1; padding: 10px 0;
-      display: flex; flex-direction: column; align-items: center; gap: 4px;
-      background: none; border: none; cursor: pointer;
-      color: var(--ink-5); font-size: 10px; font-weight: 600;
-      transition: color .15s;
-    }
-    .nav-btn:hover { color: var(--ink-3); }
-    .nav-btn.active { color: var(--accent-2); }
-
-    #home-view, #settings-panel, #config-panel { flex: 1; }
-    /* overridden below for sync-panel */
-    .settings-body { padding: 6px 14px 14px; }
+    /* .settings-body layout is defined further down, in the Settings section. */
 
     /* ── Account search + toolbar ── */
     .acc-search {
@@ -452,10 +386,9 @@
     }
     .acc-count { font-size: 10px; color: var(--ink-4); }
 
-    /* ── Account accordion ── */
+    /* ── Account list (left column) + detail (right column) ── */
+    .app-single-col { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
     #accounts-list {
-      max-height: 280px;
-      overflow-y: auto;
       scrollbar-width: thin;
       scrollbar-color: var(--border) transparent;
     }
@@ -491,18 +424,20 @@
     }
     .acc-head.open .acc-chevron { transform: rotate(180deg); color: var(--accent-2); }
 
+    /* .acc-body is now the sole child of #acc-detail (the right column) instead
+       of nesting under each row — same look, just relocated. */
     .acc-body {
-      display: none; padding: 8px 12px 10px;
-      background: var(--bg-deep); border-top: 1px solid var(--border);
-      border-left: 2px solid var(--accent-2);
+      display: none; padding: 14px 16px;
+      background: var(--bg); flex: 1;
     }
     .acc-body.open { display: block; }
     .acc-body-head {
       display: flex; align-items: center;
-      justify-content: flex-end; margin-bottom: 8px;
+      justify-content: space-between; margin-bottom: 12px;
     }
+    .acc-body-head .acc-body-title { font-size: 13px; font-weight: 700; color: var(--ink-0); }
 
-    .settings-footer { padding: 8px 14px 10px; border-top: 1px solid var(--border); }
+    .settings-footer { padding: 8px 14px 10px; border-top: 1px solid var(--border); flex-shrink: 0; }
     .settings-footer-actions { display: flex; gap: 6px; margin-top: 6px; }
     .btn-cancel {
       flex: 1; padding: 8px;
@@ -602,6 +537,7 @@
       transition: background .12s;
     }
     button.settings-row:hover { background: rgba(var(--accent-2-rgb),0.06); }
+    button.settings-row.sel { background: rgba(var(--accent-2-rgb),0.1); }
     .settings-row-icon {
       width: 28px; height: 28px; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
@@ -614,17 +550,20 @@
       display: block; font-size: 10px; color: var(--ink-4); margin-top: 1px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .settings-row-chevron { color: var(--ink-4); flex-shrink: 0; display: flex; align-items: center; }
-
+    /* No drill-down anymore — the menu stays visible alongside the content, so
+       neither the "enter" chevron nor the "back" button serve a purpose. */
+    .settings-row-chevron { display: none; }
+    .settings-back { display: none; }
     .settings-subview-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-    .settings-back {
-      display: flex; align-items: center; justify-content: center;
-      width: 24px; height: 24px; padding: 0;
-      background: transparent; border: none; border-radius: 5px;
-      color: var(--ink-3); cursor: pointer; transition: color .12s, background .12s;
-    }
-    .settings-back:hover { color: var(--accent-2); background: rgba(var(--accent-2-rgb),0.08); }
     .settings-subview-title { font-size: 13px; font-weight: 700; color: var(--ink-0); }
+
+    /* Scoped to #config-panel — .settings-body is also (coincidentally) the
+       class name of #team-panel's plain vertical content wrapper, which must
+       NOT become a flex row. */
+    #config-panel .settings-body { flex: 1; display: flex; min-height: 0; }
+    #team-panel .settings-body { padding: 14px 16px; }
+    #settings-list.lc-col { padding: 8px 6px; gap: 2px; }
+    #settings-content.dc-col { padding: 16px 18px; }
 
     /* ── Appearance (theme picker) ── */
     .theme-list { display: flex; flex-direction: column; gap: 6px; }
@@ -772,9 +711,7 @@
     @keyframes spin { to { transform: rotate(360deg); } }
 
     /* ── Sync panel ── */
-    #sync-panel { flex: 1; overflow-y: auto; }
-    #home-view, #settings-panel, #config-panel, #sync-panel { flex: 1; }
-    .sync-view { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+    .sync-view { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; max-width: 340px; margin: 0 auto; width: 100%; }
     .sync-view.hidden { display: none; }
     .sync-heading { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-5); }
     .sync-desc { font-size: 12px; color: var(--ink-4); line-height: 1.6; }
@@ -843,27 +780,14 @@
     .sync-input::placeholder { color: var(--ink-4); }
     .sync-err { font-size: 11px; color: var(--danger); min-height: 14px; }
 
-    /* ── Chip tooltip ── */
-    #acc-tooltip {
-      position: fixed;
-      background: var(--surface);
-      border: 1px solid var(--surface-2);
-      border-radius: 6px;
-      padding: 5px 9px;
-      font-size: 11px;
-      z-index: 100;
-      pointer-events: none;
-      line-height: 1.5;
-      display: none;
-    }
-    .acc-tooltip-name { color: var(--ink-1); font-weight: 600; }
-    .acc-tooltip-email { color: var(--ink-4); font-size: 10px; }
 
     /* ── Ko-fi footer ── */
     .kofi-footer {
       border-top: 1px solid var(--surface);
       padding: 8px 16px;
       text-align: center;
+      flex-shrink: 0;
+      background: var(--surface);
     }
     .kofi-footer a {
       font-size: 11px;
@@ -875,16 +799,7 @@
   </style>
 </head>
 <body>
-<script>
-  // Applied synchronously from a localStorage mirror so the popup never flashes
-  // the default theme before switching to the user's pick — chrome.storage.local
-  // (read later in popup.js) stays the source of truth; this is just a same-page
-  // cache for instant first paint. See THEMES / applyTheme() in popup.js.
-  try {
-    var _t = localStorage.getItem('otpilotTheme');
-    if (_t) document.body.dataset.theme = _t;
-  } catch (e) {}
-</script>
+<script src="theme-boot.js"></script>
 
 <!-- ── Lock overlay ── -->
 <div id="lock-overlay" class="hidden">
@@ -956,56 +871,104 @@
   </div>
 </div>
 
+<div class="app-row">
+  <nav class="rail" id="rail">
+    <button class="rail-btn active" id="nav-home" title="Home">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+        <polyline points="9 22 9 12 15 12 15 22"/>
+      </svg>
+      <span>Home</span>
+    </button>
+    <button class="rail-btn" id="nav-settings" title="Accounts">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+        <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+      </svg>
+      <span>Accounts</span>
+    </button>
+    <button class="rail-btn" id="nav-team" style="display:none" title="Team">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+      </svg>
+      <span>Team</span>
+    </button>
+    <button class="rail-btn" id="nav-config" title="Settings">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      <span>Settings</span>
+    </button>
+    <button class="rail-btn" id="nav-sync" title="Sync">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 15v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <span>Sync</span>
+    </button>
+  </nav>
+
 <!-- Home view -->
-<div id="home-view">
-  <div id="home-cat-bar" class="cat-bar" style="display:none"></div>
-  <div id="account-bar"></div>
-  <div id="account-overflow-panel" class="acc-overflow-panel" style="display:none">
-    <div class="acc-overflow-search">
-      <input type="text" id="account-search" placeholder="Search accounts…" autocomplete="off">
+<div id="home-view" class="app-split">
+  <div class="lc-col">
+    <div class="lc-search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="home-search" class="lc-search" placeholder="Search accounts…" autocomplete="off">
     </div>
-    <div id="account-overflow-list" class="acc-overflow-list"></div>
+    <div id="home-cat-bar" class="cat-bar" style="display:none"></div>
+    <div class="lc-count" id="home-count"></div>
+    <div id="home-list" class="lc-list"></div>
   </div>
 
-  <div class="code-section">
-    <div class="code-header">
-      <div id="account-name"></div>
-      <button id="btn-obfuscate" title="Show code"></button>
+  <div class="dc-col" id="home-detail">
+    <div class="code-section">
+      <div class="code-header">
+        <div id="account-name"></div>
+        <button id="btn-obfuscate" title="Show code"></button>
+      </div>
+      <div id="otp-display" class="dim">••• •••</div>
+      <div class="countdown" id="countdown">–</div>
+      <div class="progress-wrap">
+        <div id="progress-bar" style="width:100%"></div>
+      </div>
     </div>
-    <div id="otp-display" class="dim">••• •••</div>
-    <div class="countdown" id="countdown">–</div>
-    <div class="progress-wrap">
-      <div id="progress-bar" style="width:100%"></div>
+
+    <div class="actions">
+      <button class="btn" id="btn-copy" disabled>Copy</button>
+      <button class="btn" id="btn-fill" disabled>Fill Page</button>
     </div>
-  </div>
 
-  <div class="actions">
-    <button class="btn" id="btn-copy" disabled>Copy</button>
-    <button class="btn" id="btn-fill" disabled>Fill Page</button>
-  </div>
-
-  <!-- Team shared codes (read-only). Hidden unless the user has codes shared with them. -->
-  <div id="shared-section" style="display:none">
-    <div class="shared-divider">Shared with you</div>
-    <div id="shared-list"></div>
+    <!-- Team shared codes (read-only). Hidden unless the user has codes shared with them. -->
+    <div id="shared-section" style="display:none">
+      <div class="shared-divider">Shared with you</div>
+      <div id="shared-list"></div>
+    </div>
   </div>
 </div>
 
 <!-- Accounts view -->
-<div id="settings-panel" style="display:none">
-  <div class="acc-search">
-    <div class="acc-search-wrap">
-      <span class="acc-search-icon">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      </span>
-      <input id="acc-search" type="text" placeholder="Search accounts…" autocomplete="off">
+<div id="settings-panel" class="app-single-col" style="display:none">
+  <div class="app-split">
+    <div class="lc-col">
+      <div class="acc-search">
+        <div class="acc-search-wrap">
+          <span class="acc-search-icon">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </span>
+          <input id="acc-search" type="text" placeholder="Search accounts…" autocomplete="off">
+        </div>
+      </div>
+      <div id="vault-cat-bar" class="cat-bar" style="display:none"></div>
+      <div class="acc-toolbar">
+        <span class="acc-count" id="acc-count"></span>
+      </div>
+      <div id="accounts-list" class="lc-list"></div>
     </div>
+    <div class="dc-col" id="acc-detail"></div>
   </div>
-  <div id="vault-cat-bar" class="cat-bar" style="display:none"></div>
-  <div class="acc-toolbar">
-    <span class="acc-count" id="acc-count"></span>
-  </div>
-  <div id="accounts-list"></div>
   <div class="settings-footer">
     <button class="btn-add" id="btn-add">+ Add account</button>
     <div class="settings-footer-actions">
@@ -1016,12 +979,12 @@
 </div>
 
 <!-- Settings view -->
-<div id="config-panel" style="display:none">
+<div id="config-panel" class="app-single-col" style="display:none">
   <div class="settings-body">
 
     <!-- Top-level settings list -->
-    <div id="settings-list" class="settings-subview">
-      <button class="settings-row" id="row-settings-theme">
+    <div id="settings-list" class="settings-subview lc-col">
+      <button class="settings-row" id="row-settings-theme" data-view="settings-theme-view">
         <span class="settings-row-icon">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/>
@@ -1037,7 +1000,7 @@
         </span>
       </button>
 
-      <button class="settings-row" id="row-settings-backup">
+      <button class="settings-row" id="row-settings-backup" data-view="settings-backup-view">
         <span class="settings-row-icon">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
@@ -1052,7 +1015,7 @@
         </span>
       </button>
 
-      <button class="settings-row" id="row-settings-google-import">
+      <button class="settings-row" id="row-settings-google-import" data-view="settings-google-import-view">
         <span class="settings-row-icon">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><line x1="14" y1="14" x2="21" y2="14"/><line x1="14" y1="21" x2="21" y2="21"/><line x1="17.5" y1="14" x2="17.5" y2="21"/>
@@ -1067,7 +1030,7 @@
         </span>
       </button>
 
-      <button class="settings-row" id="row-settings-autofill">
+      <button class="settings-row" id="row-settings-autofill" data-view="settings-autofill-view">
         <span class="settings-row-icon">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M4 4h16v16H4z" stroke="none"/><path d="M22 6l-10 7L2 6"/><rect x="2" y="4" width="20" height="16" rx="2"/>
@@ -1082,7 +1045,7 @@
         </span>
       </button>
 
-      <button class="settings-row" id="row-settings-password">
+      <button class="settings-row" id="row-settings-password" data-view="settings-password-view">
         <span class="settings-row-icon">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
@@ -1098,6 +1061,7 @@
       </button>
     </div>
 
+    <div id="settings-content" class="dc-col">
     <!-- Sub-view: Appearance (theme) -->
     <div id="settings-theme-view" class="settings-subview" style="display:none">
       <div class="settings-subview-header">
@@ -1218,11 +1182,12 @@
       </div>
     </div>
 
+    </div>
   </div>
 </div>
 
 <!-- Sync panel -->
-<div id="sync-panel" style="display:none">
+<div id="sync-panel" class="app-single-col" style="display:none">
 
   <!-- View A: not signed in -->
   <div id="sv-signin" class="sync-view">
@@ -1298,7 +1263,7 @@
 </div>
 
 <!-- Team view -->
-<div id="team-panel" style="display:none">
+<div id="team-panel" class="app-single-col" style="display:none">
   <div class="settings-body">
     <div id="team-panel-name" style="font-size:13px;font-weight:700;color:var(--ink-0);margin-bottom:10px;"></div>
     <div id="team-invite-row" style="display:none;gap:5px;margin-bottom:12px;">
@@ -1311,53 +1276,14 @@
   </div>
 </div>
 
+</div> <!-- /.app-row -->
+
 <!-- Global status toast — shared by all views (Home, Accounts, Settings, Sync, Team) -->
 <div id="status-msg"></div>
-
-<nav class="bottom-nav">
-  <button class="nav-btn active" id="nav-home">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-      <polyline points="9 22 9 12 15 12 15 22"/>
-    </svg>
-    Home
-  </button>
-  <button class="nav-btn" id="nav-settings">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
-      <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
-    </svg>
-    Accounts
-  </button>
-  <button class="nav-btn" id="nav-team" style="display:none">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
-      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-    </svg>
-    Team
-  </button>
-  <button class="nav-btn" id="nav-config">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="3"/>
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-    </svg>
-    Settings
-  </button>
-  <button class="nav-btn" id="nav-sync">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M3 15v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4"/>
-      <polyline points="17 8 12 3 7 8"/>
-      <line x1="12" y1="3" x2="12" y2="15"/>
-    </svg>
-    Sync
-  </button>
-</nav>
 
 <div class="kofi-footer">
   <a href="https://ko-fi.com" id="kofi-link" target="_blank">☕ Buy me a coffee</a>
 </div>
-
-<div id="acc-tooltip"><span class="acc-tooltip-name" id="acc-tip-name"></span><span class="acc-tooltip-email" id="acc-tip-email"></span></div>
 
 <script src="config.js"></script>
 <script src="links.js"></script>

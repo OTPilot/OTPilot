@@ -57,10 +57,7 @@ function renderThemePicker(current) {
   });
 }
 
-document.getElementById('row-settings-theme').addEventListener('click', () => {
-  chrome.storage.local.get('theme', d => renderThemePicker(d.theme || DEFAULT_THEME));
-  showSettingsSubview('settings-theme-view');
-});
+document.getElementById('row-settings-theme').addEventListener('click', () => showSettingsSubview('settings-theme-view'));
 document.getElementById('back-settings-theme').addEventListener('click', () => showSettingsSubview('settings-list'));
 
 // ── Plan helpers ─────────────────────────────────────────────────────────────
@@ -107,6 +104,7 @@ async function syncActiveIndexToUrl() {
   } catch {
     activeIndex = -1;
   }
+  tabMatchIndex = activeIndex;
 }
 
 // ── Storage ──────────────────────────────────────────────────────────────────
@@ -348,131 +346,69 @@ function requestIcons(hints = {}) {
   });
 }
 
-const CHIP_COUNT = 3;
-let overflowOpen = false;
-
-function closeOverflow() {
-  overflowOpen = false;
-  document.getElementById('account-overflow-panel').style.display = 'none';
-  document.getElementById('account-overflow-btn')?.classList.remove('active');
-}
+// The account matching the active tab's URL, set once by syncActiveIndexToUrl()
+// at popup open. Kept separate from activeIndex (which changes freely as the
+// user browses the list) purely to keep showing the "this tab" dot/badge on
+// the right row even after they've clicked over to look at something else.
+let tabMatchIndex = -1;
 
 function renderAccountBar() {
-  closeOverflow();
   renderCategoryBar(document.getElementById('home-cat-bar'), renderAccountBar);
 
-  const bar = document.getElementById('account-bar');
-  bar.innerHTML = '';
+  const list = document.getElementById('home-list');
+  const countEl = document.getElementById('home-count');
+  const q = (document.getElementById('home-search')?.value || '').trim().toLowerCase();
 
-  // Preserve original indices (activeIndex / codes reference the full array)
-  // while only showing accounts in the selected category.
   const entries = accounts
     .map((acc, i) => ({ acc, i }))
-    .filter(e => accountMatchesFilter(e.acc));
+    .filter(e => accountMatchesFilter(e.acc))
+    .filter(e => !q || (e.acc.name || '').toLowerCase().includes(q) || (e.acc.email || '').toLowerCase().includes(q));
 
-  entries.slice(0, CHIP_COUNT).forEach(({ acc, i }) => {
-    const chip = document.createElement('button');
-    chip.className = 'acc-chip' + (i === activeIndex ? ' active' : '');
-    chip.addEventListener('mouseenter', () => showChipTooltip(chip, acc.name, acc.email));
-    chip.addEventListener('mouseleave', hideChipTooltip);
+  countEl.textContent = q
+    ? `${entries.length} result${entries.length === 1 ? '' : 's'}`
+    : `${accounts.length} account${accounts.length === 1 ? '' : 's'}`;
 
-    if ((acc.category || '').trim()) {
-      const dot = document.createElement('span');
-      dot.className = 'cat-dot';
-      dot.style.background = categoryColor(acc.category.trim());
-      chip.appendChild(dot);
-    }
+  list.innerHTML = '';
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'lc-empty';
+    empty.textContent = accounts.length ? `No account matches "${q}"` : 'No accounts yet — add one in Settings';
+    list.appendChild(empty);
+    return;
+  }
+
+  entries.forEach(({ acc, i }) => {
+    const row = document.createElement('button');
+    row.className = 'lc-row' + (i === activeIndex ? ' sel' : '');
 
     const av = avatarNode(acc);
 
-    const lbl = document.createElement('span');
-    lbl.className = 'acc-chip-name';
-    lbl.textContent = (acc.name || 'Unnamed').split(/\s+/)[0];
-
-    chip.append(av, lbl);
-    chip.addEventListener('click', () => {
-      activeIndex = i;
-      saveState();
-      renderAccountBar();
-      startTimer();
-    });
-    bar.appendChild(chip);
-  });
-
-  if (entries.length > CHIP_COUNT) {
-    const hasActiveInOverflow = entries.slice(CHIP_COUNT).some(e => e.i === activeIndex);
-    const btn = document.createElement('button');
-    btn.id = 'account-overflow-btn';
-    btn.className = 'acc-overflow-btn' + (hasActiveInOverflow ? ' has-active' : '');
-    const hidden = entries.length - CHIP_COUNT;
-    btn.textContent = hidden + ' more';
-    btn.title = `${hidden} more account${hidden === 1 ? '' : 's'}`;
-    btn.addEventListener('click', e => {
-      e.stopPropagation();
-      overflowOpen = !overflowOpen;
-      document.getElementById('account-overflow-panel').style.display = overflowOpen ? '' : 'none';
-      btn.classList.toggle('active', overflowOpen);
-      if (overflowOpen) {
-        const search = document.getElementById('account-search');
-        search.value = '';
-        renderOverflowList('');
-        search.focus();
-      }
-    });
-    bar.appendChild(btn);
-  }
-}
-
-function renderOverflowList(filter) {
-  const list = document.getElementById('account-overflow-list');
-  list.innerHTML = '';
-  const q = filter.toLowerCase();
-  accounts.forEach((acc, i) => {
-    if (!accountMatchesFilter(acc)) return;
-    const name = acc.name || 'Unnamed';
-    const email = acc.email || '';
-    if (q && !name.toLowerCase().includes(q) && !email.toLowerCase().includes(q)) return;
-
-    const item = document.createElement('button');
-    item.className = 'acc-overflow-item' + (i === activeIndex ? ' active' : '');
-
-    const av = avatarNode(acc, 'acc-av-md');
-
+    const cat = (acc.category || '').trim();
     const text = document.createElement('span');
-    text.className = 'acc-overflow-text';
-    text.innerHTML = `<span class="acc-overflow-name">${esc(name)}</span>` +
-      (email ? `<span class="acc-overflow-email">${esc(email)}</span>` : '');
+    text.className = 'lc-row-text';
+    text.innerHTML = `<span class="lc-row-name">${cat ? catDot(cat) : ''}${esc(acc.name || 'Unnamed')}</span>` +
+      (acc.email ? `<span class="lc-row-sub">${esc(acc.email)}</span>` : '');
 
-    item.append(av, text);
+    row.append(av, text);
 
-    if (i === activeIndex) {
-      const check = document.createElement('span');
-      check.className = 'acc-overflow-check';
-      check.textContent = '✓';
-      item.appendChild(check);
+    if (i === tabMatchIndex) {
+      const dot = document.createElement('span');
+      dot.className = 'lc-row-tab-dot';
+      dot.title = 'Matches this tab';
+      row.appendChild(dot);
     }
 
-    item.addEventListener('click', () => {
+    row.addEventListener('click', () => {
       activeIndex = i;
       saveState();
-      closeOverflow();
       renderAccountBar();
       startTimer();
     });
-    list.appendChild(item);
+    list.appendChild(row);
   });
 }
 
-document.getElementById('account-search').addEventListener('input', e => {
-  renderOverflowList(e.target.value);
-});
-
-document.addEventListener('click', e => {
-  if (!overflowOpen) return;
-  const bar   = document.getElementById('account-bar');
-  const panel = document.getElementById('account-overflow-panel');
-  if (!bar.contains(e.target) && !panel.contains(e.target)) closeOverflow();
-});
+document.getElementById('home-search').addEventListener('input', renderAccountBar);
 
 // ── OTP display loop ──────────────────────────────────────────────────────────
 
@@ -607,14 +543,13 @@ function renderAccountsList() {
   renderVaultCatBar();
   rebuildAccountsDOM();
   applyVaultSearch();
+  renderAccDetail();
 }
 
-// Flush the currently open accordion row's inputs into draft before any re-render.
+// Flush the currently open detail form's inputs into draft before any re-render.
 function syncOpenAccToDraft() {
   if (openAccIdx < 0) return;
-  const row = document.querySelector(`.acc-row[data-i="${openAccIdx}"]`);
-  if (!row) return;
-  const body = row.querySelector('.acc-body');
+  const body = document.querySelector('#acc-detail .acc-body');
   if (!body) return;
   draft[openAccIdx].name     = body.querySelector('.acc-name').value.trim();
   draft[openAccIdx].email    = body.querySelector('.acc-email').value.trim();
@@ -657,20 +592,21 @@ function renderVaultCatBar() {
   }, draft);
 }
 
+// Renders the left-column list of rows only. The selected row's edit form
+// lives in the separate #acc-detail panel (see renderAccDetail) instead of
+// expanding inline, since the vault is now a persistent list+detail split
+// rather than an accordion.
 function rebuildAccountsDOM() {
   const container = document.getElementById('accounts-list');
   container.innerHTML = '';
 
   draft.forEach((acc, i) => {
-    const isOpen = i === openAccIdx;
-
     const row = document.createElement('div');
     row.className = 'acc-row';
     row.dataset.i = i;
 
-    // ── Collapsed header ──
     const head = document.createElement('button');
-    head.className = 'acc-head' + (isOpen ? ' open' : '');
+    head.className = 'acc-head' + (i === openAccIdx ? ' open' : '');
     const cat = (acc.category || '').trim();
     head.innerHTML = `
       ${avatarHTML(acc, 'acc-av-md')}
@@ -680,122 +616,147 @@ function rebuildAccountsDOM() {
           ${cat ? `<span class="cat-tag">${catDot(cat)}${esc(cat)}</span>` : ''}
           ${acc.email ? `<span class="acc-head-email">${esc(acc.email)}</span>` : ''}
         </span>` : ''}
-      </span>
-      <span class="acc-chevron">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
       </span>`;
-
-    // ── Expanded body ──
-    const body = document.createElement('div');
-    body.className = 'acc-body' + (isOpen ? ' open' : '');
-    body.innerHTML = `
-      <div class="acc-body-head">
-        <button class="btn-del" title="Delete account">✕ Delete</button>
-      </div>
-      <div class="acc-field">
-        <label>Name</label>
-        <input class="acc-name" type="text" placeholder="e.g. My Project QA" value="${esc(acc.name)}">
-      </div>
-      <div class="acc-field">
-        <label>Email (optional)</label>
-        <input class="acc-email" type="email" placeholder="e.g. user@example.com" value="${esc(acc.email || '')}">
-      </div>
-      <div class="acc-field">
-        <label>Category</label>
-        <div class="cat-choose" data-value="${esc(cat)}">
-          <button type="button" class="cat-choice${cat ? '' : ' sel'}" data-cat=""><span class="cat-dot" style="background:var(--ink-4)"></span>None</button>
-          ${draftCategories().map(c => `<button type="button" class="cat-choice${cat === c ? ' sel' : ''}" data-cat="${esc(c)}">${catDot(c)}${esc(c)}</button>`).join('')}
-          <button type="button" class="cat-choice new">+ New</button>
-        </div>
-      </div>
-      <div class="acc-field">
-        <label>Secret (base32 or hex)</label>
-        <div class="field-row">
-          <input class="acc-secret" type="password" placeholder="Secret" value="${esc(acc.secret)}" autocomplete="off">
-          <button class="btn-eye" title="Show/hide">${SVG_EYE}</button>
-        </div>
-      </div>
-      <div class="acc-field">
-        <label>URLs (one per line, * wildcard ok)</label>
-        <textarea class="acc-urls" placeholder="*.example.com&#10;staging.myapp.io">${esc(acc.urls || '')}</textarea>
-      </div>
-      <label class="toggle">
-        <input type="checkbox" class="acc-autofill" ${acc.autofill !== false ? 'checked' : ''}>
-        <span class="toggle-track"></span>
-        <span class="toggle-label">Auto-fill on matching pages</span>
-      </label>
-      <div class="acc-share">
-        <button type="button" class="btn-share-team">↗ Share with team</button>
-        <div class="share-picker" style="display:none"></div>
-      </div>`;
 
     head.addEventListener('click', () => {
       syncOpenAccToDraft();
-      openAccIdx = isOpen ? -1 : i;
+      openAccIdx = i;
       rebuildAccountsDOM();
       renderVaultCatBar();
       applyVaultSearch();
-    });
-
-    body.querySelector('.btn-del').addEventListener('click', () => {
-      syncOpenAccToDraft();
-      draft.splice(i, 1);
-      openAccIdx = -1;
-      rebuildAccountsDOM();
-      renderVaultCatBar();
-      applyVaultSearch();
-    });
-
-    body.querySelector('.btn-eye').addEventListener('click', e => {
-      const btn = e.currentTarget;
-      const inp = btn.previousElementSibling;
-      const reveal = inp.type === 'password';
-      inp.type = reveal ? 'text' : 'password';
-      btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
-    });
-
-    // ── Share with team ──
-    body.querySelector('.btn-share-team').addEventListener('click', () => {
-      syncOpenAccToDraft();
-      openSharePicker(body.querySelector('.share-picker'), draft[i]);
-    });
-
-    // ── Category chooser ──
-    const choose = body.querySelector('.cat-choose');
-    choose.querySelectorAll('.cat-choice:not(.new)').forEach(btn => {
-      btn.addEventListener('click', () => {
-        choose.dataset.value = btn.dataset.cat;
-        choose.querySelectorAll('.cat-choice').forEach(b => b.classList.remove('sel'));
-        btn.classList.add('sel');
-        choose.parentElement.querySelector('.cat-new-input')?.remove();
-      });
-    });
-    choose.querySelector('.cat-choice.new').addEventListener('click', () => {
-      const field = choose.parentElement;
-      let inp = field.querySelector('.cat-new-input');
-      if (inp) { inp.focus(); return; }
-      inp = document.createElement('input');
-      inp.className = 'cat-new-input';
-      inp.placeholder = 'New category name';
-      inp.maxLength = 24;
-      inp.value = '';
-      inp.addEventListener('input', () => {
-        const v = inp.value.trim();
-        choose.dataset.value = v;
-        // A typed value supersedes any selected pill.
-        choose.querySelectorAll('.cat-choice').forEach(b => b.classList.remove('sel'));
-      });
-      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
-      field.appendChild(inp);
-      inp.focus();
+      renderAccDetail();
     });
 
     row.appendChild(head);
-    row.appendChild(body);
     container.appendChild(row);
   });
 
   updateVaultCount();
+}
+
+// Renders the edit form for draft[openAccIdx] into the right-column detail
+// panel. Same fields/behavior as the old inline accordion body, just mounted
+// in one shared container instead of nested under each row.
+function renderAccDetail() {
+  const container = document.getElementById('acc-detail');
+  const acc = draft[openAccIdx];
+
+  if (!acc) {
+    container.innerHTML = `<div class="dc-empty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16"/></svg>
+      Select an account to edit, or add a new one
+    </div>`;
+    return;
+  }
+
+  const cat = (acc.category || '').trim();
+  const body = document.createElement('div');
+  body.className = 'acc-body open';
+  body.innerHTML = `
+    <div class="acc-body-head">
+      <span class="acc-body-title">${esc(acc.name) || `Account ${openAccIdx + 1}`}</span>
+      <button class="btn-del" title="Delete account">✕ Delete</button>
+    </div>
+    <div class="acc-field">
+      <label>Name</label>
+      <input class="acc-name" type="text" placeholder="e.g. My Project QA" value="${esc(acc.name)}">
+    </div>
+    <div class="acc-field">
+      <label>Email (optional)</label>
+      <input class="acc-email" type="email" placeholder="e.g. user@example.com" value="${esc(acc.email || '')}">
+    </div>
+    <div class="acc-field">
+      <label>Category</label>
+      <div class="cat-choose" data-value="${esc(cat)}">
+        <button type="button" class="cat-choice${cat ? '' : ' sel'}" data-cat=""><span class="cat-dot" style="background:var(--ink-4)"></span>None</button>
+        ${draftCategories().map(c => `<button type="button" class="cat-choice${cat === c ? ' sel' : ''}" data-cat="${esc(c)}">${catDot(c)}${esc(c)}</button>`).join('')}
+        <button type="button" class="cat-choice new">+ New</button>
+      </div>
+    </div>
+    <div class="acc-field">
+      <label>Secret (base32 or hex)</label>
+      <div class="field-row">
+        <input class="acc-secret" type="password" placeholder="Secret" value="${esc(acc.secret)}" autocomplete="off">
+        <button class="btn-eye" title="Show/hide">${SVG_EYE}</button>
+      </div>
+    </div>
+    <div class="acc-field">
+      <label>URLs (one per line, * wildcard ok)</label>
+      <textarea class="acc-urls" placeholder="*.example.com&#10;staging.myapp.io">${esc(acc.urls || '')}</textarea>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" class="acc-autofill" ${acc.autofill !== false ? 'checked' : ''}>
+      <span class="toggle-track"></span>
+      <span class="toggle-label">Auto-fill on matching pages</span>
+    </label>
+    <div class="acc-share">
+      <button type="button" class="btn-share-team">↗ Share with team</button>
+      <div class="share-picker" style="display:none"></div>
+    </div>`;
+
+  body.querySelector('.btn-del').addEventListener('click', () => {
+    draft.splice(openAccIdx, 1);
+    openAccIdx = -1;
+    rebuildAccountsDOM();
+    renderVaultCatBar();
+    applyVaultSearch();
+    renderAccDetail();
+  });
+
+  body.querySelector('.btn-eye').addEventListener('click', e => {
+    const btn = e.currentTarget;
+    const inp = btn.previousElementSibling;
+    const reveal = inp.type === 'password';
+    inp.type = reveal ? 'text' : 'password';
+    btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
+  });
+
+  // Live-update the list row's name/email as you type, without a full
+  // syncOpenAccToDraft()+rebuild — that would steal focus from the input.
+  const idx = openAccIdx;
+  body.querySelector('.acc-name').addEventListener('input', e => {
+    const head = document.querySelector(`.acc-row[data-i="${idx}"] .acc-head-name`);
+    if (head) head.textContent = e.target.value.trim() || `Account ${idx + 1}`;
+  });
+
+  // ── Share with team ──
+  body.querySelector('.btn-share-team').addEventListener('click', () => {
+    syncOpenAccToDraft();
+    openSharePicker(body.querySelector('.share-picker'), draft[idx]);
+  });
+
+  // ── Category chooser ──
+  const choose = body.querySelector('.cat-choose');
+  choose.querySelectorAll('.cat-choice:not(.new)').forEach(btn => {
+    btn.addEventListener('click', () => {
+      choose.dataset.value = btn.dataset.cat;
+      choose.querySelectorAll('.cat-choice').forEach(b => b.classList.remove('sel'));
+      btn.classList.add('sel');
+      choose.parentElement.querySelector('.cat-new-input')?.remove();
+    });
+  });
+  choose.querySelector('.cat-choice.new').addEventListener('click', () => {
+    const field = choose.parentElement;
+    let inp = field.querySelector('.cat-new-input');
+    if (inp) { inp.focus(); return; }
+    inp = document.createElement('input');
+    inp.className = 'cat-new-input';
+    inp.placeholder = 'New category name';
+    inp.maxLength = 24;
+    inp.value = '';
+    inp.addEventListener('input', () => {
+      const v = inp.value.trim();
+      choose.dataset.value = v;
+      // A typed value supersedes any selected pill.
+      choose.querySelectorAll('.cat-choice').forEach(b => b.classList.remove('sel'));
+    });
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
+    field.appendChild(inp);
+    inp.focus();
+  });
+
+  container.innerHTML = '';
+  container.appendChild(body);
 }
 
 function esc(s = '') {
@@ -812,6 +773,7 @@ document.getElementById('btn-add').addEventListener('click', () => {
   rebuildAccountsDOM();
   renderVaultCatBar();
   applyVaultSearch();
+  renderAccDetail();
   document.getElementById('accounts-list').lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
 
@@ -866,7 +828,6 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 // ── View switching ────────────────────────────────────────────────────────────
 
 function showView(view) {
-  if (view !== 'home') closeOverflow();
   document.getElementById('home-view').style.display      = view === 'home'     ? '' : 'none';
   document.getElementById('settings-panel').style.display = view === 'accounts' ? '' : 'none';
   document.getElementById('config-panel').style.display   = view === 'settings' ? '' : 'none';
@@ -898,9 +859,21 @@ document.getElementById('toggle-email-autofill').addEventListener('change', e =>
 // ── Settings drill-down navigation ──────────────────────────────────────────
 
 function showSettingsSubview(id) {
-  ['settings-list', 'settings-theme-view', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view', 'settings-password-view'].forEach(v => {
-    document.getElementById(v).style.display = v === id ? '' : 'none';
+  // The menu (#settings-list) stays visible alongside the content now — there's
+  // no more "back". 'settings-list' as an id just means "no specific item was
+  // requested", so it falls back to the first one instead of showing nothing.
+  if (id === 'settings-list') id = 'settings-theme-view';
+  const views = ['settings-theme-view', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view', 'settings-password-view'];
+  views.forEach(v => { document.getElementById(v).style.display = v === id ? '' : 'none'; });
+  document.querySelectorAll('#settings-list .settings-row').forEach(row => {
+    row.classList.toggle('sel', row.dataset.view === id);
   });
+  // Each menu item is a static subview except Appearance, whose theme list is
+  // populated on demand (from storage) whenever it becomes the visible one —
+  // needed both on an explicit click and when Settings opens straight onto it.
+  if (id === 'settings-theme-view') {
+    chrome.storage.local.get('theme', d => renderThemePicker(d.theme || DEFAULT_THEME));
+  }
   // import-picker lives outside the subviews above (shared by Backup and Google
   // Auth import) — close it on any navigation so a pending review can't linger
   // and later be confirmed from an unrelated settings screen.
@@ -1527,26 +1500,6 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
     showLockOverlay('login');
   });
 });
-
-// ── Chip tooltip ──────────────────────────────────────────────────────────────
-
-const _chipTooltip = document.getElementById('acc-tooltip');
-const _tipName     = document.getElementById('acc-tip-name');
-const _tipEmail    = document.getElementById('acc-tip-email');
-
-function showChipTooltip(chip, name, email) {
-  const rect = chip.getBoundingClientRect();
-  _tipName.textContent  = name || '';
-  _tipEmail.textContent = email || '';
-  _tipEmail.style.display = email ? 'block' : 'none';
-  _chipTooltip.style.display = '';
-  _chipTooltip.style.left = rect.left + 'px';
-  _chipTooltip.style.top  = (rect.bottom + 4) + 'px';
-}
-
-function hideChipTooltip() {
-  _chipTooltip.style.display = 'none';
-}
 
 // ── Cloud Sync UI ─────────────────────────────────────────────────────────────
 

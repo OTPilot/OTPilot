@@ -32,13 +32,13 @@ test('shows OTP code when unlocked with an account', async ({ context, extension
   // Lock overlay should be hidden (session valid)
   await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
 
-  // Account chip is visible in the bar
-  const chip = page.locator('.acc-chip').first();
-  await expect(chip).toBeVisible();
+  // Account row is visible in the home list
+  const row = page.locator('.lc-row').first();
+  await expect(row).toBeVisible();
 
-  // Click the chip to activate the account (syncActiveIndexToUrl resets to -1
+  // Click the row to activate the account (syncActiveIndexToUrl resets to -1
   // when the active tab is popup.html, not an HTTP page — a click re-activates it)
-  await chip.click();
+  await row.click();
 
   // OTP display shows a 6-digit code (format "XXX XXX")
   const display = page.locator('#otp-display');
@@ -139,17 +139,16 @@ test('category filter bar narrows the home account chips', async ({ context, ext
   await expect(bar).toBeVisible();
   await expect(bar.locator('.cat-pill')).toHaveCount(4);
 
-  // "All" is active by default and the overflow button shows (4 > 3 chips)
+  // "All" is active by default
   await expect(bar.locator('.cat-pill.active')).toContainText('All');
 
-  // Pick "Work" → only the two Work accounts remain as chips, no overflow
+  // Pick "Work" → only the two Work accounts remain as rows in the home list
   await bar.locator('.cat-pill', { hasText: 'Work' }).click();
-  await expect(page.locator('.acc-chip')).toHaveCount(2);
-  await expect(page.locator('#account-overflow-btn')).toHaveCount(0);
-  await expect(page.locator('.acc-chip-name').first()).toHaveText('GitHub');
+  await expect(page.locator('#home-list .lc-row')).toHaveCount(2);
+  await expect(page.locator('#home-list .lc-row-name').first()).toContainText('GitHub');
 
-  // Each filtered chip carries its category color dot
-  await expect(page.locator('.acc-chip .cat-dot')).toHaveCount(2);
+  // Each filtered row carries its category color dot
+  await expect(page.locator('#home-list .lc-row-name .cat-dot')).toHaveCount(2);
 });
 
 test('assigning a new category in the editor persists and tags the account', async ({ context, extensionId }) => {

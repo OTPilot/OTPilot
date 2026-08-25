@@ -1,6 +1,19 @@
 # Changelog
 
 
+## v1.5.0
+
+### Extension
+
+- **New app shell: list + detail, everywhere** — The popup widens (300px → 600px) and moves from a bottom tab bar + cramped account chips to a persistent left icon rail (Home / Accounts / Settings / Sync / Team) next to a searchable list, with the selected item's detail on the right. This replaces three different past-their-limit patterns at once:
+  - **Home** — the 3-chip-plus-overflow account switcher (names truncated to "Am…") is gone. A full-width search box and scrollable list replace it; the code display is now "code-first" (big live code + countdown up top, fields below) instead of a single stacked view. The account matching the active tab is still pre-selected on open — same `syncActiveIndexToUrl()` behavior as before, now shown as a small dot on its row.
+  - **Accounts** — the accordion (click a row, it expands inline) is replaced by the same searchable list on the left with the edit form docked in a permanent right-hand panel, so switching between accounts to edit no longer means collapsing one and re-opening another. Add/edit/delete/share-with-team/category-picker all carried over unchanged.
+  - **Settings** — the drill-down list (row → sub-view → back button) is replaced by a persistent menu on the left with the selected item's content on the right — Appearance, Backup & Restore, Google Authenticator import, auto-fill toggle, and change-password all work exactly as before, just without the back-and-forth navigation.
+  - **Sync** and **Team** keep their existing single-pane content, now hanging off the same rail instead of the old bottom nav.
+  - The "Buy me a coffee" footer stays its own row, now below the whole rail+content area rather than below a bottom tab bar.
+- **Fix: theme picker's zero-flash script never actually ran** — The inline `<script>` added for instant theme apply on first paint (v1.4.0) silently violated the extension's Content Security Policy, which blocks inline script execution outright — it always failed, so every popup open flashed the default theme before `popup.js` applied the real one a moment later. Moved to an external `theme-boot.js` file (CSP allows external same-origin scripts), which actually executes.
+- **Fix: category dots were invisible outside flex containers** — `.cat-dot` relied on being a flex child to render at all (a bare `<span>` ignores `width`/`height` unless given `display: inline-block`), which happened to be true everywhere it was already used. The new home list is the first non-flex usage, which exposed it. Fixed at the shared rule, benefiting any future usage too.
+
 ## v1.4.0
 
 ### Extension
