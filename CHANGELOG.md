@@ -1,6 +1,12 @@
 # Changelog
 
 
+## v1.3.4
+
+### API
+
+- **Favicon resolution failing for JS-heavy homepages** — `/icons/resolve`'s homepage `<link rel="icon">` scan shared the same 512 KB download cap used for the actual icon image. Modern SPA homepages routinely exceed that (Figma's is ~1.6 MB), so the scan aborted before it ever read the `<head>`, the icon lookup fell through to a `/favicon.ico` that often doesn't exist, and the domain got negative-cached as `status: none`. The homepage scan now uses its own 4 MB budget (`MAX_HTML_DOWNLOAD`); the icon-image download keeps the original 512 KB cap. A negative (`none`) result is also now re-checked after 3 days instead of 30 (`NONE_REFRESH_AFTER_DAYS`), so a transient miss like this self-heals quickly instead of sitting wrong for a month.
+
 ## v1.3.3
 
 ### Extension
