@@ -1,6 +1,12 @@
 # Changelog
 
 
+## v1.3.5
+
+### Extension
+
+- **Icons for bot-protected sites (e.g. Binance)** — Some sites (Binance and others behind aggressive anti-bot protection) return an empty challenge page to the backend's server-side homepage fetch, so `/icons/resolve` could never discover their favicon no matter how many times it was retried. When an account is saved from the account editor, OTPilot now grabs the declared favicon from the popup's active tab (if it happens to be the site being added — the common case, since you're usually sitting on the site's 2FA page while adding it) and sends it as a hint, the same way the on-page "Save this site?" prompt already did. The backend downloads that exact URL directly instead of blind-fetching the homepage, sidestepping the bot challenge entirely. Best-effort and silent — falls back to the existing homepage scan when the active tab isn't the target site.
+
 ## v1.3.4
 
 ### API
