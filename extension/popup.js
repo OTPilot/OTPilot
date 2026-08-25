@@ -11,6 +11,58 @@ let lastSyncedAt   = null;  // ISO string: last completed bidirectional sync
 let tombstones     = {};    // { [accountName]: ISO } — deleted accounts
 let iconCache      = {};    // { [domain]: { dataUrl: string|null, fetchedAt: number } }
 
+// ── Appearance (themes) ──────────────────────────────────────────────────────
+// Single source of truth for the theme picker in Settings → Appearance. Adding
+// a theme is two steps: 1) a body[data-theme="id"] token block in popup.html's
+// <style> (same custom-property names as the others), 2) one entry here.
+const THEMES = [
+  { id: 'vault',    name: 'Vault',    desc: 'Graphite & brass — precise and premium.', swatch: ['#1c1a17', '#c9a15a'] },
+  { id: 'daylight', name: 'Daylight', desc: 'Calm paper-white, forest-green accent.',   swatch: ['#faf9f5', '#2f6f4f'] },
+  { id: 'terminal', name: 'Terminal', desc: 'Monospace control panel, cyan accent.',    swatch: ['#0a0e14', '#33c2cf'] },
+  { id: 'signal',   name: 'Signal',   desc: 'Bold navy, coral accent, rounded.',        swatch: ['#101b2d', '#ff6a55'] },
+];
+const DEFAULT_THEME = 'vault';
+
+function applyTheme(id) {
+  document.body.dataset.theme = id;
+  try { localStorage.setItem('otpilotTheme', id); } catch { /* private mode etc. */ }
+  chrome.storage.local.set({ theme: id });
+  const sub = document.getElementById('row-settings-theme-sub');
+  if (sub) sub.textContent = THEMES.find(t => t.id === id)?.name ?? id;
+}
+
+function renderThemePicker(current) {
+  const list = document.getElementById('theme-list');
+  if (!list) return;
+  list.innerHTML = '';
+  THEMES.forEach(t => {
+    const row = document.createElement('button');
+    row.className = 'theme-row' + (t.id === current ? ' active' : '');
+    row.innerHTML = `
+      <span class="theme-swatch" style="background:${t.swatch[0]}"><span style="background:${t.swatch[1]}"></span></span>
+      <span class="theme-text">
+        <span class="theme-name">${t.name}</span>
+        <span class="theme-desc">${t.desc}</span>
+      </span>
+      <span class="theme-check">${t.id === current
+        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+        : ''}</span>`;
+    row.addEventListener('click', () => {
+      if (t.id === current) return;
+      applyTheme(t.id);
+      current = t.id;
+      renderThemePicker(current);
+    });
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('row-settings-theme').addEventListener('click', () => {
+  chrome.storage.local.get('theme', d => renderThemePicker(d.theme || DEFAULT_THEME));
+  showSettingsSubview('settings-theme-view');
+});
+document.getElementById('back-settings-theme').addEventListener('click', () => showSettingsSubview('settings-list'));
+
 // ── Plan helpers ─────────────────────────────────────────────────────────────
 
 function canSync(plan) {
@@ -201,7 +253,7 @@ function renderCategoryBar(barEl, onPick, source = accounts) {
     return pill;
   };
 
-  barEl.appendChild(mkPill('All', '', `<span class="cat-dot" style="background:#64748b"></span>`, source.length));
+  barEl.appendChild(mkPill('All', '', `<span class="cat-dot" style="background:var(--ink-4)"></span>`, source.length));
   for (const c of cats) barEl.appendChild(mkPill(c, c, catDot(c), categoryCount(c, source)));
 }
 
@@ -470,7 +522,7 @@ async function refreshDisplay() {
     const rem = totpRemaining();
     countdown.textContent = 'Refreshes in ' + rem + 's';
     bar.style.width = (rem / 30 * 100) + '%';
-    bar.style.background = rem <= 5 ? '#f59e0b' : '#38bdf8';
+    bar.style.background = rem <= 5 ? 'var(--warning)' : 'var(--accent-2)';
 
     btnCopy.disabled = false;
     btnFill.disabled = false;
@@ -651,7 +703,7 @@ function rebuildAccountsDOM() {
       <div class="acc-field">
         <label>Category</label>
         <div class="cat-choose" data-value="${esc(cat)}">
-          <button type="button" class="cat-choice${cat ? '' : ' sel'}" data-cat=""><span class="cat-dot" style="background:#64748b"></span>None</button>
+          <button type="button" class="cat-choice${cat ? '' : ' sel'}" data-cat=""><span class="cat-dot" style="background:var(--ink-4)"></span>None</button>
           ${draftCategories().map(c => `<button type="button" class="cat-choice${cat === c ? ' sel' : ''}" data-cat="${esc(c)}">${catDot(c)}${esc(c)}</button>`).join('')}
           <button type="button" class="cat-choice new">+ New</button>
         </div>
@@ -846,7 +898,7 @@ document.getElementById('toggle-email-autofill').addEventListener('change', e =>
 // ── Settings drill-down navigation ──────────────────────────────────────────
 
 function showSettingsSubview(id) {
-  ['settings-list', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view', 'settings-password-view'].forEach(v => {
+  ['settings-list', 'settings-theme-view', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view', 'settings-password-view'].forEach(v => {
     document.getElementById(v).style.display = v === id ? '' : 'none';
   });
   // import-picker lives outside the subviews above (shared by Backup and Google
@@ -1856,6 +1908,11 @@ async function silentPullSync() {
 }
 
 (async () => {
+  // chrome.storage.local is the source of truth for the theme; the inline
+  // <script> right after <body> already applied a localStorage-cached guess
+  // so there's no flash — this just confirms it and keeps the cache in sync.
+  chrome.storage.local.get('theme', d => applyTheme(d.theme || DEFAULT_THEME));
+
   const justAuthenticated = await initLock();
   await loadState();
   await syncActiveIndexToUrl();
@@ -2011,7 +2068,7 @@ async function renderSharedCodes() {
     // Team name in the sync panel.
     const nameEl = document.getElementById('sync-team-name');
     if (nameEl && team.name) {
-      nameEl.innerHTML = `👥 ${esc(team.name)} · <a href="${CONFIG.DASHBOARD_URL}/dashboard/team" target="_blank" style="color:#38bdf8;text-decoration:none">Manage ↗</a>`;
+      nameEl.innerHTML = `👥 ${esc(team.name)} · <a href="${CONFIG.DASHBOARD_URL}/dashboard/team" target="_blank" style="color:var(--accent-2);text-decoration:none">Manage ↗</a>`;
       nameEl.style.display = '';
     }
     codes = await Sharing.getSharedCodes(team.id);

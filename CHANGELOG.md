@@ -1,6 +1,12 @@
 # Changelog
 
 
+## v1.4.0
+
+### Extension
+
+- **Themes** — Settings → Appearance now lets you pick the popup's visual identity: **Vault** (graphite & brass, mechanical-counter code display — the default), **Daylight** (calm paper-white, forest-green accent), **Terminal** (full monospace control panel, cyan accent), and **Signal** (bold navy with a coral accent). Switching applies instantly across every view (home, vault editor, settings, sync) with no reload. Architecturally this is a full token pass: every hardcoded color and the two font roles (`--font-ui`/`--font-code`) in `popup.html` were replaced with CSS custom properties, selected by `body[data-theme]`; the chosen theme is cached in `localStorage` so the popup never flashes the default color before applying your pick, with `chrome.storage.local` as the source of truth. Adding a future theme is two steps: a new `body[data-theme="…"]` token block in `popup.html`, and one entry in the `THEMES` array in `popup.js` — no other code changes. Google's own "Continue with Google" button is intentionally excluded (Google's brand mark, not ours to retheme).
+
 ## v1.3.6
 
 ### Extension
