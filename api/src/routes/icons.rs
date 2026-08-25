@@ -22,8 +22,18 @@ use crate::{error::Result, AppState};
 
 /// Re-fetch a domain's icon at most this often.
 const REFRESH_AFTER_DAYS: i64 = 30;
-/// Cap on bytes downloaded for an icon or a homepage HTML scan.
+/// Re-fetch a negative (`none`) result sooner than a confirmed icon — a miss is
+/// more likely to be a transient fetch problem (size cap, timeout, temporary
+/// bot-block) than a permanent fact about the site, so it shouldn't stick for
+/// as long as a successfully-resolved icon.
+const NONE_REFRESH_AFTER_DAYS: i64 = 3;
+/// Cap on bytes downloaded for an icon image — favicons are always tiny.
 const MAX_DOWNLOAD: usize = 512 * 1024;
+/// Cap on bytes downloaded for the homepage HTML scan. Modern JS-heavy
+/// homepages (Figma, Notion, Linear…) routinely exceed `MAX_DOWNLOAD`, which
+/// would abort the `<link rel=icon>` scan before it even reads the `<head>` —
+/// so this uses a much larger budget than an actual icon ever needs.
+const MAX_HTML_DOWNLOAD: usize = 4 * 1024 * 1024;
 /// Edge size of the normalized PNG.
 const ICON_SIZE: u32 = 64;
 /// Max concurrent outbound favicon fetches across all requests — the endpoint is
@@ -146,12 +156,17 @@ async fn resolve(
             continue;
         };
 
-        // Cache hit (and still fresh) → return immediately.
+        // Cache hit (and still fresh) → return immediately. A `none` result uses a
+        // shorter freshness window than an `ok` one (see NONE_REFRESH_AFTER_DAYS).
         if let Some(row) = sqlx::query_as::<_, IconRow>(
-            "SELECT status, (fetched_at > now() - ($2 || ' days')::interval) AS fresh
+            "SELECT status,
+                    (fetched_at > now() - (
+                        (CASE WHEN status = 'none' THEN $2 ELSE $3 END) || ' days'
+                    )::interval) AS fresh
              FROM domain_icons WHERE domain = $1",
         )
         .bind(&domain)
+        .bind(NONE_REFRESH_AFTER_DAYS.to_string())
         .bind(REFRESH_AFTER_DAYS.to_string())
         .fetch_optional(&state.db)
         .await?
@@ -271,7 +286,7 @@ fn registrable_domain(domain: &str) -> Option<String> {
 /// Downloads bytes (with SSRF + size guards) and re-encodes to a 64×64 PNG.
 /// Returns None if the host is non-public, the download fails, or it isn't an image.
 async fn download_and_normalize(url: &str) -> Option<Vec<u8>> {
-    let bytes = fetch_bytes(url).await?;
+    let bytes = fetch_bytes(url, MAX_DOWNLOAD).await?;
     normalize_to_png(&bytes)
 }
 
@@ -279,7 +294,7 @@ async fn download_and_normalize(url: &str) -> Option<Vec<u8>> {
 /// resolved to an absolute URL on the same domain.
 async fn discover_link_icon(domain: &str) -> Option<String> {
     let base = format!("https://{domain}/");
-    let html_bytes = fetch_bytes(&base).await?;
+    let html_bytes = fetch_bytes(&base, MAX_HTML_DOWNLOAD).await?;
     let html = String::from_utf8_lossy(&html_bytes);
     let href = extract_icon_href(&html)?;
     let abs = reqwest::Url::parse(&base).ok()?.join(&href).ok()?;
@@ -299,7 +314,7 @@ const MAX_REDIRECTS: usize = 4;
 /// reqwest can't independently re-resolve to an internal address (closing both
 /// the redirect-SSRF and the DNS-rebinding TOCTOU). Following apex→www etc. keeps
 /// icon coverage high. Body size is capped.
-async fn fetch_bytes(url: &str) -> Option<Vec<u8>> {
+async fn fetch_bytes(url: &str, max_bytes: usize) -> Option<Vec<u8>> {
     let mut current = reqwest::Url::parse(url).ok()?;
 
     for _ in 0..=MAX_REDIRECTS {
@@ -333,12 +348,12 @@ async fn fetch_bytes(url: &str) -> Option<Vec<u8>> {
             return None;
         }
         if let Some(len) = resp.content_length() {
-            if len as usize > MAX_DOWNLOAD {
+            if len as usize > max_bytes {
                 return None;
             }
         }
         let bytes = resp.bytes().await.ok()?;
-        if bytes.len() > MAX_DOWNLOAD {
+        if bytes.len() > max_bytes {
             return None;
         }
         return Some(bytes.to_vec());
