@@ -4,6 +4,62 @@
   <meta charset="utf-8">
   <title>OTPilot</title>
   <style>
+    /* ── Theme tokens ──────────────────────────────────────────────────────
+       Each theme is one block of CSS custom properties, selected by
+       body[data-theme="…"] (set from Settings → Appearance, see popup.js
+       THEMES). :root holds "vault", the default — adding a theme later is:
+       1) a new body[data-theme="x"] block below with the same token names,
+       2) one entry in the THEMES array in popup.js. No other CSS changes.
+    */
+    :root {
+      --bg:        #1c1a17; --bg-deep: #15130f;
+      --surface:   #242019; --surface-2: #332c22; --border: #3a3225;
+      --ink-0: #f6f1e6; --ink-1: #efe7d8; --ink-2: #cfc5b0;
+      --ink-3: #a89b83; --ink-4: #8a7d66; --ink-5: #6b6151;
+      --accent: #c9a15a; --accent-2: #e0c17e; --on-accent: #241d0f;
+      --danger: #e0785a; --warning: #d9924a; --success: #8fae6e;
+      --accent-2-rgb: 224,193,126; --danger-rgb: 224,120,90;
+      --warning-rgb: 217,146,74;   --on-accent-rgb: 36,29,15;
+      --font-ui:   -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-code: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    }
+    body[data-theme="daylight"] {
+      --bg:        #faf9f5; --bg-deep: #f1efe7;
+      --surface:   #ffffff; --surface-2: #eeece3; --border: #e3ded1;
+      --ink-0: #171c17; --ink-1: #262b25; --ink-2: #454b42;
+      --ink-3: #6b7268; --ink-4: #8b9184; --ink-5: #a8ac9e;
+      --accent: #2f6f4f; --accent-2: #3d8a63; --on-accent: #ffffff;
+      --danger: #c94f3f; --warning: #b8792c; --success: #2f6f4f;
+      --accent-2-rgb: 61,138,99; --danger-rgb: 201,79,63;
+      --warning-rgb: 184,121,44; --on-accent-rgb: 255,255,255;
+      --font-ui:   -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-code: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    body[data-theme="terminal"] {
+      --bg:        #0a0e14; --bg-deep: #060809;
+      --surface:   #0f151d; --surface-2: #16202b; --border: #1f2a35;
+      --ink-0: #eef3f7; --ink-1: #d7dee6; --ink-2: #b7c1cc;
+      --ink-3: #8391a1; --ink-4: #5c6773; --ink-5: #3d4750;
+      --accent: #33c2cf; --accent-2: #5fd6e0; --on-accent: #03181a;
+      --danger: #e0615a; --warning: #d9a53f; --success: #4fc98a;
+      --accent-2-rgb: 95,214,224; --danger-rgb: 224,97,90;
+      --warning-rgb: 217,165,63; --on-accent-rgb: 3,24,26;
+      --font-ui:   ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      --font-code: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    }
+    body[data-theme="signal"] {
+      --bg:        #101b2d; --bg-deep: #0b1524;
+      --surface:   #16233a; --surface-2: #1e2f4d; --border: #25365a;
+      --ink-0: #f5f8fc; --ink-1: #eef2f9; --ink-2: #c9d3e6;
+      --ink-3: #93a3c2; --ink-4: #6f7fa0; --ink-5: #4d5a78;
+      --accent: #ff6a55; --accent-2: #ff8a70; --on-accent: #2a0e08;
+      --danger: #ff4d4d; --warning: #ffb454; --success: #4ade9c;
+      --accent-2-rgb: 255,138,112; --danger-rgb: 255,77,77;
+      --warning-rgb: 255,180,84; --on-accent-rgb: 42,14,8;
+      --font-ui:   -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-code: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
@@ -11,9 +67,9 @@
       min-height: 365px;
       display: flex;
       flex-direction: column;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #0f172a;
-      color: #cbd5e1;
+      font-family: var(--font-ui);
+      background: var(--bg);
+      color: var(--ink-2);
       user-select: none;
     }
 
@@ -23,10 +79,10 @@
       align-items: center;
       gap: 8px;
       padding: 12px 16px;
-      background: #1e293b;
-      border-bottom: 1px solid #1e3a5f;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
     }
-    .header h1 { font-size: 15px; font-weight: 700; color: #f1f5f9; }
+    .header h1 { font-size: 15px; font-weight: 700; color: var(--ink-0); }
 
     /* ── Account bar ── */
     #account-bar {
@@ -42,12 +98,12 @@
       justify-content: center;
       border-radius: 50%;
       font-weight: 700;
-      color: #fff;
+      color: var(--on-accent);
       flex-shrink: 0;
       width: 18px; height: 18px; font-size: 8px;
     }
     .acc-av.acc-av-md { width: 22px; height: 22px; font-size: 9px; }
-    img.acc-av { object-fit: cover; background: #1e293b; }
+    img.acc-av { object-fit: cover; background: var(--surface); }
 
     .acc-chip {
       display: flex;
@@ -58,17 +114,17 @@
       min-width: 0;
       max-width: 84px;
       background: transparent;
-      border: 1px solid #1e3a5f;
+      border: 1px solid var(--border);
       border-radius: 20px;
-      color: #64748b;
+      color: var(--ink-4);
       font-size: 11px;
       font-weight: 600;
       cursor: pointer;
       font-family: inherit;
       transition: border-color .15s, color .15s, background .15s;
     }
-    .acc-chip:hover { color: #94a3b8; border-color: #334155; }
-    .acc-chip.active { border-color: #38bdf8; background: rgba(56,189,248,0.08); color: #38bdf8; }
+    .acc-chip:hover { color: var(--ink-3); border-color: var(--surface-2); }
+    .acc-chip.active { border-color: var(--accent-2); background: rgba(var(--accent-2-rgb),0.08); color: var(--accent-2); }
     .acc-chip-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .acc-overflow-btn {
@@ -76,9 +132,9 @@
       margin-left: auto;
       padding: 4px 8px;
       background: transparent;
-      border: 1px solid #1e3a5f;
+      border: 1px solid var(--border);
       border-radius: 20px;
-      color: #475569;
+      color: var(--ink-5);
       font-size: 11px;
       font-weight: 600;
       cursor: pointer;
@@ -86,48 +142,48 @@
       transition: border-color .15s, color .15s;
       position: relative;
     }
-    .acc-overflow-btn:hover { border-color: #334155; color: #94a3b8; }
-    .acc-overflow-btn.active { border-color: #38bdf8; color: #38bdf8; }
+    .acc-overflow-btn:hover { border-color: var(--surface-2); color: var(--ink-3); }
+    .acc-overflow-btn.active { border-color: var(--accent-2); color: var(--accent-2); }
     .acc-overflow-btn.has-active::after {
       content: '';
       position: absolute;
       top: -3px; right: -3px;
       width: 7px; height: 7px;
-      background: #38bdf8;
+      background: var(--accent-2);
       border-radius: 50%;
-      border: 1.5px solid #0f172a;
+      border: 1.5px solid var(--bg);
     }
 
     .acc-overflow-panel {
-      border-bottom: 1px solid #1e3a5f;
-      background: #1e293b;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
     }
     .acc-overflow-search {
       padding: 7px 10px;
-      border-bottom: 1px solid #1e3a5f;
+      border-bottom: 1px solid var(--border);
     }
     .acc-overflow-search input {
       width: 100%;
-      background: #0f172a;
-      border: 1px solid #1e3a5f;
+      background: var(--bg);
+      border: 1px solid var(--border);
       border-radius: 4px;
       padding: 5px 8px;
-      color: #e2e8f0;
+      color: var(--ink-1);
       font-size: 11px;
       font-family: inherit;
       outline: none;
     }
-    .acc-overflow-search input:focus { border-color: #38bdf8; }
-    .acc-overflow-search input::placeholder { color: #475569; }
+    .acc-overflow-search input:focus { border-color: var(--accent-2); }
+    .acc-overflow-search input::placeholder { color: var(--ink-5); }
 
     .acc-overflow-list {
       max-height: 150px;
       overflow-y: auto;
       scrollbar-width: thin;
-      scrollbar-color: #1e3a5f transparent;
+      scrollbar-color: var(--border) transparent;
     }
     .acc-overflow-list::-webkit-scrollbar { width: 3px; }
-    .acc-overflow-list::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 2px; }
+    .acc-overflow-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
     .acc-overflow-item {
       display: flex;
@@ -142,101 +198,101 @@
       text-align: left;
       transition: background .1s;
     }
-    .acc-overflow-item:hover { background: rgba(56,189,248,0.06); }
-    .acc-overflow-item.active { background: rgba(56,189,248,0.1); }
+    .acc-overflow-item:hover { background: rgba(var(--accent-2-rgb),0.06); }
+    .acc-overflow-item.active { background: rgba(var(--accent-2-rgb),0.1); }
     .acc-overflow-text { flex: 1; min-width: 0; }
     .acc-overflow-name {
       display: block;
-      font-size: 11px; font-weight: 600; color: #e2e8f0;
+      font-size: 11px; font-weight: 600; color: var(--ink-1);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .acc-overflow-email {
       display: block;
-      font-size: 10px; color: #475569;
+      font-size: 10px; color: var(--ink-5);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .acc-overflow-check { color: #38bdf8; font-size: 10px; flex-shrink: 0; }
+    .acc-overflow-check { color: var(--accent-2); font-size: 10px; flex-shrink: 0; }
 
     /* ── Share with team (vault) ── */
     .acc-share { margin-top: 10px; }
     .btn-share-team {
-      width: 100%; padding: 6px; background: transparent; border: 1px solid #1e3a5f;
-      border-radius: 6px; color: #64748b; font-size: 12px; cursor: pointer; font-family: inherit;
+      width: 100%; padding: 6px; background: transparent; border: 1px solid var(--border);
+      border-radius: 6px; color: var(--ink-4); font-size: 12px; cursor: pointer; font-family: inherit;
       transition: all .15s;
     }
-    .btn-share-team:hover { border-color: #38bdf8; color: #38bdf8; }
+    .btn-share-team:hover { border-color: var(--accent-2); color: var(--accent-2); }
     .share-picker { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
-    .share-msg { font-size: 11px; color: #64748b; }
-    .share-msg a { color: #38bdf8; text-decoration: none; }
+    .share-msg { font-size: 11px; color: var(--ink-4); }
+    .share-msg a { color: var(--accent-2); text-decoration: none; }
     .share-recip {
       display: flex; align-items: center; gap: 6px;
-      font-size: 11px; color: #cbd5e1; cursor: pointer;
+      font-size: 11px; color: var(--ink-2); cursor: pointer;
     }
-    .share-dim { color: #475569; }
+    .share-dim { color: var(--ink-5); }
     .btn-share-confirm {
-      margin-top: 4px; padding: 6px; background: #1e3a5f; border: 1px solid #38bdf8;
-      border-radius: 6px; color: #38bdf8; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
+      margin-top: 4px; padding: 6px; background: var(--border); border: 1px solid var(--accent-2);
+      border-radius: 6px; color: var(--accent-2); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
     }
-    .btn-share-confirm:hover { background: #0ea5e9; color: #fff; }
+    .btn-share-confirm:hover { background: var(--accent); color: var(--on-accent); }
 
     /* ── Shared with you ── */
     .shared-divider {
       font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
-      color: #475569; padding: 8px 16px 4px; border-top: 1px solid #1e3a5f; margin-top: 4px;
+      color: var(--ink-5); padding: 8px 16px 4px; border-top: 1px solid var(--border); margin-top: 4px;
     }
     .shared-row {
       display: flex; align-items: center; gap: 8px; padding: 7px 16px;
     }
     .shared-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
     .shared-name {
-      font-size: 12px; font-weight: 600; color: #e2e8f0; line-height: 1.1;
+      font-size: 12px; font-weight: 600; color: var(--ink-1); line-height: 1.1;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .shared-owner {
-      display: block; font-size: 10px; color: #475569; line-height: 1.1;
+      display: block; font-size: 10px; color: var(--ink-5); line-height: 1.1;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .shared-code {
-      font-family: 'Courier New', Courier, monospace; font-size: 15px; font-weight: 700;
-      letter-spacing: 2px; color: #38bdf8;
+      font-family: var(--font-code); font-size: 15px; font-weight: 700;
+      letter-spacing: 2px; color: var(--accent-2);
     }
     .shared-refresh {
-      background: none; border: none; cursor: pointer; color: #475569; padding: 2px;
+      background: none; border: none; cursor: pointer; color: var(--ink-5); padding: 2px;
       display: flex; align-items: center;
     }
-    .shared-refresh:hover { color: #94a3b8; }
+    .shared-refresh:hover { color: var(--ink-3); }
     .shared-copy {
-      background: #1e293b; border: 1px solid #1e3a5f; border-radius: 5px;
-      color: #94a3b8; font-size: 11px; font-weight: 600; cursor: pointer;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 5px;
+      color: var(--ink-3); font-size: 11px; font-weight: 600; cursor: pointer;
       padding: 3px 8px; font-family: inherit;
     }
-    .shared-copy:hover { color: #38bdf8; border-color: #38bdf8; }
+    .shared-copy:hover { color: var(--accent-2); border-color: var(--accent-2); }
 
     /* ── Category filter bar ── */
     .cat-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
     .cat-bar {
       display: flex; gap: 6px; padding: 7px 10px;
       overflow-x: auto; scrollbar-width: none;
-      border-bottom: 1px solid #1e3a5f;
+      border-bottom: 1px solid var(--border);
     }
     .cat-bar::-webkit-scrollbar { display: none; }
     .cat-pill {
       display: inline-flex; align-items: center; gap: 6px;
       padding: 4px 10px; flex-shrink: 0;
-      background: transparent; border: 1px solid #1e3a5f; border-radius: 20px;
-      color: #64748b; font-size: 11px; font-weight: 600; cursor: pointer;
+      background: transparent; border: 1px solid var(--border); border-radius: 20px;
+      color: var(--ink-4); font-size: 11px; font-weight: 600; cursor: pointer;
       font-family: inherit; transition: border-color .15s, color .15s, background .15s;
     }
-    .cat-pill:hover { color: #94a3b8; border-color: #334155; }
-    .cat-pill .count { color: #475569; font-weight: 700; }
-    .cat-pill.active { border-color: #38bdf8; background: rgba(56,189,248,0.08); color: #e2e8f0; }
-    .cat-pill.active .count { color: #38bdf8; }
+    .cat-pill:hover { color: var(--ink-3); border-color: var(--surface-2); }
+    .cat-pill .count { color: var(--ink-5); font-weight: 700; }
+    .cat-pill.active { border-color: var(--accent-2); background: rgba(var(--accent-2-rgb),0.08); color: var(--ink-1); }
+    .cat-pill.active .count { color: var(--accent-2); }
 
     /* ── Category tag (vault row + chip dot) ── */
     .cat-tag {
       display: inline-flex; align-items: center; gap: 4px;
-      font-size: 9px; font-weight: 700; color: #94a3b8;
-      padding: 1px 6px 1px 5px; border: 1px solid #1e3a5f; border-radius: 10px;
+      font-size: 9px; font-weight: 700; color: var(--ink-3);
+      padding: 1px 6px 1px 5px; border: 1px solid var(--border); border-radius: 10px;
       flex-shrink: 0; text-transform: uppercase; letter-spacing: .3px;
       max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
@@ -247,20 +303,20 @@
     .cat-choose { display: flex; flex-wrap: wrap; gap: 6px; }
     .cat-choice {
       display: inline-flex; align-items: center; gap: 6px;
-      padding: 5px 11px; border: 1px solid #1e3a5f; border-radius: 20px;
-      background: transparent; color: #94a3b8; font-size: 11px; font-weight: 600;
+      padding: 5px 11px; border: 1px solid var(--border); border-radius: 20px;
+      background: transparent; color: var(--ink-3); font-size: 11px; font-weight: 600;
       cursor: pointer; font-family: inherit; transition: all .15s;
     }
-    .cat-choice:hover { border-color: #334155; }
-    .cat-choice.sel { border-color: #38bdf8; background: rgba(56,189,248,0.1); color: #e2e8f0; }
-    .cat-choice.new { border-style: dashed; color: #475569; }
-    .cat-choice.new:hover { border-color: #38bdf8; color: #38bdf8; }
+    .cat-choice:hover { border-color: var(--surface-2); }
+    .cat-choice.sel { border-color: var(--accent-2); background: rgba(var(--accent-2-rgb),0.1); color: var(--ink-1); }
+    .cat-choice.new { border-style: dashed; color: var(--ink-5); }
+    .cat-choice.new:hover { border-color: var(--accent-2); color: var(--accent-2); }
     .cat-new-input {
       width: 100%; margin-top: 8px; padding: 6px 9px;
-      background: #0f172a; border: 1px solid #38bdf8; border-radius: 5px;
-      color: #e2e8f0; font-size: 12px; font-family: inherit; outline: none;
+      background: var(--bg); border: 1px solid var(--accent-2); border-radius: 5px;
+      color: var(--ink-1); font-size: 12px; font-family: inherit; outline: none;
     }
-    .cat-new-input::placeholder { color: #475569; }
+    .cat-new-input::placeholder { color: var(--ink-5); }
 
     /* ── OTP display ── */
     .code-section {
@@ -280,7 +336,7 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: .8px;
-      color: #475569;
+      color: var(--ink-5);
     }
     #btn-obfuscate {
       position: absolute;
@@ -288,37 +344,37 @@
       background: none;
       border: none;
       cursor: pointer;
-      color: #334155;
+      color: var(--surface-2);
       padding: 0;
       line-height: 0;
       transition: color .15s;
       display: flex;
       align-items: center;
     }
-    #btn-obfuscate.revealed { color: #38bdf8; }
-    #btn-obfuscate:hover { color: #94a3b8; }
+    #btn-obfuscate.revealed { color: var(--accent-2); }
+    #btn-obfuscate:hover { color: var(--ink-3); }
     #otp-display {
-      font-family: 'Courier New', Courier, monospace;
+      font-family: var(--font-code);
       font-size: 38px;
       font-weight: 700;
       letter-spacing: 6px;
-      color: #38bdf8;
+      color: var(--accent-2);
       height: 52px;
       display: flex;
       align-items: center;
       justify-content: center;
     }
-    #otp-display.dim   { color: #334155; font-size: 22px; letter-spacing: 2px; }
-    #otp-display.error { color: #f87171; font-size: 13px; letter-spacing: 0; }
+    #otp-display.dim   { color: var(--surface-2); font-size: 22px; letter-spacing: 2px; }
+    #otp-display.error { color: var(--danger); font-size: 13px; letter-spacing: 0; }
 
-    .countdown { font-size: 11px; color: #475569; margin-top: 6px; }
+    .countdown { font-size: 11px; color: var(--ink-5); margin-top: 6px; }
 
     .progress-wrap {
       margin-top: 7px; height: 3px;
-      background: #1e293b; border-radius: 2px; overflow: hidden;
+      background: var(--surface); border-radius: 2px; overflow: hidden;
     }
     #progress-bar {
-      height: 100%; background: #38bdf8;
+      height: 100%; background: var(--accent-2);
       transition: width 1s linear, background .3s;
     }
 
@@ -330,40 +386,40 @@
     }
     .btn:disabled { opacity: .35; cursor: default; }
     .btn:not(:disabled):hover { opacity: .85; }
-    #btn-copy { background: #1e293b; color: #94a3b8; }
-    #btn-fill { background: #0ea5e9; color: #fff; }
+    #btn-copy { background: var(--surface); color: var(--ink-3); }
+    #btn-fill { background: var(--accent); color: var(--on-accent); }
 
     /* ── Status ── */
     #status-msg {
       min-height: 18px; text-align: center;
       font-size: 12px; padding: 0 16px 6px;
     }
-    #status-msg.ok  { color: #4ade80; }
-    #status-msg.err { color: #f87171; }
+    #status-msg.ok  { color: var(--success); }
+    #status-msg.err { color: var(--danger); }
 
     /* ── Header buttons ── */
     .header-btn {
       background: none; border: none; cursor: pointer;
-      color: #334155; padding: 0; line-height: 0;
+      color: var(--surface-2); padding: 0; line-height: 0;
       display: flex; align-items: center; transition: color .15s;
     }
-    .header-btn:hover { color: #94a3b8; }
+    .header-btn:hover { color: var(--ink-3); }
 
     /* ── Bottom nav ── */
     .bottom-nav {
       display: flex;
-      background: #1e293b;
-      border-top: 1px solid #1e3a5f;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
     }
     .nav-btn {
       flex: 1; padding: 10px 0;
       display: flex; flex-direction: column; align-items: center; gap: 4px;
       background: none; border: none; cursor: pointer;
-      color: #475569; font-size: 10px; font-weight: 600;
+      color: var(--ink-5); font-size: 10px; font-weight: 600;
       transition: color .15s;
     }
-    .nav-btn:hover { color: #94a3b8; }
-    .nav-btn.active { color: #38bdf8; }
+    .nav-btn:hover { color: var(--ink-3); }
+    .nav-btn.active { color: var(--accent-2); }
 
     #home-view, #settings-panel, #config-panel { flex: 1; }
     /* overridden below for sync-panel */
@@ -372,41 +428,41 @@
     /* ── Account search + toolbar ── */
     .acc-search {
       padding: 7px 10px;
-      border-bottom: 1px solid #1e3a5f;
-      background: #1e293b;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
     }
     .acc-search-wrap { position: relative; }
     .acc-search-icon {
       position: absolute; left: 8px; top: 50%;
       transform: translateY(-50%);
-      color: #334155; pointer-events: none; display: flex;
+      color: var(--surface-2); pointer-events: none; display: flex;
     }
     .acc-search input {
-      width: 100%; background: #0f172a; border: 1px solid #1e3a5f;
+      width: 100%; background: var(--bg); border: 1px solid var(--border);
       border-radius: 4px; padding: 5px 8px 5px 28px;
-      color: #e2e8f0; font-size: 11px; font-family: inherit; outline: none;
+      color: var(--ink-1); font-size: 11px; font-family: inherit; outline: none;
       transition: border-color .15s;
     }
-    .acc-search input:focus { border-color: #38bdf8; }
-    .acc-search input::placeholder { color: #475569; }
+    .acc-search input:focus { border-color: var(--accent-2); }
+    .acc-search input::placeholder { color: var(--ink-5); }
 
     .acc-toolbar {
       display: flex; align-items: center;
-      padding: 4px 10px; border-bottom: 1px solid #1e3a5f;
+      padding: 4px 10px; border-bottom: 1px solid var(--border);
     }
-    .acc-count { font-size: 10px; color: #334155; }
+    .acc-count { font-size: 10px; color: var(--surface-2); }
 
     /* ── Account accordion ── */
     #accounts-list {
       max-height: 280px;
       overflow-y: auto;
       scrollbar-width: thin;
-      scrollbar-color: #1e3a5f transparent;
+      scrollbar-color: var(--border) transparent;
     }
     #accounts-list::-webkit-scrollbar { width: 3px; }
-    #accounts-list::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 2px; }
+    #accounts-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-    .acc-row { border-bottom: 1px solid #1e3a5f; }
+    .acc-row { border-bottom: 1px solid var(--border); }
     .acc-row:last-child { border-bottom: none; }
 
     .acc-head {
@@ -416,29 +472,29 @@
       cursor: pointer; font-family: inherit; text-align: left;
       transition: background .1s, border-color .15s;
     }
-    .acc-head:hover { background: rgba(56,189,248,0.04); }
+    .acc-head:hover { background: rgba(var(--accent-2-rgb),0.04); }
     .acc-head.open {
-      background: rgba(56,189,248,0.08); border-left-color: #38bdf8;
+      background: rgba(var(--accent-2-rgb),0.08); border-left-color: var(--accent-2);
     }
     .acc-head-text { flex: 1; min-width: 0; }
     .acc-head-name {
-      display: block; font-size: 11px; font-weight: 600; color: #e2e8f0;
+      display: block; font-size: 11px; font-weight: 600; color: var(--ink-1);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .acc-head-email {
-      display: block; font-size: 10px; color: #475569;
+      display: block; font-size: 10px; color: var(--ink-5);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .acc-chevron {
-      color: #334155; transition: transform .2s, color .15s;
+      color: var(--surface-2); transition: transform .2s, color .15s;
       flex-shrink: 0; display: flex; align-items: center;
     }
-    .acc-head.open .acc-chevron { transform: rotate(180deg); color: #38bdf8; }
+    .acc-head.open .acc-chevron { transform: rotate(180deg); color: var(--accent-2); }
 
     .acc-body {
       display: none; padding: 8px 12px 10px;
-      background: #0c1525; border-top: 1px solid #1e3a5f;
-      border-left: 2px solid #38bdf8;
+      background: var(--bg-deep); border-top: 1px solid var(--border);
+      border-left: 2px solid var(--accent-2);
     }
     .acc-body.open { display: block; }
     .acc-body-head {
@@ -446,64 +502,64 @@
       justify-content: flex-end; margin-bottom: 8px;
     }
 
-    .settings-footer { padding: 8px 14px 10px; border-top: 1px solid #1e3a5f; }
+    .settings-footer { padding: 8px 14px 10px; border-top: 1px solid var(--border); }
     .settings-footer-actions { display: flex; gap: 6px; margin-top: 6px; }
     .btn-cancel {
       flex: 1; padding: 8px;
-      background: transparent; border: 1px solid #334155;
-      border-radius: 6px; color: #475569;
+      background: transparent; border: 1px solid var(--surface-2);
+      border-radius: 6px; color: var(--ink-5);
       font-size: 13px; font-weight: 600; cursor: pointer;
       font-family: inherit; transition: all .15s;
     }
-    .btn-cancel:hover { border-color: #475569; color: #94a3b8; }
+    .btn-cancel:hover { border-color: var(--ink-5); color: var(--ink-3); }
 
     .btn-del {
-      background: none; border: 1px solid #334155; border-radius: 4px;
-      color: #475569; font-size: 11px; cursor: pointer; padding: 2px 7px; line-height: 1.5;
+      background: none; border: 1px solid var(--surface-2); border-radius: 4px;
+      color: var(--ink-5); font-size: 11px; cursor: pointer; padding: 2px 7px; line-height: 1.5;
       font-family: inherit; transition: all .15s;
     }
-    .btn-del:hover { color: #f87171; border-color: #f87171; background: rgba(248,113,113,0.08); }
+    .btn-del:hover { color: var(--danger); border-color: var(--danger); background: rgba(var(--danger-rgb),0.08); }
 
     .acc-field { margin-bottom: 7px; }
     .acc-field label {
       display: block; font-size: 10px; font-weight: 600;
       text-transform: uppercase; letter-spacing: .5px;
-      color: #475569; margin-bottom: 3px;
+      color: var(--ink-5); margin-bottom: 3px;
     }
     .field-row { display: flex; gap: 5px; }
     .acc-field input, .acc-field textarea {
       width: 100%; padding: 6px 9px;
-      background: #0f172a; border: 1px solid #1e3a5f;
-      border-radius: 5px; color: #e2e8f0;
-      font-size: 12px; font-family: monospace;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--ink-1);
+      font-size: 12px; font-family: var(--font-code);
     }
     .acc-field textarea { resize: vertical; min-height: 52px; line-height: 1.5; }
     .acc-field input:focus,
-    .acc-field textarea:focus { outline: none; border-color: #38bdf8; }
+    .acc-field textarea:focus { outline: none; border-color: var(--accent-2); }
     .acc-field .field-row input { flex: 1; }
 
     .btn-eye {
-      padding: 0 8px; background: #0f172a;
-      border: 1px solid #1e3a5f; border-radius: 5px;
-      color: #475569; cursor: pointer; font-size: 13px;
+      padding: 0 8px; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 5px;
+      color: var(--ink-5); cursor: pointer; font-size: 13px;
     }
-    .btn-eye:hover { color: #94a3b8; }
+    .btn-eye:hover { color: var(--ink-3); }
 
     .btn-add {
       width: 100%; padding: 7px; margin-bottom: 8px;
-      background: transparent; border: 1px dashed #1e3a5f;
-      border-radius: 6px; color: #475569;
+      background: transparent; border: 1px dashed var(--border);
+      border-radius: 6px; color: var(--ink-5);
       font-size: 12px; cursor: pointer; transition: all .15s;
     }
-    .btn-add:hover { border-color: #38bdf8; color: #38bdf8; }
+    .btn-add:hover { border-color: var(--accent-2); color: var(--accent-2); }
 
     .btn-save-all {
       flex: 1; padding: 8px;
-      background: #1e3a5f; border: 1px solid #38bdf8;
-      border-radius: 6px; color: #38bdf8;
+      background: var(--border); border: 1px solid var(--accent-2);
+      border-radius: 6px; color: var(--accent-2);
       font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
     }
-    .btn-save-all:hover { background: #0ea5e9; color: #fff; border-color: #0ea5e9; }
+    .btn-save-all:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 
     /* ── Export / Import ── */
     .backup-row {
@@ -517,25 +573,25 @@
     .toggle input { display: none; }
     .toggle-track {
       width: 28px; height: 16px; flex-shrink: 0;
-      background: #1e3a5f; border-radius: 8px;
+      background: var(--border); border-radius: 8px;
       position: relative; transition: background .2s;
     }
     .toggle-track::after {
       content: ''; position: absolute;
       width: 12px; height: 12px; border-radius: 50%;
-      background: #475569; top: 2px; left: 2px; transition: all .2s;
+      background: var(--ink-5); top: 2px; left: 2px; transition: all .2s;
     }
-    .toggle input:checked + .toggle-track { background: #0ea5e9; }
-    .toggle input:checked + .toggle-track::after { left: 14px; background: #fff; }
-    .toggle-label { font-size: 11px; color: #64748b; }
+    .toggle input:checked + .toggle-track { background: var(--accent); }
+    .toggle input:checked + .toggle-track::after { left: 14px; background: var(--on-accent); }
+    .toggle-label { font-size: 11px; color: var(--ink-4); }
 
     .btn-backup {
       flex: 1; padding: 7px;
-      background: transparent; border: 1px solid #1e3a5f;
-      border-radius: 6px; color: #64748b;
+      background: transparent; border: 1px solid var(--border);
+      border-radius: 6px; color: var(--ink-4);
       font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s;
     }
-    .btn-backup:hover { border-color: #38bdf8; color: #38bdf8; }
+    .btn-backup:hover { border-color: var(--accent-2); color: var(--accent-2); }
 
     /* ── Settings list rows (drill-down) ── */
     .settings-row {
@@ -545,65 +601,86 @@
       color: inherit; font-family: inherit; text-align: left; cursor: pointer;
       transition: background .12s;
     }
-    button.settings-row:hover { background: rgba(56,189,248,0.06); }
+    button.settings-row:hover { background: rgba(var(--accent-2-rgb),0.06); }
     .settings-row-icon {
       width: 28px; height: 28px; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
-      background: #1e293b; border: 1px solid #1e3a5f; border-radius: 8px;
-      color: #38bdf8;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--accent-2);
     }
     .settings-row-text { flex: 1; min-width: 0; }
-    .settings-row-title { display: block; font-size: 12px; font-weight: 600; color: #e2e8f0; }
+    .settings-row-title { display: block; font-size: 12px; font-weight: 600; color: var(--ink-1); }
     .settings-row-sub {
-      display: block; font-size: 10px; color: #64748b; margin-top: 1px;
+      display: block; font-size: 10px; color: var(--ink-4); margin-top: 1px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .settings-row-chevron { color: #334155; flex-shrink: 0; display: flex; align-items: center; }
+    .settings-row-chevron { color: var(--surface-2); flex-shrink: 0; display: flex; align-items: center; }
 
     .settings-subview-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
     .settings-back {
       display: flex; align-items: center; justify-content: center;
       width: 24px; height: 24px; padding: 0;
       background: transparent; border: none; border-radius: 5px;
-      color: #94a3b8; cursor: pointer; transition: color .12s, background .12s;
+      color: var(--ink-3); cursor: pointer; transition: color .12s, background .12s;
     }
-    .settings-back:hover { color: #38bdf8; background: rgba(56,189,248,0.08); }
-    .settings-subview-title { font-size: 13px; font-weight: 700; color: #f1f5f9; }
+    .settings-back:hover { color: var(--accent-2); background: rgba(var(--accent-2-rgb),0.08); }
+    .settings-subview-title { font-size: 13px; font-weight: 700; color: var(--ink-0); }
+
+    /* ── Appearance (theme picker) ── */
+    .theme-list { display: flex; flex-direction: column; gap: 6px; }
+    .theme-row {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      padding: 8px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; color: inherit; font-family: inherit; text-align: left;
+      cursor: pointer; transition: border-color .12s;
+    }
+    .theme-row:hover { border-color: var(--accent-2); }
+    .theme-row.active { border-color: var(--accent); }
+    .theme-swatch {
+      width: 30px; height: 30px; border-radius: 7px; flex-shrink: 0;
+      display: flex; align-items: flex-end; justify-content: flex-end; padding: 3px;
+      border: 1px solid rgba(var(--on-accent-rgb),.12);
+    }
+    .theme-swatch span { width: 11px; height: 11px; border-radius: 50%; display: block; }
+    .theme-text { flex: 1; min-width: 0; }
+    .theme-name { display: block; font-size: 12px; font-weight: 600; color: var(--ink-1); }
+    .theme-desc { display: block; font-size: 9.5px; color: var(--ink-4); margin-top: 1px; line-height: 1.3; }
+    .theme-check { width: 16px; flex-shrink: 0; color: var(--accent); display: flex; align-items: center; }
 
     #crypto-form {
       margin-top: 8px; padding: 10px;
-      background: #0f172a; border: 1px solid #1e3a5f; border-radius: 6px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
     }
     #crypto-form label {
       display: block; font-size: 10px; font-weight: 600;
       text-transform: uppercase; letter-spacing: .5px;
-      color: #475569; margin-bottom: 5px;
+      color: var(--ink-5); margin-bottom: 5px;
     }
     #crypto-form .field-row { display: flex; gap: 6px; }
     #crypto-password {
       flex: 1; padding: 6px 9px;
-      background: #1e293b; border: 1px solid #1e3a5f;
-      border-radius: 5px; color: #e2e8f0;
-      font-size: 12px; font-family: monospace;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--ink-1);
+      font-size: 12px; font-family: var(--font-code);
     }
-    #crypto-password:focus { outline: none; border-color: #38bdf8; }
+    #crypto-password:focus { outline: none; border-color: var(--accent-2); }
     .btn-crypto-ok {
       padding: 6px 12px;
-      background: #0ea5e9; border: none; border-radius: 5px;
-      color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
+      background: var(--accent); border: none; border-radius: 5px;
+      color: var(--on-accent); font-size: 12px; font-weight: 600; cursor: pointer;
     }
-    .btn-crypto-ok:hover { background: #38bdf8; }
+    .btn-crypto-ok:hover { background: var(--accent-2); }
     .btn-crypto-cancel {
       padding: 6px 10px;
-      background: transparent; border: 1px solid #334155;
-      border-radius: 5px; color: #475569; font-size: 12px; cursor: pointer;
+      background: transparent; border: 1px solid var(--surface-2);
+      border-radius: 5px; color: var(--ink-5); font-size: 12px; cursor: pointer;
     }
-    .btn-crypto-cancel:hover { color: #94a3b8; border-color: #475569; }
+    .btn-crypto-cancel:hover { color: var(--ink-3); border-color: var(--ink-5); }
 
     /* ── Export picker ── */
     #export-picker, #import-picker {
       margin-top: 8px; padding: 8px;
-      background: #0f172a; border: 1px solid #1e3a5f; border-radius: 6px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
     }
     #export-picker-list, #import-picker-list { max-height: 140px; overflow-y: auto; overflow-x: hidden; margin-bottom: 6px; }
     .export-acc-row {
@@ -611,20 +688,20 @@
       padding: 4px 2px; cursor: pointer; border-radius: 4px;
       overflow: hidden;
     }
-    .export-acc-row:hover { background: #1e293b; }
-    .export-acc-row input { accent-color: #0ea5e9; flex-shrink: 0; }
-    .export-acc-name { font-size: 11px; font-weight: 600; color: #94a3b8; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .export-acc-email { font-size: 10px; color: #475569; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
+    .export-acc-row:hover { background: var(--surface); }
+    .export-acc-row input { accent-color: var(--accent); flex-shrink: 0; }
+    .export-acc-name { font-size: 11px; font-weight: 600; color: var(--ink-3); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .export-acc-email { font-size: 10px; color: var(--ink-5); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
     .export-select-all {
       display: flex; align-items: center; gap: 7px;
       padding: 6px 2px 3px; cursor: pointer;
-      font-size: 10px; color: #475569;
-      border-top: 1px solid #1e3a5f; margin-top: 2px;
+      font-size: 10px; color: var(--ink-5);
+      border-top: 1px solid var(--border); margin-top: 2px;
     }
-    .export-select-all input { accent-color: #0ea5e9; }
+    .export-select-all input { accent-color: var(--accent); }
     .export-acc-exists {
-      font-size: 9px; color: #475569; background: #1e293b;
-      border: 1px solid #334155; border-radius: 3px; padding: 1px 5px;
+      font-size: 9px; color: var(--ink-5); background: var(--surface);
+      border: 1px solid var(--surface-2); border-radius: 3px; padding: 1px 5px;
       white-space: nowrap; flex-shrink: 0;
     }
     .export-acc-row.disabled { opacity: .45; cursor: default; }
@@ -633,7 +710,7 @@
     /* ── Lock overlay ── */
     #lock-overlay {
       position: fixed; inset: 0; z-index: 999;
-      background: #0f172a;
+      background: var(--bg);
       display: flex; align-items: center; justify-content: center;
       padding: 20px;
     }
@@ -641,7 +718,7 @@
 
     #lock-setup, #lock-login {
       width: 100%;
-      background: #1e293b;
+      background: var(--surface);
       border: none;
       border-radius: 12px;
       padding: 28px 24px 24px;
@@ -653,22 +730,22 @@
       gap: 10px; text-align: center; margin-bottom: 4px;
     }
     .lock-icon  { font-size: 36px; line-height: 1; }
-    .lock-title { font-size: 15px; font-weight: 700; color: #f1f5f9; }
-    .lock-sub   { font-size: 11px; color: #475569; line-height: 1.6; }
+    .lock-title { font-size: 15px; font-weight: 700; color: var(--ink-0); }
+    .lock-sub   { font-size: 11px; color: var(--ink-5); line-height: 1.6; }
 
     .lock-input {
       width: 100%; padding: 9px 12px;
-      background: #0f172a; border: none;
-      border-radius: 6px; color: #e2e8f0;
-      font-size: 13px; font-family: monospace;
+      background: var(--bg); border: none;
+      border-radius: 6px; color: var(--ink-1);
+      font-size: 13px; font-family: var(--font-code);
     }
-    .lock-input:focus { outline: none; border-color: #475569; }
-    .lock-input.err   { border-color: #f87171; }
+    .lock-input:focus { outline: none; border-color: var(--ink-5); }
+    .lock-input.err   { border-color: var(--danger); }
 
     .lock-btn {
       width: 100%; padding: 10px;
-      background: #0ea5e9; border: none; border-radius: 6px;
-      color: #fff; font-size: 13px; font-weight: 600;
+      background: var(--accent); border: none; border-radius: 6px;
+      color: var(--on-accent); font-size: 13px; font-weight: 600;
       cursor: pointer; transition: opacity .15s; margin-top: 2px;
       display: flex; align-items: center; justify-content: center; gap: 8px;
     }
@@ -676,20 +753,20 @@
     .lock-btn:not(:disabled):hover { opacity: .85; }
 
     .lock-err {
-      font-size: 12px; color: #f87171;
+      font-size: 12px; color: var(--danger);
       text-align: center; min-height: 15px; margin-top: -4px;
     }
 
     .lock-remember {
       display: flex; align-items: center; gap: 8px;
-      font-size: 11px; color: #64748b; cursor: pointer;
+      font-size: 11px; color: var(--ink-4); cursor: pointer;
     }
-    .lock-remember input { accent-color: #0ea5e9; flex-shrink: 0; }
+    .lock-remember input { accent-color: var(--accent); flex-shrink: 0; }
 
     .spinner {
       width: 14px; height: 14px; border-radius: 50%;
-      border: 2px solid rgba(255,255,255,.3);
-      border-top-color: #fff;
+      border: 2px solid rgba(var(--on-accent-rgb),.3);
+      border-top-color: var(--on-accent);
       animation: spin .7s linear infinite; flex-shrink: 0;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -699,76 +776,78 @@
     #home-view, #settings-panel, #config-panel, #sync-panel { flex: 1; }
     .sync-view { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
     .sync-view.hidden { display: none; }
-    .sync-heading { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: #475569; }
-    .sync-desc { font-size: 12px; color: #64748b; line-height: 1.6; }
-    .sync-hint { font-size: 11px; color: #38bdf8; background: rgba(56,189,248,.07); border: 1px solid rgba(56,189,248,.18); border-radius: 6px; padding: 8px 10px; line-height: 1.5; margin-top: 2px; }
+    .sync-heading { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-5); }
+    .sync-desc { font-size: 12px; color: var(--ink-4); line-height: 1.6; }
+    .sync-hint { font-size: 11px; color: var(--accent-2); background: rgba(var(--accent-2-rgb),.07); border: 1px solid rgba(var(--accent-2-rgb),.18); border-radius: 6px; padding: 8px 10px; line-height: 1.5; margin-top: 2px; }
     .btn-google {
       display: flex; align-items: center; justify-content: center; gap: 9px;
-      width: 100%; padding: 9px 12px; background: #fff; border: none; border-radius: 7px;
-      color: #1e293b; font-size: 13px; font-weight: 600; cursor: pointer;
+      /* Google's own button spec — stays literal white/dark-gray in every
+         OTPilot theme; it's Google's brand mark, not ours to retheme. */
+      width: 100%; padding: 9px 12px; background: #ffffff; border: none; border-radius: 7px;
+      color: #3c4043; font-size: 13px; font-weight: 600; cursor: pointer;
       transition: opacity .15s; font-family: inherit;
     }
     .btn-google:hover { opacity: .9; }
     .btn-google:disabled { opacity: .5; cursor: default; }
     .sync-key-box {
-      background: #0f172a; border: 1px solid #1e3a5f; border-radius: 6px;
-      padding: 10px 12px; font-family: monospace; font-size: 11px; color: #38bdf8;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      padding: 10px 12px; font-family: var(--font-code); font-size: 11px; color: var(--accent-2);
       word-break: break-all; line-height: 1.6; user-select: all;
     }
     .sync-warn {
-      font-size: 11px; color: #f59e0b; background: rgba(245,158,11,.08);
-      border: 1px solid rgba(245,158,11,.2); border-radius: 6px;
+      font-size: 11px; color: var(--warning); background: rgba(var(--warning-rgb),.08);
+      border: 1px solid rgba(var(--warning-rgb),.2); border-radius: 6px;
       padding: 8px 10px; line-height: 1.5;
     }
     .btn-sync-primary {
-      width: 100%; padding: 9px; background: #1e3a5f; border: 1px solid #38bdf8;
-      border-radius: 6px; color: #38bdf8; font-size: 13px; font-weight: 600;
+      width: 100%; padding: 9px; background: var(--border); border: 1px solid var(--accent-2);
+      border-radius: 6px; color: var(--accent-2); font-size: 13px; font-weight: 600;
       cursor: pointer; transition: all .15s; font-family: inherit;
     }
-    .btn-sync-primary:hover { background: #0ea5e9; color: #fff; border-color: #0ea5e9; }
+    .btn-sync-primary:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
     .btn-sync-primary:disabled { opacity: .45; cursor: default; }
     .btn-sync-ghost, .btn-sync-danger {
-      width: 100%; padding: 8px; background: transparent; border: 1px solid #1e3a5f;
-      border-radius: 6px; color: #64748b; font-size: 12px; cursor: pointer;
+      width: 100%; padding: 8px; background: transparent; border: 1px solid var(--border);
+      border-radius: 6px; color: var(--ink-4); font-size: 12px; cursor: pointer;
       transition: all .15s; font-family: inherit;
     }
-    .btn-sync-ghost:hover { border-color: #334155; color: #94a3b8; }
-    .btn-sync-danger:hover { border-color: #f87171; color: #f87171; }
+    .btn-sync-ghost:hover { border-color: var(--surface-2); color: var(--ink-3); }
+    .btn-sync-danger:hover { border-color: var(--danger); color: var(--danger); }
     .sync-user-row {
       display: flex; align-items: center; gap: 8px; padding: 8px 10px;
-      background: #1e293b; border-radius: 7px; border: 1px solid #1e3a5f;
+      background: var(--surface); border-radius: 7px; border: 1px solid var(--border);
     }
     .sync-user-avatar {
-      width: 26px; height: 26px; border-radius: 50%; background: #0ea5e9;
+      width: 26px; height: 26px; border-radius: 50%; background: var(--accent);
       display: flex; align-items: center; justify-content: center;
-      font-size: 11px; font-weight: 700; color: #fff; flex-shrink: 0;
+      font-size: 11px; font-weight: 700; color: var(--on-accent); flex-shrink: 0;
     }
-    .sync-user-email { font-size: 11px; font-weight: 600; color: #e2e8f0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sync-user-email { font-size: 11px; font-weight: 600; color: var(--ink-1); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sync-plan-badge {
       font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
-      padding: 2px 6px; border-radius: 10px; background: rgba(56,189,248,.12); color: #38bdf8;
-      border: 1px solid rgba(56,189,248,.25); flex-shrink: 0;
+      padding: 2px 6px; border-radius: 10px; background: rgba(var(--accent-2-rgb),.12); color: var(--accent-2);
+      border: 1px solid rgba(var(--accent-2-rgb),.25); flex-shrink: 0;
     }
-    .sync-status-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #475569; }
+    .sync-status-row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ink-5); }
     .sync-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-    .sync-dot.idle    { background: #334155; }
-    .sync-dot.syncing { background: #f59e0b; animation: pulse .8s infinite; }
-    .sync-dot.ok      { background: #4ade80; }
-    .sync-dot.error   { background: #f87171; }
+    .sync-dot.idle    { background: var(--surface-2); }
+    .sync-dot.syncing { background: var(--warning); animation: pulse .8s infinite; }
+    .sync-dot.ok      { background: var(--success); }
+    .sync-dot.error   { background: var(--danger); }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
     .sync-input {
-      width: 100%; padding: 8px 10px; background: #0f172a; border: 1px solid #1e3a5f;
-      border-radius: 6px; color: #e2e8f0; font-size: 11px; font-family: monospace; outline: none;
+      width: 100%; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--ink-1); font-size: 11px; font-family: var(--font-code); outline: none;
     }
-    .sync-input:focus { border-color: #38bdf8; }
-    .sync-input::placeholder { color: #334155; }
-    .sync-err { font-size: 11px; color: #f87171; min-height: 14px; }
+    .sync-input:focus { border-color: var(--accent-2); }
+    .sync-input::placeholder { color: var(--surface-2); }
+    .sync-err { font-size: 11px; color: var(--danger); min-height: 14px; }
 
     /* ── Chip tooltip ── */
     #acc-tooltip {
       position: fixed;
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: var(--surface);
+      border: 1px solid var(--surface-2);
       border-radius: 6px;
       padding: 5px 9px;
       font-size: 11px;
@@ -777,25 +856,35 @@
       line-height: 1.5;
       display: none;
     }
-    .acc-tooltip-name { color: #e2e8f0; font-weight: 600; }
-    .acc-tooltip-email { color: #64748b; font-size: 10px; }
+    .acc-tooltip-name { color: var(--ink-1); font-weight: 600; }
+    .acc-tooltip-email { color: var(--ink-4); font-size: 10px; }
 
     /* ── Ko-fi footer ── */
     .kofi-footer {
-      border-top: 1px solid #1e293b;
+      border-top: 1px solid var(--surface);
       padding: 8px 16px;
       text-align: center;
     }
     .kofi-footer a {
       font-size: 11px;
-      color: #475569;
+      color: var(--ink-5);
       text-decoration: none;
       transition: color .15s;
     }
-    .kofi-footer a:hover { color: #38bdf8; }
+    .kofi-footer a:hover { color: var(--accent-2); }
   </style>
 </head>
 <body>
+<script>
+  // Applied synchronously from a localStorage mirror so the popup never flashes
+  // the default theme before switching to the user's pick — chrome.storage.local
+  // (read later in popup.js) stays the source of truth; this is just a same-page
+  // cache for instant first paint. See THEMES / applyTheme() in popup.js.
+  try {
+    var _t = localStorage.getItem('otpilotTheme');
+    if (_t) document.body.dataset.theme = _t;
+  } catch (e) {}
+</script>
 
 <!-- ── Lock overlay ── -->
 <div id="lock-overlay" class="hidden">
@@ -837,12 +926,12 @@
 
 <div class="header">
   <svg width="20" height="20" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
-    <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" fill="#1e3a5f"/>
-    <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" fill="none" stroke="#38bdf8" stroke-width="4.5" stroke-linejoin="round"/>
-    <circle cx="64" cy="68" r="20" fill="#0f172a" stroke="#38bdf8" stroke-width="4"/>
-    <line x1="64" y1="68" x2="57" y2="54" stroke="#38bdf8" stroke-width="4" stroke-linecap="round"/>
-    <line x1="64" y1="68" x2="78" y2="72" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/>
-    <circle cx="64" cy="68" r="3" fill="#38bdf8"/>
+    <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" fill="var(--border)"/>
+    <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" fill="none" stroke="var(--accent-2)" stroke-width="4.5" stroke-linejoin="round"/>
+    <circle cx="64" cy="68" r="20" fill="var(--bg)" stroke="var(--accent-2)" stroke-width="4"/>
+    <line x1="64" y1="68" x2="57" y2="54" stroke="var(--accent-2)" stroke-width="4" stroke-linecap="round"/>
+    <line x1="64" y1="68" x2="78" y2="72" stroke="var(--accent-2)" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="64" cy="68" r="3" fill="var(--accent-2)"/>
   </svg>
   <h1>OTPilot</h1>
   <div style="margin-left:auto; display:flex; align-items:center; gap:10px">
@@ -932,6 +1021,22 @@
 
     <!-- Top-level settings list -->
     <div id="settings-list" class="settings-subview">
+      <button class="settings-row" id="row-settings-theme">
+        <span class="settings-row-icon">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/>
+            <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1.1-.2-.3-.4-.6-.4-1 0-.8.7-1.5 1.5-1.5H16c3.3 0 6-2.7 6-6 0-4.4-4-8-10-8z"/>
+          </svg>
+        </span>
+        <span class="settings-row-text">
+          <span class="settings-row-title">Appearance</span>
+          <span class="settings-row-sub" id="row-settings-theme-sub">Vault</span>
+        </span>
+        <span class="settings-row-chevron">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </span>
+      </button>
+
       <button class="settings-row" id="row-settings-backup">
         <span class="settings-row-icon">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -993,6 +1098,17 @@
       </button>
     </div>
 
+    <!-- Sub-view: Appearance (theme) -->
+    <div id="settings-theme-view" class="settings-subview" style="display:none">
+      <div class="settings-subview-header">
+        <button class="settings-back" id="back-settings-theme">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="settings-subview-title">Appearance</span>
+      </div>
+      <div id="theme-list" class="theme-list"></div>
+    </div>
+
     <!-- Sub-view: Change master password -->
     <div id="settings-password-view" class="settings-subview" style="display:none">
       <div class="settings-subview-header">
@@ -1002,7 +1118,7 @@
         <span class="settings-subview-title">Change master password</span>
       </div>
 
-      <p style="font-size:10px;color:#475569;margin:0 0 10px;line-height:1.5">
+      <p style="font-size:10px;color:var(--ink-5);margin:0 0 10px;line-height:1.5">
         This only changes the password that unlocks OTPilot on this device. It does not re-encrypt anything on the server — cloud sync uses a separate recovery key.
       </p>
       <input type="password" id="change-pw-current" class="lock-input" placeholder="Current password" autocomplete="current-password">
@@ -1026,7 +1142,7 @@
         <span class="toggle-track"></span>
         <span class="toggle-label">Enabled</span>
       </label>
-      <p style="font-size:10px;color:#475569;margin-top:8px;line-height:1.5">
+      <p style="font-size:10px;color:var(--ink-5);margin-top:8px;line-height:1.5">
         Reads subject lines from open Gmail or Outlook tabs to detect one-time codes. Nothing is stored or sent — the code is read locally and discarded after use.
       </p>
     </div>
@@ -1078,19 +1194,19 @@
         <span class="settings-subview-title">Import from Google Authenticator</span>
       </div>
 
-      <p style="font-size:11px;color:#94a3b8;line-height:1.5;margin:0 0 10px">
+      <p style="font-size:11px;color:var(--ink-3);line-height:1.5;margin:0 0 10px">
         In Google Authenticator: ⋮ menu → <strong>Transfer accounts</strong> → <strong>Export accounts</strong> → select accounts.
         Screenshot each QR code shown (there may be more than one if you have many accounts), then select those screenshots below.
         This only copies your accounts — nothing is removed from Google Authenticator.
       </p>
-      <div id="google-import-status" style="font-size:11px;color:#64748b;margin-bottom:8px"></div>
+      <div id="google-import-status" style="font-size:11px;color:var(--ink-4);margin-bottom:8px"></div>
       <button class="btn-crypto-ok" id="google-import-pick" style="width:100%">Select screenshots…</button>
       <input type="file" id="google-import-file" accept="image/*" multiple style="display:none">
     </div>
 
     <!-- Shared: import review (fed by either Backup or Google Authenticator import) -->
     <div id="import-picker" style="display:none">
-      <div id="import-picker-notes" style="font-size:10px;color:#f59e0b;line-height:1.5;margin-bottom:8px;display:none"></div>
+      <div id="import-picker-notes" style="font-size:10px;color:var(--warning);line-height:1.5;margin-bottom:8px;display:none"></div>
       <div id="import-picker-list"></div>
       <label class="export-select-all">
         <input type="checkbox" id="import-select-all" checked>
@@ -1159,7 +1275,7 @@
       <div class="sync-user-email" id="sync-email"></div>
       <div class="sync-plan-badge" id="sync-plan-badge">Personal</div>
     </div>
-    <div id="sync-team-name" style="display:none; font-size:11px; color:#64748b; margin:-4px 0 6px;"></div>
+    <div id="sync-team-name" style="display:none; font-size:11px; color:var(--ink-4); margin:-4px 0 6px;"></div>
     <div class="sync-status-row">
       <div class="sync-dot idle" id="sync-dot"></div>
       <span id="sync-status-text">Ready</span>
@@ -1184,14 +1300,14 @@
 <!-- Team view -->
 <div id="team-panel" style="display:none">
   <div class="settings-body">
-    <div id="team-panel-name" style="font-size:13px;font-weight:700;color:#f1f5f9;margin-bottom:10px;"></div>
+    <div id="team-panel-name" style="font-size:13px;font-weight:700;color:var(--ink-0);margin-bottom:10px;"></div>
     <div id="team-invite-row" style="display:none;gap:5px;margin-bottom:12px;">
       <input id="team-invite-email" class="sync-input" type="email" placeholder="teammate@email.com" autocomplete="off" style="flex:1;">
       <button id="team-invite-btn" class="btn-crypto-ok">Invite</button>
     </div>
-    <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#475569;margin-bottom:5px;">Members</div>
+    <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-5);margin-bottom:5px;">Members</div>
     <div id="team-members"></div>
-    <div style="font-size:11px;color:#475569;margin-top:12px;">Share codes from the <strong>Accounts</strong> tab (↗ Share with team), or manage everything on the <a id="team-web-link" href="#" target="_blank" style="color:#38bdf8;text-decoration:none;">web dashboard ↗</a>.</div>
+    <div style="font-size:11px;color:var(--ink-5);margin-top:12px;">Share codes from the <strong>Accounts</strong> tab (↗ Share with team), or manage everything on the <a id="team-web-link" href="#" target="_blank" style="color:var(--accent-2);text-decoration:none;">web dashboard ↗</a>.</div>
   </div>
 </div>
 
