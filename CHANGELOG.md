@@ -1,6 +1,12 @@
 # Changelog
 
 
+## v1.3.6
+
+### Extension
+
+- **Canvas `willReadFrequently` warning on Google Authenticator import** — `decodeQrFromImageFile`'s jsQR fallback canvas was missing `{ willReadFrequently: true }`, regressing the fix from v1.0.3 for the one canvas added later (the Google Authenticator migration import, v1.3.0). Scanning multiple exported QR screenshots logged a repeated console warning; no functional impact, just noise.
+
 ## v1.3.5
 
 ### Extension
