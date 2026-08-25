@@ -20,6 +20,7 @@ const THEMES = [
   { id: 'daylight', name: 'Daylight', desc: 'Calm paper-white, forest-green accent.',   swatch: ['#faf9f5', '#2f6f4f'] },
   { id: 'terminal', name: 'Terminal', desc: 'Monospace control panel, cyan accent.',    swatch: ['#0a0e14', '#33c2cf'] },
   { id: 'signal',   name: 'Signal',   desc: 'Bold navy, coral accent, rounded.',        swatch: ['#101b2d', '#ff6a55'] },
+  { id: 'original', name: 'Original', desc: 'The classic slate & sky-blue look.',       swatch: ['#0f172a', '#38bdf8'] },
 ];
 const DEFAULT_THEME = 'vault';
 
