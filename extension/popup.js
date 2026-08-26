@@ -16,12 +16,13 @@ let iconCache      = {};    // { [domain]: { dataUrl: string|null, fetchedAt: nu
 // a theme is two steps: 1) a body[data-theme="id"] token block in popup.html's
 // <style> (same custom-property names as the others), 2) one entry here.
 const THEMES = [
+  { id: 'original', name: 'Original', desc: 'The classic slate & sky-blue look.',       swatch: ['#0f172a', '#38bdf8'] },
   { id: 'vault',    name: 'Vault',    desc: 'Graphite & brass — precise and premium.', swatch: ['#1c1a17', '#c9a15a'] },
   { id: 'daylight', name: 'Daylight', desc: 'Calm paper-white, forest-green accent.',   swatch: ['#faf9f5', '#2f6f4f'] },
   { id: 'terminal', name: 'Terminal', desc: 'Monospace control panel, cyan accent.',    swatch: ['#0a0e14', '#33c2cf'] },
   { id: 'signal',   name: 'Signal',   desc: 'Bold navy, coral accent, rounded.',        swatch: ['#101b2d', '#ff6a55'] },
 ];
-const DEFAULT_THEME = 'vault';
+const DEFAULT_THEME = 'original';
 
 function applyTheme(id) {
   document.body.dataset.theme = id;
