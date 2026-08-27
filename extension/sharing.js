@@ -64,9 +64,14 @@ const Sharing = (() => {
   // Returns [{ id, account_name, account_email, recipients }] where `recipients`
   // is just a live count (the API doesn't expose recipient identity here — the
   // dashboard's per-recipient revoke is a separate, more detailed flow).
+  // Throws on a non-2xx response rather than returning [] — callers use an
+  // empty array to mean "confirmed not shared" (e.g. to decide whether the
+  // share picker offers to create a new share), so silently equating a
+  // failed request with "nothing shared" would risk a duplicate share on
+  // top of one the caller just couldn't see.
   async function getMyCodes(teamId) {
     const res = await api(`/teams/${teamId}/codes/mine`);
-    if (!res.ok) return [];
+    if (!res.ok) throw new Error(`getMyCodes failed: ${res.status}`);
     return await res.json();
   }
 
