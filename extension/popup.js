@@ -32,6 +32,17 @@ async function loadMySharedCodes() {
 // Two accounts can share a name (e.g. two "PayPal" entries for different
 // emails), so match on both — account_email is '' server-side when the
 // account has none, matching how shareCode() sends it.
+//
+// Known limitation: shared_codes has no stable account identifier (accounts
+// aren't individual server-side rows at all — the vault is one opaque
+// encrypted blob per user, see CLAUDE.md's data model), so this is a
+// best-effort match on the name/email *snapshotted at share time*. Renaming
+// an account after sharing it will orphan this lookup (badge/Revoke
+// disappear, re-opening the picker offers to create a new share instead of
+// managing the old one) — the exact same limitation the web dashboard's
+// "Codes I'm sharing" list already has, not something introduced here. A
+// real fix needs a stable account id threaded through share/list/revoke,
+// which is a schema change spanning the API and web dashboard too.
 function findSharedCode(acc) {
   return mySharedCodes.find(c =>
     c.account_name === (acc.name || '') && (c.account_email || '') === (acc.email || ''));
@@ -1973,9 +1984,19 @@ async function renderSharePicker(container, acc) {
 
   // Fetch fresh rather than trusting the startup-cached mySharedCodes — the
   // user may have just shared/revoked this exact account from the web
-  // dashboard in another tab.
+  // dashboard in another tab. A failed fetch must NOT silently fall through
+  // to the "not shared" picker — that could let an already-shared account
+  // get shared a second time (the server doesn't dedupe shared_codes rows).
   myTeamId = team.id;
-  mySharedCodes = await Sharing.getMyCodes(team.id).catch(() => mySharedCodes);
+  let freshCodes;
+  try {
+    freshCodes = await Sharing.getMyCodes(team.id);
+  } catch {
+    container.innerHTML = `<div class="share-msg">Couldn't check sharing status. <a href="#" class="share-retry">Retry ↗</a></div>`;
+    container.querySelector('.share-retry').addEventListener('click', e => { e.preventDefault(); renderSharePicker(container, acc); });
+    return;
+  }
+  mySharedCodes = freshCodes;
   const existing = findSharedCode(acc);
 
   if (existing) {
