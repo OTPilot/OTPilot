@@ -11,6 +11,32 @@ let lastSyncedAt   = null;  // ISO string: last completed bidirectional sync
 let tombstones     = {};    // { [accountName]: ISO } — deleted accounts
 let iconCache      = {};    // { [domain]: { dataUrl: string|null, fetchedAt: number } }
 
+// ── Team sharing (owner side) ────────────────────────────────────────────────
+// Codes *I'm* sharing with the team, refreshed at popup open and after any
+// share/revoke — drives the "shared" badge on Home/Accounts and the share
+// picker's "already shared" state. Empty for free/non-team accounts.
+let myTeamId      = null;
+let mySharedCodes = [];
+
+async function loadMySharedCodes() {
+  try {
+    const team = await Sharing.getMyTeam();
+    if (!team?.id) { myTeamId = null; mySharedCodes = []; return; }
+    myTeamId = team.id;
+    mySharedCodes = await Sharing.getMyCodes(team.id);
+  } catch {
+    myTeamId = null; mySharedCodes = [];
+  }
+}
+
+// Two accounts can share a name (e.g. two "PayPal" entries for different
+// emails), so match on both — account_email is '' server-side when the
+// account has none, matching how shareCode() sends it.
+function findSharedCode(acc) {
+  return mySharedCodes.find(c =>
+    c.account_name === (acc.name || '') && (c.account_email || '') === (acc.email || ''));
+}
+
 // ── Appearance (themes) ──────────────────────────────────────────────────────
 // Single source of truth for the theme picker in Settings → Appearance. Adding
 // a theme is two steps: 1) a body[data-theme="id"] token block in popup.html's
@@ -387,7 +413,7 @@ function renderAccountBar() {
     const cat = (acc.category || '').trim();
     const text = document.createElement('span');
     text.className = 'lc-row-text';
-    text.innerHTML = `<span class="lc-row-name">${cat ? catDot(cat) : ''}${esc(acc.name || 'Unnamed')}</span>` +
+    text.innerHTML = `<span class="lc-row-name">${cat ? catDot(cat) : ''}${esc(acc.name || 'Unnamed')}${sharedBadgeHTML(findSharedCode(acc))}</span>` +
       (acc.email ? `<span class="lc-row-sub">${esc(acc.email)}</span>` : '');
 
     row.append(av, text);
@@ -437,7 +463,7 @@ async function refreshDisplay() {
     return;
   }
 
-  nameLabel.textContent = acc.name || '';
+  nameLabel.innerHTML = esc(acc.name || '') + sharedBadgeHTML(findSharedCode(acc));
 
   if (!acc.secret) {
     display.textContent = 'no secret';
@@ -612,7 +638,7 @@ function rebuildAccountsDOM() {
     head.innerHTML = `
       ${avatarHTML(acc, 'acc-av-md')}
       <span class="acc-head-text">
-        <span class="acc-head-name">${esc(acc.name) || `Account ${i + 1}`}</span>
+        <span class="acc-head-name">${esc(acc.name) || `Account ${i + 1}`}${sharedBadgeHTML(findSharedCode(acc))}</span>
         ${cat || acc.email ? `<span class="acc-head-sub">
           ${cat ? `<span class="cat-tag">${catDot(cat)}${esc(cat)}</span>` : ''}
           ${acc.email ? `<span class="acc-head-email">${esc(acc.email)}</span>` : ''}
@@ -655,7 +681,7 @@ function renderAccDetail() {
   body.className = 'acc-body open';
   body.innerHTML = `
     <div class="acc-body-head">
-      <span class="acc-body-title">${esc(acc.name) || `Account ${openAccIdx + 1}`}</span>
+      <span class="acc-body-title">${esc(acc.name) || `Account ${openAccIdx + 1}`}${sharedBadgeHTML(findSharedCode(acc))}</span>
       <button class="btn-del" title="Delete account">✕ Delete</button>
     </div>
     <div class="acc-field">
@@ -717,7 +743,7 @@ function renderAccDetail() {
   const idx = openAccIdx;
   body.querySelector('.acc-name').addEventListener('input', e => {
     const head = document.querySelector(`.acc-row[data-i="${idx}"] .acc-head-name`);
-    if (head) head.textContent = e.target.value.trim() || `Account ${idx + 1}`;
+    if (head) head.innerHTML = esc(e.target.value.trim() || `Account ${idx + 1}`) + sharedBadgeHTML(findSharedCode(draft[idx]));
   });
 
   // ── Share with team ──
@@ -762,6 +788,16 @@ function renderAccDetail() {
 
 function esc(s = '') {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+// Small "shared with team" indicator — used on list rows and both detail
+// headers. `code` is a getMyCodes() row (has a live recipient count) or null.
+function sharedBadgeHTML(code) {
+  if (!code) return '';
+  const n = code.recipients ?? 0;
+  return `<span class="shared-badge" title="Shared with ${n} teammate${n === 1 ? '' : 's'}">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>${n}
+  </span>`;
 }
 
 document.getElementById('btn-add').addEventListener('click', () => {
@@ -1882,6 +1918,7 @@ async function silentPullSync() {
   })();
   silentPullSync(); // fire-and-forget
   renderSharedCodes(); // team "Shared with you" section (no-op if not in a team)
+  loadMySharedCodes().then(refreshSharedBadges); // "shared with team" badges (owner side)
 
   // If the user is logged in but has no local sync key, go to Sync automatically.
   // renderSyncPanel() will show the correct view (sv-restore, sv-newkey, or sv-free).
@@ -1901,12 +1938,31 @@ async function silentPullSync() {
 
 // ── Share an account with the team (from the vault) ─────────────────────────────
 
+// Re-renders the list rows (Home + Accounts) so a share/revoke's effect on the
+// "shared" badge shows up immediately. Deliberately does NOT touch #acc-detail:
+// renderAccDetail() would tear down and rebuild it, orphaning the very
+// .share-picker container a share/revoke handler may still be writing into
+// mid-flow. The detail header's own badge catches up next time the row is
+// (re)selected — renderAccDetail() always runs then anyway.
+function refreshSharedBadges() {
+  renderAccountBar();
+  if (document.getElementById('settings-panel')?.style.display !== 'none') {
+    rebuildAccountsDOM();
+  }
+}
+
+// The visible-toggle entry point (bound to the "Share with team" button).
 async function openSharePicker(container, acc) {
   if (!container) return;
   if (container.style.display !== 'none') { container.style.display = 'none'; return; }
   if (!acc?.secret) { setStatus('This account has no secret to share', false); return; }
-
   container.style.display = '';
+  await renderSharePicker(container, acc);
+}
+
+// The actual render, reusable from the revoke handler without re-toggling
+// visibility (openSharePicker's toggle is only for the button click).
+async function renderSharePicker(container, acc) {
   container.innerHTML = '<div class="share-msg">Loading…</div>';
 
   const team = await Sharing.getMyTeam().catch(() => null);
@@ -1914,6 +1970,33 @@ async function openSharePicker(container, acc) {
     container.innerHTML = `<div class="share-msg">You're not in a team. <a href="${CONFIG.DASHBOARD_URL}/dashboard/team" target="_blank">Manage team ↗</a></div>`;
     return;
   }
+
+  // Fetch fresh rather than trusting the startup-cached mySharedCodes — the
+  // user may have just shared/revoked this exact account from the web
+  // dashboard in another tab.
+  myTeamId = team.id;
+  mySharedCodes = await Sharing.getMyCodes(team.id).catch(() => mySharedCodes);
+  const existing = findSharedCode(acc);
+
+  if (existing) {
+    const n = existing.recipients ?? 0;
+    container.innerHTML = `
+      <div class="share-status">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span class="share-status-text">Already shared with <b>${n} teammate${n === 1 ? '' : 's'}</b>. Manage individual recipients on the <a href="${CONFIG.DASHBOARD_URL}/dashboard/team" target="_blank" style="color:var(--accent-2)">web dashboard ↗</a>.</span>
+        <button type="button" class="btn-share-revoke">Revoke</button>
+      </div>`;
+    container.querySelector('.btn-share-revoke').addEventListener('click', async () => {
+      const ok = await Sharing.revokeCode(team.id, existing.id).catch(() => false);
+      if (!ok) { setStatus('Revoke failed', false); return; }
+      setStatus(`Stopped sharing "${acc.name}"`);
+      mySharedCodes = mySharedCodes.filter(c => c.id !== existing.id);
+      refreshSharedBadges();
+      renderSharePicker(container, acc); // re-render straight into the normal picker below
+    });
+    return;
+  }
+
   let myId = null;
   try { myId = (await SupabaseAuth.getSession())?.user?.id ?? null; } catch { /* ignore */ }
   const members = (await Sharing.getMembers(team.id).catch(() => [])).filter(m => m.user_id !== myId);
@@ -1923,11 +2006,11 @@ async function openSharePicker(container, acc) {
     return;
   }
 
-  container.innerHTML = members.map(m => `
+  container.innerHTML = `<div class="share-recip-list">${members.map(m => `
     <label class="share-recip">
       <input type="checkbox" value="${esc(m.user_id)}" ${m.public_key ? '' : 'disabled'}>
       ${esc(m.email || m.user_id)}${m.public_key ? '' : ' <span class="share-dim">(not set up)</span>'}
-    </label>`).join('') +
+    </label>`).join('')}</div>` +
     `<button type="button" class="btn-share-confirm">Share</button>`;
 
   container.querySelector('.btn-share-confirm').addEventListener('click', async () => {
@@ -1936,8 +2019,12 @@ async function openSharePicker(container, acc) {
     if (!recipients.length) { setStatus('Pick at least one teammate', false); return; }
     try {
       const ok = await Sharing.shareCode(team.id, acc.name, acc.email, acc.secret, recipients);
-      if (ok) { setStatus(`Shared "${acc.name}" ✓`); container.style.display = 'none'; }
-      else setStatus('Share failed', false);
+      if (ok) {
+        setStatus(`Shared "${acc.name}" ✓`);
+        container.style.display = 'none';
+        mySharedCodes = await Sharing.getMyCodes(team.id).catch(() => mySharedCodes);
+        refreshSharedBadges();
+      } else setStatus('Share failed', false);
     } catch (e) {
       setStatus(e?.message || 'Share failed', false);
     }
