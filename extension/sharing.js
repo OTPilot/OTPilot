@@ -1,8 +1,9 @@
 'use strict';
 
-// Team shared codes (consumption side). Sharing is created from the web
-// dashboard; the extension only lists codes shared *with* this user and fetches
-// their live TOTP via the 2-of-2 endpoint (send K1, server reconstructs K).
+// Team shared codes: both the consumption side (list codes shared *with* this
+// user and fetch their live TOTP via the 2-of-2 endpoint — send K1, server
+// reconstructs K) and the owner side (share one of my own accounts, see/revoke
+// what I'm already sharing).
 const Sharing = (() => {
   const API_URL = CONFIG.API_URL;
   const b64e = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
@@ -58,6 +59,29 @@ const Sharing = (() => {
     return code ?? null;
   }
 
+  // Codes *I'm* sharing (owner side) — used to show a "shared" badge on an
+  // account and to detect an existing share before offering to create another.
+  // Returns [{ id, account_name, account_email, recipients }] where `recipients`
+  // is just a live count (the API doesn't expose recipient identity here — the
+  // dashboard's per-recipient revoke is a separate, more detailed flow).
+  // Throws on a non-2xx response rather than returning [] — callers use an
+  // empty array to mean "confirmed not shared" (e.g. to decide whether the
+  // share picker offers to create a new share), so silently equating a
+  // failed request with "nothing shared" would risk a duplicate share on
+  // top of one the caller just couldn't see.
+  async function getMyCodes(teamId) {
+    const res = await api(`/teams/${teamId}/codes/mine`);
+    if (!res.ok) throw new Error(`getMyCodes failed: ${res.status}`);
+    return await res.json();
+  }
+
+  // Revokes an entire shared code (all recipients lose access at once) — the
+  // same action as the web dashboard's "Revoke" button on "Codes I'm sharing".
+  async function revokeCode(teamId, codeId) {
+    const res = await api(`/teams/${teamId}/codes/${codeId}`, { method: 'DELETE' });
+    return res.ok;
+  }
+
   // Team members (for picking share recipients). Returns [{ user_id, email, public_key, role }].
   async function getMembers(teamId) {
     const res = await api(`/teams/${teamId}`);
@@ -99,5 +123,5 @@ const Sharing = (() => {
     return res.ok;
   }
 
-  return { getMyTeam, getSharedCodes, requestTotp, getMembers, shareCode };
+  return { getMyTeam, getSharedCodes, requestTotp, getMembers, shareCode, getMyCodes, revokeCode };
 })();

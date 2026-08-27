@@ -175,6 +175,15 @@
     .acc-av.acc-av-md { width: 22px; height: 22px; font-size: 9px; }
     img.acc-av { object-fit: cover; background: var(--surface); }
 
+    /* ── "Shared with team" badge (list rows + both detail headers) ── */
+    .shared-badge {
+      display: inline-flex; align-items: center; gap: 3px; vertical-align: middle;
+      margin-left: 6px; padding: 1px 6px 1px 5px; border-radius: 999px;
+      background: rgba(var(--accent-2-rgb),.14); color: var(--accent-2);
+      font-size: 9.5px; font-weight: 700; font-family: var(--font-ui);
+    }
+    .shared-badge svg { width: 10px; height: 10px; }
+
     /* ── Share with team (vault) ── */
     .acc-share { margin-top: 10px; }
     .btn-share-team {
@@ -183,19 +192,39 @@
       transition: all .15s;
     }
     .btn-share-team:hover { border-color: var(--accent-2); color: var(--accent-2); }
-    .share-picker { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
-    .share-msg { font-size: 11px; color: var(--ink-4); }
-    .share-msg a { color: var(--accent-2); text-decoration: none; }
-    .share-recip {
-      display: flex; align-items: center; gap: 6px;
-      font-size: 11px; color: var(--ink-2); cursor: pointer;
+    .share-picker { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+
+    .share-status {
+      display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      background: rgba(var(--accent-2-rgb),.08); border: 1px solid rgba(var(--accent-2-rgb),.25);
+      border-radius: 8px;
     }
+    .share-status svg { width: 14px; height: 14px; color: var(--accent-2); flex-shrink: 0; }
+    .share-status-text { flex: 1; min-width: 0; font-size: 11px; color: var(--ink-2); line-height: 1.4; }
+    .share-status-text b { color: var(--ink-0); }
+    .btn-share-revoke {
+      flex-shrink: 0; padding: 5px 9px; background: transparent; border: 1px solid var(--danger);
+      border-radius: 6px; color: var(--danger); font-size: 10.5px; font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    .btn-share-revoke:hover { background: var(--danger); color: var(--on-accent); }
+
+    .share-msg { font-size: 11px; color: var(--ink-4); line-height: 1.5; }
+    .share-msg a { color: var(--accent-2); text-decoration: none; }
+    .share-recip-list { display: flex; flex-direction: column; gap: 2px; }
+    .share-recip {
+      display: flex; align-items: center; gap: 8px; padding: 6px 4px;
+      font-size: 11.5px; color: var(--ink-2); cursor: pointer; border-radius: 6px;
+      transition: background .12s;
+    }
+    .share-recip:hover { background: rgba(var(--accent-2-rgb),.05); }
+    .share-recip input { accent-color: var(--accent-2); width: 13px; height: 13px; flex-shrink: 0; }
     .share-dim { color: var(--ink-5); }
     .btn-share-confirm {
-      margin-top: 4px; padding: 6px; background: var(--border); border: 1px solid var(--accent-2);
-      border-radius: 6px; color: var(--accent-2); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
+      padding: 7px; background: var(--accent); border: 1px solid var(--accent);
+      border-radius: 6px; color: var(--on-accent); font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;
+      transition: opacity .15s;
     }
-    .btn-share-confirm:hover { background: var(--accent); color: var(--on-accent); }
+    .btn-share-confirm:hover { opacity: .85; }
 
     /* ── Shared with you ── */
     .shared-divider {
