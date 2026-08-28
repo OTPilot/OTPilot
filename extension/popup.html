@@ -345,6 +345,21 @@
     }
     #btn-obfuscate.revealed { color: var(--accent-2); }
     #btn-obfuscate:hover { color: var(--ink-3); }
+    #btn-edit-account {
+      position: absolute;
+      left: 0;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--ink-4);
+      padding: 0;
+      line-height: 0;
+      transition: color .15s;
+      display: flex;
+      align-items: center;
+    }
+    #btn-edit-account:disabled { opacity: .35; cursor: default; }
+    #btn-edit-account:not(:disabled):hover { color: var(--ink-3); }
     #otp-display {
       font-family: var(--font-code);
       font-size: 38px;
@@ -967,6 +982,7 @@
   <div class="dc-col" id="home-detail">
     <div class="code-section">
       <div class="code-header">
+        <button id="btn-edit-account" title="Edit account" disabled></button>
         <div id="account-name"></div>
         <button id="btn-obfuscate" title="Show code"></button>
       </div>
