@@ -457,8 +457,12 @@ async function refreshDisplay() {
   const bar       = document.getElementById('progress-bar');
   const btnCopy   = document.getElementById('btn-copy');
   const btnFill   = document.getElementById('btn-fill');
+  const btnEdit   = document.getElementById('btn-edit-account');
 
   const acc = accounts[activeIndex];
+  // Shared codes (read-only, no secret of your own) live in a separate list
+  // below and aren't editable here — only own accounts get the edit shortcut.
+  btnEdit.disabled = !acc;
 
   if (!acc) {
     nameLabel.textContent = '';
@@ -528,6 +532,12 @@ const SVG_EYE_OFF = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none"
   <line x1="1" y1="1" x2="23" y2="23"/>
 </svg>`;
 
+const SVG_EDIT = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+  <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/>
+</svg>`;
+document.getElementById('btn-edit-account').innerHTML = SVG_EDIT;
+
 function applyObfuscateBtn() {
   const btn = document.getElementById('btn-obfuscate');
   btn.innerHTML = obfuscated ? SVG_EYE : SVG_EYE_OFF;
@@ -567,21 +577,48 @@ document.getElementById('btn-fill').addEventListener('click', async () => {
   }
 });
 
+document.getElementById('btn-edit-account').addEventListener('click', () => {
+  if (!accounts[activeIndex]) return;
+  editAccount(activeIndex);
+});
+
 // ── Settings – account list ───────────────────────────────────────────────────
 
 // draft holds unsaved edits while settings panel is open
 let draft = [];
 let openAccIdx = -1;
 
-function renderAccountsList() {
-  draft = accounts.map(a => ({ ...a }));
-  draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  openAccIdx = -1;
+// `openTargetIdx`, when given, is an index into `accounts` (not the
+// alphabetically-sorted `draft`) to open in the detail panel right away —
+// used by the "edit this account" shortcut on the Home view. draft entries
+// are clones, so the origin index has to be tracked through the sort to
+// translate it into draft's index space.
+function renderAccountsList(openTargetIdx = -1) {
+  const withOrigin = accounts.map((a, i) => ({ acc: { ...a }, origIdx: i }));
+  withOrigin.sort((x, y) => (x.acc.name || '').localeCompare(y.acc.name || ''));
+  draft = withOrigin.map(w => w.acc);
+  openAccIdx = openTargetIdx >= 0 ? withOrigin.findIndex(w => w.origIdx === openTargetIdx) : -1;
   document.getElementById('acc-search').value = '';
+  // A leftover category filter from a previous Accounts-view visit could hide
+  // the very row we're jumping to — clear it so the shortcut always lands
+  // somewhere visible.
+  if (openAccIdx >= 0 && categoryFilter) {
+    categoryFilter = '';
+    chrome.storage.local.set({ categoryFilter });
+  }
   renderVaultCatBar();
   rebuildAccountsDOM();
   applyVaultSearch();
   renderAccDetail();
+  if (openAccIdx >= 0) {
+    document.querySelector(`.acc-row[data-i="${openAccIdx}"]`)?.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+// Jumps to the Accounts view with `accIdx` (an index into `accounts`) already
+// open in the detail panel — the "edit" shortcut from the Home view.
+function editAccount(accIdx) {
+  showView('accounts', { openAccountIdx: accIdx });
 }
 
 // Flush the currently open detail form's inputs into draft before any re-render.
@@ -875,7 +912,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 
 // ── View switching ────────────────────────────────────────────────────────────
 
-function showView(view) {
+function showView(view, opts = {}) {
   document.getElementById('home-view').style.display      = view === 'home'     ? '' : 'none';
   document.getElementById('settings-panel').style.display = view === 'accounts' ? '' : 'none';
   document.getElementById('config-panel').style.display   = view === 'settings' ? '' : 'none';
@@ -886,7 +923,7 @@ function showView(view) {
   document.getElementById('nav-config').classList.toggle('active',   view === 'settings');
   document.getElementById('nav-sync').classList.toggle('active',     view === 'sync');
   document.getElementById('nav-team').classList.toggle('active',     view === 'team');
-  if (view === 'accounts') renderAccountsList();
+  if (view === 'accounts') renderAccountsList(opts.openAccountIdx ?? -1);
   if (view === 'sync') renderSyncPanel();
   if (view === 'team') renderTeamPanel();
   if (view === 'settings') {
