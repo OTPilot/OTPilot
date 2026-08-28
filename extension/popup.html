@@ -329,6 +329,14 @@
       text-transform: uppercase;
       letter-spacing: .8px;
       color: var(--ink-5);
+      /* The edit/obfuscate buttons flanking this are position:absolute (out of
+         flex flow), so nothing else reserves space for them — without this,
+         a long enough account name centers across the full row and renders
+         underneath both icons instead of being pushed clear of them. */
+      max-width: calc(100% - 44px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     #btn-obfuscate {
       position: absolute;
