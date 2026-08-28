@@ -770,6 +770,8 @@ function renderAccDetail() {
     </div>`;
 
   body.querySelector('.btn-del').addEventListener('click', () => {
+    const name = draft[openAccIdx].name || `Account ${openAccIdx + 1}`;
+    if (!confirm(`Delete "${name}"? This can't be undone once you save.`)) return;
     draft.splice(openAccIdx, 1);
     openAccIdx = -1;
     rebuildAccountsDOM();
@@ -871,6 +873,7 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
 
 document.getElementById('btn-save-all').addEventListener('click', async () => {
   syncOpenAccToDraft();
+  const savedIdx = openAccIdx; // reopen the same account in Accounts after saving
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
 
@@ -902,11 +905,10 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   await stampLocalChange();
   silentPullSync(); // start push before navigating so fetch is in-flight while popup is open
 
-  openAccIdx = -1;
   renderAccountBar();
   activeTabIconHint().then(requestIcons); // pick up icons for any newly-added domains
   startTimer();
-  showView('home');
+  showView('accounts', { openAccountIdx: savedIdx });
   setStatus('Saved');
 });
 
