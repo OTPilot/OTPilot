@@ -305,22 +305,38 @@ async function fillOTP(accountIndexHint) {
 // value submitted via a real user click/Enter succeeds. There's no way to
 // fake a trusted event from a content script, so instead of hardcoding known
 // sites we detect the failure at runtime — if the OTP input is still on the
-// page and the URL hasn't changed a few seconds after we auto-clicked submit,
-// the click almost certainly didn't register — and remember the hostname so
+// page and the URL hasn't changed several seconds after we auto-clicked
+// submit, the click probably didn't register — and remember the hostname so
 // future auto-fills on that site skip the auto-click and leave the final
 // submit to the user.
-const NO_AUTO_SUBMIT_KEY = 'noAutoSubmitHosts';
+//
+// Each host gets its own storage key (rather than one shared
+// `{hostname: true}` object) so that two tabs flagging different hosts at
+// the same time can't race a read-modify-write and clobber each other.
+const noAutoSubmitKey = hostname => `noAutoSubmit:${hostname}`;
+const noAutoSubmitStrikesKey = hostname => `noAutoSubmitStrikes:${hostname}`;
 
 async function isNoAutoSubmitHost(hostname) {
-  const { [NO_AUTO_SUBMIT_KEY]: hosts = {} } = await new Promise(r => chrome.storage.local.get(NO_AUTO_SUBMIT_KEY, r));
-  return !!hosts[hostname];
+  const key = noAutoSubmitKey(hostname);
+  const d = await new Promise(r => chrome.storage.local.get(key, r));
+  return !!d[key];
 }
 
-async function markNoAutoSubmitHost(hostname) {
-  const { [NO_AUTO_SUBMIT_KEY]: hosts = {} } = await new Promise(r => chrome.storage.local.get(NO_AUTO_SUBMIT_KEY, r));
-  if (hosts[hostname]) return;
-  hosts[hostname] = true;
-  await new Promise(r => chrome.storage.local.set({ [NO_AUTO_SUBMIT_KEY]: hosts }, r));
+// A single apparent failure isn't enough to permanently disable auto-submit
+// — a slow-but-successful flow (async validation, delayed redirect) can
+// look identical to a rejected click for one check. Require two separate
+// attempts (each its own page load, at least a minute apart per the
+// tryAutoFill cooldown) to both look like failures before flagging the host.
+async function recordAutoSubmitFailure(hostname) {
+  const strikesKey = noAutoSubmitStrikesKey(hostname);
+  const d = await new Promise(r => chrome.storage.local.get(strikesKey, r));
+  const strikes = (d[strikesKey] || 0) + 1;
+  if (strikes < 2) {
+    await new Promise(r => chrome.storage.local.set({ [strikesKey]: strikes }, r));
+    return;
+  }
+  await new Promise(r => chrome.storage.local.set({ [noAutoSubmitKey(hostname)]: true }, r));
+  showToast("Auto-submit didn't go through here — press Enter to continue. Won't try again on this site.", false);
 }
 
 // Give the auto-click a few seconds to take effect, then check whether it
@@ -335,9 +351,8 @@ function watchAutoSubmit(hostname) {
     if (!chrome.runtime?.id) return;
     if (location.href !== startUrl) return; // navigated — looks like it worked
     if (!findOTPInput()) return;            // no OTP field left on the page — looks like it worked
-    markNoAutoSubmitHost(hostname);
-    showToast("Auto-submit didn't go through here — press Enter to continue. Won't try again on this site.", false);
-  }, 3500);
+    recordAutoSubmitFailure(hostname);
+  }, 5000);
 }
 
 // A <button> inside a <form> defaults to type="submit" when the attribute is
@@ -380,8 +395,7 @@ async function fillAndSubmit(accountIndexHint, fromPopup = false) {
     };
 
     if (noAutoSubmit) {
-      // Leave the final submit to the user's real click/Enter — see
-      // NO_AUTO_SUBMIT_KEY.
+      // Leave the final submit to the user's real click/Enter — see isNoAutoSubmitHost.
     } else if (offerSaveUrl) {
       // A plain auto-submit fires in 600ms — a login page that navigates on
       // submit would take the save-URL prompt with it before a person could
