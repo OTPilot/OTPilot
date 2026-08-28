@@ -312,9 +312,9 @@ async function fillOTP(accountIndexHint) {
 //
 // Each host gets its own storage key (rather than one shared
 // `{hostname: true}` object) so that two tabs flagging different hosts at
-// the same time can't race a read-modify-write and clobber each other.
+// the same time can't race a read-modify-write and clobber each other. Must
+// match the key format background.js writes in recordAutoSubmitFailure.
 const noAutoSubmitKey = hostname => `noAutoSubmit:${hostname}`;
-const noAutoSubmitStrikesKey = hostname => `noAutoSubmitStrikes:${hostname}`;
 
 async function isNoAutoSubmitHost(hostname) {
   const key = noAutoSubmitKey(hostname);
@@ -324,19 +324,20 @@ async function isNoAutoSubmitHost(hostname) {
 
 // A single apparent failure isn't enough to permanently disable auto-submit
 // — a slow-but-successful flow (async validation, delayed redirect) can
-// look identical to a rejected click for one check. Require two separate
-// attempts (each its own page load, at least a minute apart per the
-// tryAutoFill cooldown) to both look like failures before flagging the host.
+// look identical to a rejected click for one check, so this needs two
+// separate strikes before flagging the host. The increment-and-maybe-flag
+// itself has to be a single atomic step, though — two tabs on the same
+// hostname could otherwise both read the same strike count and race the
+// write, losing one observed failure — so it's delegated to the background
+// service worker (one shared JS context for every tab) instead of touching
+// chrome.storage directly here.
 async function recordAutoSubmitFailure(hostname) {
-  const strikesKey = noAutoSubmitStrikesKey(hostname);
-  const d = await new Promise(r => chrome.storage.local.get(strikesKey, r));
-  const strikes = (d[strikesKey] || 0) + 1;
-  if (strikes < 2) {
-    await new Promise(r => chrome.storage.local.set({ [strikesKey]: strikes }, r));
-    return;
+  const resp = await new Promise(r =>
+    chrome.runtime.sendMessage({ action: 'recordAutoSubmitFailure', hostname }, r)
+  ).catch(() => null);
+  if (resp?.flagged) {
+    showToast("Auto-submit didn't go through here — press Enter to continue. Won't try again on this site.", false);
   }
-  await new Promise(r => chrome.storage.local.set({ [noAutoSubmitKey(hostname)]: true }, r));
-  showToast("Auto-submit didn't go through here — press Enter to continue. Won't try again on this site.", false);
 }
 
 // Give the auto-click a few seconds to take effect, then check whether it

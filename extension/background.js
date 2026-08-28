@@ -189,7 +189,49 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch(() => sendResponse({ updated: {} }));
     return true;
   }
+
+  // A content script (on some tab) thinks its auto-submitted OTP form didn't
+  // go through — see content.js's recordAutoSubmitFailure for the "why".
+  if (msg.action === 'recordAutoSubmitFailure') {
+    recordAutoSubmitFailure(msg.hostname)
+      .then(flagged => sendResponse({ flagged }))
+      .catch(() => sendResponse({ flagged: false }));
+    return true;
+  }
 });
+
+// ── OTP auto-submit failure tracking ────────────────────────────────────────
+
+// Per-hostname promise chain so that two tabs reporting a failure on the same
+// host around the same time serialize through this one JS context instead of
+// each doing an independent chrome.storage read-modify-write and racing.
+const _autoSubmitFailureLocks = new Map();
+
+function withHostnameLock(hostname, fn) {
+  const prev = _autoSubmitFailureLocks.get(hostname) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  _autoSubmitFailureLocks.set(hostname, next.catch(() => {}));
+  return next;
+}
+
+// Two separate strikes (i.e. two different page loads reporting a failure —
+// content.js only calls this once per minute per host) before the host gets
+// flagged; see content.js's recordAutoSubmitFailure for why one apparent
+// failure isn't enough on its own. Returns whether this call flagged it.
+async function recordAutoSubmitFailure(hostname) {
+  return withHostnameLock(hostname, async () => {
+    const strikesKey = `noAutoSubmitStrikes:${hostname}`;
+    const d = await new Promise(r => chrome.storage.local.get(strikesKey, r));
+    const strikes = (d[strikesKey] || 0) + 1;
+    if (strikes < 2) {
+      await new Promise(r => chrome.storage.local.set({ [strikesKey]: strikes }, r));
+      return false;
+    }
+    // Key format must match noAutoSubmitKey() in content.js.
+    await new Promise(r => chrome.storage.local.set({ [`noAutoSubmit:${hostname}`]: true }, r));
+    return true;
+  });
+}
 
 // ── Background sync polling ───────────────────────────────────────────────────
 
