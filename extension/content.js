@@ -298,6 +298,59 @@ async function fillOTP(accountIndexHint) {
   return { ok: true, code, input, acc, idx };
 }
 
+// Sites running bot/automation detection (Cloudflare, DataDome, etc.) across
+// their auth flow treat a synthetic submitBtn.click() (isTrusted: false) as
+// suspicious and silently reject the request — the field shows the right
+// code, but the POST fails as if the code were wrong, while the exact same
+// value submitted via a real user click/Enter succeeds. There's no way to
+// fake a trusted event from a content script, so instead of hardcoding known
+// sites we detect the failure at runtime — if the OTP input is still on the
+// page and the URL hasn't changed a few seconds after we auto-clicked submit,
+// the click almost certainly didn't register — and remember the hostname so
+// future auto-fills on that site skip the auto-click and leave the final
+// submit to the user.
+const NO_AUTO_SUBMIT_KEY = 'noAutoSubmitHosts';
+
+async function isNoAutoSubmitHost(hostname) {
+  const { [NO_AUTO_SUBMIT_KEY]: hosts = {} } = await new Promise(r => chrome.storage.local.get(NO_AUTO_SUBMIT_KEY, r));
+  return !!hosts[hostname];
+}
+
+async function markNoAutoSubmitHost(hostname) {
+  const { [NO_AUTO_SUBMIT_KEY]: hosts = {} } = await new Promise(r => chrome.storage.local.get(NO_AUTO_SUBMIT_KEY, r));
+  if (hosts[hostname]) return;
+  hosts[hostname] = true;
+  await new Promise(r => chrome.storage.local.set({ [NO_AUTO_SUBMIT_KEY]: hosts }, r));
+}
+
+// Give the auto-click a few seconds to take effect, then check whether it
+// actually looks like it worked. Re-scans for an OTP-looking field from
+// scratch (findOTPInput()) rather than checking the original element's
+// identity — a rejected submit often makes the site re-render the whole form
+// (a new DOM node with the same "enter your code" field), which would
+// otherwise look identical to the field having been successfully dismissed.
+function watchAutoSubmit(hostname) {
+  const startUrl = location.href;
+  setTimeout(() => {
+    if (!chrome.runtime?.id) return;
+    if (location.href !== startUrl) return; // navigated — looks like it worked
+    if (!findOTPInput()) return;            // no OTP field left on the page — looks like it worked
+    markNoAutoSubmitHost(hostname);
+    showToast("Auto-submit didn't go through here — press Enter to continue. Won't try again on this site.", false);
+  }, 3500);
+}
+
+// A <button> inside a <form> defaults to type="submit" when the attribute is
+// omitted — very common in React apps — but the CSS attribute selector
+// `[type="submit"]` only matches an explicit attribute, not that implicit
+// default. Missing it here means we'd fall back to form.submit(), which
+// doesn't dispatch a 'submit' event at all (React's onSubmit never runs) —
+// effectively a no-op for any JS-driven form.
+function findSubmitButton(form) {
+  return form.querySelector('[type="submit"]')
+    || form.querySelector('button:not([type="button"]):not([type="reset"])');
+}
+
 // Guards against submitting the same form twice — several queued save-URL
 // prompts on one page can all end up deferring a submit of the same form,
 // and their onResolve callbacks now fire together once the whole chain
@@ -307,24 +360,29 @@ const _autoSubmittedForms = new WeakSet();
 async function fillAndSubmit(accountIndexHint, fromPopup = false) {
   const result = await fillOTP(accountIndexHint);
   if (result.ok) {
-    showToast('OTP filled: ' + result.code);
+    const hostname = location.hostname.toLowerCase();
+    const noAutoSubmit = await isNoAutoSubmitHost(hostname);
+    showToast(noAutoSubmit ? `OTP filled: ${result.code} — press Enter to continue` : 'OTP filled: ' + result.code);
 
     // This account only filled via the popup's manual selection (not a URL
     // match, otherwise fillOTP would never have needed the index hint) — offer
     // to remember the site so it auto-fills here next time.
-    const hostname = location.hostname.toLowerCase();
     const offerSaveUrl = fromPopup && !accountMatchesHostname(result.acc, hostname);
 
     const form = result.input.closest('form');
     const submit = () => {
       if (!form || _autoSubmittedForms.has(form)) return;
       _autoSubmittedForms.add(form);
-      const submitBtn = form.querySelector('[type="submit"]');
+      const submitBtn = findSubmitButton(form);
       if (submitBtn) submitBtn.click();
       else form.submit();
+      watchAutoSubmit(hostname);
     };
 
-    if (offerSaveUrl) {
+    if (noAutoSubmit) {
+      // Leave the final submit to the user's real click/Enter — see
+      // NO_AUTO_SUBMIT_KEY.
+    } else if (offerSaveUrl) {
       // A plain auto-submit fires in 600ms — a login page that navigates on
       // submit would take the save-URL prompt with it before a person could
       // read or act on it. Hold the submit until the prompt actually
@@ -354,12 +412,15 @@ async function fillOTPWithAccount(acc) {
 async function fillAndSubmitWithAccount(acc) {
   const result = await fillOTPWithAccount(acc);
   if (result.ok) {
-    showToast('OTP filled: ' + result.code);
+    const hostname = location.hostname.toLowerCase();
+    const noAutoSubmit = await isNoAutoSubmitHost(hostname);
+    showToast(noAutoSubmit ? `OTP filled: ${result.code} — press Enter to continue` : 'OTP filled: ' + result.code);
     const form = result.input.closest('form');
-    if (form) {
+    if (form && !noAutoSubmit) {
       setTimeout(() => {
-        const submitBtn = form.querySelector('[type="submit"]');
+        const submitBtn = findSubmitButton(form);
         if (submitBtn) submitBtn.click(); else form.submit();
+        watchAutoSubmit(hostname);
       }, 600);
     }
   }
@@ -1155,6 +1216,7 @@ async function runDetection() {
   let _lockDismissedFor    = null;
   let _emailPollTimer      = null;
   let _emailPollFor        = null;
+  const _lastAutoSubmitAt  = {}; // hostname -> ms timestamp, see tryAutoFill
 
   function isEnrollmentPage() {
     // Suppress auto-fill on 2FA setup/enrollment pages. Requires PATH_RE to match
@@ -1253,7 +1315,18 @@ async function runDetection() {
 
     if (matching.length === 1) {
       if (input === _lastFilledInput) return;
+      // Belt-and-suspenders against a fill/submit loop: some sites re-render
+      // the whole form (a fresh DOM node) after a rejected submit, which
+      // would otherwise dodge the identity check above and fire again on
+      // every mutation. Once we've auto-filled (and possibly auto-submitted)
+      // for a host, don't do it again for a minute — the code is already
+      // sitting in the field either way, so if it didn't go through on its
+      // own the user just clicks/Enters it themselves instead of us retrying
+      // in the background.
+      const now = Date.now();
+      if (now - (_lastAutoSubmitAt[hostname] || 0) < 60_000) return;
       _lastFilledInput = input;
+      _lastAutoSubmitAt[hostname] = now;
       const acc = matching[0];
       if (await isSessionLocked()) { showLockOverlay(acc.name); return; }
       fillAndSubmit(undefined, false);
