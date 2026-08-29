@@ -451,7 +451,16 @@ document.getElementById('home-search').addEventListener('input', renderAccountBa
 
 // ── OTP display loop ──────────────────────────────────────────────────────────
 
+// refreshDisplay() is called from several places that can overlap (the 1s
+// timer tick, an account switch, icon resolution landing) — it awaits Web
+// Crypto, so an older call can still be in flight when a newer one starts.
+// Bumped at the top of each call; a call whose generation no longer matches
+// by the time its await resolves belongs to a stale account/moment and must
+// not overwrite the display or currentCode with outdated results.
+let _displayGen = 0;
+
 async function refreshDisplay() {
+  const gen = ++_displayGen;
   const display   = document.getElementById('otp-display');
   const nameLabel = document.getElementById('account-name');
   const countdown = document.getElementById('countdown');
@@ -501,6 +510,7 @@ async function refreshDisplay() {
 
   try {
     const code = await generateTOTP(acc.secret);
+    if (gen !== _displayGen) return; // a newer refresh has since started — don't stomp its result
     currentCode = code;
     display.textContent = obfuscated ? '••• •••' : code.slice(0, 3) + ' ' + code.slice(3);
     display.className = obfuscated ? 'dim' : '';
@@ -513,6 +523,7 @@ async function refreshDisplay() {
     btnCopy.disabled = false;
     btnFill.disabled = false;
   } catch {
+    if (gen !== _displayGen) return;
     display.textContent = 'Invalid secret';
     display.className = 'error';
     countdown.textContent = '';
