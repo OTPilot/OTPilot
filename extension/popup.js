@@ -475,6 +475,15 @@ async function refreshDisplay() {
   // below and aren't editable here — only own accounts get the edit shortcut.
   btnEdit.disabled = !acc;
 
+  // Drop the previous account's code and disable Copy/Fill immediately,
+  // before any await below — otherwise a click during the brief window while
+  // this generation's generateTOTP() is still pending would act on the
+  // previous account's still-enabled button and still-cached currentCode.
+  // Re-enabled further down only once (and if) this generation wins.
+  btnCopy.disabled = true;
+  btnFill.disabled = true;
+  currentCode = '';
+
   if (!acc) {
     bigIcon.innerHTML = '';
     nameLabel.textContent = '';
