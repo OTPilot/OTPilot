@@ -376,6 +376,7 @@ function requestIcons(hints = {}) {
     if (!Object.keys(updated).length) return;
     Object.assign(iconCache, updated);
     renderAccountBar();
+    refreshDisplay(); // the big icon above the code only knows the real favicon once this lands
     // Refresh vault rows too, but only when no row is being edited.
     if (document.getElementById('settings-panel')?.style.display !== 'none' && openAccIdx < 0) {
       rebuildAccountsDOM();
@@ -458,6 +459,7 @@ async function refreshDisplay() {
   const btnCopy   = document.getElementById('btn-copy');
   const btnFill   = document.getElementById('btn-fill');
   const btnEdit   = document.getElementById('btn-edit-account');
+  const bigIcon   = document.getElementById('account-big-icon');
 
   const acc = accounts[activeIndex];
   // Shared codes (read-only, no secret of your own) live in a separate list
@@ -465,6 +467,7 @@ async function refreshDisplay() {
   btnEdit.disabled = !acc;
 
   if (!acc) {
+    bigIcon.innerHTML = '';
     nameLabel.textContent = '';
     display.textContent = '••• •••';
     display.className = 'dim';
@@ -479,6 +482,11 @@ async function refreshDisplay() {
   }
 
   nameLabel.innerHTML = esc(acc.name || '') + sharedBadgeHTML(findSharedCode(acc));
+
+  // Only the real site favicon, never the letter-avatar fallback — this is
+  // decorative extra space, not a place to render initials twice.
+  const bigIconUrl = accountIconDataUrl(acc);
+  bigIcon.innerHTML = bigIconUrl ? `<img src="${bigIconUrl}" alt="">` : '';
 
   if (!acc.secret) {
     display.textContent = 'no secret';

@@ -315,6 +315,18 @@
       padding: 14px 16px 10px;
       text-align: center;
     }
+    #account-big-icon {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 14px;
+    }
+    #account-big-icon:empty { display: none; }
+    #account-big-icon img {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      object-fit: cover;
+    }
     .code-header {
       display: flex;
       align-items: center;
@@ -989,6 +1001,7 @@
 
   <div class="dc-col" id="home-detail">
     <div class="code-section">
+      <div id="account-big-icon"></div>
       <div class="code-header">
         <button id="btn-edit-account" title="Edit account" disabled></button>
         <div id="account-name"></div>
