@@ -376,6 +376,7 @@ function requestIcons(hints = {}) {
     if (!Object.keys(updated).length) return;
     Object.assign(iconCache, updated);
     renderAccountBar();
+    refreshDisplay(); // the big icon above the code only knows the real favicon once this lands
     // Refresh vault rows too, but only when no row is being edited.
     if (document.getElementById('settings-panel')?.style.display !== 'none' && openAccIdx < 0) {
       rebuildAccountsDOM();
@@ -450,7 +451,16 @@ document.getElementById('home-search').addEventListener('input', renderAccountBa
 
 // ── OTP display loop ──────────────────────────────────────────────────────────
 
+// refreshDisplay() is called from several places that can overlap (the 1s
+// timer tick, an account switch, icon resolution landing) — it awaits Web
+// Crypto, so an older call can still be in flight when a newer one starts.
+// Bumped at the top of each call; a call whose generation no longer matches
+// by the time its await resolves belongs to a stale account/moment and must
+// not overwrite the display or currentCode with outdated results.
+let _displayGen = 0;
+
 async function refreshDisplay() {
+  const gen = ++_displayGen;
   const display   = document.getElementById('otp-display');
   const nameLabel = document.getElementById('account-name');
   const countdown = document.getElementById('countdown');
@@ -458,13 +468,24 @@ async function refreshDisplay() {
   const btnCopy   = document.getElementById('btn-copy');
   const btnFill   = document.getElementById('btn-fill');
   const btnEdit   = document.getElementById('btn-edit-account');
+  const bigIcon   = document.getElementById('account-big-icon');
 
   const acc = accounts[activeIndex];
   // Shared codes (read-only, no secret of your own) live in a separate list
   // below and aren't editable here — only own accounts get the edit shortcut.
   btnEdit.disabled = !acc;
 
+  // Drop the previous account's code and disable Copy/Fill immediately,
+  // before any await below — otherwise a click during the brief window while
+  // this generation's generateTOTP() is still pending would act on the
+  // previous account's still-enabled button and still-cached currentCode.
+  // Re-enabled further down only once (and if) this generation wins.
+  btnCopy.disabled = true;
+  btnFill.disabled = true;
+  currentCode = '';
+
   if (!acc) {
+    bigIcon.innerHTML = '';
     nameLabel.textContent = '';
     display.textContent = '••• •••';
     display.className = 'dim';
@@ -480,6 +501,11 @@ async function refreshDisplay() {
 
   nameLabel.innerHTML = esc(acc.name || '') + sharedBadgeHTML(findSharedCode(acc));
 
+  // Only the real site favicon, never the letter-avatar fallback — this is
+  // decorative extra space, not a place to render initials twice.
+  const bigIconUrl = accountIconDataUrl(acc);
+  bigIcon.innerHTML = bigIconUrl ? `<img src="${bigIconUrl}" alt="">` : '';
+
   if (!acc.secret) {
     display.textContent = 'no secret';
     display.className = 'dim';
@@ -493,6 +519,7 @@ async function refreshDisplay() {
 
   try {
     const code = await generateTOTP(acc.secret);
+    if (gen !== _displayGen) return; // a newer refresh has since started — don't stomp its result
     currentCode = code;
     display.textContent = obfuscated ? '••• •••' : code.slice(0, 3) + ' ' + code.slice(3);
     display.className = obfuscated ? 'dim' : '';
@@ -505,6 +532,7 @@ async function refreshDisplay() {
     btnCopy.disabled = false;
     btnFill.disabled = false;
   } catch {
+    if (gen !== _displayGen) return;
     display.textContent = 'Invalid secret';
     display.className = 'error';
     countdown.textContent = '';

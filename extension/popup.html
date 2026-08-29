@@ -314,6 +314,28 @@
     .code-section {
       padding: 14px 16px 10px;
       text-align: center;
+      position: relative;
+    }
+    #account-big-icon {
+      /* Out of flow on purpose: #home-detail centers .code-section (+
+         siblings) as a group, so a normal-flow icon here would grow that
+         group's height and push everything else down when centered.
+         Anchoring it just above .code-section's own top edge instead uses
+         the empty space that's already there without displacing anything. */
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 100%;
+      display: flex;
+      justify-content: center;
+      margin-bottom: 14px;
+    }
+    #account-big-icon:empty { display: none; }
+    #account-big-icon img {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      object-fit: cover;
     }
     .code-header {
       display: flex;
@@ -989,6 +1011,7 @@
 
   <div class="dc-col" id="home-detail">
     <div class="code-section">
+      <div id="account-big-icon"></div>
       <div class="code-header">
         <button id="btn-edit-account" title="Edit account" disabled></button>
         <div id="account-name"></div>
