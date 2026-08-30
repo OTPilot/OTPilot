@@ -615,18 +615,22 @@ document.getElementById('btn-edit-account').addEventListener('click', () => {
 // draft holds unsaved edits while settings panel is open
 let draft = [];
 let openAccIdx = -1;
+// One-shot flag: the next empty-detail render (no account selected) should
+// say "Saved" instead of the generic prompt. Consumed and cleared the first
+// time renderAccDetail() reads it, so it never lingers past that one render.
+let _justSavedMessage = false;
 
 // `openTargetIdx`, when given, is an index into `accounts` (not the
 // alphabetically-sorted `draft`) to open in the detail panel right away —
 // used by the "edit this account" shortcut on the Home view. draft entries
 // are clones, so the origin index has to be tracked through the sort to
 // translate it into draft's index space.
-function renderAccountsList(openTargetIdx = -1) {
+function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {}) {
   const withOrigin = accounts.map((a, i) => ({ acc: { ...a }, origIdx: i }));
   withOrigin.sort((x, y) => (x.acc.name || '').localeCompare(y.acc.name || ''));
   draft = withOrigin.map(w => w.acc);
   openAccIdx = openTargetIdx >= 0 ? withOrigin.findIndex(w => w.origIdx === openTargetIdx) : -1;
-  document.getElementById('acc-search').value = '';
+  if (!preserveSearch) document.getElementById('acc-search').value = '';
   // A leftover category filter from a previous Accounts-view visit could hide
   // the very row we're jumping to — clear it so the shortcut always lands
   // somewhere visible.
@@ -745,9 +749,11 @@ function renderAccDetail() {
   const acc = draft[openAccIdx];
 
   if (!acc) {
+    const justSaved = _justSavedMessage;
+    _justSavedMessage = false;
     container.innerHTML = `<div class="dc-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16"/></svg>
-      Select an account to edit, or add a new one
+      ${justSaved ? '✓ Saved — select an account to edit, or add a new one' : 'Select an account to edit, or add a new one'}
     </div>`;
     return;
   }
@@ -902,11 +908,6 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
 
 document.getElementById('btn-save-all').addEventListener('click', async () => {
   syncOpenAccToDraft();
-  // Reopen the same account in Accounts after saving. Captured by reference,
-  // not index — draft.sort() below reorders the array (a rename or a new
-  // account can land anywhere alphabetically), so openAccIdx's pre-sort
-  // position would point at the wrong entry once draft becomes accounts.
-  const savedAcc = openAccIdx >= 0 ? draft[openAccIdx] : null;
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
 
@@ -933,7 +934,6 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 
   draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   accounts = draft;
-  const savedIdx = savedAcc ? accounts.indexOf(savedAcc) : -1;
   activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
   await saveState();
   await stampLocalChange();
@@ -942,7 +942,12 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   renderAccountBar();
   activeTabIconHint().then(requestIcons); // pick up icons for any newly-added domains
   startTimer();
-  showView('accounts', { openAccountIdx: savedIdx });
+  // Land on Accounts with nothing selected — reopening the just-saved
+  // account read as "did this even do anything?" (same form, same fields).
+  // The empty-state message confirms the save instead. Search stays as the
+  // user left it rather than resetting, so saving mid-search doesn't lose it.
+  _justSavedMessage = true;
+  showView('accounts', { openAccountIdx: -1, preserveSearch: true });
   setStatus('Saved');
 });
 
@@ -959,7 +964,7 @@ function showView(view, opts = {}) {
   document.getElementById('nav-config').classList.toggle('active',   view === 'settings');
   document.getElementById('nav-sync').classList.toggle('active',     view === 'sync');
   document.getElementById('nav-team').classList.toggle('active',     view === 'team');
-  if (view === 'accounts') renderAccountsList(opts.openAccountIdx ?? -1);
+  if (view === 'accounts') renderAccountsList(opts.openAccountIdx ?? -1, { preserveSearch: opts.preserveSearch });
   if (view === 'sync') renderSyncPanel();
   if (view === 'team') renderTeamPanel();
   if (view === 'settings') {
