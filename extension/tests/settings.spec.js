@@ -118,6 +118,62 @@ test('regression: removing the last category tag does not hide every account', a
   expect(visible).toBe(5);
 });
 
+// ── Save navigation (reopening the just-saved account read as "did this even
+// do anything?" — same form, same fields, no visible confirmation) ─────────
+
+test('saving deselects the account and shows a confirmation message instead of reopening it', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await unlock(page, [{ name: 'GitHub', secret: TEST_SECRET, urls: '', email: '' }]);
+
+  await page.click('#nav-settings');
+  await page.locator('.acc-head').first().click();
+  await expect(page.locator('.acc-body')).toBeVisible();
+
+  await page.fill('.acc-email', 'me@example.com');
+  await page.click('#btn-save-all');
+
+  // Nothing selected — not even the account just edited.
+  await expect(page.locator('.acc-body')).toBeHidden();
+  await expect(page.locator('.acc-head.open')).toHaveCount(0);
+  expect(await page.evaluate(() => openAccIdx)).toBe(-1);
+
+  // The empty-state message confirms the save landed, rather than looking
+  // identical to having never opened anything.
+  await expect(page.locator('#acc-detail .dc-empty')).toContainText('Saved');
+
+  const stored = await page.evaluate(() =>
+    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  expect(stored[0].email).toBe('me@example.com');
+});
+
+test('saving keeps an active search filter instead of clearing it', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await unlock(page, [
+    { name: 'GitHub', secret: TEST_SECRET, urls: '', email: '' },
+    { name: 'Google', secret: TEST_SECRET, urls: '', email: '' },
+    { name: 'Dropbox', secret: TEST_SECRET, urls: '', email: '' },
+  ]);
+
+  await page.click('#nav-settings');
+  await page.fill('#acc-search', 'git');
+  // .acc-head, not .acc-row: the filter hides rows via style.display on the
+  // wrapping .acc-row, but accounts sort alphabetically (Dropbox first in the
+  // DOM) — .first() without a text match would hit a hidden row and time out.
+  await page.locator('.acc-head', { hasText: 'GitHub' }).click();
+  await page.fill('.acc-email', 'me@example.com');
+  await page.click('#btn-save-all');
+
+  await expect(page.locator('#acc-search')).toHaveValue('git');
+  const { visibleCount, visibleName } = await page.locator('.acc-row').evaluateAll(els => {
+    const visible = els.filter(el => el.style.display !== 'none');
+    return { visibleCount: visible.length, visibleName: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '' };
+  });
+  expect(visibleCount).toBe(1);
+  expect(visibleName).toBe('GitHub');
+});
+
 // ── Change master password ──────────────────────────────────────────────────
 
 test('change master password: rejects wrong current password and mismatched confirmation', async ({ context, extensionId }) => {
