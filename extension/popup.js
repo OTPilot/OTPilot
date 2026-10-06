@@ -1,5 +1,6 @@
-// Storage schema: { accounts: [{name, secret, urls}], activeIndex: 0,
-//                   auth: {salt,iv,data}, sessionExpiry: number, sessionDuration: number }
+// Storage schema: { accounts: [{name, secret, urls}], activeIndex: 0 }
+// The master-password lock lives in vaultLock.js (vault key wrapped at rest,
+// unlocked only in chrome.storage.session).
 
 let accounts = [];
 let activeIndex = 0;
@@ -1012,10 +1013,15 @@ document.getElementById('back-settings-google-import').addEventListener('click',
 document.getElementById('row-settings-autofill').addEventListener('click', () => showSettingsSubview('settings-autofill-view'));
 document.getElementById('back-settings-autofill').addEventListener('click', () => showSettingsSubview('settings-list'));
 
-document.getElementById('row-settings-password').addEventListener('click', () => {
+document.getElementById('row-settings-password').addEventListener('click', async () => {
   ['change-pw-current', 'change-pw-new', 'change-pw-confirm'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('change-pw-err').textContent = '';
+  document.getElementById('autolock-select').value = String(await VaultLock.getAutoLock());
   showSettingsSubview('settings-password-view');
+});
+document.getElementById('autolock-select').addEventListener('change', async e => {
+  await VaultLock.setAutoLock(Number(e.target.value));
+  setStatus('Auto-lock updated');
 });
 document.getElementById('back-settings-password').addEventListener('click', () => showSettingsSubview('settings-list'));
 
@@ -1032,17 +1038,12 @@ document.getElementById('change-pw-submit').addEventListener('click', async () =
 
   setLockButtonState(btn, true);
   try {
-    const { auth, sessionDuration } = await loadAuthState();
-    const ok = await verifyMasterPassword(current, auth);
+    const ok = await VaultLock.changePassword(current, next);
     if (!ok) {
       err.textContent = 'Current password is incorrect.';
       setLockButtonState(btn, false);
       return;
     }
-    await createAuth(next);
-    // Renew the session from now, like setup/login do — otherwise a change
-    // made near the old expiry could immediately re-lock the popup.
-    await saveSessionExpiry(sessionDuration ?? 86400000);
     ['change-pw-current', 'change-pw-new', 'change-pw-confirm'].forEach(id => document.getElementById(id).value = '');
     showSettingsSubview('settings-list');
     setStatus('Master password updated');
@@ -1424,40 +1425,8 @@ document.getElementById('crypto-password').addEventListener('keydown', e => {
 
 // ── Lock / Session ────────────────────────────────────────────────────────────
 
-const AUTH_SENTINEL = 'otpilot-auth-ok';
 let lockSetupResolve = null;
 let lockLoginResolve = null;
-
-function loadAuthState() {
-  return new Promise(r =>
-    chrome.storage.local.get(['auth', 'sessionExpiry', 'sessionDuration'], r)
-  );
-}
-
-function saveSessionExpiry(durationMs) {
-  const expiry = Date.now() + durationMs;
-  return new Promise(r =>
-    chrome.storage.local.set({ sessionExpiry: expiry, sessionDuration: durationMs }, r)
-  );
-}
-
-async function createAuth(password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key  = await deriveKey(password, salt);
-  const { iv, data } = await encryptData(key, AUTH_SENTINEL);
-  const auth = { salt: b64enc(salt), iv, data };
-  return new Promise(r => chrome.storage.local.set({ auth }, r)).then(() => auth);
-}
-
-async function verifyMasterPassword(password, auth) {
-  try {
-    const key   = await deriveKey(password, b64dec(auth.salt));
-    const plain = await decryptData(key, auth.iv, auth.data);
-    return plain === AUTH_SENTINEL;
-  } catch {
-    return false;
-  }
-}
 
 function setLockButtonState(btn, busy) {
   btn.disabled = busy;
@@ -1487,9 +1456,6 @@ function showLockOverlay(mode) {
     document.getElementById('lock-password').value = '';
     document.getElementById('lock-login-err').textContent = '';
     document.getElementById('lock-password').classList.remove('err');
-    chrome.storage.local.get('sessionDuration', d => {
-      document.getElementById('lock-login-30d').checked = d.sessionDuration === 2592000000;
-    });
     document.getElementById('lock-password').focus();
   }
 }
@@ -1499,14 +1465,17 @@ function hideLockOverlay() {
 }
 
 async function initLock() {
-  const { auth, sessionExpiry } = await loadAuthState();
-  if (!auth) {
+  const state = await VaultLock.state();
+  if (state === 'setup') {
     return new Promise(resolve => {
       lockSetupResolve = resolve;
       showLockOverlay('setup');
     }).then(() => true);
   }
-  if (sessionExpiry && Date.now() < sessionExpiry) return false;
+  if (state === 'unlocked') {
+    await VaultLock.touch(); // opening the popup counts as activity
+    return false;
+  }
   return new Promise(resolve => {
     lockLoginResolve = resolve;
     showLockOverlay('login');
@@ -1527,7 +1496,7 @@ document.getElementById('lock-setup-btn').addEventListener('click', async () => 
   const pw2 = document.getElementById('lock-confirm-password').value;
   const err = document.getElementById('lock-setup-err');
   const btn = document.getElementById('lock-setup-btn');
-  const is30 = document.getElementById('lock-setup-30d').checked;
+  const autoLock = Number(document.getElementById('lock-setup-autolock').value);
 
   err.textContent = '';
   document.getElementById('lock-new-password').classList.remove('err');
@@ -1546,8 +1515,8 @@ document.getElementById('lock-setup-btn').addEventListener('click', async () => 
 
   setLockButtonState(btn, true);
   try {
-    await createAuth(pw1);
-    await saveSessionExpiry(is30 ? 2592000000 : 86400000);
+    await VaultLock.setup(pw1);
+    await VaultLock.setAutoLock(autoLock);
     hideLockOverlay();
     const cb = lockSetupResolve;
     lockSetupResolve = null;
@@ -1570,7 +1539,6 @@ document.getElementById('lock-login-btn').addEventListener('click', async () => 
   const err = document.getElementById('lock-login-err');
   const btn = document.getElementById('lock-login-btn');
   const inp = document.getElementById('lock-password');
-  const is30 = document.getElementById('lock-login-30d').checked;
 
   err.textContent = '';
   inp.classList.remove('err');
@@ -1583,10 +1551,8 @@ document.getElementById('lock-login-btn').addEventListener('click', async () => 
 
   setLockButtonState(btn, true);
   try {
-    const { auth } = await loadAuthState();
-    const ok = await verifyMasterPassword(pw, auth);
+    const ok = await VaultLock.unlock(pw);
     if (ok) {
-      await saveSessionExpiry(is30 ? 2592000000 : 86400000);
       hideLockOverlay();
       const cb = lockLoginResolve;
       lockLoginResolve = null;
@@ -1607,10 +1573,15 @@ document.getElementById('lock-password').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('lock-login-btn').click();
 });
 
-// Logout button
-document.getElementById('btn-logout').addEventListener('click', async () => {
+// Shows the lock screen over an open popup, stopping the code timer until the
+// master password is entered again. Used by the lock button and whenever the
+// vault locks elsewhere (auto-lock alarm, another popup) while this one is open.
+let _popupLocked = false;
+async function lockPopup() {
+  if (_popupLocked) return;
+  _popupLocked = true;
   clearInterval(timerInterval);
-  await new Promise(r => chrome.storage.local.set({ sessionExpiry: 0 }, r));
+  clearInterval(_sharedRefreshTimer);
   await new Promise(r => chrome.storage.local.remove('userPlan', r));
   document.querySelector('.kofi-footer').style.display = '';
   await new Promise(resolve => {
@@ -1619,13 +1590,38 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
       await syncActiveIndexToUrl();
       renderAccountBar();
       startTimer();
+      renderSharedCodes();
       showView('home');
       tryAutoFillCurrentTab();
       resolve();
     };
     showLockOverlay('login');
   });
+  _popupLocked = false;
+}
+
+document.getElementById('btn-logout').addEventListener('click', async () => {
+  await VaultLock.lock(); // storage.session change below shows the lock screen
+  await lockPopup();
 });
+
+// The vault key leaving chrome.storage.session means the vault locked —
+// from the auto-lock alarm, or another popup/window.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'session' && changes.vaultKeyUnlocked && !changes.vaultKeyUnlocked.newValue) lockPopup();
+});
+
+// The alarm runs once a minute; while the popup is open, check the deadline
+// more often so it never shows codes past it.
+setInterval(() => { if (!_popupLocked) VaultLock.state().catch(() => {}); }, 15000);
+
+// Using the popup counts as activity for the auto-lock (throttled).
+let _lastTouch = 0;
+['click', 'keydown'].forEach(type => document.addEventListener(type, () => {
+  if (_popupLocked || Date.now() - _lastTouch < 30000) return;
+  _lastTouch = Date.now();
+  VaultLock.touch().catch(() => {});
+}, true));
 
 // ── Cloud Sync UI ─────────────────────────────────────────────────────────────
 
@@ -1854,8 +1850,10 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
   const input = document.getElementById('sync-restore-input');
   const errEl = document.getElementById('sync-restore-err');
   const keyB64 = input.value.trim();
+  const password = document.getElementById('sync-restore-password').value;
   errEl.textContent = '';
   if (!keyB64) { errEl.textContent = 'Paste your recovery key.'; return; }
+  if (!password) { errEl.textContent = 'Enter your master password.'; return; }
   // Validate the key against the server's data before adopting it: adopting
   // re-wraps the local vault to this key, so a typo must never get that far.
   let pullResult;
@@ -1870,8 +1868,20 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     errEl.textContent = 'There is no synced data to check this key against. Use "Start fresh" instead.';
     return;
   }
+  // The vault may have locked (lock button, auto-lock) while the server
+  // request was pending: then stop here instead of adopting the key.
+  if ((await VaultLock.state()) !== 'unlocked') {
+    document.getElementById('sync-restore-password').value = '';
+    return;
+  }
   try {
-    await CloudSync.saveSyncKey(keyB64);
+    await CloudSync.saveSyncKey(keyB64, password);
+  } catch (e) {
+    errEl.textContent = e.message === 'wrong password' ? 'Incorrect master password.' : 'Could not save the key. Try again.';
+    return;
+  }
+  document.getElementById('sync-restore-password').value = '';
+  try {
     const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
 
     // On reconnect the server is the source of truth.

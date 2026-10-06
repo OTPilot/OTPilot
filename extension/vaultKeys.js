@@ -153,8 +153,11 @@ const VaultKeys = (() => {
       } else {
         writes[PLAIN] = newKey;
       }
+      // Only refresh an unlocked session: if the vault was locked meanwhile
+      // (lock() shares this lock), adopting must not reopen it.
+      const wasUnlocked = !!(await session.get(UNLOCKED))[UNLOCKED];
       await local.set(writes);
-      if (d[WRAPPED]) await session.set({ [UNLOCKED]: newKey });
+      if (d[WRAPPED] && wasUnlocked) await session.set({ [UNLOCKED]: newKey });
     });
   }
 

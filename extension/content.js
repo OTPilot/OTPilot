@@ -1,12 +1,19 @@
 // Runs on every page; bails out immediately unless an account URL matches.
 
-function isSessionLocked() {
-  return new Promise(r =>
-    chrome.storage.local.get(['auth', 'sessionExpiry'], d => {
-      if (!d.auth) { r(false); return; }
-      r(!d.sessionExpiry || Date.now() >= d.sessionExpiry);
-    })
-  );
+// The unlocked vault key lives in chrome.storage.session, which content
+// scripts can't read, so the background worker answers: 'setup' (no master
+// password yet) | 'locked' | 'unlocked'. Anything unexpected reads as locked.
+function vaultState() {
+  return new Promise(r => {
+    try {
+      chrome.runtime.sendMessage({ action: 'vaultState' }, res =>
+        r(chrome.runtime.lastError ? 'locked' : (res?.state ?? 'locked')));
+    } catch { r('locked'); }
+  });
+}
+
+async function isSessionLocked() {
+  return (await vaultState()) === 'locked';
 }
 
 function matchesPattern(pattern, hostname) {
@@ -421,6 +428,8 @@ async function fillOTPWithAccount(acc) {
   try { code = await generateTOTP(acc.secret); }
   catch (e) { return { ok: false, msg: 'Invalid secret: ' + e.message }; }
   fillInputValue(input, code);
+  // Filling a code counts as activity for the vault's inactivity auto-lock.
+  try { chrome.runtime.sendMessage({ action: 'vaultTouch' }, () => void chrome.runtime.lastError); } catch {}
   return { ok: true, code, input };
 }
 
@@ -452,26 +461,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     return true;
   }
 });
-
-function b64dec(str) {
-  return Uint8Array.from(atob(str), c => c.charCodeAt(0)).buffer;
-}
-
-async function verifyInContent(password, auth) {
-  try {
-    const raw = await crypto.subtle.importKey(
-      'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']
-    );
-    const key = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: b64dec(auth.salt), hash: 'SHA-256', iterations: 200000 },
-      raw, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
-    );
-    const plain = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: b64dec(auth.iv) }, key, b64dec(auth.data)
-    );
-    return new TextDecoder().decode(plain) === 'otpilot-auth-ok';
-  } catch { return false; }
-}
 
 function showLockOverlay(accountName, onUnlock, onDismiss) {
   if (document.getElementById('otpilot-lock')) return;
@@ -850,12 +839,8 @@ function wirePwField(el, primaryBtn, primaryLabel, onSuccess) {
     primaryBtn.textContent = 'Verifying…';
 
     try {
-      const { auth, sessionDuration } = await new Promise(r =>
-        chrome.storage.local.get(['auth', 'sessionDuration'], r)
-      );
-      if (await verifyInContent(password, auth)) {
-        const dur = sessionDuration || 86400000;
-        await new Promise(r => chrome.storage.local.set({ sessionExpiry: Date.now() + dur }, r));
+      const res = await chrome.runtime.sendMessage({ action: 'vaultUnlock', password });
+      if (res?.ok) {
         onSuccess();
       } else {
         errEl.textContent = 'Incorrect password';
@@ -1149,17 +1134,13 @@ async function runDetection() {
     const parsed = uri ? parseOtpAuthUri(uri) : findPlainTextSecret();
     if (!parsed) return false;
 
-    return await new Promise(resolve => {
-      chrome.storage.local.get(['accounts', 'auth', 'sessionExpiry'], d => {
-        if (!d.auth) { resolve(false); return; }
-        if (_dismissedSecrets.has(parsed.secret)) { resolve(false); return; }
-        const exists = (d.accounts || []).some(a => a.secret === parsed.secret);
-        if (exists)  { resolve(false); return; }
-        const locked = !d.sessionExpiry || Date.now() >= d.sessionExpiry;
-        showSuggestionOverlay(parsed.name, parsed.secret, parsed.email || '', locked);
-        resolve(true);
-      });
-    });
+    const state = await vaultState();
+    if (state === 'setup') return false; // no master password yet: nothing to save into
+    if (_dismissedSecrets.has(parsed.secret)) return false;
+    const { accounts = [] } = await chrome.storage.local.get('accounts');
+    if (accounts.some(a => a.secret === parsed.secret)) return false;
+    showSuggestionOverlay(parsed.name, parsed.secret, parsed.email || '', state === 'locked');
+    return true;
   } finally {
     _detectionInFlight = false;
   }
