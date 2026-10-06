@@ -20,6 +20,9 @@ const VaultLock = (() => {
   // Set once the user confirmed they saved the recovery key (shown after
   // first setup and to users upgrading from v1).
   const KEY_SAVED = 'recoveryKeyAcknowledged';
+  // Set when a restore replaced the device key, so the next recovery-key
+  // screen (possibly after a later unlock) says the old Emergency Kit is stale.
+  const KEY_CHANGED = 'recoveryKeyChanged';
   const DEFAULT_AUTO_LOCK = 0;
 
   const local = chrome.storage.local;
@@ -146,17 +149,24 @@ const VaultLock = (() => {
     return (await state()) === 'unlocked' && !(await local.get(KEY_SAVED))[KEY_SAVED];
   }
 
-  function acknowledgeRecoveryKey() {
-    return local.set({ [KEY_SAVED]: true });
+  async function acknowledgeRecoveryKey() {
+    await local.set({ [KEY_SAVED]: true });
+    await local.remove(KEY_CHANGED);
   }
 
   // The vault key changed (a recovery key was restored): the saved one is stale.
-  function forgetRecoveryKeyNotice() {
-    return local.remove(KEY_SAVED);
+  async function recoveryKeyReplaced() {
+    await local.remove(KEY_SAVED);
+    await local.set({ [KEY_CHANGED]: true });
+  }
+
+  async function wasRecoveryKeyReplaced() {
+    return !!(await local.get(KEY_CHANGED))[KEY_CHANGED];
   }
 
   return {
     AUTO_LOCK_OPTIONS, state, setup, unlock, lock, touch, changePassword, getAutoLock, setAutoLock,
-    recover, resetDevice, revealRecoveryKey, needsRecoveryKeyNotice, acknowledgeRecoveryKey, forgetRecoveryKeyNotice,
+    recover, resetDevice, revealRecoveryKey, needsRecoveryKeyNotice, acknowledgeRecoveryKey,
+    recoveryKeyReplaced, wasRecoveryKeyReplaced,
   };
 })();

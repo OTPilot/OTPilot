@@ -1601,20 +1601,28 @@ document.getElementById('lock-password').addEventListener('keydown', e => {
 // After any successful setup/unlock/recovery: show the recovery key once if the
 // user hasn't confirmed saving it (first setup, or upgraded from v1), then hand
 // back to whoever was waiting on the lock screen.
+const KEY_REPLACED_NOTE = 'Your recovery key is now the one you restored. Any Emergency Kit you saved before no longer works.';
+
 async function completeUnlock() {
   if (await VaultLock.needsRecoveryKeyNotice()) {
+    const note = (await VaultLock.wasRecoveryKeyReplaced()) ? KEY_REPLACED_NOTE : '';
     // Cancelled when the vault locks while the screen is up: the waiters stay
     // queued for the next unlock.
-    if (!(await showRecoveryKit())) return;
+    if (!(await showRecoveryKit(note))) return;
   }
+  // Never drop the lock screen unless the vault really is unlocked.
+  if ((await VaultLock.state()) !== 'unlocked') { showLockOverlay('login'); return; }
   hideLockOverlay();
   for (const release of _unlockWaiters.splice(0)) release();
 }
 
-// Resolves true once the user confirms saving the key, false if cancelled.
+// Resolves true once the user confirms saving the key, false if cancelled or
+// if the vault isn't unlocked (there is no key to show, and this screen must
+// never stand in for the lock screen).
 let _kitSettle = null;
 async function showRecoveryKit(note = '') {
   _kitSettle?.(false);
+  if ((await VaultLock.state()) !== 'unlocked') return false;
   showLockOverlay('kit');
   document.getElementById('lock-kit-note').textContent = note;
   document.getElementById('lock-kit-note').style.display = note ? '' : 'none';
@@ -2009,6 +2017,7 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     return;
   }
   const previousKey = await VaultKeys.getKey();
+  if (!previousKey) return; // locked meanwhile: the lock screen is up
   try {
     await CloudSync.saveSyncKey(keyB64, password);
   } catch (e) {
@@ -2039,10 +2048,11 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     syncShowView('sv-active');
     syncSetStatus('ok', 'Restored');
     // The device key is now the restored one: an Emergency Kit saved before
-    // no longer works, so show the new key until the user confirms saving it.
-    if ((await VaultKeys.getKey()) !== previousKey) {
-      await VaultLock.forgetRecoveryKeyNotice();
-      if (await showRecoveryKit('Your recovery key is now the one you just restored. Any Emergency Kit you saved before no longer works.')) hideLockOverlay();
+    // no longer works. Record that (so it survives a lock in between) and show
+    // the new key now if the vault is still unlocked, else after the next unlock.
+    if (keyB64 !== previousKey) {
+      await VaultLock.recoveryKeyReplaced();
+      if (await showRecoveryKit(KEY_REPLACED_NOTE) && (await VaultLock.state()) === 'unlocked') hideLockOverlay();
     }
   } catch {
     errEl.textContent = 'Could not finish syncing. Check your connection and try again.';

@@ -211,3 +211,31 @@ test('restoring a different recovery key shows the new key and warns the old kit
   await expect(page.locator('#lock-kit-note')).toContainText('no longer works');
   await expect(page.locator('#lock-kit-key')).toHaveText(recovery);
 });
+
+test('a restore that locks during the upload never puts the recovery-key screen over the lock screen', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  const recovery = await page.evaluate(() => VaultCrypto.b64e(VaultCrypto.generateKey()));
+  await page.evaluate(([k, pw]) => {
+    CloudSync.pull = async () => ({ accounts: [], tombstones: {} });
+    CloudSync.push = async () => { await VaultLock.lock(); return {}; }; // locks mid-restore
+    document.getElementById('sync-restore-input').value = k;
+    document.getElementById('sync-restore-password').value = pw;
+    document.getElementById('btn-restore-key').click();
+  }, [recovery, TEST_PASSWORD]);
+  await expect(page.locator('#lock-login')).toBeVisible();
+  await page.waitForTimeout(800);
+  await expect(page.locator('#lock-login')).toBeVisible();
+  await expect(page.locator('#lock-kit')).toBeHidden();
+
+  // After unlocking, the new key is shown with the stale-kit note.
+  await page.fill('#lock-password', TEST_PASSWORD);
+  await page.click('#lock-login-btn');
+  await expect(page.locator('#lock-kit')).toBeVisible();
+  await expect(page.locator('#lock-kit-note')).toContainText('no longer works');
+  await expect(page.locator('#lock-kit-key')).toHaveText(recovery);
+  await page.check('#lock-kit-saved');
+  await page.click('#lock-kit-done');
+  await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
+});
