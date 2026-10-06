@@ -2064,6 +2064,15 @@ async function doSync() {
   _syncInProgress = true;
   syncSetStatus('syncing', 'Syncing…');
   try {
+    // 2.0: per-item vault sync first, then reload the list it may have changed.
+    // The v1 blob below keeps 1.x devices in step during the transition.
+    const key = await VaultKeys.getKey();
+    if (!key) throw new Error('vault is locked');
+    await VaultSync.sync(key);
+    accounts = await VaultAccounts.load(key);
+    _loadedIds = new Set(accounts.map(a => a._id));
+    activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
+
     const serverMeta = await CloudSync.getServerMeta();
 
     const serverNewer = serverMeta !== null &&

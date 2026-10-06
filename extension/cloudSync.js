@@ -93,11 +93,13 @@ const CloudSync = (() => {
     await convertLegacyKey();
     await VaultKeys.adoptKey(keyB64, password);
     await chrome.storage.local.set({ [ENABLED]: true });
+    if (typeof VaultSync !== 'undefined') await VaultSync.reset(); // re-pair from scratch
   }
 
   // Turns sync off. The key stays: it also encrypts the local vault.
   async function deleteSyncKey() {
     await chrome.storage.local.remove([ENABLED, LEGACY_KEY]);
+    if (typeof VaultSync !== 'undefined') await VaultSync.reset();
   }
 
   // ── Encrypt / decrypt ──────────────────────────────────────────────────────
@@ -343,5 +345,6 @@ const CloudSync = (() => {
     getSyncKey, generateSyncKey, saveSyncKey, deleteSyncKey, isSyncEnabled,
     serverHasData, syncUser, pull, push, mergeWithTombstones,
     getServerMeta, executeCommand, leaveDevice,
+    api: apiFetch, // authenticated API call, for vaultSync.js
   };
 })();
