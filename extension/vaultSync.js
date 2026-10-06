@@ -139,6 +139,7 @@ const VaultSync = (() => {
         const twinId = k && (await localTwins()).get(k);
         if (twinId) {
           twins.delete(k);
+          stats.remapped[twinId] = r.id; // so open editors can follow the item
           const ours = await decryptOrNull(local[twinId], key);
           await tx.drop(twinId);
           if (ours && (ours.updatedAt || '') > (theirs.updatedAt || '')) {
@@ -237,7 +238,7 @@ const VaultSync = (() => {
   // Pull, then push. One sync at a time per browser (Web Lock).
   function sync(key) {
     return navigator.locks.request('otpilot-vault-sync', async () => {
-      const stats = { pulled: 0, pushed: 0, deleted: 0, unreadable: 0 };
+      const stats = { pulled: 0, pushed: 0, deleted: 0, unreadable: 0, remapped: {} };
       const state = await loadState();
       await pull(state, key, stats);
       await push(state, key, stats);

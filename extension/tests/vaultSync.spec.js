@@ -80,7 +80,7 @@ test('the first sync uploads every local item in a batch; the next one sends not
   const first = await sync(page);
   expect(first.pushed).toBe(2);
   const second = await sync(page);
-  expect(second).toEqual({ pulled: 0, pushed: 0, deleted: 0, unreadable: 0 });
+  expect(second).toEqual({ pulled: 0, pushed: 0, deleted: 0, unreadable: 0, remapped: {} });
   const calls = await page.evaluate(() => fakeServer.calls);
   expect(calls.filter(c => c.startsWith('POST')).length).toBe(1);
   expect(calls.filter(c => c.startsWith('PUT')).length).toBe(0);
@@ -350,4 +350,20 @@ test('a sync finishing while an account is being edited keeps the edit and merge
   const byName = Object.fromEntries((await readAccounts(page)).map(a => [a.name, a]));
   expect(byName.GitHub.email).toBe('typed@example.com');
   expect(byName.AWS.urls).toBe('aws.amazon.com');
+});
+
+test('an edit open while the first sync pairs that login with its server twin lands on the twin', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [ACC('GitHub', 'JBSWY3DPEHPK3PXP')]);
+  await fakeBlob(page, null);
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'GitHub' }).click();
+  await page.fill('.acc-email', 'typed@example.com');
+  const twinId = await page.evaluate(async () => {
+    const twin = Vault.fromV1Account({ name: 'GitHub', email: '', secret: 'JBSWY3DPEHPK3PXP', urls: '' }, 0);
+    await fakeServer.remoteSave(twin);
+    await doSync(); // first sync: pairs the local login with the server twin
+    return twin.id;
+  });
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await readAccounts(page)).map(a => [a._id, a.email])).toEqual([[twinId, 'typed@example.com']]);
 });

@@ -1077,11 +1077,17 @@ function refreshAccountsUI() {
 // (_draftBase): accounts the user didn't touch take their current version
 // (a sync may have changed or deleted them), edited and new ones are the
 // user's, and accounts that arrived meanwhile are kept.
+// Item ids a sync replaced while the popup was open (a login migrated on two
+// devices kept under the server's id): the editor's copies follow them.
+const _idRemaps = {};
+const remapId = a => (a._id && _idRemaps[a._id] ? { ...a, _id: _idRemaps[a._id] } : a);
+
 function mergeDraftWithCurrent() {
-  const base = new Map(_draftBase.filter(a => a._id).map(a => [a._id, JSON.stringify(a)]));
+  const base = new Map(_draftBase.filter(a => a._id).map(remapId).map(a => [a._id, JSON.stringify(a)]));
   const current = new Map(accounts.filter(a => a._id).map(a => [a._id, a]));
   const merged = [];
-  for (const d of draft) {
+  for (const d0 of draft) {
+    const d = remapId(d0);
     const untouched = d._id && base.get(d._id) === JSON.stringify(d);
     if (!untouched) merged.push(d);
     else if (current.has(d._id)) merged.push({ ...current.get(d._id) });
@@ -2159,7 +2165,7 @@ async function doSync() {
     // only a blob from a 1.x device is merged in.
     const key = await VaultKeys.getKey();
     if (!key) throw new Error('vault is locked');
-    await VaultSync.sync(key);
+    Object.assign(_idRemaps, (await VaultSync.sync(key)).remapped);
     await reloadFromVault(key);
 
     const serverMeta = await CloudSync.getServerMeta();
@@ -2173,7 +2179,7 @@ async function doSync() {
       tombstones = mergedTombs;
       await saveState();
       await saveTombstones();
-      await VaultSync.sync(key); // so the 1.x edits reach other 2.0 devices too
+      Object.assign(_idRemaps, (await VaultSync.sync(key)).remapped); // so the 1.x edits reach other 2.0 devices too
       await reloadFromVault(key);
     }
     await exportV1Blob(serverMeta, fromV1Device);
