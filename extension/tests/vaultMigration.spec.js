@@ -32,7 +32,7 @@ test('v1 accounts become encrypted vault items; v1 data stays and is backed up',
       failed,
       items: items.map(i => [i.title, Vault.getValue(i, 'username'), i.totp.secret]).sort((a, b) => a[1].localeCompare(b[1])),
       v1Accounts: stored.accounts,
-      backup: stored.accountsV1Backup.accounts.length,
+      backup: stored.accountsV1Backup,
       v1Tombstones: stored.vaultV1Tombstones,
       meta: { version: stored.vaultMeta.version, count: stored.vaultMeta.count },
       secretsAtRest: JSON.stringify(Object.entries(stored).filter(([k]) => k.startsWith('vi:'))).includes('JBSWY3DP'),
@@ -48,7 +48,9 @@ test('v1 accounts become encrypted vault items; v1 data stays and is backed up',
     ['GitHub', 'b@example.com', 'GEZDGNBVGY3TQOJQ'],
   ]);
   expect(result.v1Accounts).toEqual(V1_ACCOUNTS);
-  expect(result.backup).toBe(3);
+  expect(result.backup.accounts).toEqual(V1_ACCOUNTS);
+  expect(result.backup.tombstones).toEqual(V1_TOMBSTONES);
+  expect(Date.parse(result.backup.at)).not.toBeNaN();
   expect(result.v1Tombstones).toEqual(V1_TOMBSTONES);
   expect(result.meta).toEqual({ version: 2, count: 3 });
   expect(result.secretsAtRest).toBe(false);
@@ -84,10 +86,13 @@ test('a locked vault is not migrated', async ({ context, extensionId }) => {
     await VaultKeys.init();
     await VaultKeys.setPassword('correct horse');
     await VaultKeys.lock();
+    const snapshot = async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) });
+    const before = await snapshot();
     const run = await VaultMigration.migrate();
-    return { run, migrated: await VaultMigration.isMigrated(), records: Object.keys(await VaultStore.listRecords()).length };
+    return { run, before, after: await snapshot() };
   }, V1_ACCOUNTS);
-  expect(result).toEqual({ run: { status: 'locked' }, migrated: false, records: 0 });
+  expect(result.run).toEqual({ status: 'locked' });
+  expect(result.after).toEqual(result.before);
 });
 
 test('an empty account list migrates to an empty vault', async ({ context, extensionId }) => {
