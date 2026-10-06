@@ -123,10 +123,28 @@ test('malformed inputs are rejected up front', async ({ context, extensionId }) 
       shortKey: await attempt(() => VaultCrypto.encryptItem(item, new Uint8Array(16))),
       oldFormat: await attempt(() => VaultCrypto.decryptItem({ id: item.id, v: 1 }, vk)),
       noPassword: await attempt(() => VaultCrypto.wrapVaultKey(vk, '')),
+      rewrapNoVersion: await attempt(async () => {
+        const { v, ...unversioned } = await VaultCrypto.encryptItem(item, vk);
+        return VaultCrypto.rewrapItemKey(unversioned, vk, VaultCrypto.generateKey());
+      }),
     };
   }, ITEM);
   expect(errors.noId).toBe('item.id required');
   expect(errors.shortKey).toBe('key must be 32 bytes');
   expect(errors.oldFormat).toBe('unsupported item format: 1');
   expect(errors.noPassword).toBe('password required');
+  expect(errors.rewrapNoVersion).toBe('unsupported item format: undefined');
+});
+
+test('a stored vault key with an out-of-range iteration count is rejected', async ({ context, extensionId }) => {
+  const page = await cryptoPage(context, extensionId);
+  const errors = await page.evaluate(async () => {
+    const wrapped = await VaultCrypto.wrapVaultKey(VaultCrypto.generateKey(), 'pw');
+    const attempt = async iterations => {
+      try { await VaultCrypto.unwrapVaultKey({ ...wrapped, iterations }, 'pw'); return null; }
+      catch (e) { return e.message; }
+    };
+    return [await attempt(1000), await attempt(1e9), await attempt('600000')];
+  });
+  expect(errors).toEqual(Array(3).fill('unsupported vault key format'));
 });

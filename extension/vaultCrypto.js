@@ -21,6 +21,9 @@
 const VaultCrypto = (() => {
   const ITEM_FORMAT = 2;
   const KDF_ITERATIONS = 600000; // OWASP 2023 guidance for PBKDF2-HMAC-SHA256
+  // Accepted range for a stored blob: never weaker than the default, and capped
+  // so a corrupted value can't make unlocking hang.
+  const KDF_MAX_ITERATIONS = 5000000;
   const enc = new TextEncoder();
   const dec = new TextDecoder();
 
@@ -71,17 +74,28 @@ const VaultCrypto = (() => {
   async function encryptItem(item, wrappingKey) {
     if (!item || typeof item.id !== 'string' || !item.id) throw new Error('item.id required');
     const ik = generateKey();
-    const data = await seal(await importAes(ik, ['encrypt']), enc.encode(JSON.stringify(item)), itemAad(item.id));
-    const key = await seal(await importAes(wrappingKey, ['encrypt']), ik, keyAad(item.id));
-    ik.fill(0);
-    return { id: item.id, v: ITEM_FORMAT, key, data };
+    try {
+      const data = await seal(await importAes(ik, ['encrypt']), enc.encode(JSON.stringify(item)), itemAad(item.id));
+      const key = await seal(await importAes(wrappingKey, ['encrypt']), ik, keyAad(item.id));
+      return { id: item.id, v: ITEM_FORMAT, key, data };
+    } finally {
+      ik.fill(0);
+    }
+  }
+
+  function assertFormat(record) {
+    if (record?.v !== ITEM_FORMAT) throw new Error(`unsupported item format: ${record?.v}`);
   }
 
   async function decryptItem(record, wrappingKey) {
-    if (record?.v !== ITEM_FORMAT) throw new Error(`unsupported item format: ${record?.v}`);
+    assertFormat(record);
     const ik = await open(await importAes(wrappingKey, ['decrypt']), record.key, keyAad(record.id));
-    const pt = await open(await importAes(ik, ['decrypt']), record.data, itemAad(record.id));
-    ik.fill(0);
+    let pt;
+    try {
+      pt = await open(await importAes(ik, ['decrypt']), record.data, itemAad(record.id));
+    } finally {
+      ik.fill(0);
+    }
     const item = JSON.parse(dec.decode(pt));
     if (item.id !== record.id) throw new Error('item id mismatch');
     return item;
@@ -90,10 +104,14 @@ const VaultCrypto = (() => {
   // Moves an item between wrapping keys (personal VK ⇄ collection CK, or a CK
   // rotation) without touching the encrypted content.
   async function rewrapItemKey(record, fromKey, toKey) {
+    assertFormat(record);
     const ik = await open(await importAes(fromKey, ['decrypt']), record.key, keyAad(record.id));
-    const key = await seal(await importAes(toKey, ['encrypt']), ik, keyAad(record.id));
-    ik.fill(0);
-    return { ...record, key };
+    try {
+      const key = await seal(await importAes(toKey, ['encrypt']), ik, keyAad(record.id));
+      return { ...record, key };
+    } finally {
+      ik.fill(0);
+    }
   }
 
   async function deriveMasterKey(password, salt, iterations) {
@@ -105,8 +123,9 @@ const VaultCrypto = (() => {
   }
 
   // Wraps VK under the master password for storage at rest on this device.
-  async function wrapVaultKey(vaultKey, password, iterations = KDF_ITERATIONS) {
+  async function wrapVaultKey(vaultKey, password) {
     if (!password) throw new Error('password required');
+    const iterations = KDF_ITERATIONS;
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const mk = await deriveMasterKey(password, salt, iterations);
     const box = await seal(mk, toRaw(vaultKey), vkAad);
@@ -117,6 +136,10 @@ const VaultCrypto = (() => {
   // tampered blob — GCM can't tell the two apart, and neither should callers.
   async function unwrapVaultKey(wrapped, password) {
     if (wrapped?.v !== 1 || wrapped.kdf !== 'PBKDF2-SHA256') throw new Error('unsupported vault key format');
+    const n = wrapped.iterations;
+    if (!Number.isInteger(n) || n < KDF_ITERATIONS || n > KDF_MAX_ITERATIONS) {
+      throw new Error('unsupported vault key format');
+    }
     const mk = await deriveMasterKey(password, b64d(wrapped.salt), wrapped.iterations);
     try {
       return await open(mk, wrapped, vkAad);
