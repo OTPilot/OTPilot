@@ -377,10 +377,12 @@ chrome.alarms.onAlarm.addListener(async alarm => {
   const session = await SupabaseAuth.getSession();
   if (!session) return;
 
+  // syncEnabled is the 2.0 flag; a v1 plaintext syncKey means the same until
+  // CloudSync converts it into the vault key on the next popup open.
   const stored = await new Promise(r =>
-    chrome.storage.local.get(['syncKey', 'lastSyncedAt'], r)
+    chrome.storage.local.get(['syncEnabled', 'syncKey', 'lastSyncedAt'], r)
   );
-  if (!stored.syncKey) return;
+  if (!stored.syncEnabled && !stored.syncKey) return;
 
   try {
     const token = await SupabaseAuth.getAccessToken();

@@ -104,6 +104,8 @@ Team Lite lets a member share an individual TOTP code. The secret is encrypted c
 
 Sync is gated by plan: `canSync(plan)` returns true for `personal`, `team_lite`, `team_pro` (not `free`).
 
+**Sync key = vault key (2.0).** The recovery key is the vault key managed by `vaultKeys.js` (plaintext `vaultKey`, or `vaultKeyWrapped` under a master password). "Sync is set up" is the explicit `syncEnabled` flag — not the presence of a key, since the key also encrypts the local vault and stays when sync is turned off (`deleteSyncKey()` only clears the flag). A v1 plaintext `syncKey` is converted once by `CloudSync.convertLegacyKey()` (adopted as the vault key, flag set, legacy copy removed); `background.js` treats either `syncEnabled` or a not-yet-converted `syncKey` as enabled. Restoring a recovery key validates it against the server first (`CloudSync.pull(key)`), then `VaultKeys.adoptKey()` re-wraps local items to it in the same storage write that stores the key.
+
 Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` so they survive sync without re-appearing.
 
 ### API routes

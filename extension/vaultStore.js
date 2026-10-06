@@ -85,5 +85,20 @@ const VaultStore = (() => {
     await del(Object.keys(all).filter(k => k.startsWith(RECORD) || k.startsWith(TOMB)));
   }
 
-  return { listRecords, listTombstones, get: get1, readAll, save, remove, clear };
+  // For a vault key change: every record re-wrapped from oldKey to newKey,
+  // returned as storage writes for the caller to commit together with the new
+  // key in ONE chrome.storage write — otherwise a crash in between would leave
+  // records and key out of step and the vault unreadable. Content is untouched
+  // (only each item key is re-wrapped). A record that can't be unwrapped with
+  // oldKey is already unreadable and is left as it is.
+  async function prepareRekey(oldKey, newKey) {
+    const writes = {};
+    for (const [id, rec] of Object.entries(await listRecords())) {
+      try { writes[RECORD + id] = await VaultCrypto.rewrapItemKey(rec, oldKey, newKey); }
+      catch { /* unreadable before, unreadable after */ }
+    }
+    return writes;
+  }
+
+  return { listRecords, listTombstones, get: get1, readAll, save, remove, clear, prepareRekey };
 })();

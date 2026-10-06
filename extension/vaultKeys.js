@@ -127,5 +127,35 @@ const VaultKeys = (() => {
     });
   }
 
-  return { status, getKey, init, unlock, lock, setPassword, removePassword };
+  // Makes `newKey` the vault key — restoring a recovery key on a device that
+  // already has its own, or converting a v1 syncKey. Items already in the
+  // vault are re-wrapped to the new key in the same storage write that stores
+  // the key. With a master password set, `password` is required: it proves
+  // access to the current key and re-wraps the new one.
+  function adoptKey(newKey, password) {
+    return exclusive(async () => {
+      if (VaultCrypto.b64d(newKey).length !== 32) throw new Error('key must be 32 bytes');
+      const d = await local.get([PLAIN, WRAPPED]);
+      let oldKey = d[PLAIN] ?? null;
+      if (d[WRAPPED]) {
+        if (!password) throw new Error('password required');
+        oldKey = await unwrapWith(password);
+        if (!oldKey) throw new Error('wrong password');
+      }
+      if (oldKey === newKey) return;
+
+      const writes = oldKey && typeof VaultStore !== 'undefined'
+        ? await VaultStore.prepareRekey(oldKey, newKey)
+        : {};
+      if (d[WRAPPED]) {
+        writes[WRAPPED] = await VaultCrypto.wrapVaultKey(newKey, password);
+      } else {
+        writes[PLAIN] = newKey;
+      }
+      await local.set(writes);
+      if (d[WRAPPED]) await session.set({ [UNLOCKED]: newKey });
+    });
+  }
+
+  return { status, getKey, init, unlock, lock, setPassword, removePassword, adoptKey };
 })();
