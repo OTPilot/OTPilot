@@ -955,6 +955,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 // ── View switching ────────────────────────────────────────────────────────────
 
 function showView(view, opts = {}) {
+  if (view !== 'settings') clearRevealedKey();
   document.getElementById('home-view').style.display      = view === 'home'     ? '' : 'none';
   document.getElementById('settings-panel').style.display = view === 'accounts' ? '' : 'none';
   document.getElementById('config-panel').style.display   = view === 'settings' ? '' : 'none';
@@ -990,6 +991,7 @@ function showSettingsSubview(id) {
   // no more "back". 'settings-list' as an id just means "no specific item was
   // requested", so it falls back to the first one instead of showing nothing.
   if (id === 'settings-list') id = 'settings-theme-view';
+  if (id !== 'settings-password-view') clearRevealedKey();
   const views = ['settings-theme-view', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view', 'settings-password-view'];
   views.forEach(v => { document.getElementById(v).style.display = v === id ? '' : 'none'; });
   document.querySelectorAll('#settings-list .settings-row').forEach(row => {
@@ -1015,20 +1017,33 @@ document.getElementById('back-settings-autofill').addEventListener('click', () =
 
 document.getElementById('row-settings-password').addEventListener('click', async () => {
   ['change-pw-current', 'change-pw-new', 'change-pw-confirm', 'reveal-key-password'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('reveal-key-value').style.display = 'none';
+  clearRevealedKey();
   document.getElementById('reveal-key-err').textContent = '';
   document.getElementById('change-pw-err').textContent = '';
   document.getElementById('autolock-select').value = String(await VaultLock.getAutoLock());
   showSettingsSubview('settings-password-view');
 });
+// The revealed recovery key is dropped from the page as soon as it's no
+// longer on screen (leaving the view, locking); a reveal still pending then
+// is ignored (the token no longer matches).
+let _revealToken = 0;
+function clearRevealedKey() {
+  _revealToken++;
+  const out = document.getElementById('reveal-key-value');
+  out.textContent = '';
+  out.style.display = 'none';
+}
+
 document.getElementById('reveal-key-btn').addEventListener('click', async () => {
   const pwEl = document.getElementById('reveal-key-password');
   const out = document.getElementById('reveal-key-value');
   const err = document.getElementById('reveal-key-err');
   err.textContent = '';
-  out.style.display = 'none';
+  clearRevealedKey();
+  const token = _revealToken;
   const key = pwEl.value ? await VaultLock.revealRecoveryKey(pwEl.value) : null;
   pwEl.value = '';
+  if (token !== _revealToken) return;
   if (!key) { err.textContent = 'Incorrect password.'; return; }
   out.textContent = key;
   out.style.display = '';
@@ -1037,7 +1052,10 @@ document.getElementById('autolock-select').addEventListener('change', async e =>
   await VaultLock.setAutoLock(Number(e.target.value));
   setStatus('Auto-lock updated');
 });
-document.getElementById('back-settings-password').addEventListener('click', () => showSettingsSubview('settings-list'));
+document.getElementById('back-settings-password').addEventListener('click', () => {
+  clearRevealedKey();
+  showSettingsSubview('settings-list');
+});
 
 document.getElementById('change-pw-submit').addEventListener('click', async () => {
   const current = document.getElementById('change-pw-current').value;
@@ -1439,8 +1457,11 @@ document.getElementById('crypto-password').addEventListener('keydown', e => {
 
 // ── Lock / Session ────────────────────────────────────────────────────────────
 
-let lockSetupResolve = null;
-let lockLoginResolve = null;
+// Everyone waiting for the vault to be unlocked: popup startup (initLock) and
+// a re-lock while the popup is open (lockPopup). All are released together
+// once an unlock fully completes (including the recovery-key screen).
+const _unlockWaiters = [];
+const waitForUnlock = () => new Promise(resolve => _unlockWaiters.push(resolve));
 
 function setLockButtonState(btn, busy) {
   btn.disabled = busy;
@@ -1474,19 +1495,22 @@ function hideLockOverlay() {
 async function initLock() {
   const state = await VaultLock.state();
   if (state === 'setup') {
-    return new Promise(resolve => {
-      lockSetupResolve = resolve;
-      showLockOverlay('setup');
-    }).then(() => true);
+    showLockOverlay('setup');
+    return waitForUnlock().then(() => true);
   }
   if (state === 'unlocked') {
     await VaultLock.touch(); // opening the popup counts as activity
+    // The recovery-key screen was closed without confirming (popup closed, or
+    // the vault was unlocked from a page): show it before anything else.
+    if (await VaultLock.needsRecoveryKeyNotice()) {
+      const unlocked = waitForUnlock();
+      completeUnlock();
+      return unlocked.then(() => true);
+    }
     return false;
   }
-  return new Promise(resolve => {
-    lockLoginResolve = resolve;
-    showLockOverlay('login');
-  }).then(() => true);
+  showLockOverlay('login');
+  return waitForUnlock().then(() => true);
 }
 
 async function tryAutoFillCurrentTab() {
@@ -1578,21 +1602,33 @@ document.getElementById('lock-password').addEventListener('keydown', e => {
 // user hasn't confirmed saving it (first setup, or upgraded from v1), then hand
 // back to whoever was waiting on the lock screen.
 async function completeUnlock() {
-  if (await VaultLock.needsRecoveryKeyNotice()) await showRecoveryKit();
+  if (await VaultLock.needsRecoveryKeyNotice()) {
+    // Cancelled when the vault locks while the screen is up: the waiters stay
+    // queued for the next unlock.
+    if (!(await showRecoveryKit())) return;
+  }
   hideLockOverlay();
-  const cb = lockSetupResolve || lockLoginResolve;
-  lockSetupResolve = null;
-  lockLoginResolve = null;
-  cb?.();
+  for (const release of _unlockWaiters.splice(0)) release();
 }
 
-let _kitDone = null;
-async function showRecoveryKit() {
+// Resolves true once the user confirms saving the key, false if cancelled.
+let _kitSettle = null;
+async function showRecoveryKit(note = '') {
+  _kitSettle?.(false);
   showLockOverlay('kit');
+  document.getElementById('lock-kit-note').textContent = note;
+  document.getElementById('lock-kit-note').style.display = note ? '' : 'none';
   document.getElementById('lock-kit-key').textContent = await VaultKeys.getKey();
   document.getElementById('lock-kit-saved').checked = false;
   document.getElementById('lock-kit-done').disabled = true;
-  return new Promise(resolve => { _kitDone = resolve; });
+  return new Promise(resolve => { _kitSettle = resolve; });
+}
+
+function cancelRecoveryKit() {
+  document.getElementById('lock-kit-key').textContent = '';
+  const settle = _kitSettle;
+  _kitSettle = null;
+  settle?.(false);
 }
 
 function downloadEmergencyKit(key) {
@@ -1627,9 +1663,9 @@ document.getElementById('lock-kit-saved').addEventListener('change', e => {
 document.getElementById('lock-kit-done').addEventListener('click', async () => {
   await VaultLock.acknowledgeRecoveryKey();
   document.getElementById('lock-kit-key').textContent = '';
-  const done = _kitDone;
-  _kitDone = null;
-  done?.();
+  const settle = _kitSettle;
+  _kitSettle = null;
+  settle?.(true);
 });
 
 // Forgot master password → recovery key
@@ -1682,21 +1718,19 @@ async function lockPopup() {
   _popupLocked = true;
   clearInterval(timerInterval);
   clearInterval(_sharedRefreshTimer);
+  cancelRecoveryKit();
+  clearRevealedKey();
   await new Promise(r => chrome.storage.local.remove('userPlan', r));
   document.querySelector('.kofi-footer').style.display = '';
-  await new Promise(resolve => {
-    lockLoginResolve = async () => {
-      await loadState();
-      await syncActiveIndexToUrl();
-      renderAccountBar();
-      startTimer();
-      renderSharedCodes();
-      showView('home');
-      tryAutoFillCurrentTab();
-      resolve();
-    };
-    showLockOverlay('login');
-  });
+  showLockOverlay('login');
+  await waitForUnlock();
+  await loadState();
+  await syncActiveIndexToUrl();
+  renderAccountBar();
+  startTimer();
+  renderSharedCodes();
+  showView('home');
+  tryAutoFillCurrentTab();
   _popupLocked = false;
 }
 
@@ -1974,6 +2008,7 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     document.getElementById('sync-restore-password').value = '';
     return;
   }
+  const previousKey = await VaultKeys.getKey();
   try {
     await CloudSync.saveSyncKey(keyB64, password);
   } catch (e) {
@@ -2003,6 +2038,12 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     await writeLastSyncedAt(now);
     syncShowView('sv-active');
     syncSetStatus('ok', 'Restored');
+    // The device key is now the restored one: an Emergency Kit saved before
+    // no longer works, so show the new key until the user confirms saving it.
+    if ((await VaultKeys.getKey()) !== previousKey) {
+      await VaultLock.forgetRecoveryKeyNotice();
+      if (await showRecoveryKit('Your recovery key is now the one you just restored. Any Emergency Kit you saved before no longer works.')) hideLockOverlay();
+    }
   } catch {
     errEl.textContent = 'Could not finish syncing. Check your connection and try again.';
     await CloudSync.deleteSyncKey();
