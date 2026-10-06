@@ -302,6 +302,8 @@ test('regression: saving the URL updates the exact filled account, not the first
   await sendFillMessage(popupPage, autofillPage, 1);
   await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Work Vercel');
   await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
+  // The prompt closes once the background has saved the change.
+  await expect(autofillPage.locator('#otpilot-save-url')).toHaveCount(0);
 
   const stored = await readAccounts(popupPage);
   expect(stored[0].urls).toBe(''); // Personal Vercel (index 0) untouched
@@ -339,6 +341,8 @@ test('regression: reordering accounts while the save prompt is open does not mis
   // Confirming the (stale) prompt must still land on "Work Vercel" by
   // content, not on whichever account now happens to sit at index 1.
   await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
+  // The prompt closes once the background has saved the change.
+  await expect(autofillPage.locator('#otpilot-save-url')).toHaveCount(0);
 
   const stored = await readAccounts(popupPage);
   const personal = stored.find(a => a.name === 'Personal Vercel');

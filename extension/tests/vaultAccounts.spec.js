@@ -158,3 +158,26 @@ test('an account renamed on a 1.x device still updates the local item (matched b
   expect(items.map(i => [i.id, i.title])).toEqual([[local._id, 'GitHub renamed']]);
   expect(items[0].fields.find(f => f.id === 'password').value).toBe('hunter2');
 });
+
+test('a loose match by secret never takes the item another incoming account matches exactly', async ({ context, extensionId }) => {
+  const page = await openPopup(context, extensionId, [ACCOUNT]);
+  const [local] = await readAccounts(page);
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const { items } = await VaultStore.readAll(key);
+    Vault.getField(items[0], 'password').value = 'hunter2';
+    await VaultStore.save(items[0], key);
+  });
+  const { _id, ...b } = local;
+  const a = { ...b, name: 'Other account, same secret' };
+  await page.evaluate(async ([list, ids]) => {
+    await VaultAccounts.save(list, await VaultKeys.getKey(), new Set(ids));
+  }, [[a, b], [local._id]]);
+  const items = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items);
+  const mine = items.find(i => i.id === local._id);
+  expect(mine.title).toBe('GitHub');
+  expect(mine.fields.find(f => f.id === 'password').value).toBe('hunter2');
+  const other = items.find(i => i.id !== local._id);
+  expect(other.title).toBe('Other account, same secret');
+  expect(other.fields.find(f => f.id === 'password').value).toBe('');
+});

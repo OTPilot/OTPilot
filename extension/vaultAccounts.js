@@ -105,32 +105,39 @@ const VaultAccounts = (() => {
     const { items, failed } = await readLogins(key);
     const existing = new Map(items.map(i => [i.id, i]));
     // Accounts from the v1 sync blob carry no _id, or another device's: pair
-    // them with the local item they correspond to (same secret, name and
-    // email) instead of replacing it and losing its other fields.
-    const claimed = new Set(accounts.map(a => a._id).filter(id => existing.has(id)));
-    const unclaimed = new Map();
-    const bySecret = new Map(); // secret -> unclaimed items with it
-    for (const item of items) {
-      if (claimed.has(item.id)) continue;
-      const k = identity(toAccount(item));
-      if (!unclaimed.has(k)) unclaimed.set(k, item);
-      if (item.totp?.secret) bySecret.set(item.totp.secret, [...(bySecret.get(item.totp.secret) || []), item]);
+    // them with the local item they correspond to instead of replacing it
+    // (and losing its password, notes, other fields). Two passes, so a loose
+    // match can never take an item that another incoming account matches
+    // exactly: first secret + name + email, then — for what's left — the
+    // secret alone, only when exactly one local item and one incoming account
+    // share it.
+    const pairs = new Map(); // account index -> local item
+    const free = new Map(items.map(i => [i.id, i]));
+    accounts.forEach((acc, idx) => {
+      if (acc._id && existing.has(acc._id)) { pairs.set(idx, existing.get(acc._id)); free.delete(acc._id); }
+    });
+    accounts.forEach((acc, idx) => {
+      if (pairs.has(idx) || (acc._id && failed.has(acc._id))) return;
+      const match = [...free.values()].find(i => identity(toAccount(i)) === identity(acc));
+      if (match) { pairs.set(idx, match); free.delete(match.id); }
+    });
+    const bySecret = (list, secretOf) => list.reduce((m, x) => {
+      const sec = secretOf(x);
+      if (sec) m.set(sec, [...(m.get(sec) || []), x]);
+      return m;
+    }, new Map());
+    const freeBySecret = bySecret([...free.values()], i => i.totp?.secret);
+    const unpaired = accounts.map((acc, idx) => idx).filter(idx => !pairs.has(idx) && !(accounts[idx]._id && failed.has(accounts[idx]._id)));
+    const unpairedBySecret = bySecret(unpaired, idx => accounts[idx].secret);
+    for (const [sec, idxs] of unpairedBySecret) {
+      const candidates = freeBySecret.get(sec) || [];
+      if (idxs.length === 1 && candidates.length === 1) { pairs.set(idxs[0], candidates[0]); free.delete(candidates[0].id); }
     }
-    const take = item => {
-      unclaimed.delete(identity(toAccount(item)));
-      const same = bySecret.get(item.totp?.secret);
-      if (same) bySecret.set(item.totp.secret, same.filter(i => i !== item));
-      return item;
-    };
+
     const changed = [];
     accounts.forEach((acc, position) => {
       if (acc._id && failed.has(acc._id)) return; // unreadable record: leave it alone
-      let base = acc._id && existing.get(acc._id);
-      if (!base && unclaimed.has(identity(acc))) base = take(unclaimed.get(identity(acc)));
-      // Renamed elsewhere (e.g. on a 1.x device): fall back to the secret,
-      // only when exactly one unclaimed local item has it.
-      if (!base && acc.secret && bySecret.get(acc.secret)?.length === 1) base = take(bySecret.get(acc.secret)[0]);
-      base = base || Vault.newItem('login', acc._id ? { id: acc._id } : {});
+      const base = pairs.get(position) || Vault.newItem('login', acc._id ? { id: acc._id } : {});
       acc._id = base.id;
       const next = applyAccount(base, acc, position);
       if (!existing.has(base.id) || comparable(next) !== comparable(existing.get(base.id))) {
