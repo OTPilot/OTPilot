@@ -132,9 +132,8 @@ const VaultLock = (() => {
 
   // Neither password nor recovery key: wipe this device and start over. Data on
   // the server stays encrypted with the lost key.
-  async function resetDevice() {
-    await local.clear();
-    await session.clear();
+  function resetDevice() {
+    return VaultKeys.wipe();
   }
 
   // The recovery key, after re-entering the master password; null if wrong.
@@ -151,8 +150,13 @@ const VaultLock = (() => {
     return local.set({ [KEY_SAVED]: true });
   }
 
+  // The vault key changed (a recovery key was restored): the saved one is stale.
+  function forgetRecoveryKeyNotice() {
+    return local.remove(KEY_SAVED);
+  }
+
   return {
     AUTO_LOCK_OPTIONS, state, setup, unlock, lock, touch, changePassword, getAutoLock, setAutoLock,
-    recover, resetDevice, revealRecoveryKey, needsRecoveryKeyNotice, acknowledgeRecoveryKey,
+    recover, resetDevice, revealRecoveryKey, needsRecoveryKeyNotice, acknowledgeRecoveryKey, forgetRecoveryKeyNotice,
   };
 })();

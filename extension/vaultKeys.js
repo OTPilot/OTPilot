@@ -75,10 +75,12 @@ const VaultKeys = (() => {
       } catch { return false; }
     }
     if (typeof VaultStore !== 'undefined') {
+      // Any one item decrypting confirms the key; a damaged item mustn't block it.
       const records = Object.values(await VaultStore.listRecords());
-      if (records.length) {
-        try { await VaultCrypto.decryptItem(records[0], candidate); return true; } catch { return false; }
+      for (const rec of records) {
+        try { await VaultCrypto.decryptItem(rec, candidate); return true; } catch { /* next */ }
       }
+      if (records.length) return false;
     }
     return null;
   }
@@ -217,5 +219,15 @@ const VaultKeys = (() => {
     });
   }
 
-  return { status, getKey, init, unlock, lock, setPassword, removePassword, adoptKey, recover };
+  // Erases everything on this device (reset with neither password nor
+  // recovery key). Under the shared lock so an in-flight key change or record
+  // write finishes first instead of landing after the wipe.
+  function wipe() {
+    return exclusive(async () => {
+      await local.clear();
+      await session.clear();
+    });
+  }
+
+  return { status, getKey, init, unlock, lock, setPassword, removePassword, adoptKey, recover, wipe };
 })();

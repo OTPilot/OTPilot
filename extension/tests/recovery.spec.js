@@ -121,3 +121,93 @@ test('the unlock button works again after the popup re-locks while open', async 
   await expect(page.locator('#lock-login-btn')).toBeEnabled();
   await expect(page.locator('#lock-login-btn')).toHaveText('Unlock');
 });
+
+test('closing the popup on the recovery-key screen shows it again on the next open', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await page.reload();
+  await page.fill('#lock-new-password', 'hunter22');
+  await page.fill('#lock-confirm-password', 'hunter22');
+  await page.click('#lock-setup-btn');
+  await expect(page.locator('#lock-kit')).toBeVisible();
+  // Popup closed without confirming; the vault stays unlocked for the session.
+  await page.reload();
+  await expect(page.locator('#lock-kit')).toBeVisible();
+  await page.check('#lock-kit-saved');
+  await page.click('#lock-kit-done');
+  await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
+});
+
+test('a lock while the recovery-key screen is up does not leave the popup stuck', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await page.reload();
+  await page.fill('#lock-new-password', 'hunter22');
+  await page.fill('#lock-confirm-password', 'hunter22');
+  await page.click('#lock-setup-btn');
+  await expect(page.locator('#lock-kit')).toBeVisible();
+  await page.evaluate(() => VaultLock.lock());
+  await expect(page.locator('#lock-login')).toBeVisible();
+  await page.fill('#lock-password', 'hunter22');
+  await page.click('#lock-login-btn');
+  // The key was never confirmed, so the screen comes back once.
+  await expect(page.locator('#lock-kit')).toBeVisible();
+  await page.check('#lock-kit-saved');
+  await page.click('#lock-kit-done');
+  await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
+  // And a later lock still shows the lock screen (lockPopup wasn't left stuck).
+  await page.evaluate(() => VaultLock.lock());
+  await expect(page.locator('#lock-login')).toBeVisible();
+});
+
+test('one damaged item does not block recovery when another confirms the key', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedLocked(page);
+  await page.evaluate(async vk => {
+    await VaultStore.save([{ id: 'a', type: 'note', title: 'A', fields: [] }, { id: 'b', type: 'note', title: 'B', fields: [] }], vk);
+    // Damage the first record listed.
+    const first = Object.keys(await VaultStore.listRecords())[0];
+    const rec = (await chrome.storage.local.get('vi:' + first))['vi:' + first];
+    await chrome.storage.local.set({ ['vi:' + first]: { ...rec, data: { ...rec.data, ct: 'AAAA' + rec.data.ct.slice(4) } } });
+  }, TEST_VAULT_KEY);
+  await page.reload();
+  await recover(page, TEST_VAULT_KEY, 'brand-new-pw');
+  await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
+});
+
+test('the revealed recovery key is cleared when leaving the view or locking', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  await page.click('#nav-config');
+  await page.click('#row-settings-password');
+  await page.fill('#reveal-key-password', TEST_PASSWORD);
+  await page.click('#reveal-key-btn');
+  await expect(page.locator('#reveal-key-value')).toHaveText(TEST_VAULT_KEY);
+  await page.click('#nav-home');
+  expect(await page.evaluate(k => document.body.innerHTML.includes(k), TEST_VAULT_KEY)).toBe(false);
+
+  await page.click('#nav-config');
+  await page.click('#row-settings-password');
+  await page.fill('#reveal-key-password', TEST_PASSWORD);
+  await page.click('#reveal-key-btn');
+  await expect(page.locator('#reveal-key-value')).toHaveText(TEST_VAULT_KEY);
+  await page.evaluate(() => VaultLock.lock());
+  await expect(page.locator('#lock-login')).toBeVisible();
+  expect(await page.evaluate(k => document.body.innerHTML.includes(k), TEST_VAULT_KEY)).toBe(false);
+});
+
+test('restoring a different recovery key shows the new key and warns the old kit is stale', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  const recovery = await page.evaluate(() => VaultCrypto.b64e(VaultCrypto.generateKey()));
+  await page.evaluate(([k, pw]) => {
+    CloudSync.pull = async () => ({ accounts: [], tombstones: {} });
+    CloudSync.push = async () => ({});
+    document.getElementById('sync-restore-input').value = k;
+    document.getElementById('sync-restore-password').value = pw;
+    document.getElementById('btn-restore-key').click();
+  }, [recovery, TEST_PASSWORD]);
+  await expect(page.locator('#lock-kit')).toBeVisible();
+  await expect(page.locator('#lock-kit-note')).toContainText('no longer works');
+  await expect(page.locator('#lock-kit-key')).toHaveText(recovery);
+});
