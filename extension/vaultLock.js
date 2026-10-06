@@ -55,6 +55,11 @@ const VaultLock = (() => {
     await touch();
   }
 
+  // Moves v1 accounts into the vault on the first unlock in 2.0 (no-op after).
+  async function migrateVault() {
+    if (typeof VaultMigration !== 'undefined') await VaultMigration.migrate();
+  }
+
   // A fresh inactivity deadline from now. Only after proving the password.
   async function startDeadline() {
     const minutes = await getAutoLock();
@@ -97,6 +102,7 @@ const VaultLock = (() => {
     await VaultKeys.setPassword(password);
     await local.remove(LEGACY);
     await startDeadline();
+    await migrateVault();
   }
 
   // Returns true when unlocked, false on a wrong password.
@@ -111,7 +117,10 @@ const VaultLock = (() => {
       ok = await verifyLegacy(password, auth);
       if (ok) await setup(password);
     }
-    if (ok) await startDeadline();
+    if (ok) {
+      await startDeadline();
+      await migrateVault();
+    }
     return ok;
   }
 
@@ -131,6 +140,7 @@ const VaultLock = (() => {
     await VaultKeys.recover(recoveryKey, newPassword);
     await local.remove(LEGACY);
     await startDeadline();
+    await migrateVault();
   }
 
   // Neither password nor recovery key: wipe this device and start over. Data on

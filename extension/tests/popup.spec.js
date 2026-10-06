@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, TEST_SECRET } from './fixtures.js';
+import { test, expect, readAccounts, seedUnlocked, TEST_SECRET } from './fixtures.js';
 
 test('shows setup screen on first open (no master password)', async ({ context, extensionId }) => {
   const page = await context.newPage();
@@ -95,21 +95,17 @@ test('search filters accounts in accounts view', async ({ context, extensionId }
   await page.reload();
   await page.click('#nav-settings');
 
+  // Accounts load from the vault asynchronously: wait for the list first.
+  await expect(page.locator('.acc-row')).toHaveCount(3);
   // Type in search to filter
   await page.fill('#acc-search', 'git');
 
   // applyVaultSearch hides non-matching rows via style.display='none';
   // count visible rows directly rather than DOM count
-  // Accounts are sorted alphabetically; hidden via style.display='none'
-  const { visibleCount, visibleName } = await page.locator('.acc-row').evaluateAll(els => {
+  await expect.poll(() => page.locator('.acc-row').evaluateAll(els => {
     const visible = els.filter(el => el.style.display !== 'none');
-    return {
-      visibleCount: visible.length,
-      visibleName: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '',
-    };
-  });
-  expect(visibleCount).toBe(1);
-  expect(visibleName).toBe('GitHub');
+    return { count: visible.length, name: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '' };
+  })).toEqual({ count: 1, name: 'GitHub' });
 });
 
 test('category filter bar narrows the home account chips', async ({ context, extensionId }) => {
@@ -169,10 +165,8 @@ test('assigning a new category in the editor persists and tags the account', asy
 
   // Save, then verify the assignment landed in storage
   await page.click('#btn-save-all');
-  const stored = await page.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts)))
-  );
-  expect(stored[0].category).toBe('Work');
+  // Saving to the vault is async (encrypt + write): poll for it.
+  await expect.poll(async () => (await readAccounts(page))[0]?.category).toBe('Work');
 
   // Re-open the vault — the row header now shows the category tag
   await page.click('#nav-settings');
@@ -199,9 +193,9 @@ test('adding an account while a category filter is active keeps it visible and p
   await page.click('#nav-settings');
 
   // Vault opens filtered to Work: 2 visible rows
-  const visibleBefore = await page.locator('.acc-row').evaluateAll(els =>
-    els.filter(el => el.style.display !== 'none').length);
-  expect(visibleBefore).toBe(2);
+  // Accounts load from the vault asynchronously: wait for the rows.
+  await expect.poll(() => page.locator('.acc-row').evaluateAll(els =>
+    els.filter(el => el.style.display !== 'none').length)).toBe(2);
 
   // Add an account while the Work filter is active
   await page.click('#btn-add');

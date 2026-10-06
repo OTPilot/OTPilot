@@ -102,8 +102,17 @@ const VaultStore = (() => {
   // oldKey is already unreadable and is left as it is; any other failure
   // throws, so the key change is abandoned rather than stranding records.
   // Callers must hold the 'otpilot-vault' lock (VaultKeys.adoptKey does).
+  // Other records encrypted the same way that also follow the key.
+  const EXTRA_RECORDS = ['accountsV1Backup'];
+
   async function prepareRekey(oldKey, newKey) {
     const writes = {};
+    const extras = await get(EXTRA_RECORDS);
+    for (const k of EXTRA_RECORDS) {
+      if (!extras[k]) continue;
+      try { writes[k] = await VaultCrypto.rewrapItemKey(extras[k], oldKey, newKey); }
+      catch (e) { if (e.message !== 'item key unreadable') throw e; }
+    }
     for (const [id, rec] of Object.entries(await listRecords())) {
       try { writes[RECORD + id] = await VaultCrypto.rewrapItemKey(rec, oldKey, newKey); }
       catch (e) {

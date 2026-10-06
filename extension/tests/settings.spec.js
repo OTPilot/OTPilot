@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, TEST_SECRET, TEST_PASSWORD } from './fixtures.js';
+import { test, expect, readAccounts, seedUnlocked, TEST_SECRET, TEST_PASSWORD } from './fixtures.js';
 
 // ── Google Authenticator migration protobuf helpers (test-side encoder — the
 // extension only ever needs to decode, so there's no encoder in the codebase) ──
@@ -143,9 +143,7 @@ test('saving deselects the account and shows a confirmation message instead of r
   // identical to having never opened anything.
   await expect(page.locator('#acc-detail .dc-empty')).toContainText('Saved');
 
-  const stored = await page.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
-  expect(stored[0].email).toBe('me@example.com');
+  await expect.poll(async () => (await readAccounts(page))[0]?.email).toBe('me@example.com');
 });
 
 test('saving keeps an active search filter instead of clearing it', async ({ context, extensionId }) => {
@@ -158,6 +156,7 @@ test('saving keeps an active search filter instead of clearing it', async ({ con
   ]);
 
   await page.click('#nav-settings');
+  await expect(page.locator('.acc-row')).toHaveCount(3); // loaded from the vault
   await page.fill('#acc-search', 'git');
   // .acc-head, not .acc-row: the filter hides rows via style.display on the
   // wrapping .acc-row, but accounts sort alphabetically (Dropbox first in the
@@ -167,12 +166,10 @@ test('saving keeps an active search filter instead of clearing it', async ({ con
   await page.click('#btn-save-all');
 
   await expect(page.locator('#acc-search')).toHaveValue('git');
-  const { visibleCount, visibleName } = await page.locator('.acc-row').evaluateAll(els => {
+  await expect.poll(() => page.locator('.acc-row').evaluateAll(els => {
     const visible = els.filter(el => el.style.display !== 'none');
-    return { visibleCount: visible.length, visibleName: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '' };
-  });
-  expect(visibleCount).toBe(1);
-  expect(visibleName).toBe('GitHub');
+    return { count: visible.length, name: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '' };
+  })).toEqual({ count: 1, name: 'GitHub' });
 });
 
 // ── Change master password ──────────────────────────────────────────────────
