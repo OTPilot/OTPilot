@@ -1,6 +1,12 @@
 'use strict';
 
-importScripts('config.js', 'supabase.js');
+importScripts(
+  'config.js', 'supabase.js',
+  // 2.0 vault lock: the unlocked vault key lives in chrome.storage.session,
+  // which content scripts can't read, so they ask this worker (vaultState /
+  // vaultUnlock below).
+  'vaultCrypto.js', 'vaultKeys.js', 'vaultStore.js', 'cloudSync.js', 'vaultLock.js',
+);
 
 // Latest email OTP detected by email-reader.js (expires after 10 min).
 let _emailOtp = null;
@@ -198,6 +204,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch(() => sendResponse({ flagged: false }));
     return true;
   }
+
+  // Vault lock for content scripts: 'setup' | 'locked' | 'unlocked'.
+  if (msg.action === 'vaultState') {
+    VaultLock.state()
+      .then(state => sendResponse({ state }))
+      .catch(() => sendResponse({ state: 'locked' }));
+    return true;
+  }
+
+  if (msg.action === 'vaultUnlock') {
+    VaultLock.unlock(String(msg.password ?? ''))
+      .then(ok => sendResponse({ ok }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // A content script filled a code: counts as activity for the auto-lock.
+  if (msg.action === 'vaultTouch') {
+    VaultLock.touch().finally(() => sendResponse({}));
+    return true;
+  }
 });
 
 // ── OTP auto-submit failure tracking ────────────────────────────────────────
@@ -361,14 +388,27 @@ async function handleResolveIcons(rawDomains, hints, prune) {
 }
 
 
+// Inactivity auto-lock: VaultLock.state() locks the vault once its deadline
+// passes. It also runs on every read of the state, so this alarm only covers
+// the case where nothing asks for a while.
+const AUTOLOCK_ALARM = 'otpilot-autolock';
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: POLL_MINUTES });
+  chrome.alarms.create(AUTOLOCK_ALARM, { periodInMinutes: 1 });
 });
 
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.get(ALARM_NAME, alarm => {
     if (!alarm) chrome.alarms.create(ALARM_NAME, { periodInMinutes: POLL_MINUTES });
   });
+  chrome.alarms.get(AUTOLOCK_ALARM, alarm => {
+    if (!alarm) chrome.alarms.create(AUTOLOCK_ALARM, { periodInMinutes: 1 });
+  });
+});
+
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === AUTOLOCK_ALARM) VaultLock.state().catch(() => {});
 });
 
 chrome.alarms.onAlarm.addListener(async alarm => {

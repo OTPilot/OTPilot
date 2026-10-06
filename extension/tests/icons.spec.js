@@ -1,4 +1,4 @@
-import { test, expect, FAKE_AUTH, SESSION_24H, TEST_SECRET } from './fixtures.js';
+import { test, expect, seedUnlocked, TEST_SECRET } from './fixtures.js';
 
 // 1×1 transparent PNG as a data URL — stands in for a cached favicon.
 const PNG_DATA_URL =
@@ -6,17 +6,16 @@ const PNG_DATA_URL =
 
 // Seeds an unlocked vault with one account that has a cached icon and one without.
 async function seed(page) {
-  await page.evaluate(([auth, expiry, secret, dataUrl]) => {
+  await seedUnlocked(page);
+  await page.evaluate(([secret, dataUrl]) => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       accounts: [
         { name: 'GitHub', secret, urls: 'github.com', domain: 'github.com', email: '' },
         { name: 'Acme',   secret, urls: 'acme.test',  domain: 'acme.test',  email: '' },
       ],
       iconCache: { 'github.com': { dataUrl, fetchedAt: Date.now() } },
     }, r));
-  }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET, PNG_DATA_URL]);
+  }, [TEST_SECRET, PNG_DATA_URL]);
 }
 
 test('home list rows render the cached favicon as <img>, fall back to a letter avatar', async ({ context, extensionId }) => {

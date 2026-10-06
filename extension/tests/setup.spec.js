@@ -1,14 +1,13 @@
-import { test, expect, FAKE_AUTH, SESSION_24H, TEST_SECRET } from './fixtures.js';
+import { test, expect, seedUnlocked, TEST_SECRET } from './fixtures.js';
 
 async function seedStorage(popupPage, overrides = {}) {
-  await popupPage.evaluate(([auth, expiry, extra]) => {
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([extra]) => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       accounts: [],
       ...extra,
     }, r));
-  }, [FAKE_AUTH, SESSION_24H(), overrides]);
+  }, [overrides]);
 }
 
 // ── qr-anchor.html: otpauth:// in <a> tag (fastest detection path) ────────────

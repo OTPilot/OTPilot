@@ -1,4 +1,4 @@
-import { test, expect, FAKE_AUTH, SESSION_24H, TEST_SECRET } from './fixtures.js';
+import { test, expect, seedUnlocked, TEST_SECRET } from './fixtures.js';
 
 test('autofill test page has OTP input field', async ({ context }) => {
   const page = await context.newPage();
@@ -16,14 +16,13 @@ test('content script fills OTP field when triggered via extension message', asyn
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
   // Pre-seed: session unlocked + account matching localhost
-  await popupPage.evaluate(([auth, expiry, secret]) => {
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       accounts: [{ name: 'TestApp', secret, urls: 'localhost', email: '' }],
       activeIndex: 0,
     }, r));
-  }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  }, [TEST_SECRET]);
 
   // Navigate to the autofill page and wait for content script to run
   const autofillPage = await context.newPage();
@@ -51,14 +50,13 @@ test('filled code is highlighted (filled class added)', async ({ context, extens
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await popupPage.evaluate(([auth, expiry, secret]) => {
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       accounts: [{ name: 'TestApp', secret, urls: 'localhost', email: '' }],
       activeIndex: 0,
     }, r));
-  }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  }, [TEST_SECRET]);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
@@ -95,14 +93,14 @@ test('manually filling an account with no matching URL offers to save the site',
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => new Promise(r =>
     chrome.storage.local.set({
-      auth, sessionExpiry: expiry,
       // No urls at all — exactly the state a Google Authenticator import leaves.
       accounts: [{ name: 'Vercel', secret, urls: '', email: 'me@example.com' }],
       activeIndex: 0,
     }, r)
-  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  ), [TEST_SECRET]);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
@@ -123,13 +121,13 @@ test('accepting the save-URL prompt persists the site to the account (and sets i
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => new Promise(r =>
     chrome.storage.local.set({
-      auth, sessionExpiry: expiry,
       accounts: [{ name: 'Vercel', secret, urls: '', email: '' }],
       activeIndex: 0,
     }, r)
-  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  ), [TEST_SECRET]);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
@@ -150,13 +148,13 @@ test('dismissing the save-URL prompt leaves the account unchanged and does not r
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => new Promise(r =>
     chrome.storage.local.set({
-      auth, sessionExpiry: expiry,
       accounts: [{ name: 'Vercel', secret, urls: '', email: '' }],
       activeIndex: 0,
     }, r)
-  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  ), [TEST_SECRET]);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
@@ -179,16 +177,16 @@ test('regression: a dismissal does not carry over to a different account that re
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => new Promise(r =>
     chrome.storage.local.set({
-      auth, sessionExpiry: expiry,
       accounts: [
         { name: 'Personal Vercel', secret, urls: '', email: '' },
         { name: 'Work Vercel',     secret, urls: '', email: '' },
       ],
       activeIndex: 1,
     }, r)
-  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  ), [TEST_SECRET]);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
@@ -219,16 +217,16 @@ test('regression: a second manual fill while a save-URL prompt is open queues it
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await popupPage.evaluate(([auth, expiry, secretA, secretB]) => new Promise(r =>
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secretA, secretB]) => new Promise(r =>
     chrome.storage.local.set({
-      auth, sessionExpiry: expiry,
       accounts: [
         { name: 'Account A', secret: secretA, urls: '', email: '' },
         { name: 'Account B', secret: secretB, urls: '', email: '' },
       ],
       activeIndex: 0,
     }, r)
-  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET, 'JBSWY3DPEHPK3PXQ']);
+  ), [TEST_SECRET, 'JBSWY3DPEHPK3PXQ']);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
@@ -270,13 +268,13 @@ test('a URL-matched account never triggers the save-URL prompt', async ({ contex
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => new Promise(r =>
     chrome.storage.local.set({
-      auth, sessionExpiry: expiry,
       accounts: [{ name: 'TestApp', secret, urls: 'localhost', email: '' }],
       activeIndex: 0,
     }, r)
-  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  ), [TEST_SECRET]);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
@@ -293,16 +291,16 @@ test('regression: saving the URL updates the exact filled account, not the first
 
   // Two accounts sharing a secret (allowed — nothing enforces uniqueness).
   // Manually filling the *second* one must not touch the first.
-  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => new Promise(r =>
     chrome.storage.local.set({
-      auth, sessionExpiry: expiry,
       accounts: [
         { name: 'Personal Vercel', secret, urls: '', email: '' },
         { name: 'Work Vercel',     secret, urls: '', email: '' },
       ],
       activeIndex: 1,
     }, r)
-  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  ), [TEST_SECRET]);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
@@ -322,16 +320,16 @@ test('regression: reordering accounts while the save prompt is open does not mis
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => new Promise(r =>
     chrome.storage.local.set({
-      auth, sessionExpiry: expiry,
       accounts: [
         { name: 'Personal Vercel', secret, urls: '', email: '' },
         { name: 'Work Vercel',     secret, urls: '', email: '' },
       ],
       activeIndex: 1,
     }, r)
-  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  ), [TEST_SECRET]);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
@@ -366,13 +364,13 @@ test('regression: if the account is gone by the time Save is clicked, the toast 
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => new Promise(r =>
     chrome.storage.local.set({
-      auth, sessionExpiry: expiry,
       accounts: [{ name: 'Vercel', secret, urls: '', email: '' }],
       activeIndex: 0,
     }, r)
-  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  ), [TEST_SECRET]);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
@@ -399,13 +397,13 @@ test('regression: auto-submit is delayed while the save-URL prompt is up, instea
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await popupPage.evaluate(([auth, expiry, secret]) => new Promise(r =>
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => new Promise(r =>
     chrome.storage.local.set({
-      auth, sessionExpiry: expiry,
       accounts: [{ name: 'Vercel', secret, urls: '', email: '' }],
       activeIndex: 0,
     }, r)
-  ), [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  ), [TEST_SECRET]);
 
   const autofillPage = await context.newPage();
   await autofillPage.goto('http://localhost:8765/test/autofill.html');
