@@ -95,21 +95,17 @@ test('search filters accounts in accounts view', async ({ context, extensionId }
   await page.reload();
   await page.click('#nav-settings');
 
+  // Accounts load from the vault asynchronously: wait for the list first.
+  await expect(page.locator('.acc-row')).toHaveCount(3);
   // Type in search to filter
   await page.fill('#acc-search', 'git');
 
   // applyVaultSearch hides non-matching rows via style.display='none';
   // count visible rows directly rather than DOM count
-  // Accounts are sorted alphabetically; hidden via style.display='none'
-  const { visibleCount, visibleName } = await page.locator('.acc-row').evaluateAll(els => {
+  await expect.poll(() => page.locator('.acc-row').evaluateAll(els => {
     const visible = els.filter(el => el.style.display !== 'none');
-    return {
-      visibleCount: visible.length,
-      visibleName: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '',
-    };
-  });
-  expect(visibleCount).toBe(1);
-  expect(visibleName).toBe('GitHub');
+    return { count: visible.length, name: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '' };
+  })).toEqual({ count: 1, name: 'GitHub' });
 });
 
 test('category filter bar narrows the home account chips', async ({ context, extensionId }) => {

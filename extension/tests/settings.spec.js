@@ -156,6 +156,7 @@ test('saving keeps an active search filter instead of clearing it', async ({ con
   ]);
 
   await page.click('#nav-settings');
+  await expect(page.locator('.acc-row')).toHaveCount(3); // loaded from the vault
   await page.fill('#acc-search', 'git');
   // .acc-head, not .acc-row: the filter hides rows via style.display on the
   // wrapping .acc-row, but accounts sort alphabetically (Dropbox first in the
@@ -165,12 +166,10 @@ test('saving keeps an active search filter instead of clearing it', async ({ con
   await page.click('#btn-save-all');
 
   await expect(page.locator('#acc-search')).toHaveValue('git');
-  const { visibleCount, visibleName } = await page.locator('.acc-row').evaluateAll(els => {
+  await expect.poll(() => page.locator('.acc-row').evaluateAll(els => {
     const visible = els.filter(el => el.style.display !== 'none');
-    return { visibleCount: visible.length, visibleName: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '' };
-  });
-  expect(visibleCount).toBe(1);
-  expect(visibleName).toBe('GitHub');
+    return { count: visible.length, name: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '' };
+  })).toEqual({ count: 1, name: 'GitHub' });
 });
 
 // ── Change master password ──────────────────────────────────────────────────
