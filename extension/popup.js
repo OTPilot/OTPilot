@@ -186,8 +186,9 @@ async function deviceWasReset() {
 
 async function saveState() {
   // Locked (or reset) means no vault key: nothing can be written, and a stale
-  // in-memory list mustn't be.
-  if ((await VaultLock.state()) !== 'unlocked') return;
+  // in-memory list mustn't be. Throw, so a sync stops before it records
+  // success (lastSyncedAt) for data that was never saved.
+  if ((await VaultLock.state()) !== 'unlocked') throw new Error('vault is locked');
   const key = await VaultKeys.getKey();
   await VaultAccounts.save(accounts, key, _loadedIds);
   _loadedIds = new Set(accounts.map(a => a._id));
@@ -469,7 +470,7 @@ function renderAccountBar() {
 
     row.addEventListener('click', () => {
       activeIndex = i;
-      saveState();
+      chrome.storage.local.set({ activeIndex }); // only the selection changed
       renderAccountBar();
       startTimer();
     });

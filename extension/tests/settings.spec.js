@@ -143,8 +143,7 @@ test('saving deselects the account and shows a confirmation message instead of r
   // identical to having never opened anything.
   await expect(page.locator('#acc-detail .dc-empty')).toContainText('Saved');
 
-  const stored = await readAccounts(page);
-  expect(stored[0].email).toBe('me@example.com');
+  await expect.poll(async () => (await readAccounts(page))[0]?.email).toBe('me@example.com');
 });
 
 test('saving keeps an active search filter instead of clearing it', async ({ context, extensionId }) => {

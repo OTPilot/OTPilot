@@ -64,16 +64,30 @@ const VaultAccounts = (() => {
     await local.set({ [INDEX]: logins.map(indexEntry) });
   }
 
+  // Rebuilds the index from what's stored now, under the vault lock, so two
+  // writers that each saved an item can't overwrite each other's entry with
+  // the list they read before saving.
+  function rebuildIndex(key) {
+    return navigator.locks.request('otpilot-vault', async () =>
+      writeIndex((await VaultStore.readAll(key)).items));
+  }
+
   async function readIndex() {
     return (await local.get(INDEX))[INDEX] || [];
   }
 
   const byPosition = (a, b) => (a.position ?? 0) - (b.position ?? 0);
 
-  async function loginItems(key) {
+  // Logins in order, plus the ids of records that failed to decrypt — those
+  // must never be overwritten as if they were missing.
+  async function readLogins(key) {
     await VaultMigration.migrate();
-    const { items } = await VaultStore.readAll(key);
-    return items.filter(i => i.type === 'login').sort(byPosition);
+    const { items, failed } = await VaultStore.readAll(key);
+    return { items: items.filter(i => i.type === 'login').sort(byPosition), failed: new Set(failed) };
+  }
+
+  async function loginItems(key) {
+    return (await readLogins(key)).items;
   }
 
   // The account list, in the user's order.
@@ -81,15 +95,34 @@ const VaultAccounts = (() => {
     return (await loginItems(key)).map(toAccount);
   }
 
+  const identity = a => `${a.secret || ''}\u0000${a.name || ''}\u0000${a.email || ''}`;
+
   // Saves the whole v1 list. Only items that changed are re-encrypted, and only
   // ids in `knownIds` (what this caller loaded) are deleted when missing, so an
   // account added meanwhile elsewhere (a page's "Add to OTPilot") is kept.
   // Assigns `_id` to new accounts in place.
   async function save(accounts, key, knownIds = new Set()) {
-    const existing = new Map((await loginItems(key)).map(i => [i.id, i]));
+    const { items, failed } = await readLogins(key);
+    const existing = new Map(items.map(i => [i.id, i]));
+    // Accounts from the v1 sync blob carry no _id, or another device's: pair
+    // them with the local item they correspond to (same secret, name and
+    // email) instead of replacing it and losing its other fields.
+    const claimed = new Set(accounts.map(a => a._id).filter(id => existing.has(id)));
+    const unclaimed = new Map();
+    for (const item of items) {
+      if (claimed.has(item.id)) continue;
+      const k = identity(toAccount(item));
+      if (!unclaimed.has(k)) unclaimed.set(k, item);
+    }
     const changed = [];
     accounts.forEach((acc, position) => {
-      const base = (acc._id && existing.get(acc._id)) || Vault.newItem('login', acc._id ? { id: acc._id } : {});
+      if (acc._id && failed.has(acc._id)) return; // unreadable record: leave it alone
+      let base = acc._id && existing.get(acc._id);
+      if (!base) {
+        base = unclaimed.get(identity(acc));
+        if (base) unclaimed.delete(identity(acc));
+      }
+      base = base || Vault.newItem('login', acc._id ? { id: acc._id } : {});
       acc._id = base.id;
       const next = applyAccount(base, acc, position);
       if (!existing.has(base.id) || comparable(next) !== comparable(existing.get(base.id))) {
@@ -101,7 +134,7 @@ const VaultAccounts = (() => {
     const kept = new Set(accounts.map(a => a._id));
     const removed = [...knownIds].filter(id => existing.has(id) && !kept.has(id));
     if (removed.length) await VaultStore.remove(removed);
-    await writeIndex((await VaultStore.readAll(key)).items);
+    await rebuildIndex(key);
     return accounts;
   }
 
@@ -115,7 +148,7 @@ const VaultAccounts = (() => {
     const item = applyAccount(Vault.newItem('login'), acc, position);
     item.updatedAt = new Date().toISOString();
     await VaultStore.save(item, key);
-    await writeIndex([...items, item]);
+    await rebuildIndex(key);
     return items.length;
   }
 
@@ -131,7 +164,7 @@ const VaultAccounts = (() => {
     const next = applyAccount(item, { ...current, ...patch }, item.position ?? 0);
     next.updatedAt = new Date().toISOString();
     await VaultStore.save(next, key);
-    await writeIndex(items.map(i => (i.id === id ? next : i)));
+    await rebuildIndex(key);
     return true;
   }
 

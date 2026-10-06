@@ -281,7 +281,7 @@ test('a write still in flight when the device is reset does not bring the accoun
   const stored = await page.evaluate(async () => {
     await VaultLock.resetDevice();
     // e.g. a sync that finishes its request after the reset
-    await saveState();
+    await saveState().catch(() => {}); // refused: no vault after a reset
     await saveTombstones();
     await writeLastSyncedAt(new Date().toISOString());
     return chrome.storage.local.get(['accounts', 'tombstones', 'lastSyncedAt']);

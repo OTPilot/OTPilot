@@ -169,8 +169,8 @@ test('assigning a new category in the editor persists and tags the account', asy
 
   // Save, then verify the assignment landed in storage
   await page.click('#btn-save-all');
-  const stored = await readAccounts(page);
-  expect(stored[0].category).toBe('Work');
+  // Saving to the vault is async (encrypt + write): poll for it.
+  await expect.poll(async () => (await readAccounts(page))[0]?.category).toBe('Work');
 
   // Re-open the vault — the row header now shows the category tag
   await page.click('#nav-settings');

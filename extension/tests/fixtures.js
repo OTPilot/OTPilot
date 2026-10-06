@@ -1,4 +1,4 @@
-import { test as base, chromium } from '@playwright/test';
+import { test as base, chromium, expect as pwExpect } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdtempSync, rmSync } from 'fs';
@@ -93,4 +93,10 @@ export function writeAccounts(page, accounts) {
     const known = new Set((await VaultAccounts.load(key)).map(a => a._id));
     await VaultAccounts.save(accs, key, known);
   }, accounts);
+}
+
+// The popup hides its lock overlay before its first vault read (which runs the
+// v1 migration) has finished: wait for that before asserting on storage.
+export async function waitForVault(page) {
+  await pwExpect.poll(() => page.evaluate(async () => !!(await chrome.storage.local.get('vaultMeta')).vaultMeta?.migratedAt)).toBe(true);
 }
