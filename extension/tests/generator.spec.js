@@ -97,3 +97,34 @@ test('the Generate view: length, PIN mode, options and a session history of copi
   await expect(out).toHaveText(/^\d{6}$/);
   await expect(page.locator('#gen-history .gen-history-row')).toHaveCount(1);
 });
+
+test('copy: the value copied is the one saved, and a refused clipboard saves nothing', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(page);
+  await page.reload();
+  await page.click('#nav-generate');
+  const result = await page.evaluate(async () => {
+    const shown = document.getElementById('gen-output').textContent;
+    // The clipboard write is slow; the user hits Regenerate meanwhile.
+    let release;
+    navigator.clipboard.writeText = () => new Promise(r => { release = r; });
+    document.getElementById('gen-copy').click();
+    document.getElementById('gen-regenerate').click();
+    release();
+    await new Promise(r => setTimeout(r, 300));
+    const saved = (await chrome.storage.session.get('generatorHistory')).generatorHistory;
+
+    navigator.clipboard.writeText = () => Promise.reject(new Error('denied'));
+    document.getElementById('gen-copy').click();
+    await new Promise(r => setTimeout(r, 300));
+    return {
+      shown, saved,
+      afterRefused: (await chrome.storage.session.get('generatorHistory')).generatorHistory,
+      status: document.getElementById('status-msg').textContent,
+    };
+  });
+  expect(result.saved).toEqual([result.shown]);
+  expect(result.afterRefused).toEqual([result.shown]);
+  expect(result.status).toContain('Could not copy');
+});

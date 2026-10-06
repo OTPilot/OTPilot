@@ -1169,8 +1169,7 @@ async function renderGenHistory() {
     copy.title = 'Copy';
     copy.textContent = '⧉';
     copy.addEventListener('click', async () => {
-      await navigator.clipboard.writeText(value).catch(() => {});
-      setStatus('Copied');
+      if (await copyText(value)) setStatus('Copied');
     });
     row.append(text, copy);
     list.appendChild(row);
@@ -1184,10 +1183,23 @@ document.querySelectorAll('[data-gen-opt]').forEach(i =>
 document.getElementById('gen-minus').addEventListener('click', () => setGenOptions({ length: _genOptions.length - 1 }));
 document.getElementById('gen-plus').addEventListener('click', () => setGenOptions({ length: _genOptions.length + 1 }));
 document.getElementById('gen-regenerate').addEventListener('click', regenerate);
+// Copies or reports why it couldn't; returns whether the clipboard got it.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    setStatus('Could not copy — the browser blocked the clipboard', false);
+    return false;
+  }
+}
+
 document.getElementById('gen-copy').addEventListener('click', async () => {
-  await navigator.clipboard.writeText(_genValue).catch(() => {});
+  // Capture now: Regenerate or an option change while this runs replaces _genValue.
+  const value = _genValue;
+  if (!(await copyText(value))) return;
   const { generatorHistory = [] } = await chrome.storage.session.get('generatorHistory');
-  const next = [_genValue, ...generatorHistory.filter(v => v !== _genValue)].slice(0, GEN_HISTORY_MAX);
+  const next = [value, ...generatorHistory.filter(v => v !== value)].slice(0, GEN_HISTORY_MAX);
   await chrome.storage.session.set({ generatorHistory: next });
   setStatus('Password copied');
   renderGenHistory();
