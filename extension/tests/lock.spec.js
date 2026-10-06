@@ -140,17 +140,48 @@ test('on a page, a locked vault is unlocked from the overlay and the code is fil
 
   const site = await context.newPage();
   await site.goto('http://localhost:8765/test/autofill.html');
-  const overlay = site.locator('#otpilot-lock');
-  await expect(overlay).toBeVisible();
+  await expect(site.locator('#otpilot-lock')).toBeVisible();
+  const frame = site.frameLocator('#otpilot-lock iframe');
 
-  await overlay.locator('.otpilot-pw').fill('wrong');
-  await overlay.locator('.otpilot-primary').click();
-  await expect(overlay).toContainText('Incorrect password');
+  await frame.locator('#pw').fill('wrong');
+  await frame.locator('#unlock').click();
+  await expect(frame.locator('#err')).toHaveText('Incorrect password');
 
-  await overlay.locator('.otpilot-pw').fill(TEST_PASSWORD);
-  await overlay.locator('.otpilot-primary').click();
+  await frame.locator('#pw').fill(TEST_PASSWORD);
+  await frame.locator('#unlock').click();
   await expect(site.locator('input[name="otp_token"]')).toHaveValue(/^\d{6}$/);
+  await expect(site.locator('#otpilot-lock')).toHaveCount(0);
   expect(await page.evaluate(() => VaultLock.state())).toBe('unlocked');
+});
+
+test("the master password is never typed into the host page's DOM", async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedLocked(page, { accounts: [{ name: 'TestApp', secret: TEST_SECRET, urls: 'localhost', email: '' }], activeIndex: 0 });
+  const site = await context.newPage();
+  await site.goto('http://localhost:8765/test/autofill.html');
+  await expect(site.locator('#otpilot-lock')).toBeVisible();
+  await site.frameLocator('#otpilot-lock iframe').locator('#pw').fill('typed-secret');
+
+  // What the page's own scripts can see: no password field in its DOM, and no
+  // way into the extension frame.
+  const seen = await site.evaluate(() => ({
+    inputs: [...document.querySelectorAll('#otpilot-lock input')].length,
+    frameReadable: (() => { try { return !!document.querySelector('#otpilot-lock iframe').contentDocument; } catch { return false; } })(),
+    text: document.body.innerHTML.includes('typed-secret'),
+  }));
+  expect(seen).toEqual({ inputs: 0, frameReadable: false, text: false });
+});
+
+test('a page faking the "unlocked" message does not get past a locked vault', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedLocked(page, { accounts: [{ name: 'TestApp', secret: TEST_SECRET, urls: 'localhost', email: '' }], activeIndex: 0 });
+  const site = await context.newPage();
+  await site.goto('http://localhost:8765/test/autofill.html');
+  await expect(site.locator('#otpilot-lock')).toBeVisible();
+  await site.evaluate(() => window.postMessage({ source: 'otpilot-unlock', result: 'unlocked' }, '*'));
+  await site.waitForTimeout(500);
+  await expect(site.locator('#otpilot-lock')).toBeVisible();
+  await expect(site.locator('input[name="otp_token"]')).toHaveValue('');
 });
 
 test('an open popup shows the lock screen as soon as the vault locks elsewhere', async ({ context, extensionId }) => {

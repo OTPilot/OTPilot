@@ -14,12 +14,15 @@ function zipFiles() {
   return new Set(m[1].replace(/\\/g, ' ').split(/\s+/).filter(Boolean));
 }
 
-test('every script the extension loads is in the release zip', () => {
+test('every file the extension loads is in the release zip', () => {
   const manifest = JSON.parse(read('manifest.json'));
+  const pageAssets = page => [...read(page).matchAll(/<(?:script src|link rel="stylesheet" href)="([^"]+)"/g)].map(m => m[1]);
+  const accessible = (manifest.web_accessible_resources || []).flatMap(r => r.resources);
   const loaded = new Set([
     manifest.background.service_worker,
     ...manifest.content_scripts.flatMap(cs => cs.js),
-    ...[...read('popup.html').matchAll(/<script src="([^"]+)"/g)].map(m => m[1]),
+    ...accessible,
+    ...['popup.html', ...accessible.filter(f => f.endsWith('.html'))].flatMap(pageAssets),
     ...[...read('background.js').match(/importScripts\(([\s\S]*?)\);/)[1]
       .replace(/\/\/.*$/gm, '') // comments may contain quotes
       .matchAll(/'([^']+)'/g)].map(m => m[1]),
