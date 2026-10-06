@@ -197,9 +197,9 @@ test('adding an account while a category filter is active keeps it visible and p
   await page.click('#nav-settings');
 
   // Vault opens filtered to Work: 2 visible rows
-  const visibleBefore = await page.locator('.acc-row').evaluateAll(els =>
-    els.filter(el => el.style.display !== 'none').length);
-  expect(visibleBefore).toBe(2);
+  // Accounts load from the vault asynchronously: wait for the rows.
+  await expect.poll(() => page.locator('.acc-row').evaluateAll(els =>
+    els.filter(el => el.style.display !== 'none').length)).toBe(2);
 
   // Add an account while the Work filter is active
   await page.click('#btn-add');

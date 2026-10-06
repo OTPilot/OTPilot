@@ -109,19 +109,27 @@ const VaultAccounts = (() => {
     // email) instead of replacing it and losing its other fields.
     const claimed = new Set(accounts.map(a => a._id).filter(id => existing.has(id)));
     const unclaimed = new Map();
+    const bySecret = new Map(); // secret -> unclaimed items with it
     for (const item of items) {
       if (claimed.has(item.id)) continue;
       const k = identity(toAccount(item));
       if (!unclaimed.has(k)) unclaimed.set(k, item);
+      if (item.totp?.secret) bySecret.set(item.totp.secret, [...(bySecret.get(item.totp.secret) || []), item]);
     }
+    const take = item => {
+      unclaimed.delete(identity(toAccount(item)));
+      const same = bySecret.get(item.totp?.secret);
+      if (same) bySecret.set(item.totp.secret, same.filter(i => i !== item));
+      return item;
+    };
     const changed = [];
     accounts.forEach((acc, position) => {
       if (acc._id && failed.has(acc._id)) return; // unreadable record: leave it alone
       let base = acc._id && existing.get(acc._id);
-      if (!base) {
-        base = unclaimed.get(identity(acc));
-        if (base) unclaimed.delete(identity(acc));
-      }
+      if (!base && unclaimed.has(identity(acc))) base = take(unclaimed.get(identity(acc)));
+      // Renamed elsewhere (e.g. on a 1.x device): fall back to the secret,
+      // only when exactly one unclaimed local item has it.
+      if (!base && acc.secret && bySecret.get(acc.secret)?.length === 1) base = take(bySecret.get(acc.secret)[0]);
       base = base || Vault.newItem('login', acc._id ? { id: acc._id } : {});
       acc._id = base.id;
       const next = applyAccount(base, acc, position);

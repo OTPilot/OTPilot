@@ -140,3 +140,21 @@ test('a sync that finishes after the vault locked does not record success', asyn
   });
   expect(result).toBe('2026-01-01T00:00:00.000Z');
 });
+
+test('an account renamed on a 1.x device still updates the local item (matched by its secret)', async ({ context, extensionId }) => {
+  const page = await openPopup(context, extensionId, [ACCOUNT]);
+  const [local] = await readAccounts(page);
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const { items } = await VaultStore.readAll(key);
+    Vault.getField(items[0], 'password').value = 'hunter2';
+    await VaultStore.save(items[0], key);
+  });
+  const { _id, ...fromV1 } = local;
+  await page.evaluate(async ([acc, ids]) => {
+    await VaultAccounts.save([acc], await VaultKeys.getKey(), new Set(ids));
+  }, [{ ...fromV1, name: 'GitHub renamed' }, [local._id]]);
+  const items = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items);
+  expect(items.map(i => [i.id, i.title])).toEqual([[local._id, 'GitHub renamed']]);
+  expect(items[0].fields.find(f => f.id === 'password').value).toBe('hunter2');
+});
