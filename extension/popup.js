@@ -1865,29 +1865,32 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     errEl.textContent = 'Invalid key or decryption failed.';
     return;
   }
+  if (!pullResult) {
+    // Nothing on the server to decrypt, so the key can't be checked.
+    errEl.textContent = 'There is no synced data to check this key against. Use "Start fresh" instead.';
+    return;
+  }
   try {
     await CloudSync.saveSyncKey(keyB64);
-    if (pullResult) {
-      const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
+    const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
 
-      // On reconnect the server is the source of truth.
-      // Add any local-only accounts not present or deleted on the server,
-      // but discard local tombstones — offline deletions must not override synced data.
-      const remoteNames   = new Set(remoteAccounts.map(a => a.name));
-      const remoteDeleted = new Set(Object.keys(remoteTombs));
-      const localOnly     = accounts.filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
-      const merged        = [...remoteAccounts, ...localOnly];
-      const mergedTombs   = remoteTombs;
+    // On reconnect the server is the source of truth.
+    // Add any local-only accounts not present or deleted on the server,
+    // but discard local tombstones — offline deletions must not override synced data.
+    const remoteNames   = new Set(remoteAccounts.map(a => a.name));
+    const remoteDeleted = new Set(Object.keys(remoteTombs));
+    const localOnly     = accounts.filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
+    const merged        = [...remoteAccounts, ...localOnly];
+    const mergedTombs   = remoteTombs;
 
-      accounts   = merged;
-      tombstones = mergedTombs;
-      await saveState();
-      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
-      renderAccountBar();
-      const now = new Date().toISOString();
-      await CloudSync.push(merged, mergedTombs, now);
-      await writeLastSyncedAt(now);
-    }
+    accounts   = merged;
+    tombstones = mergedTombs;
+    await saveState();
+    await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+    renderAccountBar();
+    const now = new Date().toISOString();
+    await CloudSync.push(merged, mergedTombs, now);
+    await writeLastSyncedAt(now);
     syncShowView('sv-active');
     syncSetStatus('ok', 'Restored');
   } catch {

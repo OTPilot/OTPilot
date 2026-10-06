@@ -18,6 +18,9 @@ const VaultStore = (() => {
   // Promise form of the API: it rejects when Chrome refuses a write (e.g. the
   // storage quota on a large import), so a failed save never looks successful.
   const get = keys => chrome.storage.local.get(keys);
+  // Shared with VaultKeys: record writes and vault key changes never interleave,
+  // so a re-key can't overwrite a save or undo a removal made while it ran.
+  const exclusive = fn => navigator.locks.request('otpilot-vault', fn);
   const set = obj => chrome.storage.local.set(obj);
   const del = keys => chrome.storage.local.remove(keys);
 
@@ -62,27 +65,33 @@ const VaultStore = (() => {
   // Encrypts and stores items in a single storage write (one item, an import,
   // or the v1 migration). Saving an id clears its tombstone — only after the
   // write succeeded; a rejected write throws and leaves tombstones in place.
-  async function save(items, wrappingKey) {
-    const list = Array.isArray(items) ? items : [items];
-    const writes = {};
-    for (const item of list) {
-      writes[RECORD + item.id] = await VaultCrypto.encryptItem(item, wrappingKey);
-    }
-    await set(writes);
-    await del(list.map(i => TOMB + i.id));
-    return list.length;
+  function save(items, wrappingKey) {
+    return exclusive(async () => {
+      const list = Array.isArray(items) ? items : [items];
+      const writes = {};
+      for (const item of list) {
+        writes[RECORD + item.id] = await VaultCrypto.encryptItem(item, wrappingKey);
+      }
+      await set(writes);
+      await del(list.map(i => TOMB + i.id));
+      return list.length;
+    });
   }
 
-  async function remove(ids, deletedAt = new Date().toISOString()) {
-    const list = Array.isArray(ids) ? ids : [ids];
-    await del(list.map(id => RECORD + id));
-    await set(Object.fromEntries(list.map(id => [TOMB + id, deletedAt])));
+  function remove(ids, deletedAt = new Date().toISOString()) {
+    return exclusive(async () => {
+      const list = Array.isArray(ids) ? ids : [ids];
+      await del(list.map(id => RECORD + id));
+      await set(Object.fromEntries(list.map(id => [TOMB + id, deletedAt])));
+    });
   }
 
   // Remote wipe / sign-out erase: drops every record and tombstone.
-  async function clear() {
-    const all = await get(null);
-    await del(Object.keys(all).filter(k => k.startsWith(RECORD) || k.startsWith(TOMB)));
+  function clear() {
+    return exclusive(async () => {
+      const all = await get(null);
+      await del(Object.keys(all).filter(k => k.startsWith(RECORD) || k.startsWith(TOMB)));
+    });
   }
 
   // For a vault key change: every record re-wrapped from oldKey to newKey,
@@ -90,12 +99,16 @@ const VaultStore = (() => {
   // key in ONE chrome.storage write — otherwise a crash in between would leave
   // records and key out of step and the vault unreadable. Content is untouched
   // (only each item key is re-wrapped). A record that can't be unwrapped with
-  // oldKey is already unreadable and is left as it is.
+  // oldKey is already unreadable and is left as it is; any other failure
+  // throws, so the key change is abandoned rather than stranding records.
+  // Callers must hold the 'otpilot-vault' lock (VaultKeys.adoptKey does).
   async function prepareRekey(oldKey, newKey) {
     const writes = {};
     for (const [id, rec] of Object.entries(await listRecords())) {
       try { writes[RECORD + id] = await VaultCrypto.rewrapItemKey(rec, oldKey, newKey); }
-      catch { /* unreadable before, unreadable after */ }
+      catch (e) {
+        if (e.message !== 'item key unreadable') throw e; // unreadable before, unreadable after
+      }
     }
     return writes;
   }

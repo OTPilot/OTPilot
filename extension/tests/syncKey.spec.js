@@ -128,3 +128,46 @@ test('adopting a key with a master password set needs the password and keeps it 
     key: true, titles: ['Wifi'], plaintextAtRest: false,
   });
 });
+
+test('a failure re-wrapping an item aborts the key change instead of stranding the item', async ({ context, extensionId }) => {
+  const page = await syncPage(context, extensionId);
+  const result = await page.evaluate(async items => {
+    const oldKey = await VaultKeys.init();
+    await VaultStore.save(items, oldKey);
+    const real = VaultCrypto.rewrapItemKey;
+    VaultCrypto.rewrapItemKey = async (rec, ...rest) => {
+      if (rec.id === 'b') throw new Error('quota exceeded');
+      return real(rec, ...rest);
+    };
+    let error = null;
+    try { await VaultKeys.adoptKey(VaultCrypto.b64e(VaultCrypto.generateKey())); } catch (e) { error = e.message; }
+    VaultCrypto.rewrapItemKey = real;
+    return { error, keyUnchanged: (await VaultKeys.getKey()) === oldKey, readable: (await VaultStore.readAll(oldKey)).items.length };
+  }, [note('a', 'Wifi'), note('b', 'Router')]);
+  expect(result).toEqual({ error: 'quota exceeded', keyUnchanged: true, readable: 2 });
+});
+
+test('a removal racing a key change is not undone', async ({ context, extensionId }) => {
+  const page = await syncPage(context, extensionId);
+  const remaining = await page.evaluate(async () => {
+    const oldKey = await VaultKeys.init();
+    await VaultStore.save(Array.from({ length: 40 }, (_, i) => ({ id: `n${i}`, type: 'note', title: `n${i}`, fields: [] })), oldKey);
+    const newKey = VaultCrypto.b64e(VaultCrypto.generateKey());
+    // Fire the removal once the re-key has already read every record and is
+    // re-wrapping them, and give it time to land if nothing holds it back.
+    const real = VaultCrypto.rewrapItemKey;
+    let removal = null;
+    VaultCrypto.rewrapItemKey = async (...args) => {
+      if (!removal) {
+        removal = VaultStore.remove('n39');
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return real(...args);
+    };
+    await VaultKeys.adoptKey(newKey);
+    await removal;
+    VaultCrypto.rewrapItemKey = real;
+    return Object.keys(await VaultStore.listRecords()).includes('n39');
+  });
+  expect(remaining).toBe(false);
+});

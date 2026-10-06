@@ -103,9 +103,16 @@ const VaultCrypto = (() => {
 
   // Moves an item between wrapping keys (personal VK ⇄ collection CK, or a CK
   // rotation) without touching the encrypted content.
+  // Throws Error('item key unreadable') when fromKey can't unwrap the record,
+  // so callers can tell an already-unreadable record from a failure to wrap.
   async function rewrapItemKey(record, fromKey, toKey) {
     assertFormat(record);
-    const ik = await open(await importAes(fromKey, ['decrypt']), record.key, keyAad(record.id));
+    let ik;
+    try {
+      ik = await open(await importAes(fromKey, ['decrypt']), record.key, keyAad(record.id));
+    } catch {
+      throw new Error('item key unreadable');
+    }
     try {
       const key = await seal(await importAes(toKey, ['encrypt']), ik, keyAad(record.id));
       return { ...record, key };
