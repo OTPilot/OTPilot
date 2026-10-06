@@ -1014,10 +1014,24 @@ document.getElementById('row-settings-autofill').addEventListener('click', () =>
 document.getElementById('back-settings-autofill').addEventListener('click', () => showSettingsSubview('settings-list'));
 
 document.getElementById('row-settings-password').addEventListener('click', async () => {
-  ['change-pw-current', 'change-pw-new', 'change-pw-confirm'].forEach(id => document.getElementById(id).value = '');
+  ['change-pw-current', 'change-pw-new', 'change-pw-confirm', 'reveal-key-password'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('reveal-key-value').style.display = 'none';
+  document.getElementById('reveal-key-err').textContent = '';
   document.getElementById('change-pw-err').textContent = '';
   document.getElementById('autolock-select').value = String(await VaultLock.getAutoLock());
   showSettingsSubview('settings-password-view');
+});
+document.getElementById('reveal-key-btn').addEventListener('click', async () => {
+  const pwEl = document.getElementById('reveal-key-password');
+  const out = document.getElementById('reveal-key-value');
+  const err = document.getElementById('reveal-key-err');
+  err.textContent = '';
+  out.style.display = 'none';
+  const key = pwEl.value ? await VaultLock.revealRecoveryKey(pwEl.value) : null;
+  pwEl.value = '';
+  if (!key) { err.textContent = 'Incorrect password.'; return; }
+  out.textContent = key;
+  out.style.display = '';
 });
 document.getElementById('autolock-select').addEventListener('change', async e => {
   await VaultLock.setAutoLock(Number(e.target.value));
@@ -1438,26 +1452,19 @@ function setLockButtonState(btn, busy) {
   }
 }
 
+const LOCK_SCREENS = ['setup', 'login', 'kit', 'recover', 'reset'];
+
 function showLockOverlay(mode) {
-  const overlay = document.getElementById('lock-overlay');
-  const setup   = document.getElementById('lock-setup');
-  const login   = document.getElementById('lock-login');
-  overlay.classList.remove('hidden');
-  if (mode === 'setup') {
-    setup.style.display = '';
-    login.style.display = 'none';
-    document.getElementById('lock-new-password').value = '';
-    document.getElementById('lock-confirm-password').value = '';
-    document.getElementById('lock-setup-err').textContent = '';
-    document.getElementById('lock-new-password').focus();
-  } else {
-    setup.style.display = 'none';
-    login.style.display = '';
-    document.getElementById('lock-password').value = '';
-    document.getElementById('lock-login-err').textContent = '';
-    document.getElementById('lock-password').classList.remove('err');
-    document.getElementById('lock-password').focus();
-  }
+  document.getElementById('lock-overlay').classList.remove('hidden');
+  for (const m of LOCK_SCREENS) document.getElementById(`lock-${m}`).style.display = m === mode ? '' : 'none';
+  // A screen can be shown again later in the same popup (it re-locks while
+  // open), so reset its fields and any button left in the "Verifying…" state.
+  document.querySelectorAll(`#lock-${mode} .lock-btn`).forEach(b => {
+    if (b.dataset.origText) setLockButtonState(b, false);
+  });
+  document.querySelectorAll(`#lock-${mode} .lock-err`).forEach(e => { e.textContent = ''; });
+  document.querySelectorAll(`#lock-${mode} input.lock-input`).forEach(i => { i.value = ''; i.classList.remove('err'); });
+  document.querySelector(`#lock-${mode} input.lock-input`)?.focus();
 }
 
 function hideLockOverlay() {
@@ -1517,10 +1524,7 @@ document.getElementById('lock-setup-btn').addEventListener('click', async () => 
   try {
     await VaultLock.setup(pw1);
     await VaultLock.setAutoLock(autoLock);
-    hideLockOverlay();
-    const cb = lockSetupResolve;
-    lockSetupResolve = null;
-    cb?.();
+    await completeUnlock();
   } catch {
     err.textContent = 'Failed to set password. Try again.';
     setLockButtonState(btn, false);
@@ -1553,10 +1557,7 @@ document.getElementById('lock-login-btn').addEventListener('click', async () => 
   try {
     const ok = await VaultLock.unlock(pw);
     if (ok) {
-      hideLockOverlay();
-      const cb = lockLoginResolve;
-      lockLoginResolve = null;
-      cb?.();
+      await completeUnlock();
     } else {
       err.textContent = 'Incorrect password.';
       inp.classList.add('err');
@@ -1571,6 +1572,105 @@ document.getElementById('lock-login-btn').addEventListener('click', async () => 
 
 document.getElementById('lock-password').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('lock-login-btn').click();
+});
+
+// After any successful setup/unlock/recovery: show the recovery key once if the
+// user hasn't confirmed saving it (first setup, or upgraded from v1), then hand
+// back to whoever was waiting on the lock screen.
+async function completeUnlock() {
+  if (await VaultLock.needsRecoveryKeyNotice()) await showRecoveryKit();
+  hideLockOverlay();
+  const cb = lockSetupResolve || lockLoginResolve;
+  lockSetupResolve = null;
+  lockLoginResolve = null;
+  cb?.();
+}
+
+let _kitDone = null;
+async function showRecoveryKit() {
+  showLockOverlay('kit');
+  document.getElementById('lock-kit-key').textContent = await VaultKeys.getKey();
+  document.getElementById('lock-kit-saved').checked = false;
+  document.getElementById('lock-kit-done').disabled = true;
+  return new Promise(resolve => { _kitDone = resolve; });
+}
+
+function downloadEmergencyKit(key) {
+  const text = [
+    'OTPilot Emergency Kit',
+    `Created: ${new Date().toISOString().slice(0, 10)}`,
+    '',
+    `Recovery key: ${key}`,
+    '',
+    'This key decrypts everything you keep in OTPilot.',
+    '- Forgot your master password? Choose "Forgot your master password?" on the lock screen and paste this key.',
+    '- New device? Sign in, open Sync and paste this key.',
+    'Keep it offline and private. Anyone with it (and your account) can read your vault.',
+    '',
+  ].join('\n');
+  const a = document.createElement('a');
+  a.download = 'OTPilot-Emergency-Kit.txt';
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById('lock-kit-copy').addEventListener('click', async () => {
+  await navigator.clipboard.writeText(document.getElementById('lock-kit-key').textContent).catch(() => {});
+  setStatus('Recovery key copied');
+});
+document.getElementById('lock-kit-download').addEventListener('click', () =>
+  downloadEmergencyKit(document.getElementById('lock-kit-key').textContent));
+document.getElementById('lock-kit-saved').addEventListener('change', e => {
+  document.getElementById('lock-kit-done').disabled = !e.target.checked;
+});
+document.getElementById('lock-kit-done').addEventListener('click', async () => {
+  await VaultLock.acknowledgeRecoveryKey();
+  document.getElementById('lock-kit-key').textContent = '';
+  const done = _kitDone;
+  _kitDone = null;
+  done?.();
+});
+
+// Forgot master password → recovery key
+document.getElementById('lock-forgot').addEventListener('click', () => showLockOverlay('recover'));
+document.getElementById('lock-recover-back').addEventListener('click', () => showLockOverlay('login'));
+document.getElementById('lock-recover-nokey').addEventListener('click', () => showLockOverlay('reset'));
+document.getElementById('lock-reset-back').addEventListener('click', () => showLockOverlay('recover'));
+
+document.getElementById('lock-recover-btn').addEventListener('click', async () => {
+  const key = document.getElementById('lock-recover-key').value.trim();
+  const pw1 = document.getElementById('lock-recover-new').value;
+  const pw2 = document.getElementById('lock-recover-confirm').value;
+  const err = document.getElementById('lock-recover-err');
+  const btn = document.getElementById('lock-recover-btn');
+  err.textContent = '';
+  if (!key) { err.textContent = 'Paste your recovery key.'; return; }
+  if (!pw1) { err.textContent = 'Choose a new master password.'; return; }
+  if (pw1 !== pw2) { err.textContent = 'Passwords do not match.'; return; }
+
+  setLockButtonState(btn, true);
+  try {
+    await VaultLock.recover(key, pw1);
+    await VaultLock.acknowledgeRecoveryKey(); // they just used it
+    await completeUnlock();
+  } catch (e) {
+    err.textContent = e.message === 'wrong recovery key'
+      ? "That recovery key doesn't match this device."
+      : e.message === "recovery key can't be checked"
+        ? "There's nothing on this device to check the key against. Reset this device, then restore from Sync."
+        : 'Something went wrong. Try again.';
+    setLockButtonState(btn, false);
+  }
+});
+
+document.getElementById('lock-reset-btn').addEventListener('click', async () => {
+  if (document.getElementById('lock-reset-confirm').value.trim() !== 'RESET') {
+    document.getElementById('lock-reset-err').textContent = 'Type RESET to confirm.';
+    return;
+  }
+  await VaultLock.resetDevice();
+  location.reload();
 });
 
 // Shows the lock screen over an open popup, stopping the code timer until the

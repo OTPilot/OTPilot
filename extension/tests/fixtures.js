@@ -63,10 +63,11 @@ export const LEGACY_AUTH_TEST = {
 };
 
 // Seeds an unlocked vault plus any extra chrome.storage.local data. Call from
-// an extension page (it needs chrome.storage.session).
+// an extension page (it needs chrome.storage.session). The seeded user has
+// already confirmed saving their recovery key, so no one-time notice shows.
 export function seedUnlocked(page, local = {}) {
   return page.evaluate(([wrapped, vk, extra]) => Promise.all([
-    chrome.storage.local.set({ vaultKeyWrapped: wrapped, ...extra }),
+    chrome.storage.local.set({ vaultKeyWrapped: wrapped, recoveryKeyAcknowledged: true, ...extra }),
     chrome.storage.session.set({ vaultKeyUnlocked: vk }),
   ]), [TEST_VAULT_KEY_WRAPPED, TEST_VAULT_KEY, local]);
 }
@@ -74,7 +75,7 @@ export function seedUnlocked(page, local = {}) {
 // Same, but locked (master password set, vault key not in the session).
 export function seedLocked(page, local = {}) {
   return page.evaluate(([wrapped, extra]) => Promise.all([
-    chrome.storage.local.set({ vaultKeyWrapped: wrapped, ...extra }),
+    chrome.storage.local.set({ vaultKeyWrapped: wrapped, recoveryKeyAcknowledged: true, ...extra }),
     chrome.storage.session.clear(),
   ]), [TEST_VAULT_KEY_WRAPPED, local]);
 }
