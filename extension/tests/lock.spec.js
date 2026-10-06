@@ -264,3 +264,33 @@ test('adopting a key while locked keeps the vault locked', async ({ context, ext
   }, TEST_PASSWORD);
   expect(result).toEqual({ status: 'locked', unlocks: true, adopted: true });
 });
+
+test('an "unlocked" message from the frame itself, after the page navigated it, still needs a real unlock', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedLocked(page, { accounts: [{ name: 'TestApp', secret: TEST_SECRET, urls: 'localhost', email: '' }], activeIndex: 0 });
+  const site = await context.newPage();
+  await site.goto('http://localhost:8765/test/autofill.html');
+  await expect(site.locator('#otpilot-lock')).toBeVisible();
+  // The page owns the <iframe> element, so it can navigate it to its own
+  // content: the message then really comes from frame.contentWindow and only
+  // the background lock check stops it.
+  await site.evaluate(() => {
+    document.querySelector('#otpilot-lock iframe').src =
+      'data:text/html,<script>parent.postMessage({ source: "otpilot-unlock", result: "unlocked" }, "*")</script>';
+  });
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-lock')).toBeVisible();
+  await expect(site.locator('input[name="otp_token"]')).toHaveValue('');
+});
+
+test('a long account name stays on one line in the unlock frame', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  const longName = 'A Very Long Account Name That Would Otherwise Wrap Onto Several Lines';
+  await seedLocked(page, { accounts: [{ name: longName, secret: TEST_SECRET, urls: 'localhost', email: '' }], activeIndex: 0 });
+  const site = await context.newPage();
+  await site.goto('http://localhost:8765/test/autofill.html');
+  const frame = site.frameLocator('#otpilot-lock iframe');
+  await expect(frame.locator('#unlock')).toBeInViewport();
+  const lines = await frame.locator('#label').evaluate(el => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)));
+  expect(lines).toBe(1);
+});

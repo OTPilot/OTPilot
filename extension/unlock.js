@@ -10,6 +10,7 @@
 
   const label = document.getElementById('label');
   label.append(params.get('intro') || 'Unlock to auto-fill ', Object.assign(document.createElement('strong'), { textContent: name }));
+  label.title = label.textContent;
   const pw = document.getElementById('pw');
   const err = document.getElementById('err');
   const btn = document.getElementById('unlock');

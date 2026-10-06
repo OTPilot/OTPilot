@@ -11,7 +11,11 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { background: var(--surface); }
     body { font-family: var(--font-ui); color: var(--ink-2); padding: 12px 14px; }
-    .label { font-size: 12px; margin-bottom: 10px; line-height: 1.4; }
+    /* One line: the frame has a fixed height, so a long account name must not wrap. */
+    .label {
+      font-size: 12px; margin-bottom: 10px; line-height: 1.4;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
     .label strong { color: var(--ink-0); }
     .pw-wrap { position: relative; margin-bottom: 6px; }
     #pw {
