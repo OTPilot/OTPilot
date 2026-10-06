@@ -8,7 +8,7 @@ EXTENSION_FILES := \
   background.js \
   jsqr.js content.js totp.js email-reader.js googleAuthMigration.js \
   supabase.js cloudSync.js keys.js sharing.js \
-  vault.js vaultCrypto.js vaultKeys.js vaultStore.js \
+  vault.js vaultCrypto.js vaultKeys.js vaultMigration.js vaultStore.js \
   config.js links.js \
   icon16.png icon48.png icon128.png \
   LICENSE
