@@ -101,9 +101,12 @@ const Vault = (() => {
   }
 
   // Free plan counts every item except logins that hold a 2FA secret and
-  // nothing else besides a username — 2FA stays unlimited on Free.
+  // nothing else besides a username (no other field, notes or password
+  // history) — 2FA stays unlimited on Free.
   function countsForLimit(item) {
     if (item.type !== 'login' || !item.totp?.secret) return true;
+    if (String(item.notes ?? '').trim() !== '') return true;
+    if ((item.passwordHistory || []).length) return true;
     return (item.fields || []).some(f => f.id !== 'username' && String(f.value ?? '').trim() !== '');
   }
 

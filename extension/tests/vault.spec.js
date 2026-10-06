@@ -84,17 +84,21 @@ test('free limit: only 2FA-only logins are exempt', async ({ context, extensionI
     withPassword.fields.find(f => f.id === 'password').value = 'hunter2';
     const withCustom = Vault.fromV1Account(acc);
     withCustom.fields.push({ id: 'f_1', label: 'PIN', kind: 'hidden', value: '1234', custom: true });
+    const withNotes = { ...Vault.fromV1Account(acc), notes: 'recovery codes: 1234 5678' };
+    const withHistory = { ...Vault.fromV1Account(acc), passwordHistory: [{ value: 'old', changedAt: '2026-01-01' }] };
     const usernameOnly = Vault.newItem('login', { title: 'Forum' });
     usernameOnly.fields.find(f => f.id === 'username').value = 'alberto';
     return {
       twoFaOnly: Vault.countsForLimit(twoFaOnly),
       withPassword: Vault.countsForLimit(withPassword),
       withCustom: Vault.countsForLimit(withCustom),
+      withNotes: Vault.countsForLimit(withNotes),
+      withHistory: Vault.countsForLimit(withHistory),
       usernameOnly: Vault.countsForLimit(usernameOnly),
       emptyNote: Vault.countsForLimit(Vault.newItem('note')),
     };
   }, V1);
-  expect(result).toEqual({ twoFaOnly: false, withPassword: true, withCustom: true, usernameOnly: true, emptyNote: true });
+  expect(result).toEqual({ twoFaOnly: false, withPassword: true, withCustom: true, withNotes: true, withHistory: true, usernameOnly: true, emptyNote: true });
 });
 
 test('free users can save up to 50 counted items; 2FA-only logins are never blocked', async ({ context, extensionId }) => {
