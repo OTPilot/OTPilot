@@ -374,6 +374,35 @@
     #btn-copy { background: var(--surface); color: var(--ink-3); }
     #btn-fill { background: var(--accent); color: var(--on-accent); }
 
+    /* ── Generate view ── */
+    .gen-body { padding: 22px 36px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+    .gen-modes { display: flex; gap: 6px; justify-content: center; }
+    .gen-output {
+      font-family: var(--font-code); font-size: 22px; font-weight: 700; color: var(--accent-2);
+      text-align: center; letter-spacing: 1.5px; word-break: break-all; user-select: all; min-height: 30px;
+    }
+    .gen-strength { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--ink-4); }
+    .gen-bar { flex: 1; height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+    .gen-bar i { display: block; height: 100%; background: var(--success); transition: width .2s; }
+    .gen-row {
+      display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-2);
+      background: var(--surface); border-radius: 8px; padding: 8px 12px;
+    }
+    .gen-row .grow { flex: 1; }
+    .gen-step {
+      width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border); background: transparent;
+      color: var(--ink-2); cursor: pointer; font-size: 14px; font-family: inherit;
+    }
+    .gen-length { font-family: var(--font-code); min-width: 24px; text-align: center; color: var(--ink-0); }
+    .gen-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+    .gen-actions { display: flex; gap: 8px; }
+    #gen-regenerate { background: var(--surface); color: var(--ink-2); }
+    #gen-copy { background: var(--accent); color: var(--on-accent); }
+    .gen-history-title { font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-5); }
+    .gen-history { display: flex; flex-direction: column; gap: 4px; }
+    .gen-history-row { display: flex; align-items: center; gap: 8px; font-family: var(--font-code); font-size: 11.5px; color: var(--ink-3); }
+    .gen-history-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
     /* ── Status ── */
     #status-msg {
       min-height: 18px; text-align: center;
@@ -987,6 +1016,12 @@
       </svg>
       <span>Accounts</span>
     </button>
+    <button class="rail-btn" id="nav-generate" title="Generate a password">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3m-3 3l3 3"/>
+      </svg>
+      <span>Generate</span>
+    </button>
     <button class="rail-btn" id="nav-team" style="display:none" title="Team">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
@@ -1306,6 +1341,37 @@
 </div>
 
 <!-- Sync panel -->
+<!-- Generate view -->
+<div id="generate-panel" class="app-single-col" style="display:none">
+  <div class="gen-body">
+    <div class="gen-modes">
+      <button class="cat-pill active" data-gen-mode="password">Password</button>
+      <button class="cat-pill" data-gen-mode="pin">PIN</button>
+    </div>
+    <div class="gen-output" id="gen-output"></div>
+    <div class="gen-strength"><div class="gen-bar"><i id="gen-bar"></i></div><span id="gen-strength"></span></div>
+    <div class="gen-row">
+      <span class="grow">Length</span>
+      <button class="gen-step" id="gen-minus" title="Shorter">−</button>
+      <span class="gen-length" id="gen-length"></span>
+      <button class="gen-step" id="gen-plus" title="Longer">+</button>
+    </div>
+    <div class="gen-opts" id="gen-opts">
+      <label class="lock-remember"><input type="checkbox" data-gen-opt="upper"> Uppercase</label>
+      <label class="lock-remember"><input type="checkbox" data-gen-opt="lower"> Lowercase</label>
+      <label class="lock-remember"><input type="checkbox" data-gen-opt="digits"> Numbers</label>
+      <label class="lock-remember"><input type="checkbox" data-gen-opt="symbols"> Symbols</label>
+      <label class="lock-remember"><input type="checkbox" data-gen-opt="avoidAmbiguous"> Avoid look-alikes (0 O 1 l)</label>
+    </div>
+    <div class="gen-actions">
+      <button class="btn" id="gen-regenerate">Regenerate</button>
+      <button class="btn" id="gen-copy">Copy</button>
+    </div>
+    <div class="gen-history-title" id="gen-history-title" style="display:none">Copied this session</div>
+    <div class="gen-history" id="gen-history"></div>
+  </div>
+</div>
+
 <div id="sync-panel" class="app-single-col" style="display:none">
 
   <!-- View A: not signed in -->
@@ -1416,6 +1482,7 @@
 <script src="vaultStore.js"></script>
 <script src="cloudSync.js"></script>
 <script src="vaultLock.js"></script>
+<script src="generator.js"></script>
 <script src="totp.js"></script>
 <script src="jsqr.js"></script>
 <script src="googleAuthMigration.js"></script>
