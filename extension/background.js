@@ -67,6 +67,116 @@ async function fillLogin(sender, id) {
   return { ok: true, username: Vault.getValue(item, 'username'), password };
 }
 
+// ── Saving sign-ins ──────────────────────────────────────────────────────────
+// A submitted sign-in form's credentials wait in chrome.storage.session
+// (memory-only, unreadable by content scripts) for the next page in the same
+// tab to offer saving them. The password never goes back to a page: the
+// offer only names the host, the username and the login it would update.
+const PENDING_LOGIN_TTL = 3 * 60 * 1000;
+const NEVER_SAVE = 'loginNeverSave';
+const pendingLoginKey = tabId => `pendingLogin:${tabId}`;
+
+// Rough "same site" (the last two host labels): the offer can show on the
+// page a sign-in redirected to (login.site.com → app.site.com), not on an
+// unrelated site the user went to next.
+const siteOf = host => host.split('.').slice(-2).join('.');
+
+// A capture still being stored, per tab: the next page's offer request can
+// arrive while it is (the sign-in navigated right away), and waits for it.
+const _capturesInFlight = new Map();
+
+function captureLogin(sender, msg) {
+  const tabId = sender?.tab?.id;
+  const run = storeCapture(sender, msg);
+  if (tabId === undefined) return run;
+  const tracked = run.catch(() => {}).finally(() => {
+    if (_capturesInFlight.get(tabId) === tracked) _capturesInFlight.delete(tabId);
+  });
+  _capturesInFlight.set(tabId, tracked);
+  return run;
+}
+
+async function storeCapture(sender, msg) {
+  const host = senderHost(sender);
+  const password = typeof msg.password === 'string' ? msg.password : '';
+  if (!host || !password || password.length > 1024) return;
+  if ((await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE]?.includes(host)) return;
+  const username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
+  await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { host, username, password, at: Date.now() } });
+}
+
+async function readPendingLogin(sender) {
+  const host = senderHost(sender);
+  if (!host) return null;
+  await _capturesInFlight.get(sender.tab.id);
+  const key = pendingLoginKey(sender.tab.id);
+  const pending = (await chrome.storage.session.get(key))[key];
+  if (!pending) return null;
+  if (Date.now() - pending.at > PENDING_LOGIN_TTL) { await chrome.storage.session.remove(key); return null; }
+  return siteOf(pending.host) === siteOf(host) ? { key, pending } : null;
+}
+
+// What saving the pending sign-in would do: a new login, a password update of
+// the saved login with that username, or nothing (already saved as is).
+async function planPendingLogin({ host, username, password }) {
+  const key = await VaultKeys.getKey();
+  const { items } = await VaultStore.readAll(key);
+  const covering = items.filter(i => i.type === 'login' && Vault.loginCoversHost(i.urls, host));
+  const sameUser = i => Vault.getValue(i, 'username').trim().toLowerCase() === username.toLowerCase();
+  const match = covering.find(sameUser)
+    || (!username && covering.length === 1 ? covering[0] : null);
+  if (match) {
+    if (Vault.getValue(match, 'password') === password) return { kind: 'none' };
+    return { kind: 'update', item: match };
+  }
+  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+  const candidate = Vault.newItem('login', { urls: [host] });
+  Vault.getField(candidate, 'password').value = password;
+  return { kind: 'new', limit: !Vault.canSaveItem(items, userPlan, candidate) };
+}
+
+async function pendingLoginOffer(sender) {
+  const found = await readPendingLogin(sender);
+  if (!found) return null;
+  const { key, pending } = found;
+  const offer = { host: pending.host, username: pending.username };
+  const state = await VaultLock.state();
+  if (state === 'setup') { await chrome.storage.session.remove(key); return null; }
+  if (state === 'locked') return { ...offer, kind: 'locked' };
+  const plan = await planPendingLogin(pending);
+  if (plan.kind === 'none') { await chrome.storage.session.remove(key); return null; }
+  return { ...offer, kind: plan.kind, name: plan.item?.title || '', limit: !!plan.limit };
+}
+
+async function resolvePendingLogin(sender, choice) {
+  const found = await readPendingLogin(sender);
+  if (!found) return { ok: false };
+  const { key, pending } = found;
+  if (choice === 'never') {
+    const never = (await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE] || [];
+    await chrome.storage.local.set({ [NEVER_SAVE]: [...new Set([...never, pending.host])] });
+  }
+  if (choice !== 'save') { await chrome.storage.session.remove(key); return { ok: true }; }
+
+  if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
+  const plan = await planPendingLogin(pending);
+  const vk = await VaultKeys.getKey();
+  if (plan.kind === 'new') {
+    if (plan.limit) return { ok: false, limit: true };
+    await VaultAccounts.add({
+      name: pending.host.replace(/^www\./, ''), email: pending.username, secret: '',
+      urls: pending.host, password: pending.password,
+    }, vk);
+  } else if (plan.kind === 'update') {
+    const current = VaultAccounts.toAccount(plan.item);
+    if (!(await VaultAccounts.update(plan.item.id, current, { password: pending.password }, vk))) return { ok: false };
+  }
+  await chrome.storage.session.remove(key);
+  return { ok: true, kind: plan.kind };
+}
+
+chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove(pendingLoginKey(tabId)); });
+
 // Latest email OTP detected by email-reader.js (expires after 10 min).
 let _emailOtp = null;
 
@@ -318,6 +428,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.action === 'vaultFillLogin') {
     fillLogin(_sender, msg.id).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // Saving a submitted sign-in (forms.js): capture, then ask on the next page.
+  if (msg.action === 'vaultCaptureLogin') {
+    captureLogin(_sender, msg).finally(() => sendResponse({}));
+    return true;
+  }
+
+  if (msg.action === 'vaultPendingLogin') {
+    pendingLoginOffer(_sender).then(sendResponse).catch(() => sendResponse(null));
+    return true;
+  }
+
+  if (msg.action === 'vaultResolvePendingLogin') {
+    resolvePendingLogin(_sender, msg.choice).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 

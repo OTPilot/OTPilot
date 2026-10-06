@@ -1,6 +1,7 @@
 'use strict';
 
-// Sign-in forms (2.0): offers to fill a saved login's username and password.
+// Sign-in forms (2.0): offers to fill a saved login's username and password,
+// and to save (or update) the one the user just signed in with.
 // Loaded after content.js (same isolated world): uses its overlay helpers
 // (makeOverlay, OVERLAY_HEADER, mountUnlockFrame, fillInputValue, showToast).
 //
@@ -119,6 +120,131 @@
     }
   }
 
+  // ── Saving a sign-in ───────────────────────────────────────────────────
+  // On submit (a form submit, a click on its button, or Enter in the password
+  // field) the typed username + password go to the background, which keeps
+  // them for this tab. The next page — or this one, if the form went away
+  // without navigating — offers to save them. Not while a sign-in form is
+  // still showing: that's usually a rejected password or another step.
+  const SAVE_ID = 'otpilot-login-save';
+
+  // The filled password field (a new password over the current one on a
+  // change-password form) and its username field.
+  function findSubmittedFields(root = document) {
+    const filled = [...root.querySelectorAll('input[type="password"]')].filter(el => el.value && isVisible(el));
+    if (!filled.length) return null;
+    const password = filled.find(el => autocompleteOf(el).includes('new-password')) || filled[0];
+    const scope = password.form || document;
+    const before = [...scope.querySelectorAll('input')].filter(el =>
+      ['text', 'email', 'tel'].includes(el.type) && el.value
+      && !autocompleteOf(el).includes('one-time-code')
+      && (el.compareDocumentPosition(filled[0]) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const username = before.find(el => /\b(username|email)\b/.test(autocompleteOf(el))) || before[before.length - 1];
+    return { username: username?.value || '', password: password.value };
+  }
+
+  let _lastCapture = '';
+  function capture(root) {
+    if (!chrome.runtime?.id) return;
+    const fields = findSubmittedFields(root);
+    if (!fields) return;
+    const sig = `${fields.username}\u0000${fields.password}`;
+    if (sig === _lastCapture) return;
+    _lastCapture = sig;
+    chrome.runtime.sendMessage({ action: 'vaultCaptureLogin', ...fields }).catch(() => {});
+    // A single-page app may never navigate: ask again once it settles.
+    setTimeout(offerSave, 2000);
+  }
+
+  document.addEventListener('submit', e => capture(e.target instanceof HTMLFormElement ? e.target : document), true);
+  document.addEventListener('click', e => {
+    if (e.target.closest?.(`#${OVERLAY_ID}, #${SAVE_ID}`)) return; // our own buttons
+    const btn = e.target.closest?.('button, input[type="submit"], [role="button"]');
+    if (!btn) return;
+    const scope = btn.form || btn.closest('form') || document;
+    if (scope.querySelector('input[type="password"]')) capture(scope);
+  }, true);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type === 'password') capture(e.target.form || document);
+  }, true);
+
+  const passwordFormShowing = () => [...document.querySelectorAll('input[type="password"]')].some(isVisible);
+
+  async function offerSave() {
+    if (!chrome.runtime?.id || document.getElementById(SAVE_ID) || passwordFormShowing()) return;
+    let offer;
+    try { offer = await chrome.runtime.sendMessage({ action: 'vaultPendingLogin' }); } catch { offer = null; }
+    if (!offer || document.getElementById(SAVE_ID) || passwordFormShowing()) return;
+    const el = makeOverlay(SAVE_ID);
+    renderSave(el, offer);
+    document.body.appendChild(el);
+  }
+
+  const resolve = choice => chrome.runtime.sendMessage({ action: 'vaultResolvePendingLogin', choice }).catch(() => ({ ok: false }));
+  const closeSave = () => document.getElementById(SAVE_ID)?.remove();
+
+  function saveButton(label, primary) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    Object.assign(b.style, {
+      flex: primary ? '1' : '0 0 auto', padding: '7px 10px', borderRadius: '7px', cursor: 'pointer',
+      font: 'inherit', fontSize: '12px', fontWeight: '600',
+      background: primary ? '#38bdf8' : 'transparent', color: primary ? '#0f172a' : '#94a3b8',
+      border: primary ? '0' : '1px solid #1e3a5f',
+    });
+    return b;
+  }
+
+  function renderSave(el, offer) {
+    el.innerHTML = `${OVERLAY_HEADER}<div class="otpilot-save-body" style="padding:10px 12px 12px;color:#f1f5f9;font-size:13px;"></div>`;
+    el.querySelector('.otpilot-overlay-close').addEventListener('click', () => { resolve('dismiss'); closeSave(); });
+    const body = el.querySelector('.otpilot-save-body');
+    const title = offer.kind === 'update'
+      ? `Update the password for <b>${esc(offer.name || offer.host)}</b>?`
+      : `Save this login for <b>${esc(offer.host)}</b>?`;
+
+    if (offer.kind === 'locked') {
+      mountUnlockFrame(body, { name: offer.host, action: 'Unlock & save', intro: `Unlock OTPilot to save your ${offer.host} login.` },
+        async () => {
+          let next;
+          try { next = await chrome.runtime.sendMessage({ action: 'vaultPendingLogin' }); } catch { next = null; }
+          if (!next) { closeSave(); return; }
+          renderSave(el, next);
+        },
+        () => { resolve('dismiss'); closeSave(); });
+      return;
+    }
+
+    body.innerHTML = `<div class="otpilot-save-title" style="margin-bottom:4px;">${title}</div>`
+      + (offer.username ? `<div style="color:#94a3b8;font-size:12px;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(offer.username)}</div>` : '<div style="height:6px"></div>');
+    if (offer.limit) {
+      body.insertAdjacentHTML('beforeend', '<div class="otpilot-save-limit" style="color:#fbbf24;font-size:12px;">The Free plan holds 50 items. Upgrade to save more.</div>');
+      return;
+    }
+    const row = document.createElement('div');
+    Object.assign(row.style, { display: 'flex', gap: '6px' });
+    const save = saveButton(offer.kind === 'update' ? 'Update' : 'Save', true);
+    save.className = 'otpilot-save-confirm';
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      const res = await resolve('save');
+      closeSave();
+      showToast(res?.ok ? (offer.kind === 'update' ? 'Password updated in OTPilot' : 'Login saved to OTPilot') : 'OTPilot could not save this login', !!res?.ok);
+    });
+    const later = saveButton('Not now');
+    later.className = 'otpilot-save-later';
+    later.addEventListener('click', () => { resolve('dismiss'); closeSave(); });
+    row.append(save, later);
+    if (offer.kind === 'new') {
+      const never = saveButton('Never');
+      never.className = 'otpilot-save-never';
+      never.title = `Never offer to save logins on ${offer.host}`;
+      never.addEventListener('click', () => { resolve('never'); closeSave(); });
+      row.append(never);
+    }
+    body.appendChild(row);
+  }
+
   // Sign-in forms often appear after load (SPAs, modals).
   let timer;
   const observer = new MutationObserver(() => {
@@ -130,4 +256,5 @@
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   check();
+  offerSave();
 })();

@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in (SPA)</title></head>
+<body>
+  <div id="app">
+    <form id="f">
+      <input name="user">
+      <input type="password" name="pass">
+      <button type="button" id="go">Continue</button>
+    </form>
+  </div>
+  <script>
+    // Signs in without a page load or a submit event, like many SPAs.
+    document.getElementById('go').addEventListener('click', () => {
+      setTimeout(() => { document.getElementById('app').innerHTML = '<h1>Dashboard</h1>'; }, 200);
+    });
+  </script>
+</body></html>
