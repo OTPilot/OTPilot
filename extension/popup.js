@@ -1868,6 +1868,12 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     errEl.textContent = 'There is no synced data to check this key against. Use "Start fresh" instead.';
     return;
   }
+  // The vault may have locked (lock button, auto-lock) while the server
+  // request was pending: then stop here instead of adopting the key.
+  if ((await VaultLock.state()) !== 'unlocked') {
+    document.getElementById('sync-restore-password').value = '';
+    return;
+  }
   try {
     await CloudSync.saveSyncKey(keyB64, password);
   } catch (e) {

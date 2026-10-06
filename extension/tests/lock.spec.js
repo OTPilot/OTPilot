@@ -203,3 +203,33 @@ test('restoring a recovery key needs the master password and keeps the key wrapp
   expect(local.syncEnabled).toBe(true);
   expect(JSON.stringify(local)).not.toContain(recovery);
 });
+
+test('a restore that finishes after the vault locked does not reopen it', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  const recovery = await page.evaluate(() => VaultCrypto.b64e(VaultCrypto.generateKey()));
+  const state = await page.evaluate(async ([k, pw]) => {
+    // The server answers only after the vault has locked.
+    CloudSync.pull = async () => { await VaultLock.lock(); return { accounts: [], tombstones: {} }; };
+    CloudSync.push = async () => ({});
+    document.getElementById('sync-restore-input').value = k;
+    document.getElementById('sync-restore-password').value = pw;
+    document.getElementById('btn-restore-key').click();
+    await new Promise(r => setTimeout(r, 1500));
+    return { lock: await VaultLock.state(), session: await chrome.storage.session.get(null) };
+  }, [recovery, TEST_PASSWORD]);
+  expect(state.lock).toBe('locked');
+  expect(state.session.vaultKeyUnlocked).toBeUndefined();
+});
+
+test('adopting a key while locked keeps the vault locked', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedLocked(page);
+  const result = await page.evaluate(async pw => {
+    const k = VaultCrypto.b64e(VaultCrypto.generateKey());
+    await VaultKeys.adoptKey(k, pw);
+    return { status: await VaultKeys.status(), unlocks: await VaultKeys.unlock(pw), adopted: (await VaultKeys.getKey()) === k };
+  }, TEST_PASSWORD);
+  expect(result).toEqual({ status: 'locked', unlocks: true, adopted: true });
+});
