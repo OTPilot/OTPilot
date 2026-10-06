@@ -13,7 +13,7 @@ use axum::{
 };
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use serde_json::{json, Value};
-use sqlx::{Executor, PgPool};
+use sqlx::{postgres::PgConnectOptions, Executor, PgPool};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -32,24 +32,60 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEG7g6irBkWtlJFBspgXBnzpfLN2FM
 O7RCQwdJubILQirgE4LTpaQ732e9D2lKnF1t6NuPP0FMTUK+r+tWhHAgvQ==
 -----END PUBLIC KEY-----";
 
-/// A new database on the DATABASE_URL server, with all migrations applied.
-pub async fn test_pool() -> PgPool {
+/// A fresh database on the DATABASE_URL server with every migration applied.
+/// Dropped when this guard goes out of scope — also when the test panics,
+/// since Drop runs during unwinding.
+pub struct TestDb {
+    pub pool: PgPool,
+    name: String,
+    admin: PgConnectOptions,
+}
+
+impl Drop for TestDb {
+    fn drop(&mut self) {
+        let (name, admin) = (self.name.clone(), self.admin.clone());
+        // Drop can't await, and the test's runtime may be shutting down: use a
+        // short-lived runtime on its own thread. FORCE ends the test's pool
+        // connections (Postgres 13+).
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                if let Ok(pool) = PgPool::connect_with(admin).await {
+                    let _ = pool
+                        .execute(format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)").as_str())
+                        .await;
+                }
+            });
+        })
+        .join();
+    }
+}
+
+pub async fn test_db() -> TestDb {
     let url = std::env::var("DATABASE_URL").expect("db-tests need DATABASE_URL");
-    let admin = PgPool::connect(&url).await.expect("connect to test server");
+    // Parse once and only swap the database name, keeping any query settings
+    // (sslmode, a socket `host=…`, …) for both connections.
+    let admin: PgConnectOptions = url.parse().expect("valid DATABASE_URL");
     let name = format!("otpilot_test_{}", Uuid::new_v4().simple());
-    admin
+    let server = PgPool::connect_with(admin.clone())
+        .await
+        .expect("connect to test server");
+    server
         .execute(format!("CREATE DATABASE {name}").as_str())
         .await
         .expect("create test database");
-    let base = url.rsplit_once('/').map(|(b, _)| b).unwrap_or(&url);
-    let pool = PgPool::connect(&format!("{base}/{name}"))
+    server.close().await;
+    let pool = PgPool::connect_with(admin.clone().database(&name))
         .await
         .expect("connect to test database");
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
         .expect("migrate");
-    pool
+    TestDb { pool, name, admin }
 }
 
 pub fn test_state(db: PgPool) -> AppState {
