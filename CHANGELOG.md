@@ -1,6 +1,14 @@
 # Changelog
 
 
+## v2.0.0 (unreleased)
+
+Built on `release/2.0.0`; every 2.0 PR targets that branch, and it merges to `main` once the whole release is ready.
+
+### Extension
+
+- **Version bump to 2.0.0** — OTPilot becomes a password manager with built-in 2FA: a unified vault (logins, secure notes, servers, API credentials), per-item encryption, password autofill, import/export, and team collections. Entries for each feature land here as their PRs merge.
+
 ## v1.4.0
 
 ### Extension
