@@ -17,6 +17,12 @@ const VaultLock = (() => {
   const LEGACY = ['auth', 'sessionExpiry', 'sessionDuration'];
   const LEGACY_SENTINEL = 'otpilot-auth-ok';
   const AUTO_LOCK_OPTIONS = [15, 60, 240, 480, 0];
+  // Set once the user confirmed they saved the recovery key (shown after
+  // first setup and to users upgrading from v1).
+  const KEY_SAVED = 'recoveryKeyAcknowledged';
+  // Set when a restore replaced the device key, so the next recovery-key
+  // screen (possibly after a later unlock) says the old Emergency Kit is stale.
+  const KEY_CHANGED = 'recoveryKeyChanged';
   const DEFAULT_AUTO_LOCK = 0;
 
   const local = chrome.storage.local;
@@ -118,5 +124,49 @@ const VaultLock = (() => {
     return true;
   }
 
-  return { AUTO_LOCK_OPTIONS, state, setup, unlock, lock, touch, changePassword, getAutoLock, setAutoLock };
+  // "Forgot master password": the recovery key is the vault key itself. A v1
+  // plaintext syncKey is converted first so it can be compared.
+  async function recover(recoveryKey, newPassword) {
+    await CloudSync.isSyncEnabled();
+    await VaultKeys.recover(recoveryKey, newPassword);
+    await local.remove(LEGACY);
+    await startDeadline();
+  }
+
+  // Neither password nor recovery key: wipe this device and start over. Data on
+  // the server stays encrypted with the lost key.
+  function resetDevice() {
+    return VaultKeys.wipe();
+  }
+
+  // The recovery key, after re-entering the master password; null if wrong.
+  async function revealRecoveryKey(password) {
+    if (!(await VaultKeys.unlock(password))) return null;
+    return VaultKeys.getKey();
+  }
+
+  async function needsRecoveryKeyNotice() {
+    return (await state()) === 'unlocked' && !(await local.get(KEY_SAVED))[KEY_SAVED];
+  }
+
+  async function acknowledgeRecoveryKey() {
+    await local.set({ [KEY_SAVED]: true });
+    await local.remove(KEY_CHANGED);
+  }
+
+  // The vault key changed (a recovery key was restored): the saved one is stale.
+  async function recoveryKeyReplaced() {
+    await local.remove(KEY_SAVED);
+    await local.set({ [KEY_CHANGED]: true });
+  }
+
+  async function wasRecoveryKeyReplaced() {
+    return !!(await local.get(KEY_CHANGED))[KEY_CHANGED];
+  }
+
+  return {
+    AUTO_LOCK_OPTIONS, state, setup, unlock, lock, touch, changePassword, getAutoLock, setAutoLock,
+    recover, resetDevice, revealRecoveryKey, needsRecoveryKeyNotice, acknowledgeRecoveryKey,
+    recoveryKeyReplaced, wasRecoveryKeyReplaced,
+  };
 })();

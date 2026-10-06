@@ -168,18 +168,34 @@ function loadState() {
   );
 }
 
-function saveState() {
-  return new Promise(r => chrome.storage.local.set({ accounts, activeIndex }, r));
+// After "Reset OTPilot on this device" storage is empty and the vault is back
+// at first run. A write still in flight from before (a sync finishing its
+// request, another open page) must not put data back, so every account/sync
+// write goes through this check.
+async function deviceWasReset() {
+  return (await VaultLock.state()) === 'setup';
 }
 
-function stampLocalChange() {
+async function saveState() {
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ accounts, activeIndex });
+}
+
+async function saveTombstones() {
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ tombstones });
+}
+
+async function stampLocalChange() {
   localChangedAt = new Date().toISOString();
-  return new Promise(r => chrome.storage.local.set({ localChangedAt }, r));
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ localChangedAt });
 }
 
-function writeLastSyncedAt(ts) {
+async function writeLastSyncedAt(ts) {
   lastSyncedAt = ts;
-  return new Promise(r => chrome.storage.local.set({ lastSyncedAt: ts }, r));
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ lastSyncedAt: ts });
 }
 
 function formatRelativeTime(isoStr) {
@@ -931,7 +947,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
     if (!draftSet.has(acc.name)) newTombs[acc.name] = now;
   }
   tombstones = newTombs;
-  await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+  await saveTombstones();
 
   draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   accounts = draft;
@@ -955,6 +971,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 // ── View switching ────────────────────────────────────────────────────────────
 
 function showView(view, opts = {}) {
+  if (view !== 'settings') clearRevealedKey();
   document.getElementById('home-view').style.display      = view === 'home'     ? '' : 'none';
   document.getElementById('settings-panel').style.display = view === 'accounts' ? '' : 'none';
   document.getElementById('config-panel').style.display   = view === 'settings' ? '' : 'none';
@@ -990,6 +1007,7 @@ function showSettingsSubview(id) {
   // no more "back". 'settings-list' as an id just means "no specific item was
   // requested", so it falls back to the first one instead of showing nothing.
   if (id === 'settings-list') id = 'settings-theme-view';
+  if (id !== 'settings-password-view') clearRevealedKey();
   const views = ['settings-theme-view', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view', 'settings-password-view'];
   views.forEach(v => { document.getElementById(v).style.display = v === id ? '' : 'none'; });
   document.querySelectorAll('#settings-list .settings-row').forEach(row => {
@@ -1014,16 +1032,46 @@ document.getElementById('row-settings-autofill').addEventListener('click', () =>
 document.getElementById('back-settings-autofill').addEventListener('click', () => showSettingsSubview('settings-list'));
 
 document.getElementById('row-settings-password').addEventListener('click', async () => {
-  ['change-pw-current', 'change-pw-new', 'change-pw-confirm'].forEach(id => document.getElementById(id).value = '');
+  ['change-pw-current', 'change-pw-new', 'change-pw-confirm', 'reveal-key-password'].forEach(id => document.getElementById(id).value = '');
+  clearRevealedKey();
+  document.getElementById('reveal-key-err').textContent = '';
   document.getElementById('change-pw-err').textContent = '';
   document.getElementById('autolock-select').value = String(await VaultLock.getAutoLock());
   showSettingsSubview('settings-password-view');
+});
+// The revealed recovery key is dropped from the page as soon as it's no
+// longer on screen (leaving the view, locking); a reveal still pending then
+// is ignored (the token no longer matches).
+let _revealToken = 0;
+function clearRevealedKey() {
+  _revealToken++;
+  const out = document.getElementById('reveal-key-value');
+  out.textContent = '';
+  out.style.display = 'none';
+}
+
+document.getElementById('reveal-key-btn').addEventListener('click', async () => {
+  const pwEl = document.getElementById('reveal-key-password');
+  const out = document.getElementById('reveal-key-value');
+  const err = document.getElementById('reveal-key-err');
+  err.textContent = '';
+  clearRevealedKey();
+  const token = _revealToken;
+  const key = pwEl.value ? await VaultLock.revealRecoveryKey(pwEl.value) : null;
+  pwEl.value = '';
+  if (token !== _revealToken) return;
+  if (!key) { err.textContent = 'Incorrect password.'; return; }
+  out.textContent = key;
+  out.style.display = '';
 });
 document.getElementById('autolock-select').addEventListener('change', async e => {
   await VaultLock.setAutoLock(Number(e.target.value));
   setStatus('Auto-lock updated');
 });
-document.getElementById('back-settings-password').addEventListener('click', () => showSettingsSubview('settings-list'));
+document.getElementById('back-settings-password').addEventListener('click', () => {
+  clearRevealedKey();
+  showSettingsSubview('settings-list');
+});
 
 document.getElementById('change-pw-submit').addEventListener('click', async () => {
   const current = document.getElementById('change-pw-current').value;
@@ -1425,8 +1473,11 @@ document.getElementById('crypto-password').addEventListener('keydown', e => {
 
 // ── Lock / Session ────────────────────────────────────────────────────────────
 
-let lockSetupResolve = null;
-let lockLoginResolve = null;
+// Everyone waiting for the vault to be unlocked: popup startup (initLock) and
+// a re-lock while the popup is open (lockPopup). All are released together
+// once an unlock fully completes (including the recovery-key screen).
+const _unlockWaiters = [];
+const waitForUnlock = () => new Promise(resolve => _unlockWaiters.push(resolve));
 
 function setLockButtonState(btn, busy) {
   btn.disabled = busy;
@@ -1438,26 +1489,19 @@ function setLockButtonState(btn, busy) {
   }
 }
 
+const LOCK_SCREENS = ['setup', 'login', 'kit', 'recover', 'reset'];
+
 function showLockOverlay(mode) {
-  const overlay = document.getElementById('lock-overlay');
-  const setup   = document.getElementById('lock-setup');
-  const login   = document.getElementById('lock-login');
-  overlay.classList.remove('hidden');
-  if (mode === 'setup') {
-    setup.style.display = '';
-    login.style.display = 'none';
-    document.getElementById('lock-new-password').value = '';
-    document.getElementById('lock-confirm-password').value = '';
-    document.getElementById('lock-setup-err').textContent = '';
-    document.getElementById('lock-new-password').focus();
-  } else {
-    setup.style.display = 'none';
-    login.style.display = '';
-    document.getElementById('lock-password').value = '';
-    document.getElementById('lock-login-err').textContent = '';
-    document.getElementById('lock-password').classList.remove('err');
-    document.getElementById('lock-password').focus();
-  }
+  document.getElementById('lock-overlay').classList.remove('hidden');
+  for (const m of LOCK_SCREENS) document.getElementById(`lock-${m}`).style.display = m === mode ? '' : 'none';
+  // A screen can be shown again later in the same popup (it re-locks while
+  // open), so reset its fields and any button left in the "Verifying…" state.
+  document.querySelectorAll(`#lock-${mode} .lock-btn`).forEach(b => {
+    if (b.dataset.origText) setLockButtonState(b, false);
+  });
+  document.querySelectorAll(`#lock-${mode} .lock-err`).forEach(e => { e.textContent = ''; });
+  document.querySelectorAll(`#lock-${mode} input.lock-input`).forEach(i => { i.value = ''; i.classList.remove('err'); });
+  document.querySelector(`#lock-${mode} input.lock-input`)?.focus();
 }
 
 function hideLockOverlay() {
@@ -1467,19 +1511,22 @@ function hideLockOverlay() {
 async function initLock() {
   const state = await VaultLock.state();
   if (state === 'setup') {
-    return new Promise(resolve => {
-      lockSetupResolve = resolve;
-      showLockOverlay('setup');
-    }).then(() => true);
+    showLockOverlay('setup');
+    return waitForUnlock().then(() => true);
   }
   if (state === 'unlocked') {
     await VaultLock.touch(); // opening the popup counts as activity
+    // The recovery-key screen was closed without confirming (popup closed, or
+    // the vault was unlocked from a page): show it before anything else.
+    if (await VaultLock.needsRecoveryKeyNotice()) {
+      const unlocked = waitForUnlock();
+      completeUnlock();
+      return unlocked.then(() => true);
+    }
     return false;
   }
-  return new Promise(resolve => {
-    lockLoginResolve = resolve;
-    showLockOverlay('login');
-  }).then(() => true);
+  showLockOverlay('login');
+  return waitForUnlock().then(() => true);
 }
 
 async function tryAutoFillCurrentTab() {
@@ -1517,10 +1564,7 @@ document.getElementById('lock-setup-btn').addEventListener('click', async () => 
   try {
     await VaultLock.setup(pw1);
     await VaultLock.setAutoLock(autoLock);
-    hideLockOverlay();
-    const cb = lockSetupResolve;
-    lockSetupResolve = null;
-    cb?.();
+    await completeUnlock();
   } catch {
     err.textContent = 'Failed to set password. Try again.';
     setLockButtonState(btn, false);
@@ -1553,10 +1597,7 @@ document.getElementById('lock-login-btn').addEventListener('click', async () => 
   try {
     const ok = await VaultLock.unlock(pw);
     if (ok) {
-      hideLockOverlay();
-      const cb = lockLoginResolve;
-      lockLoginResolve = null;
-      cb?.();
+      await completeUnlock();
     } else {
       err.textContent = 'Incorrect password.';
       inp.classList.add('err');
@@ -1573,6 +1614,135 @@ document.getElementById('lock-password').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('lock-login-btn').click();
 });
 
+// After any successful setup/unlock/recovery: show the recovery key once if the
+// user hasn't confirmed saving it (first setup, or upgraded from v1), then hand
+// back to whoever was waiting on the lock screen.
+const KEY_REPLACED_NOTE = 'Your recovery key is now the one you restored. Any Emergency Kit you saved before no longer works.';
+
+async function completeUnlock() {
+  if (await VaultLock.needsRecoveryKeyNotice()) {
+    const note = (await VaultLock.wasRecoveryKeyReplaced()) ? KEY_REPLACED_NOTE : '';
+    // Cancelled when the vault locks while the screen is up: the waiters stay
+    // queued for the next unlock.
+    if (!(await showRecoveryKit(note))) return;
+  }
+  // Never drop the lock screen unless the vault really is unlocked.
+  if ((await VaultLock.state()) !== 'unlocked') { showLockOverlay('login'); return; }
+  hideLockOverlay();
+  for (const release of _unlockWaiters.splice(0)) release();
+}
+
+// Resolves true once the user confirms saving the key, false if cancelled or
+// if the vault isn't unlocked (there is no key to show, and this screen must
+// never stand in for the lock screen).
+// Each request takes a token; a lock (cancelRecoveryKit) or a newer request
+// bumps it, and every await is followed by a token check, so a stale request
+// can't show the screen over the login or fill in a key after cancellation.
+let _kitSettle = null;
+let _kitToken = 0;
+async function showRecoveryKit(note = '') {
+  _kitSettle?.(false);
+  _kitSettle = null;
+  const token = ++_kitToken;
+  if ((await VaultLock.state()) !== 'unlocked' || token !== _kitToken) return false;
+  const key = await VaultKeys.getKey();
+  if (!key || token !== _kitToken) return false;
+  // No await from here until _kitSettle is set: nothing can cancel in between.
+  showLockOverlay('kit');
+  document.getElementById('lock-kit-note').textContent = note;
+  document.getElementById('lock-kit-note').style.display = note ? '' : 'none';
+  document.getElementById('lock-kit-key').textContent = key;
+  document.getElementById('lock-kit-saved').checked = false;
+  document.getElementById('lock-kit-done').disabled = true;
+  return new Promise(resolve => { _kitSettle = resolve; });
+}
+
+function cancelRecoveryKit() {
+  _kitToken++;
+  document.getElementById('lock-kit-key').textContent = '';
+  const settle = _kitSettle;
+  _kitSettle = null;
+  settle?.(false);
+}
+
+function downloadEmergencyKit(key) {
+  const text = [
+    'OTPilot Emergency Kit',
+    `Created: ${new Date().toISOString().slice(0, 10)}`,
+    '',
+    `Recovery key: ${key}`,
+    '',
+    'This key decrypts everything you keep in OTPilot.',
+    '- Forgot your master password? Choose "Forgot your master password?" on the lock screen and paste this key.',
+    '- New device? Sign in, open Sync and paste this key.',
+    'Keep it offline and private. Anyone with it (and your account) can read your vault.',
+    '',
+  ].join('\n');
+  const a = document.createElement('a');
+  a.download = 'OTPilot-Emergency-Kit.txt';
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById('lock-kit-copy').addEventListener('click', async () => {
+  await navigator.clipboard.writeText(document.getElementById('lock-kit-key').textContent).catch(() => {});
+  setStatus('Recovery key copied');
+});
+document.getElementById('lock-kit-download').addEventListener('click', () =>
+  downloadEmergencyKit(document.getElementById('lock-kit-key').textContent));
+document.getElementById('lock-kit-saved').addEventListener('change', e => {
+  document.getElementById('lock-kit-done').disabled = !e.target.checked;
+});
+document.getElementById('lock-kit-done').addEventListener('click', async () => {
+  await VaultLock.acknowledgeRecoveryKey();
+  document.getElementById('lock-kit-key').textContent = '';
+  const settle = _kitSettle;
+  _kitSettle = null;
+  settle?.(true);
+});
+
+// Forgot master password → recovery key
+document.getElementById('lock-forgot').addEventListener('click', () => showLockOverlay('recover'));
+document.getElementById('lock-recover-back').addEventListener('click', () => showLockOverlay('login'));
+document.getElementById('lock-recover-nokey').addEventListener('click', () => showLockOverlay('reset'));
+document.getElementById('lock-reset-back').addEventListener('click', () => showLockOverlay('recover'));
+
+document.getElementById('lock-recover-btn').addEventListener('click', async () => {
+  const key = document.getElementById('lock-recover-key').value.trim();
+  const pw1 = document.getElementById('lock-recover-new').value;
+  const pw2 = document.getElementById('lock-recover-confirm').value;
+  const err = document.getElementById('lock-recover-err');
+  const btn = document.getElementById('lock-recover-btn');
+  err.textContent = '';
+  if (!key) { err.textContent = 'Paste your recovery key.'; return; }
+  if (!pw1) { err.textContent = 'Choose a new master password.'; return; }
+  if (pw1 !== pw2) { err.textContent = 'Passwords do not match.'; return; }
+
+  setLockButtonState(btn, true);
+  try {
+    await VaultLock.recover(key, pw1);
+    await VaultLock.acknowledgeRecoveryKey(); // they just used it
+    await completeUnlock();
+  } catch (e) {
+    err.textContent = e.message === 'wrong recovery key'
+      ? "That recovery key doesn't match this device."
+      : e.message === "recovery key can't be checked"
+        ? "There's nothing on this device to check the key against. Reset this device, then restore from Sync."
+        : 'Something went wrong. Try again.';
+    setLockButtonState(btn, false);
+  }
+});
+
+document.getElementById('lock-reset-btn').addEventListener('click', async () => {
+  if (document.getElementById('lock-reset-confirm').value.trim() !== 'RESET') {
+    document.getElementById('lock-reset-err').textContent = 'Type RESET to confirm.';
+    return;
+  }
+  await VaultLock.resetDevice();
+  location.reload();
+});
+
 // Shows the lock screen over an open popup, stopping the code timer until the
 // master password is entered again. Used by the lock button and whenever the
 // vault locks elsewhere (auto-lock alarm, another popup) while this one is open.
@@ -1582,21 +1752,19 @@ async function lockPopup() {
   _popupLocked = true;
   clearInterval(timerInterval);
   clearInterval(_sharedRefreshTimer);
+  cancelRecoveryKit();
+  clearRevealedKey();
   await new Promise(r => chrome.storage.local.remove('userPlan', r));
   document.querySelector('.kofi-footer').style.display = '';
-  await new Promise(resolve => {
-    lockLoginResolve = async () => {
-      await loadState();
-      await syncActiveIndexToUrl();
-      renderAccountBar();
-      startTimer();
-      renderSharedCodes();
-      showView('home');
-      tryAutoFillCurrentTab();
-      resolve();
-    };
-    showLockOverlay('login');
-  });
+  showLockOverlay('login');
+  await waitForUnlock();
+  await loadState();
+  await syncActiveIndexToUrl();
+  renderAccountBar();
+  startTimer();
+  renderSharedCodes();
+  showView('home');
+  tryAutoFillCurrentTab();
   _popupLocked = false;
 }
 
@@ -1730,7 +1898,7 @@ async function doSync() {
       accounts   = serverMeta.accounts;
       tombstones = serverMeta.tombstones;
       await saveState();
-      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+      await saveTombstones();
       renderAccountBar();
       requestIcons(); // pick up icons for accounts pulled in from another device
       startTimer();
@@ -1746,7 +1914,7 @@ async function doSync() {
       tombstones = mergedTombs;
       const now = new Date().toISOString();
       await saveState();
-      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+      await saveTombstones();
       renderAccountBar();
       requestIcons(); // pick up icons for accounts merged in from another device
       startTimer();
@@ -1874,6 +2042,8 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     document.getElementById('sync-restore-password').value = '';
     return;
   }
+  const previousKey = await VaultKeys.getKey();
+  if (!previousKey) return; // locked meanwhile: the lock screen is up
   try {
     await CloudSync.saveSyncKey(keyB64, password);
   } catch (e) {
@@ -1881,6 +2051,10 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     return;
   }
   document.getElementById('sync-restore-password').value = '';
+  // The device key is now the restored one: record it right away, before any
+  // network work that could fail, so the stale-Emergency-Kit warning can't be lost.
+  const keyReplaced = keyB64 !== previousKey;
+  if (keyReplaced) await VaultLock.recoveryKeyReplaced();
   try {
     const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
 
@@ -1896,13 +2070,16 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     accounts   = merged;
     tombstones = mergedTombs;
     await saveState();
-    await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+    await saveTombstones();
     renderAccountBar();
     const now = new Date().toISOString();
     await CloudSync.push(merged, mergedTombs, now);
     await writeLastSyncedAt(now);
     syncShowView('sv-active');
     syncSetStatus('ok', 'Restored');
+    // Show the new key now if the vault is still unlocked; otherwise the
+    // recorded change shows it after the next unlock.
+    if (keyReplaced && await showRecoveryKit(KEY_REPLACED_NOTE) && (await VaultLock.state()) === 'unlocked') hideLockOverlay();
   } catch {
     errEl.textContent = 'Could not finish syncing. Check your connection and try again.';
     await CloudSync.deleteSyncKey();

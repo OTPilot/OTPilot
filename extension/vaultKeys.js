@@ -24,6 +24,12 @@ const VaultKeys = (() => {
   const PLAIN = 'vaultKey';
   const WRAPPED = 'vaultKeyWrapped';
   const UNLOCKED = 'vaultKeyUnlocked';
+  // A fixed value encrypted with VK, stored next to the wrapped key: lets a
+  // recovery key be checked locally without the master password, even when
+  // the vault has no items yet.
+  const CHECK = 'vaultKeyCheck';
+  const CHECK_TEXT = 'otpilot-vault-key-check';
+  const CHECK_AAD = new TextEncoder().encode('otpilot:vk-check:v1');
 
   const local = chrome.storage.local;
   const session = chrome.storage.session;
@@ -46,6 +52,37 @@ const VaultKeys = (() => {
     const d = await local.get([PLAIN, WRAPPED]);
     if (d[WRAPPED]) return (await session.get(UNLOCKED))[UNLOCKED] ?? null;
     return d[PLAIN] ?? null;
+  }
+
+  async function makeCheck(key) {
+    const k = await crypto.subtle.importKey('raw', VaultCrypto.b64d(key), 'AES-GCM', false, ['encrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: CHECK_AAD }, k, new TextEncoder().encode(CHECK_TEXT));
+    return { iv: VaultCrypto.b64e(iv), ct: VaultCrypto.b64e(ct) };
+  }
+
+  // true / false when the candidate can be checked, null when nothing on this
+  // device can confirm it (no check value, no vault item, no plaintext key).
+  async function matchesVaultKey(candidate) {
+    const d = await local.get([CHECK, PLAIN]);
+    if (d[PLAIN]) return d[PLAIN] === candidate;
+    if (d[CHECK]) {
+      try {
+        const k = await crypto.subtle.importKey('raw', VaultCrypto.b64d(candidate), 'AES-GCM', false, ['decrypt']);
+        const pt = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: VaultCrypto.b64d(d[CHECK].iv), additionalData: CHECK_AAD }, k, VaultCrypto.b64d(d[CHECK].ct));
+        return new TextDecoder().decode(pt) === CHECK_TEXT;
+      } catch { return false; }
+    }
+    if (typeof VaultStore !== 'undefined') {
+      // Any one item decrypting confirms the key; a damaged item mustn't block it.
+      const records = Object.values(await VaultStore.listRecords());
+      for (const rec of records) {
+        try { await VaultCrypto.decryptItem(rec, candidate); return true; } catch { /* next */ }
+      }
+      if (records.length) return false;
+    }
+    return null;
   }
 
   // Every state change runs under one Web Lock, shared with VaultStore's
@@ -108,7 +145,27 @@ const VaultKeys = (() => {
       if (!key) throw new Error('vault is locked');
       if ((await local.get('syncKey')).syncKey) throw new Error('sync key is still stored in plaintext');
       const wrapped = await VaultCrypto.wrapVaultKey(key, newPassword);
-      await local.set({ [WRAPPED]: wrapped });
+      await local.set({ [WRAPPED]: wrapped, [CHECK]: await makeCheck(key) });
+      await session.set({ [UNLOCKED]: key });
+      await local.remove(PLAIN);
+    });
+  }
+
+  // "Forgot master password": proves the recovery key (= VK) against what this
+  // device holds, then wraps it with a new password and unlocks. Nothing in the
+  // vault changes. Throws 'wrong recovery key' or 'recovery key can't be checked'.
+  function recover(candidate, newPassword) {
+    return exclusive(async () => {
+      if (!newPassword) throw new Error('password required');
+      let raw;
+      try { raw = VaultCrypto.b64d(candidate.trim()); } catch { throw new Error('wrong recovery key'); }
+      if (raw.length !== 32) throw new Error('wrong recovery key');
+      const key = VaultCrypto.b64e(raw);
+      const match = await matchesVaultKey(key);
+      if (match === null) throw new Error("recovery key can't be checked");
+      if (!match) throw new Error('wrong recovery key');
+      const wrapped = await VaultCrypto.wrapVaultKey(key, newPassword);
+      await local.set({ [WRAPPED]: wrapped, [CHECK]: await makeCheck(key) });
       await session.set({ [UNLOCKED]: key });
       await local.remove(PLAIN);
     });
@@ -122,7 +179,7 @@ const VaultKeys = (() => {
       const key = await unwrapWith(currentPassword);
       if (!key) return false;
       await local.set({ [PLAIN]: key });
-      await local.remove(WRAPPED);
+      await local.remove([WRAPPED, CHECK]);
       await session.remove(UNLOCKED);
       return true;
     });
@@ -150,6 +207,7 @@ const VaultKeys = (() => {
         : {};
       if (d[WRAPPED]) {
         writes[WRAPPED] = await VaultCrypto.wrapVaultKey(newKey, password);
+        writes[CHECK] = await makeCheck(newKey);
       } else {
         writes[PLAIN] = newKey;
       }
@@ -161,5 +219,15 @@ const VaultKeys = (() => {
     });
   }
 
-  return { status, getKey, init, unlock, lock, setPassword, removePassword, adoptKey };
+  // Erases everything on this device (reset with neither password nor
+  // recovery key). Under the shared lock so an in-flight key change or record
+  // write finishes first instead of landing after the wipe.
+  function wipe() {
+    return exclusive(async () => {
+      await local.clear();
+      await session.clear();
+    });
+  }
+
+  return { status, getKey, init, unlock, lock, setPassword, removePassword, adoptKey, recover, wipe };
 })();
