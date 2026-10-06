@@ -167,6 +167,9 @@ test('activity after the deadline passed locks instead of reviving the session',
   const page = await popup(context, extensionId);
   await seedUnlocked(page, { autoLockMinutes: 15 });
   await page.reload();
+  // Opening the popup sets its own deadline (initLock → touch); wait for it so
+  // it can't overwrite the expired one set below.
+  await expect.poll(() => page.evaluate(async () => (await chrome.storage.session.get('vaultLockAt')).vaultLockAt ?? 0)).toBeGreaterThan(0);
   await page.evaluate(() => chrome.storage.session.set({ vaultLockAt: Date.now() - 1000 }));
   // Changing the auto-lock is activity (touch); it must not renew an expired deadline.
   const state = await page.evaluate(async () => { await VaultLock.setAutoLock(60); return VaultLock.state(); });
