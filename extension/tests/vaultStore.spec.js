@@ -4,7 +4,7 @@ import { test, expect } from './fixtures.js';
 // vaultCrypto.js it needs) into an extension page with a clean storage.
 async function storePage(context, extensionId) {
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.goto(`chrome-extension://${extensionId}/test/blank.html`);
   await page.evaluate(() => new Promise(r => chrome.storage.local.clear(r)));
   await page.addScriptTag({ url: `chrome-extension://${extensionId}/vaultCrypto.js` });
   await page.addScriptTag({ url: `chrome-extension://${extensionId}/vaultStore.js` });
@@ -95,4 +95,34 @@ test('clear wipes vault records and tombstones but nothing else', async ({ conte
     return Object.keys(await new Promise(r => chrome.storage.local.get(null, r))).sort();
   }, [item('a', 'A'), item('b', 'B')]);
   expect(keys).toEqual(['accounts', 'theme']);
+});
+
+test("an item whose id is '__proto__' is stored and read back like any other", async ({ context, extensionId }) => {
+  const page = await storePage(context, extensionId);
+  const result = await page.evaluate(async it => {
+    const vk = VaultCrypto.generateKey();
+    await VaultStore.save(it, vk);
+    const { items, failed } = await VaultStore.readAll(vk);
+    await VaultStore.remove('__proto__', '2026-10-06T12:00:00.000Z');
+    return { titles: items.map(i => i.title), failed, tombs: Object.keys(await VaultStore.listTombstones()) };
+  }, item('__proto__', 'Odd id'));
+  expect(result).toEqual({ titles: ['Odd id'], failed: [], tombs: ['__proto__'] });
+});
+
+test('a save Chrome rejects (over quota) throws and keeps the tombstone', async ({ context, extensionId }) => {
+  const page = await storePage(context, extensionId);
+  const result = await page.evaluate(async () => {
+    const vk = VaultCrypto.generateKey();
+    await VaultStore.remove('big', '2026-10-06T12:00:00.000Z');
+    // ~11 MB of notes: past chrome.storage.local's 10 MB quota once encrypted.
+    const huge = { id: 'big', type: 'note', title: 'Too big', fields: [], notes: 'x'.repeat(11 * 1024 * 1024) };
+    let error = null;
+    try { await VaultStore.save(huge, vk); } catch (e) { error = e.message; }
+    return {
+      threw: !!error,
+      records: Object.keys(await VaultStore.listRecords()),
+      tombs: Object.keys(await VaultStore.listTombstones()),
+    };
+  });
+  expect(result).toEqual({ threw: true, records: [], tombs: ['big'] });
 });

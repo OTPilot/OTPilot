@@ -15,13 +15,15 @@ const VaultStore = (() => {
   const RECORD = 'vi:';
   const TOMB = 'vt:';
 
-  const get = keys => new Promise(r => chrome.storage.local.get(keys, r));
-  const set = obj => new Promise(r => chrome.storage.local.set(obj, r));
-  const del = keys => new Promise(r => chrome.storage.local.remove(keys, r));
+  // Promise form of the API: it rejects when Chrome refuses a write (e.g. the
+  // storage quota on a large import), so a failed save never looks successful.
+  const get = keys => chrome.storage.local.get(keys);
+  const set = obj => chrome.storage.local.set(obj);
+  const del = keys => chrome.storage.local.remove(keys);
 
   async function byPrefix(prefix) {
     const all = await get(null);
-    const out = {};
+    const out = Object.create(null); // ids are data: '__proto__' must stay a key
     for (const [k, v] of Object.entries(all)) {
       if (k.startsWith(prefix)) out[k.slice(prefix.length)] = v;
     }
@@ -58,7 +60,8 @@ const VaultStore = (() => {
   }
 
   // Encrypts and stores items in a single storage write (one item, an import,
-  // or the v1 migration). Saving an id clears its tombstone.
+  // or the v1 migration). Saving an id clears its tombstone — only after the
+  // write succeeded; a rejected write throws and leaves tombstones in place.
   async function save(items, wrappingKey) {
     const list = Array.isArray(items) ? items : [items];
     const writes = {};

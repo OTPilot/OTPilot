@@ -4,7 +4,7 @@ import { test, expect } from './fixtures.js';
 // blank extension page (same origin, so the extension CSP allows it).
 async function cryptoPage(context, extensionId) {
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.goto(`chrome-extension://${extensionId}/test/blank.html`);
   await page.addScriptTag({ url: `chrome-extension://${extensionId}/vaultCrypto.js` });
   return page;
 }
