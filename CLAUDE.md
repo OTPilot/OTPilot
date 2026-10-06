@@ -95,6 +95,7 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 - `config.js` — active config (API_URL, SUPABASE_URL, etc.); swapped by `make dev/prod`
 - `keys.js` — team ECDH P-256 keypair (private key local; public uploaded via `sync-user`) for wrapping shared-code keys
 - `sharing.js` — team shared-codes (consume): list codes shared with you, unwrap K1, fetch live TOTP
+- `generator.js` — password/PIN generator (pure): `crypto.getRandomValues` with rejection sampling (no modulo bias), at least one char from every enabled set, look-alikes (0 O o 1 l I |) skipped by default, `strength()` = entropy bits of the settings. The popup's Generate view keeps its options in `chrome.storage.local.generatorOptions` and the last 10 copied values in `chrome.storage.session.generatorHistory` (memory only)
 - `vaultCrypto.js` — 2.0 vault crypto (pure, no storage): per-item AES-GCM with item id as AAD, IK wrap/re-wrap under VK (syncKey) or a collection key, master-password wrap of VK (PBKDF2-SHA256 600k)
 - `vaultStore.js` — 2.0 local encrypted item storage: one `chrome.storage.local` key per record (`vi:<id>`) and per tombstone (`vt:<id>`) so concurrent writers never clobber each other; `readAll` reports undecryptable records instead of failing
 - `vaultKeys.js` — 2.0 vault key (VK) lifecycle: plaintext `vaultKey` without a master password, `vaultKeyWrapped` + `chrome.storage.session` `vaultKeyUnlocked` with one; stored apart from `syncKey` (whose presence means "sync is set up") but adopts it when present

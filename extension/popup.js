@@ -991,6 +991,8 @@ function showView(view, opts = {}) {
   document.getElementById('config-panel').style.display   = view === 'settings' ? '' : 'none';
   document.getElementById('sync-panel').style.display     = view === 'sync'     ? '' : 'none';
   document.getElementById('team-panel').style.display     = view === 'team'     ? '' : 'none';
+  document.getElementById('generate-panel').style.display = view === 'generate' ? '' : 'none';
+  document.getElementById('nav-generate').classList.toggle('active', view === 'generate');
   document.getElementById('nav-home').classList.toggle('active',     view === 'home');
   document.getElementById('nav-settings').classList.toggle('active', view === 'accounts');
   document.getElementById('nav-config').classList.toggle('active',   view === 'settings');
@@ -999,6 +1001,7 @@ function showView(view, opts = {}) {
   if (view === 'accounts') renderAccountsList(opts.openAccountIdx ?? -1, { preserveSearch: opts.preserveSearch });
   if (view === 'sync') renderSyncPanel();
   if (view === 'team') renderTeamPanel();
+  if (view === 'generate') renderGenerator();
   if (view === 'settings') {
     chrome.storage.local.get('emailAutoFill', d => {
       const on = d.emailAutoFill ?? true;
@@ -1126,6 +1129,95 @@ document.getElementById('nav-home').addEventListener('click',    () => showView(
 document.getElementById('nav-settings').addEventListener('click', () => showView('accounts'));
 document.getElementById('nav-config').addEventListener('click',   () => showView('settings'));
 document.getElementById('nav-sync').addEventListener('click',     () => showView('sync'));
+document.getElementById('nav-generate').addEventListener('click', () => showView('generate'));
+
+// ── Generate ─────────────────────────────────────────────────────────────────
+// Options persist (chrome.storage.local, not secret). Copied passwords are kept
+// for this browser session only (chrome.storage.session, memory-only), so one
+// generated for a signup form that got closed can still be recovered.
+let _genOptions = { ...Generator.DEFAULTS };
+let _genValue = '';
+const GEN_HISTORY_MAX = 10;
+
+async function renderGenerator() {
+  const { generatorOptions } = await chrome.storage.local.get('generatorOptions');
+  _genOptions = Generator.normalize(generatorOptions);
+  regenerate();
+  renderGenHistory();
+}
+
+function syncGenControls() {
+  document.querySelectorAll('[data-gen-mode]').forEach(b => b.classList.toggle('active', b.dataset.genMode === _genOptions.mode));
+  document.getElementById('gen-length').textContent = _genOptions.length;
+  document.querySelectorAll('[data-gen-opt]').forEach(i => { i.checked = !!_genOptions[i.dataset.genOpt]; });
+  document.getElementById('gen-opts').style.display = _genOptions.mode === 'pin' ? 'none' : '';
+  const { bits, label } = Generator.strength(_genOptions);
+  document.getElementById('gen-strength').textContent = `${label} · ${_genOptions.length} characters · ~${bits} bits`;
+  document.getElementById('gen-bar').style.width = `${Math.min(100, bits)}%`;
+}
+
+function regenerate() {
+  _genValue = Generator.generate(_genOptions);
+  document.getElementById('gen-output').textContent = _genValue;
+  syncGenControls();
+}
+
+function setGenOptions(patch) {
+  _genOptions = Generator.normalize({ ..._genOptions, ...patch });
+  chrome.storage.local.set({ generatorOptions: _genOptions });
+  regenerate();
+}
+
+async function renderGenHistory() {
+  const { generatorHistory = [] } = await chrome.storage.session.get('generatorHistory');
+  const list = document.getElementById('gen-history');
+  list.innerHTML = '';
+  document.getElementById('gen-history-title').style.display = generatorHistory.length ? '' : 'none';
+  for (const value of generatorHistory) {
+    const row = document.createElement('div');
+    row.className = 'gen-history-row';
+    const text = document.createElement('span');
+    text.textContent = value;
+    const copy = document.createElement('button');
+    copy.className = 'gen-step';
+    copy.title = 'Copy';
+    copy.textContent = '⧉';
+    copy.addEventListener('click', async () => {
+      if (await copyText(value)) setStatus('Copied');
+    });
+    row.append(text, copy);
+    list.appendChild(row);
+  }
+}
+
+document.querySelectorAll('[data-gen-mode]').forEach(b =>
+  b.addEventListener('click', () => setGenOptions({ mode: b.dataset.genMode, length: b.dataset.genMode === 'pin' ? 6 : 16 })));
+document.querySelectorAll('[data-gen-opt]').forEach(i =>
+  i.addEventListener('change', () => setGenOptions({ [i.dataset.genOpt]: i.checked })));
+document.getElementById('gen-minus').addEventListener('click', () => setGenOptions({ length: _genOptions.length - 1 }));
+document.getElementById('gen-plus').addEventListener('click', () => setGenOptions({ length: _genOptions.length + 1 }));
+document.getElementById('gen-regenerate').addEventListener('click', regenerate);
+// Copies or reports why it couldn't; returns whether the clipboard got it.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    setStatus('Could not copy — the browser blocked the clipboard', false);
+    return false;
+  }
+}
+
+document.getElementById('gen-copy').addEventListener('click', async () => {
+  // Capture now: Regenerate or an option change while this runs replaces _genValue.
+  const value = _genValue;
+  if (!(await copyText(value))) return;
+  const { generatorHistory = [] } = await chrome.storage.session.get('generatorHistory');
+  const next = [value, ...generatorHistory.filter(v => v !== value)].slice(0, GEN_HISTORY_MAX);
+  await chrome.storage.session.set({ generatorHistory: next });
+  setStatus('Password copied');
+  renderGenHistory();
+});
 document.getElementById('nav-team').addEventListener('click',     () => showView('team'));
 
 document.getElementById('btn-quick-add').addEventListener('click', () => {
