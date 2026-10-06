@@ -2193,15 +2193,23 @@ const SVG_REFRESH = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none"
 
 let _sharedRefreshTimer = null;
 
+// Startup, the 30s auto-refresh and any later call can overlap. Only the
+// newest call may touch the DOM, so a slower stale one can't hide or
+// overwrite the section after a newer one already rendered it.
+let _sharedRenderSeq = 0;
+
 async function renderSharedCodes() {
   if (typeof Sharing === 'undefined') return;
   const section = document.getElementById('shared-section');
   const list = document.getElementById('shared-list');
   if (!section || !list) return;
+  const seq = ++_sharedRenderSeq;
+  const stale = () => seq !== _sharedRenderSeq;
 
   let team, codes;
   try {
     team = await Sharing.getMyTeam();
+    if (stale()) return;
     // Show the Team nav tab whenever the user belongs to a team.
     document.getElementById('nav-team').style.display = (team && team.id) ? '' : 'none';
     if (!team || !team.id) { section.style.display = 'none'; return; }
@@ -2212,7 +2220,8 @@ async function renderSharedCodes() {
       nameEl.style.display = '';
     }
     codes = await Sharing.getSharedCodes(team.id);
-  } catch { section.style.display = 'none'; return; }
+  } catch { if (!stale()) section.style.display = 'none'; return; }
+  if (stale()) return;
 
   if (!codes.length) { section.style.display = 'none'; return; }
 
@@ -2227,6 +2236,7 @@ async function renderSharedCodes() {
     }
     await new Promise(r => chrome.storage.local.set({ knownSharedIds: ids }, r));
   } catch { /* ignore */ }
+  if (stale()) return;
 
   section.style.display = '';
   list.innerHTML = '';
