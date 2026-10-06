@@ -4,7 +4,7 @@ ZIP_DEV := releases/otpilot-$(VERSION)-dev.zip
 
 EXTENSION_FILES := \
   manifest.json \
-  popup.html popup.js theme-boot.js \
+  popup.html popup.js theme-boot.js theme.css unlock.html unlock.js \
   background.js \
   jsqr.js content.js totp.js email-reader.js googleAuthMigration.js \
   supabase.js cloudSync.js keys.js sharing.js \

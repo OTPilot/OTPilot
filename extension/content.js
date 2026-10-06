@@ -475,30 +475,15 @@ function showLockOverlay(accountName, onUnlock, onDismiss) {
     overflow: 'hidden',
   });
 
-  const safeName = accountName.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  el.innerHTML = `${OVERLAY_HEADER}
-    <div style="padding:12px 14px;">
-      <div style="color:#cbd5e1;font-size:12px;margin-bottom:10px;">
-        Unlock to auto-fill <strong style="color:#f1f5f9;">${safeName}</strong>
-      </div>
-      ${PW_FIELD_HTML}
-      <div style="display:flex;gap:8px;">
-        <button class="otpilot-primary" style="flex:1;padding:7px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Unlock</button>
-        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid #334155;border-radius:6px;color:#64748b;font-size:12px;cursor:pointer;">Not now</button>
-      </div>
-    </div>`;
-
+  el.innerHTML = OVERLAY_HEADER;
   document.body.appendChild(el);
 
-  const close      = () => { el.remove(); onDismiss?.(); };
-  const primaryBtn = el.querySelector('.otpilot-primary');
-
+  let stopListening = () => {};
+  const close = () => { stopListening(); el.remove(); onDismiss?.(); };
   el.querySelector('.otpilot-overlay-close').onclick = close;
-  el.querySelector('.otpilot-secondary').onclick     = close;
 
   const defaultOnUnlock = () => { el.remove(); fillAndSubmit(undefined, false); };
-  wirePwField(el, primaryBtn, 'Unlock', onUnlock || defaultOnUnlock);
+  stopListening = mountUnlockFrame(el, { name: accountName, action: 'Unlock' }, onUnlock || defaultOnUnlock, close);
 }
 
 // ── Detect 2FA setup pages ───────────────────────────────────────────────────
@@ -783,18 +768,6 @@ const OVERLAY_HEADER = `
     <button class="otpilot-overlay-close" style="background:none;border:none;color:#475569;cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button>
   </div>`;
 
-const PW_FIELD_HTML = `
-  <div style="position:relative;margin-bottom:6px;">
-    <input class="otpilot-pw" type="password" placeholder="Master password" autocomplete="current-password"
-      style="width:100%;padding:8px 32px 8px 10px;background:#0f172a;border:1px solid #1e3a5f;
-             border-radius:6px;color:#e2e8f0;font-size:12px;font-family:monospace;
-             outline:none;box-sizing:border-box;">
-    <button class="otpilot-pw-eye" tabindex="-1"
-      style="position:absolute;right:7px;top:50%;transform:translateY(-50%);
-             background:none;border:none;color:#475569;cursor:pointer;font-size:12px;padding:0;line-height:1;">👁</button>
-  </div>
-  <div class="otpilot-pw-err" style="color:#f87171;font-size:11px;min-height:14px;margin-bottom:6px;"></div>`;
-
 function makeOverlay(id) {
   const el = document.createElement('div');
   el.id = id;
@@ -823,41 +796,27 @@ function makeOverlay(id) {
   return el;
 }
 
-function wirePwField(el, primaryBtn, primaryLabel, onSuccess) {
-  const pwInput = el.querySelector('.otpilot-pw');
-  const errEl   = el.querySelector('.otpilot-pw-err');
+// The master password is typed into an extension-origin iframe (unlock.html),
+// never into the host page's DOM, where the page's own scripts could read it.
+// The frame's "unlocked" message is only a hint: the page can post the same
+// message, so the real lock state is re-checked with the background first.
+// Returns a function that stops listening.
+function mountUnlockFrame(container, { name, intro, action }, onUnlocked, onDismiss) {
+  const frame = document.createElement('iframe');
+  const query = new URLSearchParams({ name, action, ...(intro ? { intro } : {}) });
+  frame.src = `${chrome.runtime.getURL('unlock.html')}?${query}`;
+  frame.title = 'Unlock OTPilot';
+  Object.assign(frame.style, { display: 'block', width: '100%', height: '148px', border: '0' });
+  container.appendChild(frame);
 
-  el.querySelector('.otpilot-pw-eye').onclick = () => {
-    pwInput.type = pwInput.type === 'password' ? 'text' : 'password';
+  const onMessage = async e => {
+    if (e.source !== frame.contentWindow || e.data?.source !== 'otpilot-unlock') return;
+    if (e.data.result === 'dismissed') { stop(); onDismiss(); return; }
+    if (e.data.result === 'unlocked' && !(await isSessionLocked())) { stop(); onUnlocked(); }
   };
-
-  async function attempt() {
-    const password = pwInput.value;
-    if (!password) { errEl.textContent = 'Enter your password'; return; }
-    errEl.textContent = '';
-    primaryBtn.disabled = true;
-    primaryBtn.textContent = 'Verifying…';
-
-    try {
-      const res = await chrome.runtime.sendMessage({ action: 'vaultUnlock', password });
-      if (res?.ok) {
-        onSuccess();
-      } else {
-        errEl.textContent = 'Incorrect password';
-        primaryBtn.disabled = false;
-        primaryBtn.textContent = primaryLabel;
-        pwInput.select();
-      }
-    } catch {
-      errEl.textContent = 'An error occurred';
-      primaryBtn.disabled = false;
-      primaryBtn.textContent = primaryLabel;
-    }
-  }
-
-  primaryBtn.onclick = attempt;
-  pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') attempt(); });
-  setTimeout(() => pwInput.focus(), 100);
+  const stop = () => window.removeEventListener('message', onMessage);
+  window.addEventListener('message', onMessage);
+  return stop;
 }
 
 function showCodeRevealOverlay(name, code) {
@@ -912,20 +871,17 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
       <div style="color:#cbd5e1;font-size:12px;margin-bottom:10px;">
         Save <strong style="color:#f1f5f9;">${safeName}</strong> to OTPilot?
       </div>
-      ${locked ? PW_FIELD_HTML : ''}
-      <div style="display:flex;gap:8px;">
-        <button class="otpilot-primary" style="flex:1;padding:7px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">${locked ? 'Unlock & Add' : 'Add account'}</button>
+      ${locked ? '' : `<div style="display:flex;gap:8px;">
+        <button class="otpilot-primary" style="flex:1;padding:7px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Add account</button>
         <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid #334155;border-radius:6px;color:#64748b;font-size:12px;cursor:pointer;">Not now</button>
-      </div>
+      </div>`}
     </div>`;
 
   document.body.appendChild(el);
 
-  const close      = () => { _dismissedSecrets.add(secret); el.remove(); };
-  const primaryBtn = el.querySelector('.otpilot-primary');
-
+  let stopListening = () => {};
+  const close = () => { stopListening(); _dismissedSecrets.add(secret); el.remove(); };
   el.querySelector('.otpilot-overlay-close').onclick = close;
-  el.querySelector('.otpilot-secondary').onclick     = close;
 
   async function addAccount() {
     const d = await new Promise(r => chrome.storage.local.get('accounts', r));
@@ -946,9 +902,10 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   }
 
   if (locked) {
-    wirePwField(el, primaryBtn, 'Unlock & Add', addAccount);
+    stopListening = mountUnlockFrame(el, { name, intro: 'Unlock to save ', action: 'Unlock & Add' }, addAccount, close);
   } else {
-    primaryBtn.onclick = addAccount;
+    el.querySelector('.otpilot-primary').onclick = addAccount;
+    el.querySelector('.otpilot-secondary').onclick = close;
   }
 }
 

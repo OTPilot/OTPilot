@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<!-- In-page unlock, framed by content.js. Lives on the extension's origin so the
+     host page's scripts can't read the master password typed here (they can
+     read anything typed into the page's own DOM). -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Unlock OTPilot</title>
+  <link rel="stylesheet" href="theme.css">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { background: var(--surface); }
+    body { font-family: var(--font-ui); color: var(--ink-2); padding: 12px 14px; }
+    /* One line: the frame has a fixed height, so a long account name must not wrap. */
+    .label {
+      font-size: 12px; margin-bottom: 10px; line-height: 1.4;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .label strong { color: var(--ink-0); }
+    .pw-wrap { position: relative; margin-bottom: 6px; }
+    #pw {
+      width: 100%; padding: 8px 32px 8px 10px; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 6px; color: var(--ink-1);
+      font-size: 13px; font-family: inherit;
+    }
+    #pw:focus { outline: none; border-color: var(--accent-2); }
+    #eye {
+      position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; color: var(--ink-4); cursor: pointer; padding: 2px;
+    }
+    #err { color: var(--danger); font-size: 11px; min-height: 15px; margin-bottom: 6px; }
+    .row { display: flex; gap: 8px; }
+    button.primary {
+      flex: 1; padding: 7px; background: var(--accent); border: none; border-radius: 6px;
+      color: var(--on-accent); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    button.primary:disabled { opacity: .5; cursor: default; }
+    button.secondary {
+      padding: 7px 10px; background: transparent; border: 1px solid var(--border); border-radius: 6px;
+      color: var(--ink-4); font-size: 12px; cursor: pointer; font-family: inherit;
+    }
+  </style>
+</head>
+<body>
+  <div class="label" id="label"></div>
+  <div class="pw-wrap">
+    <input type="password" id="pw" placeholder="Master password" autocomplete="current-password" autofocus>
+    <button id="eye" type="button" title="Show password">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+    </button>
+  </div>
+  <div id="err"></div>
+  <div class="row">
+    <button class="primary" id="unlock">Unlock</button>
+    <button class="secondary" id="dismiss">Not now</button>
+  </div>
+  <script src="unlock.js"></script>
+</body>
+</html>

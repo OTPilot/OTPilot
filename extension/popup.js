@@ -51,8 +51,8 @@ function findSharedCode(acc) {
 
 // ── Appearance (themes) ──────────────────────────────────────────────────────
 // Single source of truth for the theme picker in Settings → Appearance. Adding
-// a theme is two steps: 1) a body[data-theme="id"] token block in popup.html's
-// <style> (same custom-property names as the others), 2) one entry here.
+// a theme is two steps: 1) a body[data-theme="id"] token block in theme.css
+// (same custom-property names as the others), 2) one entry here.
 const THEMES = [
   { id: 'original', name: 'Original', desc: 'The classic slate & sky-blue look.',       swatch: ['#0f172a', '#38bdf8'] },
   { id: 'vault',    name: 'Vault',    desc: 'Graphite & brass — precise and premium.', swatch: ['#1c1a17', '#c9a15a'] },
