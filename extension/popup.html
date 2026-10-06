@@ -689,7 +689,7 @@
     }
     #lock-overlay.hidden { display: none; }
 
-    #lock-setup, #lock-login {
+    #lock-setup, #lock-login, #lock-kit, #lock-recover, #lock-reset {
       width: 100%;
       background: var(--surface);
       border: none;
@@ -735,6 +735,21 @@
       font-size: 11px; color: var(--ink-4); cursor: pointer;
     }
     .lock-remember input { accent-color: var(--accent); flex-shrink: 0; }
+
+    /* Recovery screens */
+    .lock-link {
+      background: none; border: none; color: var(--accent-2); font-size: 11px;
+      cursor: pointer; font-family: inherit; align-self: center; padding: 2px;
+    }
+    .lock-key {
+      font-family: var(--font-code); font-size: 12px; color: var(--ink-0);
+      background: var(--bg); border-radius: 6px; padding: 10px 12px;
+      word-break: break-all; user-select: all; text-align: center;
+    }
+    .lock-row { display: flex; gap: 8px; }
+    .lock-btn.secondary { background: var(--surface-2); color: var(--ink-1); }
+    .lock-btn.danger { background: var(--danger); color: var(--on-accent); }
+    .lock-warn { font-size: 11px; line-height: 1.6; color: var(--warning); }
 
     .spinner {
       width: 14px; height: 14px; border-radius: 50%;
@@ -869,6 +884,56 @@
     <input type="password" id="lock-password" class="lock-input" placeholder="Master password" autocomplete="current-password">
     <div class="lock-err" id="lock-login-err"></div>
     <button class="lock-btn" id="lock-login-btn">Unlock</button>
+    <button class="lock-link" id="lock-forgot">Forgot your master password?</button>
+  </div>
+
+  <!-- Screen C: save the recovery key (after setup, and once after upgrading) -->
+  <div id="lock-kit" style="display:none">
+    <div class="lock-head">
+      <div class="lock-icon">🗝️</div>
+      <div class="lock-title">Save your recovery key</div>
+      <div class="lock-sub">It's the only way back in if you forget your master password, and it sets up OTPilot on another device. We can't recover it for you.</div>
+    </div>
+    <div class="lock-key" id="lock-kit-key"></div>
+    <div class="lock-row">
+      <button class="lock-btn secondary" id="lock-kit-copy">Copy</button>
+      <button class="lock-btn secondary" id="lock-kit-download">Download Emergency Kit</button>
+    </div>
+    <label class="lock-remember">
+      <input type="checkbox" id="lock-kit-saved">
+      I saved my recovery key somewhere safe
+    </label>
+    <button class="lock-btn" id="lock-kit-done" disabled>Continue</button>
+  </div>
+
+  <!-- Screen D: forgot master password → recovery key -->
+  <div id="lock-recover" style="display:none">
+    <div class="lock-head">
+      <div class="lock-icon">🛟</div>
+      <div class="lock-title">Use your recovery key</div>
+      <div class="lock-sub">Paste your recovery key and choose a new master password. Everything in OTPilot stays as it is.</div>
+    </div>
+    <input type="text" id="lock-recover-key" class="lock-input" placeholder="Recovery key" spellcheck="false" autocomplete="off">
+    <input type="password" id="lock-recover-new" class="lock-input" placeholder="New master password" autocomplete="new-password">
+    <input type="password" id="lock-recover-confirm" class="lock-input" placeholder="Confirm new master password" autocomplete="new-password">
+    <div class="lock-err" id="lock-recover-err"></div>
+    <button class="lock-btn" id="lock-recover-btn">Set new password</button>
+    <button class="lock-link" id="lock-recover-nokey">I don't have my recovery key</button>
+    <button class="lock-link" id="lock-recover-back">Back</button>
+  </div>
+
+  <!-- Screen E: no password, no recovery key → wipe this device -->
+  <div id="lock-reset" style="display:none">
+    <div class="lock-head">
+      <div class="lock-icon">⚠️</div>
+      <div class="lock-title">Reset OTPilot on this device</div>
+      <div class="lock-sub">Without your master password or recovery key, nothing stored here can be decrypted.</div>
+    </div>
+    <div class="lock-warn">This erases every account, code and setting on this device. Synced data stays on our servers, still encrypted: you can restore it later only with the recovery key.</div>
+    <input type="text" id="lock-reset-confirm" class="lock-input" placeholder='Type RESET to confirm' autocomplete="off">
+    <div class="lock-err" id="lock-reset-err"></div>
+    <button class="lock-btn danger" id="lock-reset-btn">Erase this device</button>
+    <button class="lock-link" id="lock-reset-back">Back</button>
   </div>
 
 </div>
@@ -1132,6 +1197,12 @@
       <p style="font-size:10px;color:var(--ink-5);margin:0 0 10px;line-height:1.5">
         Changing the master password re-wraps your vault key on this device. Your recovery key stays the same.
       </p>
+      <div style="display:flex;gap:8px;margin-bottom:6px">
+        <input type="password" id="reveal-key-password" class="lock-input" placeholder="Master password" autocomplete="current-password">
+        <button class="lock-btn" id="reveal-key-btn" style="width:auto;padding:9px 12px;white-space:nowrap">Show recovery key</button>
+      </div>
+      <div class="lock-key" id="reveal-key-value" style="display:none;margin-bottom:6px"></div>
+      <div class="lock-err" id="reveal-key-err" style="margin-bottom:10px"></div>
       <input type="password" id="change-pw-current" class="lock-input" placeholder="Current password" autocomplete="current-password">
       <input type="password" id="change-pw-new" class="lock-input" placeholder="New password" autocomplete="new-password" style="margin-top:8px">
       <input type="password" id="change-pw-confirm" class="lock-input" placeholder="Confirm new password" autocomplete="new-password" style="margin-top:8px">

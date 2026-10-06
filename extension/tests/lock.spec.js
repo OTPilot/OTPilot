@@ -3,6 +3,14 @@ import { test, expect, seedUnlocked, seedLocked, TEST_SECRET, TEST_PASSWORD, LEG
 // 2.0 master-password lock (vaultLock.js): mandatory password that wraps the
 // vault key; unlocked only in chrome.storage.session; inactivity auto-lock.
 
+// The one-time "save your recovery key" screen after setup / v1 upgrade.
+async function finishRecoveryKit(page) {
+  await expect(page.locator('#lock-kit')).toBeVisible();
+  await expect(page.locator('#lock-kit-done')).toBeDisabled();
+  await page.check('#lock-kit-saved');
+  await page.click('#lock-kit-done');
+}
+
 async function popup(context, extensionId) {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
@@ -19,7 +27,12 @@ test('first run: setting the master password wraps the vault key and saves the a
   await page.fill('#lock-confirm-password', 'hunter22');
   await page.selectOption('#lock-setup-autolock', '60');
   await page.click('#lock-setup-btn');
+  await expect(page.locator('#lock-kit-key')).toHaveText(/^[A-Za-z0-9+/]{43}=$/);
+  const shownKey = await page.locator('#lock-kit-key').textContent();
+  await finishRecoveryKit(page);
   await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
+  expect(shownKey).toBe(await page.evaluate(() => VaultKeys.getKey()));
+  expect(await page.evaluate(() => chrome.storage.local.get('recoveryKeyAcknowledged'))).toEqual({ recoveryKeyAcknowledged: true });
 
   const state = await page.evaluate(async () => ({
     lock: await VaultLock.state(),
@@ -64,6 +77,8 @@ test('a v1 user is migrated on first unlock: same password, vault key wrapped, l
 
   await page.fill('#lock-password', TEST_PASSWORD);
   await page.click('#lock-login-btn');
+  // Upgraded users see their recovery key once.
+  await finishRecoveryKit(page);
   await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
 
   const local = await page.evaluate(() => chrome.storage.local.get(null));
@@ -83,6 +98,7 @@ test('a v1 user with sync: the plaintext syncKey ends up wrapped by the master p
   await page.reload();
   await page.fill('#lock-password', TEST_PASSWORD);
   await page.click('#lock-login-btn');
+  await finishRecoveryKit(page);
   await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
 
   const result = await page.evaluate(async key => {
