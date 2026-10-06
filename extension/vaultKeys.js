@@ -48,52 +48,83 @@ const VaultKeys = (() => {
     return d[PLAIN] ?? null;
   }
 
-  // Creates VK if this device has none: adopts the existing syncKey when there
-  // is one, otherwise generates a new key. Returns the key (base64).
-  async function init() {
-    const d = await local.get([PLAIN, WRAPPED, 'syncKey']);
-    if (d[WRAPPED] || d[PLAIN]) return getKey();
-    const key = d.syncKey || VaultCrypto.b64e(VaultCrypto.generateKey());
-    await local.set({ [PLAIN]: key });
-    return key;
-  }
+  // Every state change runs under one Web Lock. Web Locks are per origin, so
+  // this serializes the popup, other extension pages and the background
+  // worker: two first-run init() calls can't generate different keys, and
+  // lock() can't interleave with unlock() or removePassword().
+  const exclusive = fn => navigator.locks.request('otpilot-vault-key', fn);
 
-  // Returns true on success, false on a wrong password.
-  async function unlock(password) {
+  // VK as base64 if `password` unwraps it, null on a wrong password.
+  async function unwrapWith(password) {
     const { [WRAPPED]: wrapped } = await local.get(WRAPPED);
     if (!wrapped) throw new Error('no master password set');
     let raw;
     try { raw = await VaultCrypto.unwrapVaultKey(wrapped, password); }
-    catch (e) { if (e.message === 'wrong password') return false; throw e; }
-    await session.set({ [UNLOCKED]: VaultCrypto.b64e(raw) });
+    catch (e) { if (e.message === 'wrong password') return null; throw e; }
+    const key = VaultCrypto.b64e(raw);
     raw.fill(0);
-    return true;
+    return key;
+  }
+
+  // Creates VK if this device has none: adopts the existing syncKey when there
+  // is one, otherwise generates a new key. Returns the key (base64), or null if
+  // a master password is set and the vault is locked.
+  function init() {
+    return exclusive(async () => {
+      const d = await local.get([PLAIN, WRAPPED, 'syncKey']);
+      if (d[WRAPPED] || d[PLAIN]) return getKey();
+      const key = d.syncKey || VaultCrypto.b64e(VaultCrypto.generateKey());
+      await local.set({ [PLAIN]: key });
+      return key;
+    });
+  }
+
+  // Returns true on success, false on a wrong password.
+  function unlock(password) {
+    return exclusive(async () => {
+      const key = await unwrapWith(password);
+      if (!key) return false;
+      await session.set({ [UNLOCKED]: key });
+      return true;
+    });
   }
 
   function lock() {
-    return session.remove(UNLOCKED);
+    return exclusive(() => session.remove(UNLOCKED));
   }
 
   // Sets or changes the master password. Needs VK available (open, or
   // unlocked). Writes the wrapped key before dropping the plaintext copy, so a
   // failure in between never leaves the device without a usable key.
-  async function setPassword(newPassword) {
-    const key = await getKey();
-    if (!key) throw new Error('vault is locked');
-    const wrapped = await VaultCrypto.wrapVaultKey(key, newPassword);
-    await local.set({ [WRAPPED]: wrapped });
-    await session.set({ [UNLOCKED]: key });
-    await local.remove(PLAIN);
+  //
+  // Refused while a plaintext syncKey exists: it IS the vault key, so wrapping
+  // only `vaultKey` would report "locked" while the same key stays readable in
+  // `syncKey`. Sync has to read the key through VaultKeys first (2.0 wiring),
+  // which moves syncKey under this lifecycle.
+  function setPassword(newPassword) {
+    return exclusive(async () => {
+      const key = await getKey();
+      if (!key) throw new Error('vault is locked');
+      if ((await local.get('syncKey')).syncKey) throw new Error('sync key is still stored in plaintext');
+      const wrapped = await VaultCrypto.wrapVaultKey(key, newPassword);
+      await local.set({ [WRAPPED]: wrapped });
+      await session.set({ [UNLOCKED]: key });
+      await local.remove(PLAIN);
+    });
   }
 
-  // Removes the master password; VK goes back to plaintext at rest.
-  async function removePassword(currentPassword) {
-    if (!(await unlock(currentPassword))) return false;
-    const key = await getKey();
-    await local.set({ [PLAIN]: key });
-    await local.remove(WRAPPED);
-    await lock();
-    return true;
+  // Removes the master password; VK goes back to plaintext at rest. The
+  // wrapped copy is only deleted after the plaintext one is written from a key
+  // that was actually unwrapped.
+  function removePassword(currentPassword) {
+    return exclusive(async () => {
+      const key = await unwrapWith(currentPassword);
+      if (!key) return false;
+      await local.set({ [PLAIN]: key });
+      await local.remove(WRAPPED);
+      await session.remove(UNLOCKED);
+      return true;
+    });
   }
 
   return { status, getKey, init, unlock, lock, setPassword, removePassword };

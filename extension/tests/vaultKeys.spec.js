@@ -91,3 +91,35 @@ test('removing the master password needs the current one and restores the open k
   });
   expect(result).toEqual({ wrong: false, stillLocked: 'locked', right: true, status: 'open', sameKey: true, wrappedGone: true });
 });
+
+test('overlapping first-run init calls from two pages agree on one key', async ({ context, extensionId }) => {
+  const p1 = await keysPage(context, extensionId);
+  const p2 = await keysPage(context, extensionId);
+  const run = p => p.evaluate(() => Promise.all(Array.from({ length: 5 }, () => VaultKeys.init())));
+  const [a, b] = await Promise.all([run(p1), run(p2)]);
+  const stored = await p1.evaluate(() => VaultKeys.getKey());
+  expect(new Set([...a, ...b, stored]).size).toBe(1);
+});
+
+test('a lock overlapping removePassword never loses the key', async ({ context, extensionId }) => {
+  const page = await keysPage(context, extensionId);
+  const result = await page.evaluate(async () => {
+    const key = await VaultKeys.init();
+    await VaultKeys.setPassword('correct horse');
+    const [removed] = await Promise.all([VaultKeys.removePassword('correct horse'), VaultKeys.lock(), VaultKeys.lock()]);
+    return { removed, status: await VaultKeys.status(), sameKey: (await VaultKeys.getKey()) === key };
+  });
+  expect(result).toEqual({ removed: true, status: 'open', sameKey: true });
+});
+
+test('setting a password is refused while the same key sits in a plaintext syncKey', async ({ context, extensionId }) => {
+  const page = await keysPage(context, extensionId);
+  const result = await page.evaluate(async () => {
+    await chrome.storage.local.set({ syncKey: VaultCrypto.b64e(VaultCrypto.generateKey()) });
+    await VaultKeys.init();
+    let error = null;
+    try { await VaultKeys.setPassword('correct horse'); } catch (e) { error = e.message; }
+    return { error, status: await VaultKeys.status() };
+  });
+  expect(result).toEqual({ error: 'sync key is still stored in plaintext', status: 'open' });
+});
