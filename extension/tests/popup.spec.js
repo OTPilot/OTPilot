@@ -225,3 +225,54 @@ test('adding an account while a category filter is active keeps it visible and p
     page.locator('#vault-cat-bar .cat-pill', { hasText: 'Work' }).locator('.count')
   ).toHaveText('3');
 });
+
+// ── "Shared with you" row layout (regression: a long account name + owner
+// email pushed the row past the popup's fixed 600px width — clipped by
+// overflow-x:hidden rather than wrapping, cutting off the code and buttons
+// on a smaller screen) ──────────────────────────────────────────────────────
+
+test('regression: a long shared-code row wraps instead of overflowing the popup width', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+  await page.evaluate(([auth, expiry]) => new Promise(r =>
+    chrome.storage.local.set({ auth, sessionExpiry: expiry, accounts: [], obfuscated: false }, r)
+  ), [FAKE_AUTH, SESSION_24H()]);
+  await page.reload();
+
+  // Stubs Sharing directly rather than the network/crypto it wraps (ECDH key
+  // unwrap, Supabase auth) — this targets renderSharedCodes()'s DOM output
+  // for a long row, not the sharing feature's data path.
+  await page.evaluate(() => {
+    Sharing.getMyTeam = async () => ({ id: 'team1', name: 'Test Team' });
+    Sharing.getSharedCodes = async () => [{
+      id: 'code1',
+      account_name: 'A Very Long Shared Account Name For This Test',
+      account_email: 'a.surprisingly.long.email.address@example-company.com',
+      owner_email: 'another.surprisingly.long.email.address@example-company.com',
+      k1: new Uint8Array(32),
+    }];
+    Sharing.requestTotp = async () => '085336';
+  });
+  await page.evaluate(() => renderSharedCodes());
+
+  const row = page.locator('.shared-row').first();
+  await expect(row).toBeVisible();
+  await expect(row.locator('.shared-code')).toHaveText('085 336');
+
+  // The regression itself: body is fixed at 600px, and html clips overflow-x
+  // rather than scrolling it — a row that doesn't shrink/wrap correctly
+  // pushes content past that width, silently cut off instead of visible or
+  // scrollable, which is what the bug report screenshot showed (text cut off
+  // mid-word at the right edge).
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.body.scrollWidth,
+    clientWidth: document.body.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+
+  // Direct DOM evidence for *why* it fits: a fixed-width code column rather
+  // than one sized to whatever digits happen to be in it.
+  const codeWidth = await row.locator('.shared-code').evaluate(el => el.getBoundingClientRect().width);
+  expect(codeWidth).toBeCloseTo(78, 0);
+});
