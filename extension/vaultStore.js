@@ -1,0 +1,89 @@
+'use strict';
+
+// Local encrypted storage for 2.0 vault items (needs vaultCrypto.js).
+//
+// Each encrypted record lives under its own chrome.storage.local key
+// (`vi:<id>`), and each deletion leaves a tombstone under `vt:<id>` holding the
+// ISO time it was deleted, so sync can tell other devices. One key per item
+// (instead of one shared object) means the popup and the background worker
+// can write different items at the same time without a read-modify-write on a
+// shared map silently dropping one of the writes.
+//
+// This module never sees the vault key on its own: callers pass the key that
+// wraps the item (the vault key for personal items).
+const VaultStore = (() => {
+  const RECORD = 'vi:';
+  const TOMB = 'vt:';
+
+  // Promise form of the API: it rejects when Chrome refuses a write (e.g. the
+  // storage quota on a large import), so a failed save never looks successful.
+  const get = keys => chrome.storage.local.get(keys);
+  const set = obj => chrome.storage.local.set(obj);
+  const del = keys => chrome.storage.local.remove(keys);
+
+  async function byPrefix(prefix) {
+    const all = await get(null);
+    const out = Object.create(null); // ids are data: '__proto__' must stay a key
+    for (const [k, v] of Object.entries(all)) {
+      if (k.startsWith(prefix)) out[k.slice(prefix.length)] = v;
+    }
+    return out;
+  }
+
+  // { [id]: encrypted record }
+  function listRecords() {
+    return byPrefix(RECORD);
+  }
+
+  // { [id]: ISO deletion time }
+  function listTombstones() {
+    return byPrefix(TOMB);
+  }
+
+  async function get1(id, wrappingKey) {
+    const rec = (await get(RECORD + id))[RECORD + id];
+    return rec ? VaultCrypto.decryptItem(rec, wrappingKey) : null;
+  }
+
+  // Decrypts every record. A record that fails to decrypt (corrupted, or
+  // wrapped by a key this caller doesn't hold) is reported in `failed` rather
+  // than failing the whole read, so one bad record can't hide the vault.
+  async function readAll(wrappingKey) {
+    const records = await listRecords();
+    const items = [];
+    const failed = [];
+    for (const [id, rec] of Object.entries(records)) {
+      try { items.push(await VaultCrypto.decryptItem(rec, wrappingKey)); }
+      catch { failed.push(id); }
+    }
+    return { items, failed };
+  }
+
+  // Encrypts and stores items in a single storage write (one item, an import,
+  // or the v1 migration). Saving an id clears its tombstone — only after the
+  // write succeeded; a rejected write throws and leaves tombstones in place.
+  async function save(items, wrappingKey) {
+    const list = Array.isArray(items) ? items : [items];
+    const writes = {};
+    for (const item of list) {
+      writes[RECORD + item.id] = await VaultCrypto.encryptItem(item, wrappingKey);
+    }
+    await set(writes);
+    await del(list.map(i => TOMB + i.id));
+    return list.length;
+  }
+
+  async function remove(ids, deletedAt = new Date().toISOString()) {
+    const list = Array.isArray(ids) ? ids : [ids];
+    await del(list.map(id => RECORD + id));
+    await set(Object.fromEntries(list.map(id => [TOMB + id, deletedAt])));
+  }
+
+  // Remote wipe / sign-out erase: drops every record and tombstone.
+  async function clear() {
+    const all = await get(null);
+    await del(Object.keys(all).filter(k => k.startsWith(RECORD) || k.startsWith(TOMB)));
+  }
+
+  return { listRecords, listTombstones, get: get1, readAll, save, remove, clear };
+})();

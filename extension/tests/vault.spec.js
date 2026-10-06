@@ -1,10 +1,10 @@
 import { test, expect } from './fixtures.js';
 
-// vault.js isn't wired into any page yet, so each test loads it into an
-// extension page (same origin, so the extension CSP allows it).
+// vault.js isn't wired into any page yet, so each test loads it into a
+// blank extension page (same origin, so the extension CSP allows it).
 async function vaultPage(context, extensionId) {
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.goto(`chrome-extension://${extensionId}/test/blank.html`);
   await page.addScriptTag({ url: `chrome-extension://${extensionId}/vault.js` });
   return page;
 }
