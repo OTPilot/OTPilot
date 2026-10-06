@@ -1573,10 +1573,15 @@ document.getElementById('lock-password').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('lock-login-btn').click();
 });
 
-// Logout button
-document.getElementById('btn-logout').addEventListener('click', async () => {
+// Shows the lock screen over an open popup, stopping the code timer until the
+// master password is entered again. Used by the lock button and whenever the
+// vault locks elsewhere (auto-lock alarm, another popup) while this one is open.
+let _popupLocked = false;
+async function lockPopup() {
+  if (_popupLocked) return;
+  _popupLocked = true;
   clearInterval(timerInterval);
-  await VaultLock.lock();
+  clearInterval(_sharedRefreshTimer);
   await new Promise(r => chrome.storage.local.remove('userPlan', r));
   document.querySelector('.kofi-footer').style.display = '';
   await new Promise(resolve => {
@@ -1585,13 +1590,38 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
       await syncActiveIndexToUrl();
       renderAccountBar();
       startTimer();
+      renderSharedCodes();
       showView('home');
       tryAutoFillCurrentTab();
       resolve();
     };
     showLockOverlay('login');
   });
+  _popupLocked = false;
+}
+
+document.getElementById('btn-logout').addEventListener('click', async () => {
+  await VaultLock.lock(); // storage.session change below shows the lock screen
+  await lockPopup();
 });
+
+// The vault key leaving chrome.storage.session means the vault locked —
+// from the auto-lock alarm, or another popup/window.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'session' && changes.vaultKeyUnlocked && !changes.vaultKeyUnlocked.newValue) lockPopup();
+});
+
+// The alarm runs once a minute; while the popup is open, check the deadline
+// more often so it never shows codes past it.
+setInterval(() => { if (!_popupLocked) VaultLock.state().catch(() => {}); }, 15000);
+
+// Using the popup counts as activity for the auto-lock (throttled).
+let _lastTouch = 0;
+['click', 'keydown'].forEach(type => document.addEventListener(type, () => {
+  if (_popupLocked || Date.now() - _lastTouch < 30000) return;
+  _lastTouch = Date.now();
+  VaultLock.touch().catch(() => {});
+}, true));
 
 // ── Cloud Sync UI ─────────────────────────────────────────────────────────────
 
@@ -1820,8 +1850,10 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
   const input = document.getElementById('sync-restore-input');
   const errEl = document.getElementById('sync-restore-err');
   const keyB64 = input.value.trim();
+  const password = document.getElementById('sync-restore-password').value;
   errEl.textContent = '';
   if (!keyB64) { errEl.textContent = 'Paste your recovery key.'; return; }
+  if (!password) { errEl.textContent = 'Enter your master password.'; return; }
   // Validate the key against the server's data before adopting it: adopting
   // re-wraps the local vault to this key, so a typo must never get that far.
   let pullResult;
@@ -1837,7 +1869,13 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     return;
   }
   try {
-    await CloudSync.saveSyncKey(keyB64);
+    await CloudSync.saveSyncKey(keyB64, password);
+  } catch (e) {
+    errEl.textContent = e.message === 'wrong password' ? 'Incorrect master password.' : 'Could not save the key. Try again.';
+    return;
+  }
+  document.getElementById('sync-restore-password').value = '';
+  try {
     const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
 
     // On reconnect the server is the source of truth.

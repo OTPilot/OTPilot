@@ -1330,6 +1330,8 @@
     <div class="sync-desc">Your encrypted accounts are waiting on the server. Paste your recovery key to decrypt them.</div>
     <div class="sync-hint">Already set up on another device? Open OTPilot there → <strong>Sync → Show recovery key</strong>.</div>
     <input type="text" class="sync-input" id="sync-restore-input" placeholder="Paste recovery key…" spellcheck="false" autocomplete="off">
+    <input type="password" class="sync-input" id="sync-restore-password" placeholder="Your master password" autocomplete="current-password">
+    <div class="sync-hint">Your master password re-protects the restored key on this device.</div>
     <div class="sync-err" id="sync-restore-err"></div>
     <button class="btn-sync-primary" id="btn-restore-key">Restore accounts</button>
     <button class="btn-sync-danger" id="btn-overwrite-server">Start fresh (replaces server data)</button>

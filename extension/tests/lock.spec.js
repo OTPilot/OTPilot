@@ -152,3 +152,51 @@ test('on a page, a locked vault is unlocked from the overlay and the code is fil
   await expect(site.locator('input[name="otp_token"]')).toHaveValue(/^\d{6}$/);
   expect(await page.evaluate(() => VaultLock.state())).toBe('unlocked');
 });
+
+test('an open popup shows the lock screen as soon as the vault locks elsewhere', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
+  // e.g. the auto-lock alarm in the background worker
+  await page.evaluate(() => chrome.storage.session.remove('vaultKeyUnlocked'));
+  await expect(page.locator('#lock-login')).toBeVisible();
+});
+
+test('activity after the deadline passed locks instead of reviving the session', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page, { autoLockMinutes: 15 });
+  await page.reload();
+  await page.evaluate(() => chrome.storage.session.set({ vaultLockAt: Date.now() - 1000 }));
+  // Changing the auto-lock is activity (touch); it must not renew an expired deadline.
+  const state = await page.evaluate(async () => { await VaultLock.setAutoLock(60); return VaultLock.state(); });
+  expect(state).toBe('locked');
+  await expect(page.locator('#lock-login')).toBeVisible();
+});
+
+test('restoring a recovery key needs the master password and keeps the key wrapped', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  const recovery = await page.evaluate(() => VaultCrypto.b64e(VaultCrypto.generateKey()));
+  // No network here: the server pull/push are stubbed; this exercises the
+  // restore handler from "key validated" on.
+  const restore = (key, pw) => page.evaluate(([k, p]) => {
+    CloudSync.pull = async () => ({ accounts: [], tombstones: {} });
+    CloudSync.push = async () => ({});
+    document.getElementById('sync-restore-input').value = k;
+    document.getElementById('sync-restore-password').value = p;
+    document.getElementById('sync-restore-err').textContent = '';
+    document.getElementById('btn-restore-key').click();
+  }, [key, pw]);
+
+  await restore(recovery, 'wrong');
+  await expect(page.locator('#sync-restore-err')).toHaveText('Incorrect master password.');
+  expect(await page.evaluate(k => VaultKeys.getKey().then(v => v === k), recovery)).toBe(false);
+
+  await restore(recovery, TEST_PASSWORD);
+  await expect.poll(() => page.evaluate(k => VaultKeys.getKey().then(v => v === k), recovery)).toBe(true);
+  const local = await page.evaluate(() => chrome.storage.local.get(null));
+  expect(local.syncEnabled).toBe(true);
+  expect(JSON.stringify(local)).not.toContain(recovery);
+});

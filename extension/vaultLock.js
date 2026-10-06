@@ -49,12 +49,18 @@ const VaultLock = (() => {
     await touch();
   }
 
-  // Records activity: pushes the inactivity deadline out (no-op when locked).
-  async function touch() {
-    if ((await VaultKeys.status()) !== 'unlocked') return;
+  // A fresh inactivity deadline from now. Only after proving the password.
+  async function startDeadline() {
     const minutes = await getAutoLock();
     if (minutes > 0) await session.set({ [LOCK_AT]: Date.now() + minutes * 60000 });
     else await session.remove(LOCK_AT);
+  }
+
+  // Records activity: pushes the deadline out, unless it already passed — then
+  // it locks instead, so activity can never revive an expired session.
+  async function touch() {
+    if ((await state()) !== 'unlocked') return;
+    await startDeadline();
   }
 
   async function lock() {
@@ -84,7 +90,7 @@ const VaultLock = (() => {
     await VaultKeys.init();
     await VaultKeys.setPassword(password);
     await local.remove(LEGACY);
-    await touch();
+    await startDeadline();
   }
 
   // Returns true when unlocked, false on a wrong password.
@@ -99,7 +105,7 @@ const VaultLock = (() => {
       ok = await verifyLegacy(password, auth);
       if (ok) await setup(password);
     }
-    if (ok) await touch();
+    if (ok) await startDeadline();
     return ok;
   }
 
@@ -108,7 +114,7 @@ const VaultLock = (() => {
     if (!next) throw new Error('password required');
     if (!(await unlock(current))) return false;
     await VaultKeys.setPassword(next);
-    await touch();
+    await startDeadline();
     return true;
   }
 
