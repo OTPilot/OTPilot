@@ -12,6 +12,7 @@ const CloudSync = (() => {
   // can be wrapped by the master password) and `syncEnabled` is the flag.
   const LEGACY_KEY     = 'syncKey';
   const ENABLED        = 'syncEnabled';
+  const SYNC_STATE     = 'vaultSyncState'; // VaultSync's progress (see vaultSync.js)
   const DEVICE_ID_KEY  = 'deviceId';
 
   // ── Device identity ────────────────────────────────────────────────────────
@@ -93,13 +94,15 @@ const CloudSync = (() => {
     await convertLegacyKey();
     await VaultKeys.adoptKey(keyB64, password);
     await chrome.storage.local.set({ [ENABLED]: true });
-    if (typeof VaultSync !== 'undefined') await VaultSync.reset(); // re-pair from scratch
+    await chrome.storage.local.remove(SYNC_STATE); // re-pair items from scratch
   }
 
   // Turns sync off. The key stays: it also encrypts the local vault.
   async function deleteSyncKey() {
-    await chrome.storage.local.remove([ENABLED, LEGACY_KEY]);
-    if (typeof VaultSync !== 'undefined') await VaultSync.reset();
+    // Also forget per-item sync progress, here rather than via VaultSync so it
+    // happens in every context (the background worker runs remote
+    // 'disconnect' commands and doesn't load vaultSync.js).
+    await chrome.storage.local.remove([ENABLED, LEGACY_KEY, SYNC_STATE]);
   }
 
   // ── Encrypt / decrypt ──────────────────────────────────────────────────────
@@ -125,7 +128,9 @@ const CloudSync = (() => {
     );
     const parsed = JSON.parse(new TextDecoder().decode(plain));
     if (Array.isArray(parsed)) return { accounts: parsed, tombstones: {}, teamKey: null };
-    return { accounts: parsed.accounts ?? [], tombstones: parsed.tombstones ?? {}, teamKey: parsed.teamKey ?? null };
+    // `writer: 'v2'` marks a blob written by a 2.0 device (inside the
+    // ciphertext, so the server can't change it); 1.x devices don't set it.
+    return { accounts: parsed.accounts ?? [], tombstones: parsed.tombstones ?? {}, teamKey: parsed.teamKey ?? null, writer: parsed.writer ?? null };
   }
 
   // Adopt the team keypair carried in a decrypted vault, so every device of this
@@ -213,9 +218,9 @@ const CloudSync = (() => {
       return command ? { accounts: [], tombstones: {}, updatedAt: null, command } : null;
     }
 
-    const { accounts, tombstones, teamKey } = await decrypt(body.encrypted_blob, keyB64);
+    const { accounts, tombstones, teamKey, writer } = await decrypt(body.encrypted_blob, keyB64);
     await adoptTeamKey(teamKey);
-    return { accounts, tombstones, updatedAt: body.updated_at, command };
+    return { accounts, tombstones, writer, updatedAt: body.updated_at, command };
   }
 
   // Execute a pending command from the server ({ action, nonce }).
@@ -237,7 +242,8 @@ const CloudSync = (() => {
 
   // Encrypt + push { accounts, tombstones, teamKey } to server. The team private
   // key rides inside the E2E blob so it's portable across the user's devices.
-  async function push(accounts, tombstones, updatedAt) {
+  // `writer` = 'v2' from 2.0 devices (see decrypt).
+  async function push(accounts, tombstones, updatedAt, writer = null) {
     const keyB64        = await getSyncKey();
     if (!keyB64) throw new Error('No sync key');
     let teamKey = null;
@@ -247,7 +253,7 @@ const CloudSync = (() => {
     // Passwords never go into the v1 blob (1.x devices don't know them, and
     // the per-item vault sync carries them); only the v1 fields do.
     const v1Accounts = accounts.map(({ password, ...rest }) => rest);
-    const encrypted_blob = await encrypt({ accounts: v1Accounts, tombstones, teamKey }, keyB64);
+    const encrypted_blob = await encrypt({ accounts: v1Accounts, tombstones, teamKey, ...(writer ? { writer } : {}) }, keyB64);
     const devicePayload  = await getDevicePayload();
     const res = await apiFetch('/accounts', {
       method: 'PUT',

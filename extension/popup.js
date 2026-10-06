@@ -1048,6 +1048,16 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 
 // ── View switching ────────────────────────────────────────────────────────────
 
+// Redraws whatever shows the account list: Home always, and the Accounts view
+// if it's open (keeping its search). Used after the list changes underneath
+// the UI (first load, a sync).
+function refreshAccountsUI() {
+  renderAccountBar();
+  if (document.getElementById('settings-panel').style.display !== 'none') {
+    renderAccountsList(-1, { preserveSearch: true });
+  }
+}
+
 function showView(view, opts = {}) {
   if (view !== 'settings') clearRevealedKey();
   document.getElementById('home-view').style.display      = view === 'home'     ? '' : 'none';
@@ -2059,57 +2069,72 @@ async function renderSyncPanel() {
 }
 
 let _syncInProgress = false;
+// After a sync changed the vault: reload the list, rebuild the locked-vault
+// index (pulled URLs/names/deletions), and redraw.
+async function reloadFromVault(key) {
+  accounts = await VaultAccounts.load(key);
+  _loadedIds = new Set(accounts.map(a => a._id));
+  activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
+  await VaultAccounts.writeIndex((await VaultStore.readAll(key)).items);
+  refreshAccountsUI();
+  requestIcons();
+  startTimer();
+}
+
+// The v1 view of the vault for 1.x devices: written when it no longer matches
+// what this device last exported (or a 1.x device just changed it). Accounts
+// that left the vault since the last export get v1 tombstones (keyed by name),
+// or a 1.x device would push them back.
+const v1Fields = a => ({ name: a.name, email: a.email || '', secret: a.secret, urls: a.urls || '', autofill: a.autofill !== false, category: a.category || '', domain: a.domain || '' });
+async function exportV1Blob(serverMeta, fromV1Device) {
+  const { v1Export } = await chrome.storage.local.get('v1Export');
+  const snapshot = JSON.stringify(accounts.map(v1Fields));
+  const now = new Date().toISOString();
+  if (!fromV1Device && serverMeta && v1Export?.snapshot === snapshot) {
+    // Up to date (possibly written by another 2.0 device): nothing to upload.
+    if (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt) await writeLastSyncedAt(serverMeta.updatedAt);
+    return;
+  }
+  const current = new Set(accounts.map(a => a.name));
+  for (const name of v1Export?.names || []) {
+    if (!current.has(name)) tombstones[name] = now;
+  }
+  for (const name of current) delete tombstones[name];
+  await saveTombstones();
+  await CloudSync.push(accounts, tombstones, now, 'v2');
+  await chrome.storage.local.set({ v1Export: { snapshot, names: [...current] } });
+  await writeLastSyncedAt(now);
+}
+
 async function doSync() {
   if (_syncInProgress) return;
   _syncInProgress = true;
   syncSetStatus('syncing', 'Syncing…');
   try {
-    // 2.0: per-item vault sync first, then reload the list it may have changed.
-    // The v1 blob below keeps 1.x devices in step during the transition.
+    // 2.0: the vault syncs item by item (/vault/items); the v1 blob only keeps
+    // 1.x devices in step during the transition. Blobs written by 2.0 devices
+    // carry writer 'v2' and are ignored here (their items already arrived);
+    // only a blob from a 1.x device is merged in.
     const key = await VaultKeys.getKey();
     if (!key) throw new Error('vault is locked');
     await VaultSync.sync(key);
-    accounts = await VaultAccounts.load(key);
-    _loadedIds = new Set(accounts.map(a => a._id));
-    activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
+    await reloadFromVault(key);
 
     const serverMeta = await CloudSync.getServerMeta();
-
-    const serverNewer = serverMeta !== null &&
+    const fromV1Device = !!serverMeta && serverMeta.writer !== 'v2' &&
       (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt);
-    const localNewer  = localChangedAt !== null &&
-      (lastSyncedAt === null || localChangedAt > lastSyncedAt);
-
-    if (serverNewer && !localNewer) {
-      accounts   = serverMeta.accounts;
-      tombstones = serverMeta.tombstones;
-      await saveState();
-      await saveTombstones();
-      renderAccountBar();
-      requestIcons(); // pick up icons for accounts pulled in from another device
-      startTimer();
-      await writeLastSyncedAt(serverMeta.updatedAt);
-    } else if (!serverNewer && localNewer) {
-      await CloudSync.push(accounts, tombstones, localChangedAt);
-      await writeLastSyncedAt(localChangedAt);
-    } else if (serverNewer && localNewer) {
+    if (fromV1Device) {
       const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
         accounts, tombstones, serverMeta.accounts, serverMeta.tombstones, lastSyncedAt
       );
       accounts   = merged;
       tombstones = mergedTombs;
-      const now = new Date().toISOString();
       await saveState();
       await saveTombstones();
-      renderAccountBar();
-      requestIcons(); // pick up icons for accounts merged in from another device
-      startTimer();
-      await CloudSync.push(merged, mergedTombs, now);
-      await writeLastSyncedAt(now);
-    } else if (!serverMeta && localChangedAt) {
-      await CloudSync.push(accounts, tombstones, localChangedAt);
-      await writeLastSyncedAt(localChangedAt);
+      await VaultSync.sync(key); // so the 1.x edits reach other 2.0 devices too
+      await reloadFromVault(key);
     }
+    await exportV1Blob(serverMeta, fromV1Device);
 
     if (serverMeta?.command) {
       await CloudSync.executeCommand(serverMeta.command);
@@ -2185,10 +2210,15 @@ document.getElementById('btn-confirm-newkey').addEventListener('click', async ()
       // Overwrite the server blob with the new key directly — do NOT read/merge
       // the existing blob (it was encrypted with a different key and can't be
       // decrypted, which would otherwise fail the whole sync).
+      // Same for the per-item vault: its items may be encrypted with the lost
+      // key, so they're deleted and this device's vault is uploaded instead.
       _startFresh = false;
       const now = new Date().toISOString();
-      await CloudSync.push(accounts, tombstones, now);
+      await CloudSync.push(accounts, tombstones, now, 'v2');
+      await chrome.storage.local.set({ v1Export: { snapshot: JSON.stringify(accounts.map(v1Fields)), names: accounts.map(a => a.name) } });
       await writeLastSyncedAt(now);
+      await VaultSync.wipeServer();
+      await VaultSync.sync(await VaultKeys.getKey());
       syncSetStatus('ok', 'Synced');
     } else {
       await stampLocalChange(); // force initial push so other devices can detect existing sync
@@ -2302,7 +2332,7 @@ let _stopSyncMode = 'free';
 document.getElementById('btn-free-signout').addEventListener('click', async () => {
   try { await CloudSync.leaveDevice() } catch (e) { console.error('leaveDevice:', e) }
   await SupabaseAuth.signOut();
-  await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r));
+  await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'v1Export'], r));
   localChangedAt = null;
   lastSyncedAt   = null;
   tombstones     = {};
@@ -2326,7 +2356,7 @@ document.getElementById('btn-confirm-stop-sync').addEventListener('click', async
   await SupabaseAuth.signOut();
   if (_stopSyncMode === 'active') await CloudSync.deleteSyncKey();
   await new Promise(r => chrome.storage.local.remove(
-    ['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r
+    ['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'v1Export'], r
   ));
   localChangedAt = null;
   lastSyncedAt   = null;
@@ -2379,7 +2409,8 @@ async function silentPullSync() {
   const justAuthenticated = await initLock();
   await loadState();
   await syncActiveIndexToUrl();
-  renderAccountBar();
+  // The user may have opened Accounts while the vault was still loading.
+  refreshAccountsUI();
   requestIcons(); // resolve+cache site favicons, then re-render when ready
   startTimer();
   if (justAuthenticated) tryAutoFillCurrentTab();

@@ -122,22 +122,23 @@ const VaultStore = (() => {
     return writes;
   }
 
-  // Applies records pulled from the server as they are (they're encrypted with
-  // the same vault key) and removes ones deleted remotely, in one locked step.
-  // Clears the tombstones of every id touched.
-  function applyRemote({ upserts = {}, deletes = [] }) {
-    return exclusive(async () => {
-      const writes = Object.fromEntries(Object.entries(upserts).map(([id, rec]) => [RECORD + id, rec]));
-      if (Object.keys(writes).length) await set(writes);
-      if (deletes.length) await del(deletes.map(id => RECORD + id));
-      const touched = [...Object.keys(upserts), ...deletes];
-      if (touched.length) await del(touched.map(id => TOMB + id));
-    });
+  // Runs `fn(tx)` under the vault lock, so nothing else saves or removes
+  // records between what `fn` reads and what it writes (sync uses this to
+  // read, decide and apply remote changes as one step). `tx` writes raw
+  // records (already encrypted) and removes without leaving a tombstone.
+  function transaction(fn) {
+    return exclusive(() => fn({
+      listRecords,
+      listTombstones,
+      put: (id, rec) => set({ [RECORD + id]: rec }).then(() => del(TOMB + id)),
+      drop: id => del([RECORD + id, TOMB + id]),
+      dropTombstone: id => del(TOMB + id),
+    }));
   }
 
   function dropTombstones(ids) {
     return exclusive(() => del(ids.map(id => TOMB + id)));
   }
 
-  return { listRecords, listTombstones, get: get1, readAll, save, remove, clear, prepareRekey, applyRemote, dropTombstones };
+  return { listRecords, listTombstones, get: get1, readAll, save, remove, clear, prepareRekey, transaction, dropTombstones };
 })();

@@ -80,7 +80,7 @@ test('the first sync uploads every local item in a batch; the next one sends not
   const first = await sync(page);
   expect(first.pushed).toBe(2);
   const second = await sync(page);
-  expect(second).toEqual({ pulled: 0, pushed: 0, deleted: 0 });
+  expect(second).toEqual({ pulled: 0, pushed: 0, deleted: 0, unreadable: 0 });
   const calls = await page.evaluate(() => fakeServer.calls);
   expect(calls.filter(c => c.startsWith('POST')).length).toBe(1);
   expect(calls.filter(c => c.startsWith('PUT')).length).toBe(0);
@@ -191,4 +191,129 @@ test('uploads tell the server which items count toward the Free limit', async ({
     return Object.fromEntries(items.map(i => [i.title, fakeServer.counts[i.id]]));
   });
   expect(counts).toEqual({ '2FA only': false, note: true });
+});
+
+// v1 blob stand-in for doSync (what CloudSync.getServerMeta / push talk to).
+async function fakeBlob(page, blob = null) {
+  await page.evaluate(b => {
+    window.fakeBlobState = b;
+    CloudSync.getServerMeta = async () => window.fakeBlobState;
+    CloudSync.push = async (accounts, tombstones, updatedAt, writer) => {
+      window.fakeBlobState = { accounts: structuredClone(accounts), tombstones: { ...tombstones }, updatedAt, writer };
+      return {};
+    };
+  }, blob);
+}
+
+test('the same login migrated on two devices ends up as one item', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [ACC('GitHub', 'JBSWY3DPEHPK3PXP')]);
+  // The other device migrated the same v1 account under its own id and uploaded it first.
+  await page.evaluate(async () => {
+    const twin = Vault.fromV1Account({ name: 'GitHub', email: '', secret: 'JBSWY3DPEHPK3PXP', urls: '' }, 0);
+    await fakeServer.remoteSave(twin);
+    window.twinId = twin.id;
+  });
+  await sync(page);
+  const result = await page.evaluate(async () => ({
+    local: (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => i.id),
+    server: [...fakeServer.items.keys()],
+    twinId,
+  }));
+  expect(result.local).toEqual([result.twinId]);
+  expect(result.server).toEqual([result.twinId]);
+});
+
+test('records this device cannot decrypt are not stored', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const stats = await page.evaluate(async () => {
+    const other = VaultCrypto.generateKey();
+    const record = await VaultCrypto.encryptItem(Vault.newItem('note', { title: 'old key' }), other);
+    fakeServer.items.set(record.id, { record, revision: ++fakeServer.rev, deleted: false });
+    return VaultSync.sync(await VaultKeys.getKey());
+  });
+  expect(stats.unreadable).toBe(1);
+  expect(await localTitles(page)).toEqual([]);
+});
+
+test('a local deletion of an item the server has but sync state forgot is sent, not undone', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const id = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const item = Vault.newItem('note', { title: 'uploaded, then sync died' });
+    await VaultStore.save(item, key);
+    const record = (await VaultStore.listRecords())[item.id];
+    fakeServer.items.set(item.id, { record, revision: ++fakeServer.rev, deleted: false });
+    await VaultStore.remove(item.id); // deleted here; no sync state for it
+    return item.id;
+  });
+  await sync(page);
+  expect(await localTitles(page)).toEqual([]);
+  expect(await page.evaluate(i => fakeServer.items.get(i).deleted, id)).toBe(true);
+});
+
+test('doSync ignores a blob written by another 2.0 device and merges one from a 1.x device', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [ACC('GitHub', 'JBSWY3DPEHPK3PXP')]);
+  // A 2.0 device's blob, newer, with stale content: must not override the vault.
+  await fakeBlob(page, { accounts: [ACC('Stale', 'GEZDGNBVGY3TQOJQ')], tombstones: {}, updatedAt: '2099-01-01T00:00:00.000Z', writer: 'v2' });
+  await page.evaluate(() => doSync());
+  expect((await readAccounts(page)).map(a => a.name)).toEqual(['GitHub']);
+
+  // A 1.x device adds an account: merged into the vault and uploaded as an item.
+  await fakeBlob(page, {
+    accounts: [ACC('GitHub', 'JBSWY3DPEHPK3PXP'), { ...ACC('From 1.x', 'MFRGGZDFMZTWQ2LK'), _updatedAt: '2099-01-02T00:00:00.000Z' }],
+    tombstones: {}, updatedAt: '2099-01-02T00:00:00.000Z', writer: null,
+  });
+  await page.evaluate(() => doSync());
+  expect((await readAccounts(page)).map(a => a.name).sort()).toEqual(['From 1.x', 'GitHub']);
+  const serverTitles = await page.evaluate(async () => Promise.all([...fakeServer.items.keys()].map(async id => (await fakeServer.read(id))?.title)));
+  expect(serverTitles.sort()).toEqual(['From 1.x', 'GitHub']);
+  // And the blob is now a 2.0 export of the vault.
+  expect(await page.evaluate(() => fakeBlobState.writer)).toBe('v2');
+});
+
+test('the v1 export tombstones accounts removed since the last export', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [ACC('A', 'JBSWY3DPEHPK3PXP'), ACC('B', 'GEZDGNBVGY3TQOJQ')]);
+  await fakeBlob(page, null);
+  await page.evaluate(() => doSync());
+  // B deleted on another 2.0 device (arrives through /vault/items).
+  await page.evaluate(async () => {
+    const b = (await VaultStore.readAll(await VaultKeys.getKey())).items.find(i => i.title === 'B');
+    fakeServer.remoteDelete(b.id);
+    await doSync();
+  });
+  const blob = await page.evaluate(() => fakeBlobState);
+  expect(blob.accounts.map(a => a.name)).toEqual(['A']);
+  expect(Object.keys(blob.tombstones)).toEqual(['B']);
+});
+
+test('the list redraws after a sync that only changed items', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [ACC('GitHub', 'JBSWY3DPEHPK3PXP')]);
+  await fakeBlob(page, null);
+  await page.evaluate(() => doSync());
+  await page.click('#nav-settings');
+  await expect(page.locator('.acc-row')).toHaveCount(1);
+  await page.evaluate(async () => {
+    await fakeServer.remoteSave(Vault.fromV1Account({ name: 'Laptop item', secret: 'MFRGGZDFMZTWQ2LK', urls: 'example.org' }, 1));
+    await doSync();
+  });
+  await expect(page.locator('.acc-row')).toHaveCount(2);
+  const index = await page.evaluate(() => VaultAccounts.readIndex());
+  expect(index.map(e => e.name)).toContain('Laptop item');
+});
+
+test('Start fresh deletes the old items on the server and uploads this vault', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [ACC('Mine', 'JBSWY3DPEHPK3PXP')]);
+  await fakeBlob(page, null);
+  const titles = await page.evaluate(async () => {
+    const lost = VaultCrypto.generateKey();
+    const old = await VaultCrypto.encryptItem(Vault.newItem('note', { title: 'old' }), lost);
+    fakeServer.items.set(old.id, { record: old, revision: ++fakeServer.rev, deleted: false });
+    _startFresh = true;
+    CloudSync.syncUser = async () => ({});
+    document.getElementById('btn-confirm-newkey').click();
+    await new Promise(r => setTimeout(r, 1500));
+    const live = [...fakeServer.items.values()].filter(v => !v.deleted);
+    return Promise.all(live.map(async v => (await VaultCrypto.decryptItem(v.record, await VaultKeys.getKey())).title));
+  });
+  expect(titles).toEqual(['Mine']);
 });
