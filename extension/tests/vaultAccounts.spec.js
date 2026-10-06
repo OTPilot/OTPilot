@@ -150,7 +150,7 @@ test('an account renamed on a 1.x device still updates the local item (matched b
     Vault.getField(items[0], 'password').value = 'hunter2';
     await VaultStore.save(items[0], key);
   });
-  const { _id, ...fromV1 } = local;
+  const { _id, password, ...fromV1 } = local; // a 1.x account has neither
   await page.evaluate(async ([acc, ids]) => {
     await VaultAccounts.save([acc], await VaultKeys.getKey(), new Set(ids));
   }, [{ ...fromV1, name: 'GitHub renamed' }, [local._id]]);
@@ -168,7 +168,7 @@ test('a loose match by secret never takes the item another incoming account matc
     Vault.getField(items[0], 'password').value = 'hunter2';
     await VaultStore.save(items[0], key);
   });
-  const { _id, ...b } = local;
+  const { _id, password, ...b } = local; // as a 1.x device sends it
   const a = { ...b, name: 'Other account, same secret' };
   await page.evaluate(async ([list, ids]) => {
     await VaultAccounts.save(list, await VaultKeys.getKey(), new Set(ids));

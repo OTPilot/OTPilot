@@ -242,7 +242,10 @@ const CloudSync = (() => {
     if (typeof TeamKeys !== 'undefined') {
       try { teamKey = await TeamKeys.exportPrivJwk(); } catch { /* ignore */ }
     }
-    const encrypted_blob = await encrypt({ accounts, tombstones, teamKey }, keyB64);
+    // Passwords never go into the v1 blob (1.x devices don't know them, and
+    // the per-item vault sync carries them); only the v1 fields do.
+    const v1Accounts = accounts.map(({ password, ...rest }) => rest);
+    const encrypted_blob = await encrypt({ accounts: v1Accounts, tombstones, teamKey }, keyB64);
     const devicePayload  = await getDevicePayload();
     const res = await apiFetch('/accounts', {
       method: 'PUT',

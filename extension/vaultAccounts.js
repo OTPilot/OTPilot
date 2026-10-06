@@ -28,6 +28,7 @@ const VaultAccounts = (() => {
       urls: (item.urls || []).join('\n'),
       autofill: item.autofill !== false,
       category: item.tags?.[0] || '',
+      password: Vault.getValue(item, 'password'),
       _updatedAt: item.updatedAt,
     };
     if (item.iconDomain) acc.domain = item.iconDomain;
@@ -40,6 +41,15 @@ const VaultAccounts = (() => {
     next.title = acc.name || '';
     const user = Vault.getField(next, 'username');
     if (user) user.value = acc.email || '';
+    // Only when the caller knows about passwords: an account from the v1 blob
+    // (a 1.x device) has no `password` and must not erase the stored one.
+    const pw = Vault.getField(next, 'password');
+    if (pw && acc.password !== undefined && acc.password !== pw.value) {
+      if (pw.value) {
+        next.passwordHistory = [{ value: pw.value, changedAt: new Date().toISOString() }, ...(item.passwordHistory || [])].slice(0, 5);
+      }
+      pw.value = acc.password;
+    }
     next.totp = acc.secret
       ? { ...(item.totp || { digits: 6, period: 30, algorithm: 'SHA1' }), secret: acc.secret }
       : null;
