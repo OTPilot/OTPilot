@@ -2500,6 +2500,7 @@ function refreshSharedBadges() {
   renderAccountBar();
   if (document.getElementById('settings-panel')?.style.display !== 'none') {
     rebuildAccountsDOM();
+    applyVaultSearch(); // fresh rows start visible: re-apply the search/category filter
   }
 }
 

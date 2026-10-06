@@ -214,6 +214,31 @@ test('adding an account while a category filter is active keeps it visible and p
   ).toHaveText('3');
 });
 
+// Regression: the "shared with team" badges load asynchronously on open and
+// redraw the vault rows; the redraw dropped the active category filter, so
+// every account showed again under the "Work" pill (a CI flake of the test
+// above whenever the badges landed after the list).
+test('regression: the shared-badge refresh keeps the category filter applied', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => new Promise(r => chrome.storage.local.set({
+    categoryFilter: 'Work',
+    accounts: [
+      { name: 'GitHub', secret, urls: '', email: '', category: 'Work' },
+      { name: 'Gmail',  secret, urls: '', email: '', category: 'Personal' },
+    ],
+  }, r)), [TEST_SECRET]);
+  await page.reload();
+  await page.click('#nav-settings');
+  const visible = () => page.locator('.acc-row').evaluateAll(els =>
+    els.filter(el => el.style.display !== 'none').map(el => el.querySelector('.acc-head-name').textContent));
+  await expect.poll(visible).toEqual(['GitHub']);
+
+  await page.evaluate(() => refreshSharedBadges());
+  expect(await visible()).toEqual(['GitHub']);
+});
+
 // ── "Shared with you" row layout (regression: a long account name + owner
 // email pushed the row past the popup's fixed 600px width — clipped by
 // overflow-x:hidden rather than wrapping, cutting off the code and buttons
