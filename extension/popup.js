@@ -168,18 +168,34 @@ function loadState() {
   );
 }
 
-function saveState() {
-  return new Promise(r => chrome.storage.local.set({ accounts, activeIndex }, r));
+// After "Reset OTPilot on this device" storage is empty and the vault is back
+// at first run. A write still in flight from before (a sync finishing its
+// request, another open page) must not put data back, so every account/sync
+// write goes through this check.
+async function deviceWasReset() {
+  return (await VaultLock.state()) === 'setup';
 }
 
-function stampLocalChange() {
+async function saveState() {
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ accounts, activeIndex });
+}
+
+async function saveTombstones() {
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ tombstones });
+}
+
+async function stampLocalChange() {
   localChangedAt = new Date().toISOString();
-  return new Promise(r => chrome.storage.local.set({ localChangedAt }, r));
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ localChangedAt });
 }
 
-function writeLastSyncedAt(ts) {
+async function writeLastSyncedAt(ts) {
   lastSyncedAt = ts;
-  return new Promise(r => chrome.storage.local.set({ lastSyncedAt: ts }, r));
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ lastSyncedAt: ts });
 }
 
 function formatRelativeTime(isoStr) {
@@ -931,7 +947,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
     if (!draftSet.has(acc.name)) newTombs[acc.name] = now;
   }
   tombstones = newTombs;
-  await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+  await saveTombstones();
 
   draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   accounts = draft;
@@ -1619,20 +1635,30 @@ async function completeUnlock() {
 // Resolves true once the user confirms saving the key, false if cancelled or
 // if the vault isn't unlocked (there is no key to show, and this screen must
 // never stand in for the lock screen).
+// Each request takes a token; a lock (cancelRecoveryKit) or a newer request
+// bumps it, and every await is followed by a token check, so a stale request
+// can't show the screen over the login or fill in a key after cancellation.
 let _kitSettle = null;
+let _kitToken = 0;
 async function showRecoveryKit(note = '') {
   _kitSettle?.(false);
-  if ((await VaultLock.state()) !== 'unlocked') return false;
+  _kitSettle = null;
+  const token = ++_kitToken;
+  if ((await VaultLock.state()) !== 'unlocked' || token !== _kitToken) return false;
+  const key = await VaultKeys.getKey();
+  if (!key || token !== _kitToken) return false;
+  // No await from here until _kitSettle is set: nothing can cancel in between.
   showLockOverlay('kit');
   document.getElementById('lock-kit-note').textContent = note;
   document.getElementById('lock-kit-note').style.display = note ? '' : 'none';
-  document.getElementById('lock-kit-key').textContent = await VaultKeys.getKey();
+  document.getElementById('lock-kit-key').textContent = key;
   document.getElementById('lock-kit-saved').checked = false;
   document.getElementById('lock-kit-done').disabled = true;
   return new Promise(resolve => { _kitSettle = resolve; });
 }
 
 function cancelRecoveryKit() {
+  _kitToken++;
   document.getElementById('lock-kit-key').textContent = '';
   const settle = _kitSettle;
   _kitSettle = null;
@@ -1872,7 +1898,7 @@ async function doSync() {
       accounts   = serverMeta.accounts;
       tombstones = serverMeta.tombstones;
       await saveState();
-      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+      await saveTombstones();
       renderAccountBar();
       requestIcons(); // pick up icons for accounts pulled in from another device
       startTimer();
@@ -1888,7 +1914,7 @@ async function doSync() {
       tombstones = mergedTombs;
       const now = new Date().toISOString();
       await saveState();
-      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+      await saveTombstones();
       renderAccountBar();
       requestIcons(); // pick up icons for accounts merged in from another device
       startTimer();
@@ -2025,6 +2051,10 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     return;
   }
   document.getElementById('sync-restore-password').value = '';
+  // The device key is now the restored one: record it right away, before any
+  // network work that could fail, so the stale-Emergency-Kit warning can't be lost.
+  const keyReplaced = keyB64 !== previousKey;
+  if (keyReplaced) await VaultLock.recoveryKeyReplaced();
   try {
     const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
 
@@ -2040,20 +2070,16 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     accounts   = merged;
     tombstones = mergedTombs;
     await saveState();
-    await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+    await saveTombstones();
     renderAccountBar();
     const now = new Date().toISOString();
     await CloudSync.push(merged, mergedTombs, now);
     await writeLastSyncedAt(now);
     syncShowView('sv-active');
     syncSetStatus('ok', 'Restored');
-    // The device key is now the restored one: an Emergency Kit saved before
-    // no longer works. Record that (so it survives a lock in between) and show
-    // the new key now if the vault is still unlocked, else after the next unlock.
-    if (keyB64 !== previousKey) {
-      await VaultLock.recoveryKeyReplaced();
-      if (await showRecoveryKit(KEY_REPLACED_NOTE) && (await VaultLock.state()) === 'unlocked') hideLockOverlay();
-    }
+    // Show the new key now if the vault is still unlocked; otherwise the
+    // recorded change shows it after the next unlock.
+    if (keyReplaced && await showRecoveryKit(KEY_REPLACED_NOTE) && (await VaultLock.state()) === 'unlocked') hideLockOverlay();
   } catch {
     errEl.textContent = 'Could not finish syncing. Check your connection and try again.';
     await CloudSync.deleteSyncKey();

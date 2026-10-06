@@ -239,3 +239,49 @@ test('a restore that locks during the upload never puts the recovery-key screen 
   await page.click('#lock-kit-done');
   await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
 });
+
+test('if the upload after a restore fails, the stale-kit warning still shows next time', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  const recovery = await page.evaluate(() => VaultCrypto.b64e(VaultCrypto.generateKey()));
+  await page.evaluate(([k, pw]) => {
+    CloudSync.pull = async () => ({ accounts: [], tombstones: {} });
+    CloudSync.push = async () => { throw new Error('offline'); };
+    document.getElementById('sync-restore-input').value = k;
+    document.getElementById('sync-restore-password').value = pw;
+    document.getElementById('btn-restore-key').click();
+  }, [recovery, TEST_PASSWORD]);
+  await expect(page.locator('#sync-restore-err')).toContainText('Could not finish syncing');
+  await page.reload(); // next popup open
+  await expect(page.locator('#lock-kit')).toBeVisible();
+  await expect(page.locator('#lock-kit-note')).toContainText('no longer works');
+  await expect(page.locator('#lock-kit-key')).toHaveText(recovery);
+});
+
+test('a lock right after the recovery-key screen is requested cancels it before it shows', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  const result = await page.evaluate(async () => {
+    const pending = showRecoveryKit();
+    cancelRecoveryKit(); // what lockPopup does, before the request's awaits finish
+    return { shown: await pending, kitVisible: document.getElementById('lock-kit').style.display !== 'none', key: document.getElementById('lock-kit-key').textContent };
+  });
+  expect(result).toEqual({ shown: false, kitVisible: false, key: '' });
+});
+
+test('a write still in flight when the device is reset does not bring the accounts back', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page, { accounts: [{ name: 'X', secret: 'JBSWY3DPEHPK3PXP', urls: '' }] });
+  await page.reload();
+  const stored = await page.evaluate(async () => {
+    await VaultLock.resetDevice();
+    // e.g. a sync that finishes its request after the reset
+    await saveState();
+    await saveTombstones();
+    await writeLastSyncedAt(new Date().toISOString());
+    return chrome.storage.local.get(['accounts', 'tombstones', 'lastSyncedAt']);
+  });
+  expect(stored).toEqual({});
+});
