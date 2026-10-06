@@ -10,9 +10,10 @@
 // extra fields, other tags) is kept.
 //
 // The locked-vault index (`vaultIndex`, plaintext in chrome.storage.local):
-// name, URL patterns and the autofill flag of every login, so a page can show
-// "Unlock to auto-fill <name>" only where the user has an account while the
-// vault is locked. Secrets and usernames are never in it. Product decision: it
+// name, URL patterns, the autofill flag and whether it has a password, for
+// every login, so a page can show "Unlock to auto-fill <name>" only where the
+// user has an account while the vault is locked. Secrets, passwords and
+// usernames are never in it. Product decision: it
 // reveals which sites the user has accounts on to anyone who can read the
 // browser profile, in exchange for not prompting on every OTP page.
 const VaultAccounts = (() => {
@@ -66,7 +67,11 @@ const VaultAccounts = (() => {
   const comparable = item => JSON.stringify({ ...item, updatedAt: null });
 
   function indexEntry(item) {
-    return { id: item.id, name: item.title || '', urls: (item.urls || []).join('\n'), autofill: item.autofill !== false };
+    return {
+      id: item.id, name: item.title || '', urls: (item.urls || []).join('\n'), autofill: item.autofill !== false,
+      // Whether it can fill a sign-in form (never the password itself).
+      hasPassword: !!Vault.getValue(item, 'password'),
+    };
   }
 
   async function writeIndex(items) {

@@ -6,7 +6,7 @@ EXTENSION_FILES := \
   manifest.json \
   popup.html popup.js theme-boot.js theme.css unlock.html unlock.js generator.js \
   background.js \
-  jsqr.js content.js totp.js email-reader.js googleAuthMigration.js \
+  jsqr.js content.js forms.js totp.js email-reader.js googleAuthMigration.js \
   supabase.js cloudSync.js keys.js sharing.js \
   vault.js vaultAccounts.js vaultCrypto.js vaultKeys.js vaultLock.js vaultMigration.js vaultStore.js vaultSync.js \
   config.js links.js \

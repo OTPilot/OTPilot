@@ -27,6 +27,46 @@ async function accountsForContent() {
   return { locked: true, activeIndex, accounts: index };
 }
 
+// The host of the page a top-frame content script runs on, or null.
+function senderHost(sender) {
+  if (!sender?.tab || sender.frameId !== 0 || !sender.url) return null;
+  try {
+    const url = new URL(sender.url);
+    return /^https?:$/.test(url.protocol) ? url.hostname : null;
+  } catch { return null; }
+}
+
+// Logins that can fill the sender page's sign-in form: unlocked, those with a
+// password whose URLs cover the host ({ id, name, username }); locked, the
+// same from the plaintext index ({ id, name }), to offer an unlock.
+async function loginsForPage(sender) {
+  const host = senderHost(sender);
+  const state = await VaultLock.state();
+  if (!host || state === 'setup') return { state, logins: [] };
+  if (state === 'unlocked') {
+    const { items } = await VaultStore.readAll(await VaultKeys.getKey());
+    const logins = items
+      .filter(i => i.type === 'login' && Vault.getValue(i, 'password') && Vault.loginCoversHost(i.urls, host))
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map(i => ({ id: i.id, name: i.title || host, username: Vault.getValue(i, 'username') }));
+    return { state, logins };
+  }
+  const logins = (await VaultAccounts.readIndex())
+    .filter(e => e.hasPassword && Vault.loginCoversHost(e.urls, host))
+    .map(e => ({ id: e.id, name: e.name || host }));
+  return { state, logins };
+}
+
+async function fillLogin(sender, id) {
+  const host = senderHost(sender);
+  if (!host || typeof id !== 'string' || (await VaultLock.state()) !== 'unlocked') return { ok: false };
+  const item = await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null);
+  const password = item && Vault.getValue(item, 'password');
+  if (!item || item.type !== 'login' || !password || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
+  await VaultLock.touch();
+  return { ok: true, username: Vault.getValue(item, 'username'), password };
+}
+
 // Latest email OTP detected by email-reader.js (expires after 10 min).
 let _emailOtp = null;
 
@@ -264,6 +304,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
       return { ok: await VaultAccounts.update(msg.id, msg.expected, msg.patch, await VaultKeys.getKey()) };
     })().then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // Sign-in forms (forms.js). The page's host comes from the sender (the
+  // browser), never from the message, and only the top frame is served. The
+  // list carries no passwords; one is released only for a login the user
+  // picked whose saved URLs cover that host.
+  if (msg.action === 'vaultLoginsForPage') {
+    loginsForPage(_sender).then(sendResponse).catch(() => sendResponse({ state: 'locked', logins: [] }));
+    return true;
+  }
+
+  if (msg.action === 'vaultFillLogin') {
+    fillLogin(_sender, msg.id).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 
