@@ -35,6 +35,14 @@ aes-gcm = "0.10"
 base64 = "0.22"
 sentry = { version = "0.48", features = ["anyhow", "tracing", "tower", "tower-axum-matched-path", "logs"] }
 
+[features]
+# Integration tests that need a Postgres server (DATABASE_URL); CI runs
+# `cargo test --features db-tests` against a service container.
+db-tests = []
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
 [profile.release]
 opt-level = 3
 strip = true

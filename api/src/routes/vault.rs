@@ -400,3 +400,301 @@ mod tests {
         assert!(validate_record(&r).is_err());
     }
 }
+
+/// End-to-end tests of the vault endpoints against a real Postgres, through
+/// the router and the JWT extractor. `cargo test --features db-tests`
+/// (needs DATABASE_URL; CI provides a service container).
+#[cfg(all(test, feature = "db-tests"))]
+mod db_tests {
+    use super::*;
+    use crate::test_support::{call, create_user, test_pool, test_state};
+    use axum::http::Method;
+
+    fn record(tag: &str) -> Value {
+        json!({ "v": 2, "key": { "iv": "aXY=", "ct": tag }, "data": { "iv": "aXY=", "ct": tag } })
+    }
+
+    async fn app() -> (Router, sqlx::PgPool) {
+        let pool = test_pool().await;
+        (router().with_state(test_state(pool.clone())), pool)
+    }
+
+    #[tokio::test]
+    async fn create_update_and_conflict() {
+        let (app, db) = app().await;
+        let user = create_user(&db, "personal").await;
+        let id = Uuid::new_v4();
+        let uri = format!("/vault/items/{id}");
+
+        let (s, created) = call(
+            &app,
+            user,
+            Method::PUT,
+            &uri,
+            Some(json!({ "record": record("a") })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let rev1 = created["revision"].as_i64().unwrap();
+
+        // An update must name the revision it's based on.
+        let (s, body) = call(
+            &app,
+            user,
+            Method::PUT,
+            &uri,
+            Some(json!({ "record": record("b") })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert_eq!(body["item"]["revision"], rev1);
+
+        let (s, updated) = call(
+            &app,
+            user,
+            Method::PUT,
+            &uri,
+            Some(json!({ "record": record("b"), "base_revision": rev1 })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let rev2 = updated["revision"].as_i64().unwrap();
+        assert!(rev2 > rev1);
+
+        // A stale base revision is refused and returns the server's version.
+        let (s, body) = call(
+            &app,
+            user,
+            Method::PUT,
+            &uri,
+            Some(json!({ "record": record("c"), "base_revision": rev1 })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert_eq!(body["item"]["record"]["data"]["ct"], "b");
+    }
+
+    #[tokio::test]
+    async fn another_users_item_is_invisible_and_untouched() {
+        let (app, db) = app().await;
+        let alice = create_user(&db, "personal").await;
+        let mallory = create_user(&db, "personal").await;
+        let id = Uuid::new_v4();
+        let uri = format!("/vault/items/{id}");
+        call(
+            &app,
+            alice,
+            Method::PUT,
+            &uri,
+            Some(json!({ "record": record("alice") })),
+        )
+        .await;
+
+        let (s, _) = call(
+            &app,
+            mallory,
+            Method::PUT,
+            &uri,
+            Some(json!({ "record": record("mallory"), "base_revision": 1 })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _) = call(
+            &app,
+            mallory,
+            Method::DELETE,
+            &format!("{uri}?base_revision=1"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (_, list) = call(&app, mallory, Method::GET, "/vault/items", None).await;
+        assert_eq!(list["items"].as_array().unwrap().len(), 0);
+
+        let (_, list) = call(&app, alice, Method::GET, "/vault/items", None).await;
+        assert_eq!(list["items"][0]["record"]["data"]["ct"], "alice");
+    }
+
+    #[tokio::test]
+    async fn incremental_pull_includes_deletions() {
+        let (app, db) = app().await;
+        let user = create_user(&db, "personal").await;
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (_, ra) = call(
+            &app,
+            user,
+            Method::PUT,
+            &format!("/vault/items/{a}"),
+            Some(json!({ "record": record("a") })),
+        )
+        .await;
+        let (_, first) = call(&app, user, Method::GET, "/vault/items?since=0", None).await;
+        let cursor = first["revision"].as_i64().unwrap();
+        assert_eq!(first["items"].as_array().unwrap().len(), 1);
+
+        call(
+            &app,
+            user,
+            Method::PUT,
+            &format!("/vault/items/{b}"),
+            Some(json!({ "record": record("b") })),
+        )
+        .await;
+        let rev_a = ra["revision"].as_i64().unwrap();
+        let (s, _) = call(
+            &app,
+            user,
+            Method::DELETE,
+            &format!("/vault/items/{a}?base_revision={rev_a}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        let (_, next) = call(
+            &app,
+            user,
+            Method::GET,
+            &format!("/vault/items?since={cursor}"),
+            None,
+        )
+        .await;
+        let items = next["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        let deleted = items.iter().find(|i| i["id"] == a.to_string()).unwrap();
+        assert_eq!(deleted["deleted"], true);
+        assert_eq!(deleted["record"], Value::Null);
+        assert_eq!(next["more"], false);
+    }
+
+    #[tokio::test]
+    async fn batch_creates_new_and_reports_existing() {
+        let (app, db) = app().await;
+        let user = create_user(&db, "personal").await;
+        let existing = Uuid::new_v4();
+        call(
+            &app,
+            user,
+            Method::PUT,
+            &format!("/vault/items/{existing}"),
+            Some(json!({ "record": record("old") })),
+        )
+        .await;
+        let fresh = Uuid::new_v4();
+        let (s, body) = call(
+            &app,
+            user,
+            Method::POST,
+            "/vault/items/batch",
+            Some(json!({ "items": [
+            { "id": fresh, "record": record("new"), "counts_for_limit": false },
+            { "id": existing, "record": record("overwrite?") },
+        ] })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body["created"].as_array().unwrap().len(), 1);
+        assert_eq!(body["conflicts"], json!([existing]));
+        let (_, list) = call(&app, user, Method::GET, "/vault/items", None).await;
+        let old = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == existing.to_string())
+            .unwrap()
+            .clone();
+        assert_eq!(old["record"]["data"]["ct"], "old");
+        let counts: bool =
+            sqlx::query_scalar("SELECT counts_for_limit FROM vault_items WHERE id = $1")
+                .bind(fresh)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert!(!counts);
+        let version: i16 = sqlx::query_scalar("SELECT vault_version FROM users WHERE id = $1")
+            .bind(user)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(version, 2);
+    }
+
+    #[tokio::test]
+    async fn oversized_batch_and_bad_records_are_refused() {
+        let (app, db) = app().await;
+        let user = create_user(&db, "personal").await;
+        let big = "A".repeat(100 * 1024);
+        let items: Vec<Value> = (0..90)
+            .map(|_| json!({ "id": Uuid::new_v4(), "record": record(&big) }))
+            .collect();
+        let (s, _) = call(
+            &app,
+            user,
+            Method::POST,
+            "/vault/items/batch",
+            Some(json!({ "items": items })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
+
+        let (s, _) = call(
+            &app,
+            user,
+            Method::PUT,
+            &format!("/vault/items/{}", Uuid::new_v4()),
+            Some(json!({ "record": { "v": 2 } })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn free_plan_cannot_sync_the_vault() {
+        let (app, db) = app().await;
+        let user = create_user(&db, "free").await;
+        let (s, _) = call(&app, user, Method::GET, "/vault/items", None).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _) = call(
+            &app,
+            user,
+            Method::PUT,
+            &format!("/vault/items/{}", Uuid::new_v4()),
+            Some(json!({ "record": record("x") })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_writes_get_distinct_revisions_and_none_is_skipped() {
+        let (app, db) = app().await;
+        let user = create_user(&db, "personal").await;
+        let handles: Vec<_> = (0..25)
+            .map(|i| {
+                let app = app.clone();
+                tokio::spawn(async move {
+                    let uri = format!("/vault/items/{}", Uuid::new_v4());
+                    call(
+                        &app,
+                        user,
+                        Method::PUT,
+                        &uri,
+                        Some(json!({ "record": record(&i.to_string()) })),
+                    )
+                    .await
+                })
+            })
+            .collect();
+        let mut revs = Vec::new();
+        for h in handles {
+            let (s, body) = h.await.unwrap();
+            assert_eq!(s, StatusCode::OK);
+            revs.push(body["revision"].as_i64().unwrap());
+        }
+        revs.sort();
+        revs.dedup();
+        assert_eq!(revs.len(), 25);
+        let (_, list) = call(&app, user, Method::GET, "/vault/items?since=0", None).await;
+        assert_eq!(list["items"].as_array().unwrap().len(), 25);
+    }
+}

@@ -3,6 +3,8 @@ mod email;
 mod error;
 mod middleware;
 mod routes;
+#[cfg(all(test, feature = "db-tests"))]
+mod test_support;
 
 use axum::{http::Method, Router};
 use std::collections::HashMap;

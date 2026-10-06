@@ -35,7 +35,10 @@ Load into Chrome: `chrome://extensions` → Developer mode → Load unpacked →
 cd api
 cargo run              # dev server (reads api/.env)
 cargo build --release
-cargo test             # no tests yet
+cargo test             # unit tests (no DB needed)
+DATABASE_URL=postgres://postgres:postgres@localhost:5442/postgres cargo test --features db-tests
+                       # + DB-backed integration tests (each test creates its own database);
+                       # CI runs these against a Postgres service container
 ```
 Requires `api/.env` with `DATABASE_URL`, `SUPABASE_URL`, `PORT`, and Stripe vars (see `api/.env.example`).
 
