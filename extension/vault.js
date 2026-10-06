@@ -12,6 +12,8 @@
 // extension can't destroy data written by a newer one.
 const Vault = (() => {
   const FREE_ITEM_LIMIT = 50;
+  // Anything else (free, missing, unknown) gets the Free limit.
+  const PAID_PLANS = ['personal', 'team_lite', 'team_pro'];
 
   const FIELD_KINDS = ['text', 'password', 'hidden', 'email', 'url', 'date', 'phone', 'multiline'];
   // Kinds whose value is masked by default and offered by the generator.
@@ -98,16 +100,26 @@ const Vault = (() => {
     return getField(item, id)?.value ?? '';
   }
 
-  // Free plan counts every item except logins that only hold a 2FA code (no
-  // password and no other filled field) — 2FA stays unlimited on Free.
+  // Free plan counts every item except logins that hold a 2FA secret and
+  // nothing else besides a username — 2FA stays unlimited on Free.
   function countsForLimit(item) {
-    if (item.type !== 'login') return true;
+    if (item.type !== 'login' || !item.totp?.secret) return true;
     return (item.fields || []).some(f => f.id !== 'username' && String(f.value ?? '').trim() !== '');
   }
 
-  function canCreateItem(items, plan) {
-    if (plan !== 'free') return true;
-    return items.filter(countsForLimit).length < FREE_ITEM_LIMIT;
+  function countedItems(items) {
+    return items.filter(countsForLimit).length;
+  }
+
+  // Whether saving `candidate` (new or edited) is allowed. Over the limit, items
+  // that already counted stay editable; only adding a counted item is blocked —
+  // a new one, or a 2FA-only login that gains a password.
+  function canSaveItem(items, plan, candidate) {
+    if (PAID_PLANS.includes(plan)) return true;
+    if (!countsForLimit(candidate)) return true;
+    const existing = items.find(i => i.id === candidate.id);
+    if (existing && countsForLimit(existing)) return true;
+    return countedItems(items.filter(i => i.id !== candidate.id)) < FREE_ITEM_LIMIT;
   }
 
   // ── v1 ⇄ v2 ─────────────────────────────────────────────────────────────
@@ -149,9 +161,9 @@ const Vault = (() => {
   }
 
   return {
-    FREE_ITEM_LIMIT, FIELD_KINDS, SECRET_KINDS, TYPES, UPCOMING_TYPES,
+    FREE_ITEM_LIMIT, PAID_PLANS, FIELD_KINDS, SECRET_KINDS, TYPES, UPCOMING_TYPES,
     isKnownType, newItem, getField, getValue,
-    countsForLimit, canCreateItem,
+    countsForLimit, countedItems, canSaveItem,
     fromV1Account, toV1Account,
   };
 })();

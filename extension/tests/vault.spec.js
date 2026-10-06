@@ -76,7 +76,7 @@ test('items without a 2FA secret never reach the transition blob', async ({ cont
   expect(result).toEqual([null, null]);
 });
 
-test('free limit: 2FA-only logins do not count, everything else does', async ({ context, extensionId }) => {
+test('free limit: only 2FA-only logins are exempt', async ({ context, extensionId }) => {
   const page = await vaultPage(context, extensionId);
   const result = await page.evaluate(acc => {
     const twoFaOnly = Vault.fromV1Account(acc);
@@ -84,27 +84,55 @@ test('free limit: 2FA-only logins do not count, everything else does', async ({ 
     withPassword.fields.find(f => f.id === 'password').value = 'hunter2';
     const withCustom = Vault.fromV1Account(acc);
     withCustom.fields.push({ id: 'f_1', label: 'PIN', kind: 'hidden', value: '1234', custom: true });
+    const usernameOnly = Vault.newItem('login', { title: 'Forum' });
+    usernameOnly.fields.find(f => f.id === 'username').value = 'alberto';
     return {
       twoFaOnly: Vault.countsForLimit(twoFaOnly),
       withPassword: Vault.countsForLimit(withPassword),
       withCustom: Vault.countsForLimit(withCustom),
+      usernameOnly: Vault.countsForLimit(usernameOnly),
       emptyNote: Vault.countsForLimit(Vault.newItem('note')),
     };
   }, V1);
-  expect(result).toEqual({ twoFaOnly: false, withPassword: true, withCustom: true, emptyNote: true });
+  expect(result).toEqual({ twoFaOnly: false, withPassword: true, withCustom: true, usernameOnly: true, emptyNote: true });
 });
 
-test('free users can create up to 50 counted items; paid users are unlimited', async ({ context, extensionId }) => {
+test('free users can save up to 50 counted items; 2FA-only logins are never blocked', async ({ context, extensionId }) => {
   const page = await vaultPage(context, extensionId);
   const result = await page.evaluate(acc => {
     const notes = n => Array.from({ length: n }, () => Vault.newItem('note'));
-    const twoFa = Array.from({ length: 80 }, () => Vault.fromV1Account(acc));
+    const twoFa = () => Vault.fromV1Account(acc);
+    const full = notes(50);
     return {
-      at49: Vault.canCreateItem(notes(49), 'free'),
-      at50: Vault.canCreateItem(notes(50), 'free'),
-      at50PlusManyTwoFa: Vault.canCreateItem([...notes(49), ...twoFa], 'free'),
-      paid: Vault.canCreateItem(notes(500), 'personal'),
+      at49: Vault.canSaveItem(notes(49), 'free', Vault.newItem('note')),
+      at50: Vault.canSaveItem(full, 'free', Vault.newItem('note')),
+      at50PlusManyTwoFa: Vault.canSaveItem([...notes(49), ...Array.from({ length: 80 }, twoFa)], 'free', Vault.newItem('note')),
+      twoFaAtCap: Vault.canSaveItem(full, 'free', twoFa()),
+      paid: Vault.canSaveItem(notes(500), 'personal', Vault.newItem('note')),
+      noPlan: Vault.canSaveItem(full, undefined, Vault.newItem('note')),
+      unknownPlan: Vault.canSaveItem(full, 'enterprise', Vault.newItem('note')),
+      counted: Vault.countedItems([...notes(3), twoFa()]),
     };
   }, V1);
-  expect(result).toEqual({ at49: true, at50: false, at50PlusManyTwoFa: true, paid: true });
+  expect(result).toEqual({
+    at49: true, at50: false, at50PlusManyTwoFa: true, twoFaAtCap: true,
+    paid: true, noPlan: false, unknownPlan: false, counted: 3,
+  });
+});
+
+test('over the free limit, counted items stay editable but 2FA-only logins cannot gain a password', async ({ context, extensionId }) => {
+  const page = await vaultPage(context, extensionId);
+  const result = await page.evaluate(acc => {
+    const items = Array.from({ length: 60 }, () => Vault.newItem('note'));
+    const twoFa = Vault.fromV1Account(acc);
+    items.push(twoFa);
+    const editedNote = { ...items[0], title: 'renamed' };
+    const upgraded = structuredClone(twoFa);
+    upgraded.fields.find(f => f.id === 'password').value = 'hunter2';
+    return {
+      editCounted: Vault.canSaveItem(items, 'free', editedNote),
+      addPassword: Vault.canSaveItem(items, 'free', upgraded),
+    };
+  }, V1);
+  expect(result).toEqual({ editCounted: true, addPassword: false });
 });
