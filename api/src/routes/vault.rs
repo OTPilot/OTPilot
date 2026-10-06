@@ -4,7 +4,7 @@
 //! stored as-is. Personal items only for now; team collections come later.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -26,12 +26,18 @@ use crate::{
 /// base64-encoded, plus envelope overhead).
 const MAX_RECORD_BYTES: usize = 128 * 1024;
 const MAX_BATCH: usize = 500;
+/// Request body cap for a batch. Clients split uploads by count (MAX_BATCH)
+/// and by size, so a full vault goes up in several batches.
+const MAX_BATCH_BYTES: usize = 8 * 1024 * 1024;
 const PAGE_SIZE: i64 = 1000;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/vault/items", get(list_items))
-        .route("/vault/items/batch", post(create_batch))
+        .route(
+            "/vault/items/batch",
+            post(create_batch).layer(DefaultBodyLimit::max(MAX_BATCH_BYTES)),
+        )
         .route("/vault/items/{id}", put(put_item).delete(delete_item))
 }
 
@@ -92,11 +98,37 @@ fn conflict(current: Option<&ItemRow>) -> Response {
         .into_response()
 }
 
-async fn mark_migrated(state: &AppState, user_id: Uuid) {
-    let _ = sqlx::query("UPDATE users SET vault_version = 2 WHERE id = $1 AND vault_version < 2")
+/// Starts a write transaction holding a per-owner advisory lock until commit.
+///
+/// `revision` comes from `nextval`, which is assigned at write time, not at
+/// commit. Without this lock two writes by the same owner could take N and
+/// N+1 and commit N+1 first; a pull in between would move the client's cursor
+/// past N, and N would never be pulled. Serializing an owner's writes makes
+/// their revisions commit in order. (Readers filter by owner, so other owners'
+/// interleaving doesn't matter.)
+async fn begin_owner_tx(
+    state: &AppState,
+    owner: Uuid,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let mut owner_tx = state.db.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('vault_items'), hashtext($1::text))")
+        .bind(owner)
+        .execute(&mut *owner_tx)
+        .await?;
+    Ok(owner_tx)
+}
+
+/// Marks the user as on the 2.0 vault, inside the write's transaction so the
+/// flag and the items can't disagree.
+async fn mark_migrated(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+) -> Result<()> {
+    sqlx::query("UPDATE users SET vault_version = 2 WHERE id = $1 AND vault_version < 2")
         .bind(user_id)
-        .execute(&state.db)
-        .await;
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -159,7 +191,7 @@ async fn put_item(
     require_cloud_plan(&state, auth.id).await?;
     let record = validate_record(&body.record)?;
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = begin_owner_tx(&state, auth.id).await?;
     let existing = sqlx::query_as::<_, LockedRow>(
         "SELECT owner_id, revision FROM vault_items WHERE id = $1 FOR UPDATE",
     )
@@ -217,8 +249,8 @@ async fn put_item(
             None => Err(ApiError::NotFound),
         };
     };
+    mark_migrated(&mut tx, auth.id).await?;
     tx.commit().await?;
-    mark_migrated(&state, auth.id).await;
     Ok(Json(json!({ "id": id, "revision": revision })).into_response())
 }
 
@@ -248,7 +280,7 @@ async fn delete_item(
     Query(params): Query<DeleteParams>,
 ) -> Result<Response> {
     require_cloud_plan(&state, auth.id).await?;
-    let mut tx = state.db.begin().await?;
+    let mut tx = begin_owner_tx(&state, auth.id).await?;
     let existing = sqlx::query_as::<_, LockedRow>(
         "SELECT owner_id, revision FROM vault_items WHERE id = $1 FOR UPDATE",
     )
@@ -310,7 +342,7 @@ async fn create_batch(
         .map(|i| validate_record(&i.record))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = begin_owner_tx(&state, auth.id).await?;
     let mut created = Vec::new();
     let mut conflicts = Vec::new();
     for (item, record) in body.items.iter().zip(&records) {
@@ -329,10 +361,10 @@ async fn create_batch(
             None => conflicts.push(item.id),
         }
     }
-    tx.commit().await?;
     if !created.is_empty() {
-        mark_migrated(&state, auth.id).await;
+        mark_migrated(&mut tx, auth.id).await?;
     }
+    tx.commit().await?;
     Ok(Json(json!({ "created": created, "conflicts": conflicts })))
 }
 
