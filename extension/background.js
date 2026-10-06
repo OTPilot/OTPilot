@@ -15,7 +15,9 @@ importScripts(
 async function accountsForContent() {
   const { activeIndex = 0 } = await chrome.storage.local.get('activeIndex');
   if ((await VaultLock.state()) === 'unlocked') {
-    return { locked: false, activeIndex, accounts: await VaultAccounts.load(await VaultKeys.getKey()) };
+    // No passwords: content scripts don't fill them yet, so they don't get them.
+    const accounts = (await VaultAccounts.load(await VaultKeys.getKey())).map(({ password, ...acc }) => acc);
+    return { locked: false, activeIndex, accounts };
   }
   let index = await VaultAccounts.readIndex();
   if (!(await VaultMigration.isMigrated())) {

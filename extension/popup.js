@@ -191,6 +191,9 @@ async function saveState() {
   if ((await VaultLock.state()) !== 'unlocked') throw new Error('vault is locked');
   const key = await VaultKeys.getKey();
   await VaultAccounts.save(accounts, key, _loadedIds);
+  // Re-read what was stored: entries that came without a password (a 1.x
+  // device's blob) keep the vault's, and the list must show it again.
+  accounts = await VaultAccounts.load(key);
   _loadedIds = new Set(accounts.map(a => a._id));
   await chrome.storage.local.set({ activeIndex });
 }
@@ -516,6 +519,7 @@ async function refreshDisplay() {
   currentCode = '';
 
   if (!acc) {
+    renderHomeCreds(null);
     bigIcon.innerHTML = '';
     nameLabel.textContent = '';
     display.textContent = '••• •••';
@@ -531,6 +535,7 @@ async function refreshDisplay() {
   }
 
   nameLabel.innerHTML = esc(acc.name || '') + sharedBadgeHTML(findSharedCode(acc));
+  renderHomeCreds(acc);
 
   // Only the real site favicon, never the letter-avatar fallback — this is
   // decorative extra space, not a place to render initials twice.
@@ -538,9 +543,9 @@ async function refreshDisplay() {
   bigIcon.innerHTML = bigIconUrl ? `<img src="${bigIconUrl}" alt="">` : '';
 
   if (!acc.secret) {
-    display.textContent = 'no secret';
+    display.textContent = 'No 2FA code';
     display.className = 'dim';
-    countdown.textContent = 'Set a secret in Settings';
+    countdown.textContent = acc.password ? '' : 'Add a password or 2FA secret in Accounts';
     bar.style.width = '0%';
     btnCopy.disabled = true;
     btnFill.disabled = true;
@@ -572,6 +577,46 @@ async function refreshDisplay() {
     btnFill.disabled = true;
     currentCode = '';
   }
+}
+
+// Username and password under the code. Re-rendered only when the account or
+// its values change, not on every timer tick (that would reset Show and eat clicks).
+let _homeCredsKey = null;
+function renderHomeCreds(acc) {
+  const key = acc ? JSON.stringify([acc._id, acc.email || '', acc.password || '']) : '';
+  if (key === _homeCredsKey) return;
+  _homeCredsKey = key;
+  const box = document.getElementById('home-creds');
+  box.innerHTML = '';
+  if (!acc || (!acc.email && !acc.password)) return;
+  const row = (label, value, secret) => {
+    const el = document.createElement('div');
+    el.className = 'home-cred';
+    el.innerHTML = `<div class="home-cred-text"><span class="home-cred-label">${label}</span><span class="home-cred-value"></span></div>`;
+    const valueEl = el.querySelector('.home-cred-value');
+    const show = shown => { valueEl.textContent = secret && !shown ? '•'.repeat(Math.min(value.length, 14)) : value; };
+    show(false);
+    if (secret) {
+      const eye = document.createElement('button');
+      eye.className = 'home-cred-btn';
+      eye.title = 'Show/hide';
+      eye.innerHTML = SVG_EYE;
+      let shown = false;
+      eye.addEventListener('click', () => { shown = !shown; show(shown); eye.innerHTML = shown ? SVG_EYE_OFF : SVG_EYE; });
+      el.appendChild(eye);
+    }
+    const copy = document.createElement('button');
+    copy.className = 'home-cred-btn';
+    copy.textContent = 'Copy';
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(value); setStatus(`${label} copied`); }
+      catch { setStatus('Could not copy — the browser blocked the clipboard', false); }
+    });
+    el.appendChild(copy);
+    box.appendChild(el);
+  };
+  if (acc.email) row('Username', acc.email, false);
+  if (acc.password) row('Password', acc.password, true);
 }
 
 function startTimer() {
@@ -691,6 +736,7 @@ function syncOpenAccToDraft() {
   if (!body) return;
   draft[openAccIdx].name     = body.querySelector('.acc-name').value.trim();
   draft[openAccIdx].email    = body.querySelector('.acc-email').value.trim();
+  draft[openAccIdx].password = body.querySelector('.acc-password').value;
   draft[openAccIdx].secret   = body.querySelector('.acc-secret').value.trim();
   draft[openAccIdx].urls     = body.querySelector('.acc-urls').value.trim();
   draft[openAccIdx].autofill = body.querySelector('.acc-autofill').checked;
@@ -802,8 +848,16 @@ function renderAccDetail() {
       <input class="acc-name" type="text" placeholder="e.g. My Project QA" value="${esc(acc.name)}">
     </div>
     <div class="acc-field">
-      <label>Email (optional)</label>
-      <input class="acc-email" type="email" placeholder="e.g. user@example.com" value="${esc(acc.email || '')}">
+      <label>Username or email (optional)</label>
+      <input class="acc-email" type="text" placeholder="e.g. user@example.com" value="${esc(acc.email || '')}">
+    </div>
+    <div class="acc-field">
+      <label>Password (optional)</label>
+      <div class="field-row">
+        <input class="acc-password" type="password" placeholder="Password" value="${esc(acc.password || '')}" autocomplete="new-password">
+        <button class="btn-eye" title="Show/hide">${SVG_EYE}</button>
+        <button class="btn-eye btn-gen-password" title="Generate a password">⟳</button>
+      </div>
     </div>
     <div class="acc-field">
       <label>Category</label>
@@ -814,7 +868,7 @@ function renderAccDetail() {
       </div>
     </div>
     <div class="acc-field">
-      <label>Secret (base32 or hex)</label>
+      <label>2FA secret (optional, base32 or hex)</label>
       <div class="field-row">
         <input class="acc-secret" type="password" placeholder="Secret" value="${esc(acc.secret)}" autocomplete="off">
         <button class="btn-eye" title="Show/hide">${SVG_EYE}</button>
@@ -846,12 +900,21 @@ function renderAccDetail() {
     renderAccDetail();
   });
 
-  body.querySelector('.btn-eye').addEventListener('click', e => {
+  body.querySelectorAll('.btn-eye:not(.btn-gen-password)').forEach(b => b.addEventListener('click', e => {
     const btn = e.currentTarget;
-    const inp = btn.previousElementSibling;
+    const inp = btn.parentElement.querySelector('input');
     const reveal = inp.type === 'password';
     inp.type = reveal ? 'text' : 'password';
     btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
+  }));
+
+  // Fills a new password with the Generate view's settings, shown so the user sees what they got.
+  body.querySelector('.btn-gen-password').addEventListener('click', async () => {
+    const { generatorOptions } = await chrome.storage.local.get('generatorOptions');
+    const inp = body.querySelector('.acc-password');
+    inp.value = Generator.generate({ ...generatorOptions, mode: 'password' });
+    inp.type = 'text';
+    inp.parentElement.querySelector('.btn-eye:not(.btn-gen-password)').innerHTML = SVG_EYE_OFF;
   });
 
   // Live-update the list row's name/email as you type, without a full
@@ -952,6 +1015,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
     const changed = !old ||
       old.secret !== acc.secret || old.urls !== acc.urls ||
       old.email !== acc.email || old.autofill !== acc.autofill ||
+      (old.password || '') !== (acc.password || '') ||
       (old.category || '') !== (acc.category || '');
     acc._updatedAt = changed ? now : (old._updatedAt ?? now);
   }
@@ -1859,6 +1923,9 @@ async function lockPopup() {
   clearInterval(timerInterval);
   clearInterval(_sharedRefreshTimer);
   cancelRecoveryKit();
+  // Passwords start masked again after unlocking.
+  document.getElementById('home-creds').innerHTML = '';
+  _homeCredsKey = null;
   clearRevealedKey();
   await new Promise(r => chrome.storage.local.remove('userPlan', r));
   document.querySelector('.kofi-footer').style.display = '';
