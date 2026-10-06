@@ -191,6 +191,9 @@ async function saveState() {
   if ((await VaultLock.state()) !== 'unlocked') throw new Error('vault is locked');
   const key = await VaultKeys.getKey();
   await VaultAccounts.save(accounts, key, _loadedIds);
+  // Re-read what was stored: entries that came without a password (a 1.x
+  // device's blob) keep the vault's, and the list must show it again.
+  accounts = await VaultAccounts.load(key);
   _loadedIds = new Set(accounts.map(a => a._id));
   await chrome.storage.local.set({ activeIndex });
 }
@@ -580,7 +583,7 @@ async function refreshDisplay() {
 // its values change, not on every timer tick (that would reset Show and eat clicks).
 let _homeCredsKey = null;
 function renderHomeCreds(acc) {
-  const key = acc ? `${acc._id}|${acc.email || ''}|${acc.password || ''}` : '';
+  const key = acc ? JSON.stringify([acc._id, acc.email || '', acc.password || '']) : '';
   if (key === _homeCredsKey) return;
   _homeCredsKey = key;
   const box = document.getElementById('home-creds');
@@ -911,6 +914,7 @@ function renderAccDetail() {
     const inp = body.querySelector('.acc-password');
     inp.value = Generator.generate({ ...generatorOptions, mode: 'password' });
     inp.type = 'text';
+    inp.parentElement.querySelector('.btn-eye:not(.btn-gen-password)').innerHTML = SVG_EYE_OFF;
   });
 
   // Live-update the list row's name/email as you type, without a full
@@ -1919,6 +1923,9 @@ async function lockPopup() {
   clearInterval(timerInterval);
   clearInterval(_sharedRefreshTimer);
   cancelRecoveryKit();
+  // Passwords start masked again after unlocking.
+  document.getElementById('home-creds').innerHTML = '';
+  _homeCredsKey = null;
   clearRevealedKey();
   await new Promise(r => chrome.storage.local.remove('userPlan', r));
   document.querySelector('.kofi-footer').style.display = '';

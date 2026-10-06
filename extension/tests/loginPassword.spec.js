@@ -94,3 +94,62 @@ test('passwords never go into the v1 sync blob', async ({ context, extensionId }
   });
   expect(blob.accounts).toEqual([{ name: 'GitHub', secret: 'JBSWY3DPEHPK3PXP' }]);
 });
+
+test('after a v1 blob pull, accounts still show and keep their passwords', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, []);
+  await writeAccounts(page, [{ name: 'GitHub', email: 'me', secret: TEST_SECRET, urls: '', password: 'keep-me' }]);
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => accounts.length)).toBe(1); // popup finished loading
+  const result = await page.evaluate(async () => {
+    // What a v1 pull does: replace the list with password-less entries, then save.
+    accounts = accounts.map(({ password, ...a }) => a);
+    await saveState();
+    return accounts[0].password;
+  });
+  expect(result).toBe('keep-me');
+});
+
+test('Home rows change when username and password swap a "|" between them', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, []);
+  await writeAccounts(page, [{ name: 'X', email: 'a|b', secret: '', urls: '', password: 'c' }]);
+  await page.reload();
+  await page.locator('#home-list .lc-row', { hasText: 'X' }).click();
+  await expect(page.locator('#home-creds .home-cred').first()).toContainText('a|b');
+  await page.evaluate(async () => { accounts[0] = { ...accounts[0], email: 'a', password: 'b|c' }; refreshDisplay(); });
+  await expect(page.locator('#home-creds .home-cred-value').first()).toHaveText('a');
+});
+
+test('the generate button shows the eye as "revealed"', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, [{ name: 'GitHub', email: '', secret: TEST_SECRET, urls: '' }]);
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'GitHub' }).click();
+  const eyeBefore = await page.locator('.acc-password ~ .btn-eye').first().innerHTML();
+  await page.click('.btn-gen-password');
+  const eyeAfter = await page.locator('.acc-password ~ .btn-eye').first().innerHTML();
+  expect(eyeAfter).not.toBe(eyeBefore);
+});
+
+test('pages never receive passwords', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, []);
+  await writeAccounts(page, [{ name: 'GitHub', email: 'me', secret: TEST_SECRET, urls: 'localhost', password: 'secret-pw' }]);
+  const res = await page.evaluate(() => chrome.runtime.sendMessage({ action: 'vaultAccounts' }));
+  expect(res.accounts[0].name).toBe('GitHub');
+  expect(JSON.stringify(res)).not.toContain('secret-pw');
+});
+
+test('a revealed password is masked again after locking and unlocking', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, []);
+  await writeAccounts(page, [{ name: 'GitHub', email: 'me', secret: '', urls: '', password: 'hunter2' }]);
+  await page.reload();
+  await page.locator('#home-list .lc-row', { hasText: 'GitHub' }).click();
+  const pw = page.locator('#home-creds .home-cred').nth(1);
+  await pw.locator('.home-cred-btn').first().click();
+  await expect(pw.locator('.home-cred-value')).toHaveText('hunter2');
+  await page.click('#btn-logout');
+  await page.fill('#lock-password', 'test');
+  await page.click('#lock-login-btn');
+  await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
+  await expect(page.locator('#home-list .lc-row', { hasText: 'GitHub' })).toBeVisible();
+  await page.locator('#home-list .lc-row', { hasText: 'GitHub' }).click();
+  await expect(page.locator('#home-creds .home-cred').nth(1).locator('.home-cred-value')).toHaveText('•••••••');
+});
