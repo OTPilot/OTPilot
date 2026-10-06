@@ -28,6 +28,9 @@ test('a forgotten master password is replaced using the recovery key; the vault 
   const page = await popup(context, extensionId);
   await seedLockedWithCheck(page);
   await page.evaluate(async vk => {
+    // An already-migrated 2.0 vault (otherwise the first unlock's migration
+    // would treat the item as leftovers of an interrupted run).
+    await chrome.storage.local.set({ vaultMeta: { version: 2, migratedAt: '2026-10-01T00:00:00.000Z', count: 0 } });
     await VaultStore.save({ id: 'a', type: 'note', title: 'Wifi', fields: [] }, vk);
   }, TEST_VAULT_KEY);
   await page.reload();

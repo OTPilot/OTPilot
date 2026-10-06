@@ -1,12 +1,12 @@
 import { test, expect } from './fixtures.js';
 
-// vaultMigration.js isn't wired into any page yet, so each test loads it and
-// its dependencies into the script-free test page, with clean storage.
+// Each test loads vaultMigration.js and its dependencies into the script-free
+// test page, with clean storage.
 async function migrationPage(context, extensionId) {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/test/blank.html`);
   await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
-  for (const f of ['vault.js', 'vaultCrypto.js', 'vaultKeys.js', 'vaultStore.js', 'vaultMigration.js']) {
+  for (const f of ['vault.js', 'vaultCrypto.js', 'vaultKeys.js', 'vaultStore.js', 'vaultMigration.js', 'vaultAccounts.js']) {
     await page.addScriptTag({ url: `chrome-extension://${extensionId}/${f}` });
   }
   return page;
@@ -19,7 +19,7 @@ const V1_ACCOUNTS = [
 ];
 const V1_TOMBSTONES = { 'Old Bank': '2026-08-01T00:00:00.000Z' };
 
-test('v1 accounts become encrypted vault items; v1 data stays and is backed up', async ({ context, extensionId }) => {
+test('v1 accounts become encrypted vault items; the plaintext list goes, an encrypted backup stays', async ({ context, extensionId }) => {
   const page = await migrationPage(context, extensionId);
   const result = await page.evaluate(async ([accounts, tombstones]) => {
     await chrome.storage.local.set({ accounts, tombstones });
@@ -32,7 +32,9 @@ test('v1 accounts become encrypted vault items; v1 data stays and is backed up',
       failed,
       items: items.map(i => [i.title, Vault.getValue(i, 'username'), i.totp.secret]).sort((a, b) => a[1].localeCompare(b[1])),
       v1Accounts: stored.accounts,
-      backup: stored.accountsV1Backup,
+      backupAtRest: JSON.stringify(stored.accountsV1Backup),
+      backup: await VaultCrypto.decryptItem(stored.accountsV1Backup, key),
+      index: stored.vaultIndex,
       v1Tombstones: stored.vaultV1Tombstones,
       meta: { version: stored.vaultMeta.version, count: stored.vaultMeta.count },
       secretsAtRest: JSON.stringify(Object.entries(stored).filter(([k]) => k.startsWith('vi:'))).includes('JBSWY3DP'),
@@ -47,8 +49,16 @@ test('v1 accounts become encrypted vault items; v1 data stays and is backed up',
     ['GitHub', 'a@example.com', 'JBSWY3DPEHPK3PXP'],
     ['GitHub', 'b@example.com', 'GEZDGNBVGY3TQOJQ'],
   ]);
-  expect(result.v1Accounts).toEqual(V1_ACCOUNTS);
+  expect(result.v1Accounts).toBeUndefined();
+  expect(result.backupAtRest).not.toContain('JBSWY3DP');
   expect(result.backup.accounts).toEqual(V1_ACCOUNTS);
+  // The locked-vault index: names, URL patterns and autofill only, in v1 order.
+  expect(result.index.map(({ id, ...rest }) => rest)).toEqual([
+    { name: 'GitHub', urls: 'github.com', autofill: true },
+    { name: 'GitHub', urls: 'github.com', autofill: true },
+    { name: 'Namecheap', urls: '', autofill: false },
+  ]);
+  expect(JSON.stringify(result.index)).not.toContain('JBSWY3DP');
   expect(result.backup.tombstones).toEqual(V1_TOMBSTONES);
   expect(Date.parse(result.backup.at)).not.toBeNaN();
   expect(result.v1Tombstones).toEqual(V1_TOMBSTONES);
