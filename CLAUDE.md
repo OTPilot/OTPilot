@@ -78,6 +78,7 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 | `users` (team cols) | `has_personal_cloud`, `public_key` | `has_personal_cloud` survives team downgrade; `public_key` = ECDH P-256 for share wrapping |
 | `devices` | `user_id`, `device_id`, `name`, `os`, `browser`, `pending_action` | Registered extension installs |
 | `sync_logs` | `user_id`, `device_id`, `action`, `accounts_count`, `created_at` | Trimmed automatically by trigger (keep last 10 per device) |
+| `vault_items` | `id` (client uuid), `owner_id`, `collection_id`, `encrypted_item`, `counts_for_limit`, `revision`, `deleted_at` | 2.0 vault, one row per encrypted item; `revision` from a global sequence for incremental pull; deletes are tombstones (empty `encrypted_item`) |
 | `domain_icons` | `domain` (PK), `status`, `storage_key`, `fetched_at` | Shared favicon cache, one row per domain; `status='none'` is a negative cache. Bytes live in S3/R2 |
 
 ### Extension JS modules
@@ -121,6 +122,10 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | POST | `/devices/:id/erase` | Mark device for remote wipe |
 | POST | `/devices/:id/ack` | Device acknowledges pending action |
 | POST | `/devices/:id/leave` | Device unregisters itself |
+| GET | `/vault/items?since=N` | 2.0 vault: items (incl. tombstones) with `revision > N`, 1000 per page + `more` |
+| PUT | `/vault/items/:id` | Create, or update with `base_revision`; `409` + current item when the server moved on |
+| DELETE | `/vault/items/:id?base_revision=N` | Soft delete (tombstone, new revision) |
+| POST | `/vault/items/batch` | Create up to 500 new items (migration, imports); existing ids come back in `conflicts`, never overwritten |
 | POST | `/icons/resolve` | Resolve favicons for a batch of domains; fetches + stores any missing in S3/R2, returns `{domain: {status, url?}}` (**public** — so free / not-signed-in users get icons; abuse bounded by SSRF guards, 50-domain cap, negative cache, and a global fetch semaphore) |
 | POST/GET | `/teams` | Create (idempotent, team plan) / get the user's team |
 | GET/PATCH/DELETE | `/teams/:id` | Detail (members + seats) / rename / delete (downgrades all) |
