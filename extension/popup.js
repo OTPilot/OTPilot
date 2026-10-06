@@ -705,6 +705,7 @@ function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {})
   const withOrigin = accounts.map((a, i) => ({ acc: { ...a }, origIdx: i }));
   withOrigin.sort((x, y) => (x.acc.name || '').localeCompare(y.acc.name || ''));
   draft = withOrigin.map(w => w.acc);
+  _draftBase = structuredClone(draft);
   openAccIdx = openTargetIdx >= 0 ? withOrigin.findIndex(w => w.origIdx === openTargetIdx) : -1;
   if (!preserveSearch) document.getElementById('acc-search').value = '';
   // A leftover category filter from a previous Accounts-view visit could hide
@@ -1004,6 +1005,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   syncOpenAccToDraft();
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
+  draft = mergeDraftWithCurrent();
 
   // Diff old accounts vs draft: stamp _updatedAt on new/changed, tombstone deleted
   const now      = new Date().toISOString();
@@ -1051,11 +1053,44 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 // Redraws whatever shows the account list: Home always, and the Accounts view
 // if it's open (keeping its search). Used after the list changes underneath
 // the UI (first load, a sync).
+// Never rebuilds an editor with unsaved changes or an open form: a sync
+// finishing mid-edit would otherwise discard what the user typed. Saving
+// merges the edits with whatever changed meanwhile (mergeDraftWithCurrent).
+let _draftBase = [];
+function accountsEditorBusy() {
+  if (document.getElementById('settings-panel').style.display === 'none') return false;
+  syncOpenAccToDraft();
+  return openAccIdx >= 0 || JSON.stringify(draft) !== JSON.stringify(_draftBase);
+}
+
 function refreshAccountsUI() {
   renderAccountBar();
-  if (document.getElementById('settings-panel').style.display !== 'none') {
-    renderAccountsList(-1, { preserveSearch: true });
+  if (document.getElementById('settings-panel').style.display === 'none') return;
+  if (accountsEditorBusy()) {
+    setStatus('Synced — other changes appear after you save or cancel');
+    return;
   }
+  renderAccountsList(-1, { preserveSearch: true });
+}
+
+// Three-way merge for Save, against the list the editor started from
+// (_draftBase): accounts the user didn't touch take their current version
+// (a sync may have changed or deleted them), edited and new ones are the
+// user's, and accounts that arrived meanwhile are kept.
+function mergeDraftWithCurrent() {
+  const base = new Map(_draftBase.filter(a => a._id).map(a => [a._id, JSON.stringify(a)]));
+  const current = new Map(accounts.filter(a => a._id).map(a => [a._id, a]));
+  const merged = [];
+  for (const d of draft) {
+    const untouched = d._id && base.get(d._id) === JSON.stringify(d);
+    if (!untouched) merged.push(d);
+    else if (current.has(d._id)) merged.push({ ...current.get(d._id) });
+    // untouched here and gone from the vault: deleted elsewhere, stays deleted
+  }
+  for (const a of accounts) {
+    if (a._id && !base.has(a._id)) merged.push({ ...a }); // arrived while editing
+  }
+  return merged;
 }
 
 function showView(view, opts = {}) {
@@ -2086,9 +2121,16 @@ async function reloadFromVault(key) {
 // that left the vault since the last export get v1 tombstones (keyed by name),
 // or a 1.x device would push them back.
 const v1Fields = a => ({ name: a.name, email: a.email || '', secret: a.secret, urls: a.urls || '', autofill: a.autofill !== false, category: a.category || '', domain: a.domain || '' });
+// SHA-256 of the v1 view: what's compared with the last export. Only the hash
+// is stored (the view contains secrets); names are kept for the tombstones
+// and are already in the plaintext vaultIndex.
+async function v1Snapshot(list) {
+  const bytes = new TextEncoder().encode(JSON.stringify(list.map(v1Fields)));
+  return VaultCrypto.b64e(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
+}
 async function exportV1Blob(serverMeta, fromV1Device) {
   const { v1Export } = await chrome.storage.local.get('v1Export');
-  const snapshot = JSON.stringify(accounts.map(v1Fields));
+  const snapshot = await v1Snapshot(accounts);
   const now = new Date().toISOString();
   if (!fromV1Device && serverMeta && v1Export?.snapshot === snapshot) {
     // Up to date (possibly written by another 2.0 device): nothing to upload.
@@ -2215,7 +2257,7 @@ document.getElementById('btn-confirm-newkey').addEventListener('click', async ()
       _startFresh = false;
       const now = new Date().toISOString();
       await CloudSync.push(accounts, tombstones, now, 'v2');
-      await chrome.storage.local.set({ v1Export: { snapshot: JSON.stringify(accounts.map(v1Fields)), names: accounts.map(a => a.name) } });
+      await chrome.storage.local.set({ v1Export: { snapshot: await v1Snapshot(accounts), names: accounts.map(a => a.name) } });
       await writeLastSyncedAt(now);
       await VaultSync.wipeServer();
       await VaultSync.sync(await VaultKeys.getKey());

@@ -317,3 +317,37 @@ test('Start fresh deletes the old items on the server and uploads this vault', a
   });
   expect(titles).toEqual(['Mine']);
 });
+
+test('no OTP secret is left in plaintext storage by the v1 export', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [ACC('GitHub', 'JBSWY3DPEHPK3PXP')]);
+  await fakeBlob(page, null);
+  await page.evaluate(() => doSync());
+  const raw = JSON.stringify(await page.evaluate(() => chrome.storage.local.get(null)));
+  expect(raw).not.toContain('JBSWY3DPEHPK3PXP');
+});
+
+test('a sync finishing while an account is being edited keeps the edit and merges on Save', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [ACC('GitHub', 'JBSWY3DPEHPK3PXP'), ACC('AWS', 'GEZDGNBVGY3TQOJQ')]);
+  await fakeBlob(page, null);
+  await page.evaluate(() => doSync());
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'GitHub' }).click();
+  await page.fill('.acc-email', 'typed@example.com');
+
+  // Meanwhile on another device: AWS gets a URL, and a new account appears.
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const aws = (await VaultStore.readAll(key)).items.find(i => i.title === 'AWS');
+    await fakeServer.remoteSave({ ...aws, urls: ['aws.amazon.com'], updatedAt: new Date(Date.now() + 1000).toISOString() });
+    await fakeServer.remoteSave(Vault.fromV1Account({ name: 'New elsewhere', secret: 'MFRGGZDFMZTWQ2LK', urls: '' }, 9));
+    await doSync();
+  });
+  // The form is still open with what was typed.
+  await expect(page.locator('.acc-email')).toHaveValue('typed@example.com');
+
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await readAccounts(page)).map(a => a.name).sort()).toEqual(['AWS', 'GitHub', 'New elsewhere']);
+  const byName = Object.fromEntries((await readAccounts(page)).map(a => [a.name, a]));
+  expect(byName.GitHub.email).toBe('typed@example.com');
+  expect(byName.AWS.urls).toBe('aws.amazon.com');
+});
