@@ -7,7 +7,11 @@
 
 const CloudSync = (() => {
   const API_URL  = CONFIG.API_URL;
-  const KEY_STORE      = 'syncKey';
+  // v1 stored the key in plaintext under `syncKey`, and its mere presence
+  // meant "sync is set up". In 2.0 the key is the vault key (VaultKeys, which
+  // can be wrapped by the master password) and `syncEnabled` is the flag.
+  const LEGACY_KEY     = 'syncKey';
+  const ENABLED        = 'syncEnabled';
   const DEVICE_ID_KEY  = 'deviceId';
 
   // ── Device identity ────────────────────────────────────────────────────────
@@ -49,25 +53,51 @@ const CloudSync = (() => {
 
   // ── Sync key ───────────────────────────────────────────────────────────────
 
-  function getSyncKey() {
-    return new Promise(r =>
-      chrome.storage.local.get([KEY_STORE], d => r(d[KEY_STORE] ?? null))
-    );
+  // One-time move of a v1 plaintext syncKey into the vault key. Idempotent and
+  // safe to race: adoptKey serializes on VaultKeys' lock, and every context
+  // adopts the same key before the legacy copy is removed.
+  async function convertLegacyKey() {
+    const { [LEGACY_KEY]: legacy } = await chrome.storage.local.get(LEGACY_KEY);
+    if (!legacy) return;
+    await VaultKeys.adoptKey(legacy);
+    await chrome.storage.local.set({ [ENABLED]: true });
+    await chrome.storage.local.remove(LEGACY_KEY);
   }
 
+  async function isSyncEnabled() {
+    await convertLegacyKey();
+    return !!(await chrome.storage.local.get(ENABLED))[ENABLED];
+  }
+
+  // The recovery key (= the vault key) when sync is set up and the vault is
+  // available; null otherwise.
+  async function getSyncKey() {
+    if (!(await isSyncEnabled())) return null;
+    return VaultKeys.getKey();
+  }
+
+  // Turns sync on with this device's vault key (creating it if needed) — the
+  // local vault is already encrypted with it, so it becomes the recovery key.
   async function generateSyncKey() {
-    const raw    = crypto.getRandomValues(new Uint8Array(32));
-    const keyB64 = enc(raw);
-    await new Promise(r => chrome.storage.local.set({ [KEY_STORE]: keyB64 }, r));
-    return keyB64;
+    await convertLegacyKey();
+    const key = await VaultKeys.init();
+    if (!key) throw new Error('vault is locked');
+    await chrome.storage.local.set({ [ENABLED]: true });
+    return key;
   }
 
-  function saveSyncKey(keyB64) {
-    return new Promise(r => chrome.storage.local.set({ [KEY_STORE]: keyB64 }, r));
+  // Turns sync on with a recovery key from another device. Callers validate it
+  // first (pull(keyB64) decrypts the server's data with it); local vault items
+  // are re-wrapped to it.
+  async function saveSyncKey(keyB64, password) {
+    await convertLegacyKey();
+    await VaultKeys.adoptKey(keyB64, password);
+    await chrome.storage.local.set({ [ENABLED]: true });
   }
 
-  function deleteSyncKey() {
-    return new Promise(r => chrome.storage.local.remove([KEY_STORE], r));
+  // Turns sync off. The key stays: it also encrypts the local vault.
+  async function deleteSyncKey() {
+    await chrome.storage.local.remove([ENABLED, LEGACY_KEY]);
   }
 
   // ── Encrypt / decrypt ──────────────────────────────────────────────────────
@@ -152,8 +182,10 @@ const CloudSync = (() => {
   }
 
   // Pull + decrypt. Returns { accounts, tombstones } or null if server has no data.
-  async function pull() {
-    const keyB64 = await getSyncKey();
+  // `keyB64` overrides the stored key, to validate a recovery key before
+  // adopting it.
+  async function pull(keyB64 = null) {
+    keyB64 = keyB64 || await getSyncKey();
     if (!keyB64) throw new Error('No sync key');
     const res  = await apiFetch('/accounts');
     if (!res.ok) throw new Error(`pull ${res.status}`);
@@ -195,6 +227,7 @@ const CloudSync = (() => {
     if (!ackRes.ok) return; // nonce mismatch or already acked — don't act
     if (action === 'erase') {
       await chrome.storage.local.clear();
+      await chrome.storage.session.clear(); // an unlocked vault key lives here
     } else if (action === 'disconnect') {
       await deleteSyncKey();
     }
@@ -304,7 +337,7 @@ const CloudSync = (() => {
   }
 
   return {
-    getSyncKey, generateSyncKey, saveSyncKey, deleteSyncKey,
+    getSyncKey, generateSyncKey, saveSyncKey, deleteSyncKey, isSyncEnabled,
     serverHasData, syncUser, pull, push, mergeWithTombstones,
     getServerMeta, executeCommand, leaveDevice,
   };

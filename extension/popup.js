@@ -1856,39 +1856,50 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
   const keyB64 = input.value.trim();
   errEl.textContent = '';
   if (!keyB64) { errEl.textContent = 'Paste your recovery key.'; return; }
+  // Validate the key against the server's data before adopting it: adopting
+  // re-wraps the local vault to this key, so a typo must never get that far.
+  let pullResult;
+  try {
+    pullResult = await CloudSync.pull(keyB64);
+  } catch {
+    errEl.textContent = 'Invalid key or decryption failed.';
+    return;
+  }
+  if (!pullResult) {
+    // Nothing on the server to decrypt, so the key can't be checked.
+    errEl.textContent = 'There is no synced data to check this key against. Use "Start fresh" instead.';
+    return;
+  }
   try {
     await CloudSync.saveSyncKey(keyB64);
-    const pullResult = await CloudSync.pull();
-    if (pullResult) {
-      const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
+    const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
 
-      // On reconnect the server is the source of truth.
-      // Add any local-only accounts not present or deleted on the server,
-      // but discard local tombstones — offline deletions must not override synced data.
-      const remoteNames   = new Set(remoteAccounts.map(a => a.name));
-      const remoteDeleted = new Set(Object.keys(remoteTombs));
-      const localOnly     = accounts.filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
-      const merged        = [...remoteAccounts, ...localOnly];
-      const mergedTombs   = remoteTombs;
+    // On reconnect the server is the source of truth.
+    // Add any local-only accounts not present or deleted on the server,
+    // but discard local tombstones — offline deletions must not override synced data.
+    const remoteNames   = new Set(remoteAccounts.map(a => a.name));
+    const remoteDeleted = new Set(Object.keys(remoteTombs));
+    const localOnly     = accounts.filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
+    const merged        = [...remoteAccounts, ...localOnly];
+    const mergedTombs   = remoteTombs;
 
-      accounts   = merged;
-      tombstones = mergedTombs;
-      await saveState();
-      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
-      renderAccountBar();
-      const now = new Date().toISOString();
-      await CloudSync.push(merged, mergedTombs, now);
-      await writeLastSyncedAt(now);
-    }
+    accounts   = merged;
+    tombstones = mergedTombs;
+    await saveState();
+    await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+    renderAccountBar();
+    const now = new Date().toISOString();
+    await CloudSync.push(merged, mergedTombs, now);
+    await writeLastSyncedAt(now);
     syncShowView('sv-active');
     syncSetStatus('ok', 'Restored');
   } catch {
-    errEl.textContent = 'Invalid key or decryption failed.';
+    errEl.textContent = 'Could not finish syncing. Check your connection and try again.';
     await CloudSync.deleteSyncKey();
   }
 });
 
-// Restore: start fresh (replaces server data with a new key)
+// Restore: start fresh (replaces server data, encrypted with this device's vault key)
 document.getElementById('btn-overwrite-server').addEventListener('click', async () => {
   _startFresh = true;
   const newKey = await CloudSync.generateSyncKey();
