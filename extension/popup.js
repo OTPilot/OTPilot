@@ -148,10 +148,18 @@ async function syncActiveIndexToUrl() {
 
 // ── Storage ──────────────────────────────────────────────────────────────────
 
-function loadState() {
+// Ids of the vault items this popup loaded: saveState only deletes those (an
+// account added meanwhile from a page isn't in `accounts` and must survive).
+let _loadedIds = new Set();
+
+async function loadState() {
+  // Accounts live encrypted in the vault (only read once unlocked).
+  const key = await VaultKeys.getKey();
+  const vaultAccounts = key ? await VaultAccounts.load(key) : [];
+  _loadedIds = new Set(vaultAccounts.map(a => a._id));
   return new Promise(r =>
-    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'categoryFilter', 'iconCache'], d => {
-      accounts       = d.accounts || [];
+    chrome.storage.local.get(['activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'categoryFilter', 'iconCache'], d => {
+      accounts       = vaultAccounts;
       activeIndex    = Math.min(d.activeIndex ?? 0, Math.max(accounts.length - 1, 0));
       obfuscated     = d.obfuscated ?? true;
       categoryFilter = d.categoryFilter ?? '';
@@ -177,8 +185,13 @@ async function deviceWasReset() {
 }
 
 async function saveState() {
-  if (await deviceWasReset()) return;
-  await chrome.storage.local.set({ accounts, activeIndex });
+  // Locked (or reset) means no vault key: nothing can be written, and a stale
+  // in-memory list mustn't be.
+  if ((await VaultLock.state()) !== 'unlocked') return;
+  const key = await VaultKeys.getKey();
+  await VaultAccounts.save(accounts, key, _loadedIds);
+  _loadedIds = new Set(accounts.map(a => a._id));
+  await chrome.storage.local.set({ activeIndex });
 }
 
 async function saveTombstones() {
@@ -1758,14 +1771,18 @@ async function lockPopup() {
   document.querySelector('.kofi-footer').style.display = '';
   showLockOverlay('login');
   await waitForUnlock();
+  // Unlocked: a new lock from here on must be handled again, even while the
+  // view below is still reloading (reading the vault takes a moment).
+  _popupLocked = false;
   await loadState();
+  if (_popupLocked) return;
   await syncActiveIndexToUrl();
+  if (_popupLocked) return;
   renderAccountBar();
   startTimer();
   renderSharedCodes();
   showView('home');
   tryAutoFillCurrentTab();
-  _popupLocked = false;
 }
 
 document.getElementById('btn-logout').addEventListener('click', async () => {

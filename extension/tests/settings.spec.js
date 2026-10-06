@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, TEST_SECRET, TEST_PASSWORD } from './fixtures.js';
+import { test, expect, readAccounts, seedUnlocked, TEST_SECRET, TEST_PASSWORD } from './fixtures.js';
 
 // ── Google Authenticator migration protobuf helpers (test-side encoder — the
 // extension only ever needs to decode, so there's no encoder in the codebase) ──
@@ -143,8 +143,7 @@ test('saving deselects the account and shows a confirmation message instead of r
   // identical to having never opened anything.
   await expect(page.locator('#acc-detail .dc-empty')).toContainText('Saved');
 
-  const stored = await page.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  const stored = await readAccounts(page);
   expect(stored[0].email).toBe('me@example.com');
 });
 

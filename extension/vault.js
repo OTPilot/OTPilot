@@ -129,7 +129,8 @@ const Vault = (() => {
   // v1 account: { name, email, secret, urls ("a.com\nb.com"), autofill,
   //               category, domain, _updatedAt }
 
-  function fromV1Account(acc) {
+  // `position` keeps the v1 list order (the UI sorts by it).
+  function fromV1Account(acc, position = 0) {
     const urls = String(acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
     const ts = acc._updatedAt || nowIso();
     const item = newItem('login', {
@@ -140,6 +141,7 @@ const Vault = (() => {
       totp: acc.secret ? { secret: acc.secret, ...DEFAULT_TOTP } : null,
       createdAt: ts,
       updatedAt: ts,
+      position,
     });
     getField(item, 'username').value = acc.email || '';
     if (acc.domain) item.iconDomain = acc.domain;

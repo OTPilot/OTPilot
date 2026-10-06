@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, TEST_SECRET } from './fixtures.js';
+import { test, expect, readAccounts, seedUnlocked, TEST_SECRET } from './fixtures.js';
 
 test('shows setup screen on first open (no master password)', async ({ context, extensionId }) => {
   const page = await context.newPage();
@@ -169,9 +169,7 @@ test('assigning a new category in the editor persists and tags the account', asy
 
   // Save, then verify the assignment landed in storage
   await page.click('#btn-save-all');
-  const stored = await page.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts)))
-  );
+  const stored = await readAccounts(page);
   expect(stored[0].category).toBe('Work');
 
   // Re-open the vault — the row header now shows the category tag

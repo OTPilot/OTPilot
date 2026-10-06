@@ -80,3 +80,17 @@ export function seedLocked(page, local = {}) {
   ]), [TEST_VAULT_KEY_WRAPPED, local]);
 }
 export const TEST_SECRET = 'JBSWY3DPEHPK3PXP'; // from test/qr-anchor.html
+
+// 2.0: accounts live encrypted in the vault. Read/replace the v1-shaped list
+// through the adapter, from an unlocked extension page (e.g. the popup).
+export function readAccounts(page) {
+  return page.evaluate(async () => VaultAccounts.load(await VaultKeys.getKey()));
+}
+
+export function writeAccounts(page, accounts) {
+  return page.evaluate(async accs => {
+    const key = await VaultKeys.getKey();
+    const known = new Set((await VaultAccounts.load(key)).map(a => a._id));
+    await VaultAccounts.save(accs, key, known);
+  }, accounts);
+}

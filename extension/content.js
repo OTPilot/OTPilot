@@ -47,18 +47,25 @@ function findAllMatchingAccounts(accounts, hostname) {
   return accounts.filter(acc => accountMatchesHostname(acc, hostname));
 }
 
-function getActiveAccount(overrideIndex) {
-  return new Promise(r =>
-    chrome.storage.local.get(['accounts', 'activeIndex'], d => {
-      const accs = d.accounts || [];
-      // 1. Try URL-based match first
-      const byUrlIdx = accs.findIndex(acc => accountMatchesHostname(acc, location.hostname.toLowerCase()));
-      if (byUrlIdx !== -1) { r({ acc: accs[byUrlIdx], idx: byUrlIdx }); return; }
-      // 2. Fall back to the account selected in the popup (or override from message)
-      const idx = overrideIndex ?? d.activeIndex ?? 0;
-      r({ acc: accs[idx] || null, idx });
-    })
-  );
+// Accounts come from the background worker, which holds the vault key.
+// Unlocked: the decrypted list. Locked: only { name, urls, autofill } per
+// account (the plaintext index), enough to say "Unlock to auto-fill <name>".
+async function getVaultAccounts() {
+  try {
+    const res = await chrome.runtime.sendMessage({ action: 'vaultAccounts' });
+    if (res) return res;
+  } catch { /* extension reloaded or worker unavailable */ }
+  return { locked: true, activeIndex: 0, accounts: [] };
+}
+
+async function getActiveAccount(overrideIndex) {
+  const { accounts: accs, activeIndex } = await getVaultAccounts();
+  // 1. Try URL-based match first
+  const byUrlIdx = accs.findIndex(acc => accountMatchesHostname(acc, location.hostname.toLowerCase()));
+  if (byUrlIdx !== -1) return { acc: accs[byUrlIdx], idx: byUrlIdx };
+  // 2. Fall back to the account selected in the popup (or override from message)
+  const idx = overrideIndex ?? activeIndex ?? 0;
+  return { acc: accs[idx] || null, idx };
 }
 
 const OTP_SELECTORS = [
@@ -884,10 +891,11 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   el.querySelector('.otpilot-overlay-close').onclick = close;
 
   async function addAccount() {
-    const d = await new Promise(r => chrome.storage.local.get('accounts', r));
-    const accs = d.accounts || [];
-    accs.push({ name, secret, urls: location.hostname, autofill: true, email, domain: location.hostname });
-    await new Promise(r => chrome.storage.local.set({ accounts: accs, activeIndex: accs.length - 1 }, r));
+    const res = await chrome.runtime.sendMessage({
+      action: 'vaultAddAccount',
+      account: { name, secret, urls: location.hostname, autofill: true, email, domain: location.hostname },
+    }).catch(() => null);
+    if (!res?.ok) { showToast('Could not save — unlock OTPilot and try again', false); return; }
     _dismissedSecrets.add(secret);
     // Capture the site's icon now, passing the page's declared favicon as a hint.
     requestSiteIcon(location.hostname);
@@ -985,36 +993,17 @@ function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
   el.querySelector('.otpilot-overlay-close').onclick = close;
   el.querySelector('.otpilot-secondary').onclick = () => { _dismissedUrlPrompts.add(dismissKey); close(); };
   el.querySelector('.otpilot-primary').onclick = async () => {
-    const d = await new Promise(r => chrome.storage.local.get('accounts', r));
-    const accs = d.accounts || [];
-    // Prefer the index we resolved the account at — fast path, correct as
-    // long as nothing reordered the list while the prompt sat open. A secret
-    // match alone isn't enough to trust it (two accounts can share a secret,
-    // and a reorder could put a different one at this exact index), so
-    // compare the full record. If it no longer matches there, fall back to a
-    // full-list search by the same full-record identity, and only write if
-    // that's unambiguous — guessing between duplicates risks tagging the
-    // wrong account.
-    const matchesFully = a => a && a.secret === acc.secret && a.name === acc.name
-      && a.urls === acc.urls && a.email === acc.email;
-    let targetIdx = matchesFully(accs[idx]) ? idx : -1;
-    if (targetIdx === -1) {
-      const matches = accs.map((a, i) => matchesFully(a) ? i : -1).filter(i => i !== -1);
-      if (matches.length === 1) targetIdx = matches[0];
-    }
-    let saved = false;
-    if (targetIdx !== -1) {
-      const existing = (accs[targetIdx].urls || '').trim();
-      accs[targetIdx] = {
-        ...accs[targetIdx],
-        urls: existing ? existing + '\n' + hostname : hostname,
-        domain: hostname,
-        _updatedAt: new Date().toISOString(),
-      };
-      saved = await new Promise(resolve =>
-        chrome.storage.local.set({ accounts: accs }, () => resolve(!chrome.runtime.lastError))
-      );
-    }
+    // The background updates the account only if it still matches what this
+    // prompt was showing; if it changed or disappeared meanwhile, nothing is
+    // written rather than guessing (two accounts can share a secret).
+    const existing = (acc.urls || '').trim();
+    const res = await chrome.runtime.sendMessage({
+      action: 'vaultUpdateAccount',
+      id: acc._id,
+      expected: { name: acc.name, secret: acc.secret, urls: acc.urls, email: acc.email },
+      patch: { urls: existing ? existing + '\n' + hostname : hostname, domain: hostname },
+    }).catch(() => null);
+    const saved = !!res?.ok;
     if (saved) {
       requestSiteIcon(hostname);
       showToast(`Saved — ${acc.name} will auto-fill here next time`);
@@ -1094,8 +1083,10 @@ async function runDetection() {
     const state = await vaultState();
     if (state === 'setup') return false; // no master password yet: nothing to save into
     if (_dismissedSecrets.has(parsed.secret)) return false;
-    const { accounts = [] } = await chrome.storage.local.get('accounts');
-    if (accounts.some(a => a.secret === parsed.secret)) return false;
+    // Unlocked: skip a secret that's already saved. Locked, secrets can't be
+    // compared; the background skips a duplicate when it's added after unlock.
+    const { accounts = [] } = await getVaultAccounts();
+    if (accounts.some(a => a.secret && a.secret === parsed.secret)) return false;
     showSuggestionOverlay(parsed.name, parsed.secret, parsed.email || '', state === 'locked');
     return true;
   } finally {
@@ -1242,7 +1233,7 @@ async function runDetection() {
   async function tryAutoFill() {
     if (isEnrollmentPage()) return;
 
-    const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
+    const { accounts = [] } = await getVaultAccounts();
     const hostname = location.hostname.toLowerCase();
     const matching = findAllMatchingAccounts(accounts, hostname).filter(a => a.autofill !== false);
 
@@ -1295,10 +1286,13 @@ async function runDetection() {
       if (await isSessionLocked()) {
         if (_lockDismissed && input === _lockDismissedFor) return;
         const onLockDismiss = () => { _lockDismissed = true; _lockDismissedFor = input; };
-        showLockOverlay('OTPilot', () => {
+        showLockOverlay('OTPilot', async () => {
           document.getElementById('otpilot-lock')?.remove();
           _lockDismissed = false;
-          showAccountPickerOverlay(matching, onClose);
+          // `matching` came from the locked index (no secrets): fetch the
+          // decrypted accounts now that the vault is open.
+          const { accounts: unlocked = [] } = await getVaultAccounts();
+          showAccountPickerOverlay(findAllMatchingAccounts(unlocked, hostname).filter(a => a.autofill !== false), onClose);
         }, onLockDismiss);
         return;
       }

@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, TEST_SECRET } from './fixtures.js';
+import { test, expect, writeAccounts, readAccounts, seedUnlocked, TEST_SECRET } from './fixtures.js';
 
 test('autofill test page has OTP input field', async ({ context }) => {
   const page = await context.newPage();
@@ -137,8 +137,7 @@ test('accepting the save-URL prompt persists the site to the account (and sets i
   await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
   await expect(autofillPage.locator('#otpilot-save-url')).toHaveCount(0);
 
-  const stored = await popupPage.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  const stored = await readAccounts(popupPage);
   expect(stored[0].urls).toBe('localhost');
   expect(stored[0].domain).toBe('localhost');
   expect(Date.now() - new Date(stored[0]._updatedAt).getTime()).toBeLessThan(10000);
@@ -164,8 +163,7 @@ test('dismissing the save-URL prompt leaves the account unchanged and does not r
   await autofillPage.locator('#otpilot-save-url .otpilot-secondary').click();
   await expect(autofillPage.locator('#otpilot-save-url')).toHaveCount(0);
 
-  const stored = await popupPage.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  const stored = await readAccounts(popupPage);
   expect(stored[0].urls).toBe('');
 
   // Filling again for the same account+site shouldn't nag a second time.
@@ -200,12 +198,8 @@ test('regression: a dismissal does not carry over to a different account that re
 
   // The list reorders — "Personal Vercel" (never shown or dismissed) now
   // sits at index 1, the position the dismissal used to key off of.
-  await popupPage.evaluate(() => new Promise(r =>
-    chrome.storage.local.get('accounts', d => {
-      const [a, b] = d.accounts;
-      chrome.storage.local.set({ accounts: [b, a] }, r);
-    })
-  ));
+  const [first, second] = await readAccounts(popupPage);
+  await writeAccounts(popupPage, [second, first]);
 
   // Filling "Personal Vercel" (now at index 1) must still show its own
   // prompt — it never inherited Work Vercel's dismissal.
@@ -258,8 +252,7 @@ test('regression: a second manual fill while a save-URL prompt is open queues it
   await expect(autofillPage.locator('#otpilot-save-url')).toHaveCount(0);
   await expect(autofillPage.locator('#result')).toBeVisible({ timeout: 3000 });
 
-  const stored = await popupPage.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  const stored = await readAccounts(popupPage);
   expect(stored[0].urls).toBe(''); // Account A was dismissed, not saved
   expect(stored[1].urls).toBe('localhost'); // Account B was saved
 });
@@ -310,8 +303,7 @@ test('regression: saving the URL updates the exact filled account, not the first
   await expect(autofillPage.locator('#otpilot-save-url')).toContainText('Work Vercel');
   await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
 
-  const stored = await popupPage.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  const stored = await readAccounts(popupPage);
   expect(stored[0].urls).toBe(''); // Personal Vercel (index 0) untouched
   expect(stored[1].urls).toBe('localhost'); // Work Vercel (index 1, the one actually filled)
 });
@@ -341,19 +333,14 @@ test('regression: reordering accounts while the save prompt is open does not mis
 
   // While it's open, the popup reorders the list — "Personal Vercel" (a
   // different account, same secret) now sits at index 1 instead.
-  await popupPage.evaluate(() => new Promise(r =>
-    chrome.storage.local.get('accounts', d => {
-      const [a, b] = d.accounts;
-      chrome.storage.local.set({ accounts: [b, a] }, r);
-    })
-  ));
+  const [first, second] = await readAccounts(popupPage);
+  await writeAccounts(popupPage, [second, first]);
 
   // Confirming the (stale) prompt must still land on "Work Vercel" by
   // content, not on whichever account now happens to sit at index 1.
   await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
 
-  const stored = await popupPage.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  const stored = await readAccounts(popupPage);
   const personal = stored.find(a => a.name === 'Personal Vercel');
   const work = stored.find(a => a.name === 'Work Vercel');
   expect(personal.urls).toBe('');
@@ -381,15 +368,14 @@ test('regression: if the account is gone by the time Save is clicked, the toast 
 
   // The account is deleted from the popup while the prompt is still open —
   // no index and no full-record match can resolve a target anymore.
-  await popupPage.evaluate(() => new Promise(r => chrome.storage.local.set({ accounts: [] }, r)));
+  await writeAccounts(popupPage, []);
 
   await autofillPage.locator('#otpilot-save-url .otpilot-primary').click();
 
   await expect(autofillPage.getByText('Could not save site — account changed')).toBeVisible();
   await expect(autofillPage.getByText('Saved —', { exact: false })).toHaveCount(0);
 
-  const stored = await popupPage.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
+  const stored = await readAccounts(popupPage);
   expect(stored).toEqual([]);
 });
 

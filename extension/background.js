@@ -5,8 +5,25 @@ importScripts(
   // 2.0 vault lock: the unlocked vault key lives in chrome.storage.session,
   // which content scripts can't read, so they ask this worker (vaultState /
   // vaultUnlock below).
-  'vaultCrypto.js', 'vaultKeys.js', 'vaultStore.js', 'cloudSync.js', 'vaultLock.js',
+  'vaultCrypto.js', 'vaultKeys.js', 'vaultStore.js', 'vault.js', 'vaultMigration.js',
+  'vaultAccounts.js', 'cloudSync.js', 'vaultLock.js',
 );
+
+// Accounts for content scripts. Unlocked: the decrypted list. Locked: only the
+// plaintext index (name, URL patterns, autofill — no secrets), or, for a v1
+// user not migrated yet, the same fields from the old plaintext list.
+async function accountsForContent() {
+  const { activeIndex = 0 } = await chrome.storage.local.get('activeIndex');
+  if ((await VaultLock.state()) === 'unlocked') {
+    return { locked: false, activeIndex, accounts: await VaultAccounts.load(await VaultKeys.getKey()) };
+  }
+  let index = await VaultAccounts.readIndex();
+  if (!(await VaultMigration.isMigrated())) {
+    const { accounts = [] } = await chrome.storage.local.get('accounts');
+    index = accounts.map(a => ({ name: a.name, urls: a.urls, autofill: a.autofill !== false }));
+  }
+  return { locked: true, activeIndex, accounts: index };
+}
 
 // Latest email OTP detected by email-reader.js (expires after 10 min).
 let _emailOtp = null;
@@ -217,6 +234,34 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     VaultLock.unlock(String(msg.password ?? ''))
       .then(ok => sendResponse({ ok }))
       .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  if (msg.action === 'vaultAccounts') {
+    accountsForContent()
+      .then(sendResponse)
+      .catch(() => sendResponse({ locked: true, activeIndex: 0, accounts: [] }));
+    return true;
+  }
+
+  // "Add to OTPilot" from a 2FA setup page (after any in-page unlock).
+  if (msg.action === 'vaultAddAccount') {
+    (async () => {
+      if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
+      const index = await VaultAccounts.add(msg.account, await VaultKeys.getKey());
+      await chrome.storage.local.set({ activeIndex: index });
+      return { ok: true, index };
+    })().then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // "Save this site to <account>?" — only if the account is still what the
+  // page saw (`expected`).
+  if (msg.action === 'vaultUpdateAccount') {
+    (async () => {
+      if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
+      return { ok: await VaultAccounts.update(msg.id, msg.expected, msg.patch, await VaultKeys.getKey()) };
+    })().then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 
