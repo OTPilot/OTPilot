@@ -147,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::billing::router())
         .merge(routes::devices::router())
         .merge(routes::icons::router())
+        .merge(routes::vault::router())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
