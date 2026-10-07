@@ -91,17 +91,17 @@
       return;
     }
 
-    body.innerHTML = `<div style="color:#94a3b8;font-size:12px;margin-bottom:8px;">Sign in with</div>`;
+    body.innerHTML = `<div style="color:var(--ink-3, #94a3b8);font-size:12px;margin-bottom:8px;">Sign in with</div>`;
     for (const login of logins) {
       const btn = document.createElement('button');
       btn.className = 'otpilot-login-choice';
       Object.assign(btn.style, {
         display: 'block', width: '100%', textAlign: 'left', margin: '0 0 6px', padding: '8px 10px',
-        background: '#0f172a', border: '1px solid #1e3a5f', borderRadius: '8px', cursor: 'pointer',
-        color: '#f1f5f9', font: 'inherit', fontSize: '13px',
+        background: 'var(--bg, #0f172a)', border: '1px solid var(--border, #1e3a5f)', borderRadius: '8px', cursor: 'pointer',
+        color: 'var(--ink-0, #f1f5f9)', font: 'inherit', fontSize: '13px',
       });
       btn.innerHTML = `<div style="font-weight:600;">${esc(login.name)}</div>`
-        + (login.username ? `<div style="color:#94a3b8;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(login.username)}</div>` : '');
+        + (login.username ? `<div style="color:var(--ink-3, #94a3b8);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(login.username)}</div>` : '');
       btn.addEventListener('click', trusted(() => fill(login.id)));
       body.appendChild(btn);
     }
@@ -212,14 +212,14 @@
     Object.assign(b.style, {
       flex: primary ? '1' : '0 0 auto', padding: '7px 10px', borderRadius: '7px', cursor: 'pointer',
       font: 'inherit', fontSize: '12px', fontWeight: '600',
-      background: primary ? '#38bdf8' : 'transparent', color: primary ? '#0f172a' : '#94a3b8',
-      border: primary ? '0' : '1px solid #1e3a5f',
+      background: primary ? 'var(--accent-2, #38bdf8)' : 'transparent', color: primary ? 'var(--bg, #0f172a)' : 'var(--ink-3, #94a3b8)',
+      border: primary ? '0' : '1px solid var(--border, #1e3a5f)',
     });
     return b;
   }
 
   function renderSave(el, offer) {
-    el.innerHTML = `${OVERLAY_HEADER}<div class="otpilot-save-body" style="padding:10px 12px 12px;color:#f1f5f9;font-size:13px;"></div>`;
+    el.innerHTML = `${OVERLAY_HEADER}<div class="otpilot-save-body" style="padding:10px 12px 12px;color:var(--ink-0, #f1f5f9);font-size:13px;"></div>`;
     el.querySelector('.otpilot-overlay-close').addEventListener('click', trusted(() => { resolve(offer, 'dismiss'); closeSave(); }));
     const body = el.querySelector('.otpilot-save-body');
     const title = offer.kind === 'update'
@@ -239,9 +239,9 @@
     }
 
     body.innerHTML = `<div class="otpilot-save-title" style="margin-bottom:4px;">${title}</div>`
-      + (offer.username ? `<div style="color:#94a3b8;font-size:12px;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(offer.username)}</div>` : '<div style="height:6px"></div>');
+      + (offer.username ? `<div style="color:var(--ink-3, #94a3b8);font-size:12px;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(offer.username)}</div>` : '<div style="height:6px"></div>');
     if (offer.limit) {
-      body.insertAdjacentHTML('beforeend', '<div class="otpilot-save-limit" style="color:#fbbf24;font-size:12px;">The Free plan holds 50 items. Upgrade to save more.</div>');
+      body.insertAdjacentHTML('beforeend', '<div class="otpilot-save-limit" style="color:var(--warning, #fbbf24);font-size:12px;">The Free plan holds 50 items. Upgrade to save more.</div>');
       return;
     }
     const row = document.createElement('div');
@@ -286,9 +286,9 @@
     let value = Generator.generate({ ...options, mode: 'password' });
 
     const el = makeOverlay(GEN_ID);
-    el.innerHTML = `${OVERLAY_HEADER}<div style="padding:10px 12px 12px;color:#f1f5f9;font-size:13px;">
+    el.innerHTML = `${OVERLAY_HEADER}<div style="padding:10px 12px 12px;color:var(--ink-0, #f1f5f9);font-size:13px;">
       <div style="margin-bottom:6px;">Use a strong password?</div>
-      <div class="otpilot-gen-value" style="font-family:ui-monospace,Menlo,monospace;font-size:13px;background:#0f172a;border:1px solid #1e3a5f;border-radius:7px;padding:7px 9px;margin-bottom:8px;word-break:break-all;"></div>
+      <div class="otpilot-gen-value" style="font-family:ui-monospace,Menlo,monospace;font-size:13px;background:var(--bg, #0f172a);border:1px solid var(--border, #1e3a5f);border-radius:7px;padding:7px 9px;margin-bottom:8px;word-break:break-all;"></div>
       <div class="otpilot-gen-row" style="display:flex;gap:6px;"></div></div>`;
     const shown = el.querySelector('.otpilot-gen-value');
     shown.textContent = value;

@@ -112,3 +112,20 @@ test('the in-page lock card follows the theme', async ({ context, extensionId })
   await popup.evaluate(() => chrome.storage.local.set({ theme: 'vault' }));
   await expect.poll(() => surface(lock)).toBe('rgb(36, 32, 25)');
 });
+
+test('the sign-in fill overlay follows the theme', async ({ context, extensionId }) => {
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(popup, { accounts: [], theme: 'daylight' });
+  await popup.reload();
+  await popup.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    await VaultAccounts.save([{ name: 'GitHub', email: 'me@x.com', secret: '', urls: 'localhost', password: 'pw' }], key);
+  });
+  const site = await context.newPage();
+  await site.goto('http://localhost:8765/test/login.html');
+  const overlay = site.locator('#otpilot-login-fill');
+  await expect(overlay).toBeVisible();
+  await expect.poll(() => surface(overlay)).toBe('rgb(255, 255, 255)');
+  await expect.poll(() => surface(overlay.locator('.otpilot-login-choice'))).toBe('rgb(250, 249, 245)');
+});
