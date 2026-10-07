@@ -258,6 +258,33 @@ async fn owned_teams(db: &sqlx::PgPool, user: uuid::Uuid) -> Result<Vec<TeamRef>
     .await?)
 }
 
+/// Deletes the users row (cascades take the rest). If this fails, the
+/// `pending_deletion_at` flag makes the startup cleanup finish it.
+async fn delete_user_row(state: &AppState, user: uuid::Uuid) {
+    if let Err(e) = sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user)
+        .execute(&state.db)
+        .await
+    {
+        tracing::error!("deleting user row {user}: {e}");
+    }
+}
+
+/// Whether Supabase reports the auth user as gone (404). Any other answer,
+/// or none, is "not known to be gone".
+async fn supabase_user_gone(state: &AppState, user: uuid::Uuid) -> bool {
+    let url = format!("{}/auth/v1/admin/users/{user}", state.supabase_admin_base);
+    matches!(
+        reqwest::Client::new()
+            .get(&url)
+            .header("apikey", &state.supabase_service_key)
+            .bearer_auth(&state.supabase_service_key)
+            .send()
+            .await,
+        Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND
+    )
+}
+
 /// Steps 1–3 of `delete_user`: billing, then teams.
 async fn prepare_deletion(state: &AppState, user: uuid::Uuid) -> Result<()> {
     let personal: Option<String> =
@@ -375,8 +402,14 @@ async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<St
     {
         Ok(r) => r,
         Err(e) => {
-            // Supabase not reached: the account stays as it was (billing and
-            // teams already handled), usable, and the deletion can be retried.
+            // No answer. The deletion may still have happened (the connection
+            // dropped after Supabase deleted the user): ask. Gone → finish
+            // deleting the row; still there (or unknown) → the account stays
+            // usable and the deletion can be retried (a retry's 404 finishes).
+            if supabase_user_gone(&state, auth.id).await {
+                delete_user_row(&state, auth.id).await;
+                return Ok(StatusCode::NO_CONTENT);
+            }
             clear_flags().await;
             return Err(anyhow::anyhow!("Supabase request failed: {e}").into());
         }
@@ -397,14 +430,7 @@ async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<St
     }
 
     // Supabase user is gone — remove DB row (CASCADE handles the rest).
-    // If this fails the startup cleanup will finish it.
-    if let Err(e) = sqlx::query("DELETE FROM users WHERE id = $1")
-        .bind(auth.id)
-        .execute(&state.db)
-        .await
-    {
-        tracing::error!("deleting user row {}: {e}", auth.id);
-    }
+    delete_user_row(&state, auth.id).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -717,5 +743,39 @@ mod db_tests {
             )
             .await
         );
+    }
+
+    /// A Supabase that deletes the user but drops the connection before
+    /// answering (the DELETE gets no response), then reports it gone (404).
+    async fn supabase_losing_the_answer() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 2048];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                if buf[..n].starts_with(b"GET") {
+                    let _ = sock
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                        .await;
+                }
+                // DELETE: dropped without a response.
+            }
+        });
+        base
+    }
+
+    #[tokio::test]
+    async fn a_lost_supabase_answer_after_the_user_was_deleted_still_removes_the_data() {
+        let db = test_db().await;
+        let mut state = test_state(db.pool.clone());
+        state.supabase_admin_base = supabase_losing_the_answer().await;
+        let app = router().with_state(state);
+        let user = create_user(&db.pool, "free").await;
+        let (s, _) = call(&app, user, Method::DELETE, "/users/me", None).await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+        assert!(!exists(&db.pool, "SELECT 1 FROM users WHERE id = $1", user).await);
     }
 }
