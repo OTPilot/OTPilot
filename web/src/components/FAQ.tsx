@@ -35,7 +35,7 @@ const faqs = [
   },
   {
     q: 'Can I get a refund?',
-    a: 'Yes, within 14 days of a payment, if the service didn\'t work as documented or there was a billing error. We don\'t offer refunds for "changed my mind", but you can cancel anytime and the free plan lets you try everything first.',
+    a: 'Yes, within 14 days of a payment (for yearly plans, of the first purchase; renewals are not refunded), if the service didn\'t work as documented or there was a billing error. We don\'t offer refunds for "changed my mind", but you can cancel anytime and the free plan lets you try everything first.',
   },
   {
     q: 'Which browsers does OTPilot support?',

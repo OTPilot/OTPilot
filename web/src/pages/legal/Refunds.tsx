@@ -70,12 +70,12 @@ export default function Refunds() {
                   </tr>
                   <tr>
                     <td className="py-2.5 pr-4">Personal — yearly ($30)</td>
-                    <td className="py-2.5 pr-4">Within 14 days of a payment (purchase or renewal), for a valid reason</td>
+                    <td className="py-2.5 pr-4">Within 14 days of the first purchase, for a valid reason (renewals are not refunded)</td>
                     <td className="py-2.5 text-teal-400">Full refund of that payment</td>
                   </tr>
                   <tr>
                     <td className="py-2.5 pr-4">Team Lite — monthly ($8) / yearly ($80), extra seats</td>
-                    <td className="py-2.5 pr-4">Within 14 days of a payment, for a valid reason</td>
+                    <td className="py-2.5 pr-4">Within 14 days of a payment, for a valid reason (yearly: the first purchase only; renewals are not refunded)</td>
                     <td className="py-2.5 text-teal-400">Full refund of that payment</td>
                   </tr>
                   <tr>
