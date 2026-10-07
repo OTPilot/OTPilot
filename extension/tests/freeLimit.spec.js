@@ -174,3 +174,23 @@ test('the editor and the page\'s Save login cannot both take the last free slot'
   });
   expect(order).toEqual(['other save', 'other done', 'editor check']);
 });
+
+test('a save queued behind the limit lock does not save an editing session started later', async ({ context, extensionId }) => {
+  const page = await editorWith(context, extensionId, counted(2));
+  const titles = () => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => i.title).sort());
+  await page.evaluate(() => {
+    window.releaseLimitLock = null;
+    navigator.locks.request('otpilot-item-limit', () => new Promise(r => { window.releaseLimitLock = r; }));
+  });
+  await page.locator('.acc-head', { hasText: 'Site 00' }).click();
+  await page.fill('#acc-detail .acc-name', 'Clicked save on this');
+  await page.click('#btn-save-all'); // queued behind the held lock
+  // The user leaves the editor and starts over, typing something else.
+  await page.click('#nav-home');
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Site 01' }).click();
+  await page.fill('#acc-detail .acc-name', 'Never saved');
+  await page.evaluate(() => window.releaseLimitLock());
+  await expect(page.locator('#status-msg')).toContainText('changed while saving');
+  expect(await titles()).toEqual(['Site 00', 'Site 01']);
+});

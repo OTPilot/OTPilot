@@ -378,6 +378,7 @@ test('a sync finishing while an account is being edited keeps the edit and merge
   await expect(page.locator('.acc-email')).toHaveValue('typed@example.com');
 
   await page.click('#btn-save-all');
+  await expect.poll(async () => (await readAccounts(page)).find(a => a.name === 'GitHub')?.email).toBe('typed@example.com');
   await expect.poll(async () => (await readAccounts(page)).map(a => a.name).sort()).toEqual(['AWS', 'GitHub', 'New elsewhere']);
   const byName = Object.fromEntries((await readAccounts(page)).map(a => [a.name, a]));
   expect(byName.GitHub.email).toBe('typed@example.com');

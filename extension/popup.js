@@ -701,7 +701,11 @@ let _justSavedMessage = false;
 // used by the "edit this account" shortcut on the Home view. draft entries
 // are clones, so the origin index has to be tracked through the sort to
 // translate it into draft's index space.
+// Bumped each time the editor starts over from the saved list (a new draft).
+let _editSession = 0;
+
 function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {}) {
+  _editSession++;
   const withOrigin = accounts.map((a, i) => ({ acc: { ...a }, origIdx: i }));
   withOrigin.sort((x, y) => (x.acc.name || '').localeCompare(y.acc.name || ''));
   draft = withOrigin.map(w => w.acc);
@@ -1007,14 +1011,22 @@ let _savingAccounts = false;
 document.getElementById('btn-save-all').addEventListener('click', async () => {
   if (_savingAccounts) return;
   _savingAccounts = true;
+  // What this click saves is captured now, before waiting for the lock: if
+  // the user leaves the editor or starts over meanwhile, the queued save
+  // stops instead of saving a later editing session nobody clicked Save on.
+  syncOpenAccToDraft();
+  const intended = { session: _editSession, draft: JSON.stringify(draft) };
   // Counting toward the Free limit and writing share one lock with every
   // other user-initiated add (the page's Save login, CSV import), so two of
   // them can't both take the last free slot.
-  try { await navigator.locks.request('otpilot-item-limit', saveAccounts); } finally { _savingAccounts = false; }
+  try { await navigator.locks.request('otpilot-item-limit', () => saveAccounts(intended)); } finally { _savingAccounts = false; }
 });
 
-async function saveAccounts() {
-  syncOpenAccToDraft();
+async function saveAccounts(intended) {
+  if (_editSession !== intended.session || JSON.stringify(draft) !== intended.draft) {
+    setStatus('The list changed while saving — save again', false);
+    return;
+  }
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
 
