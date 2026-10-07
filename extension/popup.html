@@ -1363,6 +1363,21 @@
       </div>
 
       <input type="file" id="import-file" accept=".json" style="display:none">
+
+      <div class="csv-export" style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+        <button class="btn-backup" id="btn-export-csv" style="width:100%">↑ Export everything as CSV (not encrypted)</button>
+        <div id="csv-export-form" style="display:none;margin-top:8px">
+          <p style="font-size:11px;color:var(--warning);line-height:1.5;margin:0 0 8px">
+            The CSV holds every password, 2FA secret and note in plain text: anyone who opens the file can read them.
+            Use it to move to another manager, then delete it.
+          </p>
+          <div class="field-row">
+            <input type="password" id="csv-export-password" placeholder="Master password" autocomplete="off">
+            <button class="btn-crypto-ok" id="csv-export-confirm">Export</button>
+            <button class="btn-crypto-cancel" id="csv-export-cancel">✕</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Sub-view: Import from Google Authenticator -->

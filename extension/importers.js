@@ -9,6 +9,52 @@
 // Secure notes (Bitwarden type "note", LastPass "http://sn") become note
 // items.
 const Importers = (() => {
+  // Tags in OTPilot's `folder` column: ';' separates, '\;' and '\\' escape.
+  const joinTags = tags => tags.map(t => String(t).replace(/\\/g, '\\\\').replace(/;/g, '\\;')).join(';');
+  function splitTags(text) {
+    const out = [];
+    let cur = '';
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '\\' && i + 1 < text.length) { cur += text[++i]; continue; }
+      if (text[i] === ';') { out.push(cur); cur = ''; continue; }
+      cur += text[i];
+    }
+    out.push(cur);
+    return out;
+  }
+
+  // How OTPilot stores an imported base32 secret: as is, unless it also
+  // looks like hex (only 0-9/A-F, even length) — totp.js decodeSecret would
+  // read those as hex, so they're stored as the hex of their bytes.
+  function storableSecret(b32) {
+    if (!b32 || !/^[0-9a-fA-F]+$/.test(b32) || b32.length % 2) return b32;
+    let bits = 0, val = 0, hex = '';
+    for (const ch of b32.toUpperCase()) {
+      val = (val << 5) | B32.indexOf(ch);
+      bits += 5;
+      if (bits >= 8) { hex += ((val >>> (bits - 8)) & 0xff).toString(16).padStart(2, '0'); bits -= 8; }
+    }
+    return hex;
+  }
+
+  // OTPilot reads a secret of hex digits (even length) as hex (totp.js
+  // decodeSecret); an otpauth URI needs base32.
+  const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  function otpauthSecret(secret) {
+    const s = String(secret).replace(/\s/g, '');
+    if (!/^[0-9a-fA-F]+$/.test(s) || s.length % 2) return s.toUpperCase();
+    let bits = 0, val = 0, out = '';
+    for (let i = 0; i < s.length; i += 2) {
+      val = (val << 8) | parseInt(s.slice(i, i + 2), 16);
+      bits += 8;
+      while (bits >= 5) { out += B32[(val >>> (bits - 5)) & 31]; bits -= 5; }
+    }
+    if (bits > 0) out += B32[(val << (5 - bits)) & 31];
+    return out;
+  }
+
+  const uniqueTags = tags => [...new Set(tags.map(t => String(t || '').trim()).filter(Boolean))];
+
   // RFC 4180: quoted fields, "" escapes, newlines inside quotes, CRLF or LF.
   function parseCsv(text) {
     const rows = [];
@@ -35,6 +81,7 @@ const Importers = (() => {
   }
 
   const SOURCES = [
+    { name: 'OTPilot', has: ['type', 'name', 'url', 'username', 'password', 'totp', 'notes', 'folder', 'fields'] },
     { name: 'Bitwarden', has: ['login_uri', 'login_username', 'login_password'] },
     { name: '1Password', has: ['title', 'url', 'username', 'password', 'otpauth'] },
     { name: 'LastPass', has: ['url', 'username', 'password', 'extra', 'name', 'grouping'] },
@@ -69,16 +116,19 @@ const Importers = (() => {
     return { col, source };
   }
 
-  const base32 = v => {
+  // Other managers' secrets: at least 16 characters (anything shorter is
+  // more likely a stray value). OTPilot's own export: any length OTPilot
+  // generates codes for.
+  const base32 = (v, min = 16) => {
     const s = String(v || '').replace(/[\s-]/g, '').toUpperCase();
-    return /^[A-Z2-7]{16,}=*$/.test(s) ? s.replace(/=+$/, '') : '';
+    return new RegExp(`^[A-Z2-7]{${min},}=*$`).test(s) ? s.replace(/=+$/, '') : '';
   };
 
   // A TOTP secret from an otpauth:// URI or a bare base32 secret: { secret }
   // ('' when there is none), or { unsupported: true } for settings OTPilot
   // can't generate (HOTP, not 6 digits / 30 s / SHA1) — those would give
   // codes the site rejects, so they're reported instead of imported.
-  function parseTotp(value) {
+  function parseTotp(value, min = 16) {
     const v = String(value || '').trim();
     if (!v) return { secret: '' };
     if (/^otpauth:\/\//i.test(v)) {
@@ -89,11 +139,11 @@ const Importers = (() => {
         && (p.get('digits') ?? '6') === '6'
         && (p.get('period') ?? '30') === '30'
         && (p.get('algorithm') ?? 'SHA1').toUpperCase() === 'SHA1';
-      const secret = base32(p.get('secret'));
+      const secret = base32(p.get('secret'), min);
       if (!secret) return { secret: '' };
       return supported ? { secret } : { unsupported: true };
     }
-    return { secret: base32(v) };
+    return { secret: base32(v, min) };
   }
 
   const totpSecret = value => parseTotp(value).secret || '';
@@ -124,21 +174,43 @@ const Importers = (() => {
   //       password, notes, totp, tag }], invalid, unsupportedTotp }
   function parse(text) {
     const rows = parseCsv(text);
-    if (rows.length < 2) return { source: 'CSV', entries: [], invalid: 0, unsupportedTotp: 0 };
+    if (rows.length < 2) return { source: 'CSV', entries: [], invalid: 0, unsupportedTotp: 0, otherTypes: 0 };
     const { col, source } = columns(rows[0]);
     if (col.password === undefined && col.totp === undefined) throw new Error('No password column found');
     const get = (row, key) => (col[key] !== undefined ? String(row[col[key]] ?? '').trim() : '');
+    // OTPilot's own export round-trips exactly: notes untrimmed, URL
+    // patterns as saved (one per line), logins without a password kept.
+    const own = source === 'OTPilot';
+    const raw = (row, key) => (col[key] !== undefined ? String(row[col[key]] ?? '') : '');
+    const notesOf = row => (own ? raw(row, 'notes') : get(row, 'notes'));
+    // OTPilot's own export lists every tag in `folder` (a;b;c, with \; and
+    // \\ escaping); other managers have one folder, possibly a path
+    // (Root/Email → Email).
+    const tagsOf = row => (own
+      ? uniqueTags(splitTags(raw(row, 'folder')))
+      : [folderTag(get(row, 'folder'))].filter(Boolean));
+    const withTags = (entry, row) => {
+      const [tag = '', ...more] = tagsOf(row);
+      entry.tag = tag;
+      if (more.length) entry.moreTags = more;
+      return entry;
+    };
     const entries = [];
-    let invalid = 0, unsupportedTotp = 0;
+    let invalid = 0, unsupportedTotp = 0, otherTypes = 0;
     for (const row of rows.slice(1)) {
       const rawUrl = get(row, 'url');
-      if (get(row, 'type').toLowerCase() === 'note' || rawUrl === 'http://sn') {
-        const note = { type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: get(row, 'notes'), totp: '', tag: folderTag(get(row, 'folder')) };
+      // OTPilot's export also lists servers, API credentials…: not rebuilt
+      // from CSV yet, reported instead of turned into logins.
+      if (own && !['login', 'note'].includes(get(row, 'type').toLowerCase())) { otherTypes++; continue; }
+      // LastPass marks notes with the URL http://sn; OTPilot's export says so
+      // in `type` (a login may well be saved with that URL).
+      if (get(row, 'type').toLowerCase() === 'note' || (!own && rawUrl === 'http://sn')) {
+        const note = withTags({ type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: notesOf(row), totp: '', tag: '' }, row);
         if (note.notes || get(row, 'title')) entries.push(note); else invalid++;
         continue;
       }
-      const urls = urlsOf(rawUrl, source);
-      const totp = parseTotp(get(row, 'totp'));
+      const urls = own ? raw(row, 'url').split('\n').map(u => u.trim()).filter(Boolean) : urlsOf(rawUrl, source);
+      const totp = parseTotp(get(row, 'totp'), own ? 1 : 16);
       if (totp.unsupported) unsupportedTotp++;
       const entry = {
         type: 'login',
@@ -146,19 +218,29 @@ const Importers = (() => {
         urls,
         username: get(row, 'username'),
         password: col.password !== undefined ? String(row[col.password] ?? '') : '',
-        notes: get(row, 'notes'),
+        notes: notesOf(row),
         totp: totp.secret || '',
-        tag: folderTag(get(row, 'folder')),
+        tag: '',
       };
-      if (!entry.password && !entry.totp) { invalid++; continue; }
+      withTags(entry, row);
+      if (!own && !entry.password && !entry.totp) { invalid++; continue; }
       if (!entry.title) entry.title = entry.username || 'Imported login';
       entries.push(entry);
     }
-    return { source, entries, invalid, unsupportedTotp };
+    return { source, entries, invalid, unsupportedTotp, otherTypes };
   }
 
-  const hostsOverlap = (item, entry) => entry.urls.some(h => Vault.loginCoversHost(item.urls, h))
-    || (item.urls || []).some(h => Vault.loginCoversHost(entry.urls, h));
+  // Saved URL patterns can carry a scheme, path or port (and OTPilot's own
+  // export keeps them as saved): compare by their host part.
+  const hostOf = pattern => String(pattern).trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .split(/[/?#]/)[0].replace(/:\d+$/, '').replace(/^\*\./, '').toLowerCase();
+  const hostsOverlap = (item, entry) => entry.urls.some(u => Vault.loginCoversHost(item.urls, hostOf(u)))
+    || (item.urls || []).some(u => Vault.loginCoversHost(entry.urls, hostOf(u)));
+  // Whether a saved secret (`stored`: base32, or hex the way OTPilot reads it)
+  // is the imported one (`incoming`: always base32 here — parseTotp — so it is
+  // never read as hex, even when it looks like it).
+  const sameSecret = (stored, incoming) => !!stored && !!incoming
+    && otpauthSecret(stored).replace(/=+$/, '') === String(incoming).replace(/[\s=]/g, '').toUpperCase();
 
   // What importing each entry does against the vault's current `items`:
   //   exists — a login for that site + username already holds everything the
@@ -192,9 +274,9 @@ const Importers = (() => {
       const loose = onSite.filter(i => userOf(i).toLowerCase() === entry.username.trim().toLowerCase());
       const matches = exact.length ? exact : (loose.length === 1 ? loose : []);
       const pwOk = i => !entry.password || [entry.password, ''].includes(Vault.getValue(i, 'password'));
-      const totpOk = i => !entry.totp || !i.totp?.secret || i.totp.secret === entry.totp;
+      const totpOk = i => !entry.totp || !i.totp?.secret || sameSecret(i.totp.secret, entry.totp);
       const holdsAll = i => (!entry.password || Vault.getValue(i, 'password') === entry.password)
-        && (!entry.totp || i.totp?.secret === entry.totp);
+        && (!entry.totp || sameSecret(i.totp?.secret, entry.totp));
       const same = matches.find(holdsAll);
       if (same) return { action: 'exists', target: same.id };
       const target = matches.find(i => !taken.has(i.id) && pwOk(i) && totpOk(i));
@@ -217,20 +299,20 @@ const Importers = (() => {
         if (entry.password) Vault.getField(next, 'password').value = entry.password;
         if (!next.urls.length) next.urls = entry.urls;
         if (!next.notes && entry.notes) next.notes = entry.notes;
-        if (!next.totp && entry.totp) next.totp = { secret: entry.totp, digits: 6, period: 30, algorithm: 'SHA1' };
-        if (entry.tag && !(next.tags || []).includes(entry.tag)) next.tags = [...(next.tags || []), entry.tag];
+        if (!next.totp && entry.totp) next.totp = { secret: storableSecret(entry.totp), digits: 6, period: 30, algorithm: 'SHA1' };
+        next.tags = uniqueTags([...(next.tags || []), entry.tag, ...(entry.moreTags || [])]);
         next.updatedAt = now;
         out.push(next);
         continue;
       }
       if (entry.type === 'note') {
-        out.push(Vault.newItem('note', { title: entry.title, notes: entry.notes, tags: entry.tag ? [entry.tag] : [] }));
+        out.push(Vault.newItem('note', { title: entry.title, notes: entry.notes, tags: uniqueTags([entry.tag, ...(entry.moreTags || [])]) }));
         continue;
       }
       const item = Vault.newItem('login', {
         title: entry.title, urls: entry.urls, notes: entry.notes,
-        tags: entry.tag ? [entry.tag] : [],
-        totp: entry.totp ? { secret: entry.totp, digits: 6, period: 30, algorithm: 'SHA1' } : null,
+        tags: uniqueTags([entry.tag, ...(entry.moreTags || [])]),
+        totp: entry.totp ? { secret: storableSecret(entry.totp), digits: 6, period: 30, algorithm: 'SHA1' } : null,
         position: position++,
       });
       Vault.getField(item, 'username').value = entry.username;
@@ -240,5 +322,41 @@ const Importers = (() => {
     return out;
   }
 
-  return { parseCsv, parse, plan, toItems, totpSecret, parseTotp };
+  // ── Export ────────────────────────────────────────────────────────────────
+  // The vault as CSV, in columns this importer (and most managers' generic
+  // CSV import) reads back: logins and secure notes round-trip; other types
+  // carry their fields as "Label: value" lines in `fields`.
+  const CSV_COLUMNS = ['type', 'name', 'url', 'username', 'password', 'totp', 'notes', 'folder', 'fields'];
+
+  const csvCell = v => {
+    const s = String(v ?? '');
+    return /[",\r\n]/.test(s) || /^\s|\s$/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  function toCsv(items) {
+    const rows = items
+      .slice()
+      .sort((a, b) => (a.type === b.type ? (a.title || '').localeCompare(b.title || '') : a.type.localeCompare(b.type)))
+      .map(item => {
+        const value = id => Vault.getValue(item, id);
+        const known = new Set(['username', 'password']);
+        const extra = (item.fields || [])
+          .filter(f => !(item.type === 'login' && known.has(f.id)) && String(f.value ?? '') !== '')
+          .map(f => `${f.label || f.id}: ${f.value}`);
+        return [
+          item.type,
+          item.title || '',
+          (item.urls || []).join('\n'),
+          item.type === 'login' ? value('username') : '',
+          item.type === 'login' ? value('password') : '',
+          item.totp?.secret ? `otpauth://totp/${encodeURIComponent(item.title || 'OTPilot')}?secret=${otpauthSecret(item.totp.secret)}` : '',
+          item.notes || '',
+          joinTags(item.tags || []),
+          extra.join('\n'),
+        ];
+      });
+    return [CSV_COLUMNS, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+  }
+
+  return { parseCsv, parse, plan, toItems, totpSecret, parseTotp, toCsv };
 })();

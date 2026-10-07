@@ -1414,7 +1414,7 @@ function planOtherItems(merged) {
 }
 
 function showView(view, opts = {}) {
-  if (view !== 'settings') clearRevealedKey();
+  if (view !== 'settings') { clearRevealedKey(); hideCsvExport(); }
   document.getElementById('home-view').style.display      = view === 'home'     ? '' : 'none';
   document.getElementById('settings-panel').style.display = view === 'accounts' ? '' : 'none';
   document.getElementById('config-panel').style.display   = view === 'settings' ? '' : 'none';
@@ -1454,6 +1454,7 @@ function showSettingsSubview(id) {
   // requested", so it falls back to the first one instead of showing nothing.
   if (id === 'settings-list') id = 'settings-theme-view';
   if (id !== 'settings-password-view') clearRevealedKey();
+  if (id !== 'settings-backup-view') hideCsvExport();
   const views = ['settings-theme-view', 'settings-backup-view', 'settings-google-import-view', 'settings-csv-import-view', 'settings-autofill-view', 'settings-password-view'];
   views.forEach(v => { document.getElementById(v).style.display = v === id ? '' : 'none'; });
   document.querySelectorAll('#settings-list .settings-row').forEach(row => {
@@ -1869,6 +1870,7 @@ async function showCsvReview(file) {
 
   const skipped = [
     parsed.invalid ? `${parsed.invalid} row${parsed.invalid === 1 ? '' : 's'} without a password skipped` : '',
+    parsed.otherTypes ? `${parsed.otherTypes} server/API item${parsed.otherTypes === 1 ? '' : 's'} not imported (not supported from CSV yet)` : '',
     parsed.unsupportedTotp ? `${parsed.unsupportedTotp} 2FA code${parsed.unsupportedTotp === 1 ? '' : 's'} with unsupported settings (HOTP, 8 digits, SHA256…) not imported` : '',
   ].filter(Boolean);
   const nLogins = parsed.entries.filter(e => e.type === 'login').length;
@@ -1976,6 +1978,64 @@ async function importCsvEntries(chosen) {
   const merged = toSave.length - created.length;
   hideCsvReview();
   csvImportStatus(`Imported ${added} login${added === 1 ? '' : 's'}${notes ? ` and ${notes} secure note${notes === 1 ? '' : 's'}` : ''}${merged ? `, added ${merged} to existing logins` : ''}.`);
+}
+
+// ── Export everything as CSV (not encrypted) ───────────────────────────────
+// Asks for the master password again: the file holds every secret in plain
+// text. Columns are the ones the CSV import reads (Importers.toCsv).
+
+// Bumped whenever the form closes (Cancel, Escape, toggling it, leaving the
+// view, locking): an export still checking the password or reading the
+// vault then writes nothing.
+let _csvExportSeq = 0;
+let _csvExporting = false;
+
+function hideCsvExport() {
+  _csvExportSeq++;
+  document.getElementById('csv-export-form').style.display = 'none';
+  document.getElementById('csv-export-password').value = '';
+}
+
+document.getElementById('btn-export-csv').addEventListener('click', () => {
+  const form = document.getElementById('csv-export-form');
+  if (form.style.display !== 'none') { hideCsvExport(); return; }
+  form.style.display = '';
+  document.getElementById('csv-export-password').focus();
+});
+document.getElementById('csv-export-cancel').addEventListener('click', hideCsvExport);
+document.getElementById('csv-export-password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('csv-export-confirm').click();
+  if (e.key === 'Escape') hideCsvExport();
+});
+
+document.getElementById('csv-export-confirm').addEventListener('click', async () => {
+  if (_csvExporting) return; // one export at a time: never two plaintext copies
+  const password = document.getElementById('csv-export-password').value;
+  if (!password) { setStatus('Enter your master password', false); return; }
+  const seq = _csvExportSeq;
+  const btn = document.getElementById('csv-export-confirm');
+  _csvExporting = true;
+  btn.disabled = true;
+  try { await exportCsv(password, seq); } finally { _csvExporting = false; btn.disabled = false; }
+});
+
+async function exportCsv(password, seq) {
+  const key = await VaultLock.revealRecoveryKey(password).catch(() => null);
+  if (seq !== _csvExportSeq) return; // closed meanwhile
+  if (!key) { setStatus('Incorrect password', false); return; }
+  const { items, failed } = await VaultStore.readAll(key);
+  if (seq !== _csvExportSeq || (await VaultLock.state()) !== 'unlocked') return;
+  if (!items.length) {
+    setStatus(failed.length ? `Could not export: ${failed.length} unreadable item${failed.length === 1 ? '' : 's'}` : 'The vault is empty', false);
+    return;
+  }
+  const a = document.createElement('a');
+  a.download = `otpilot-export-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.href = URL.createObjectURL(new Blob([Importers.toCsv(items)], { type: 'text/csv' }));
+  a.click();
+  URL.revokeObjectURL(a.href);
+  hideCsvExport();
+  setStatus(`Exported ${items.length} item${items.length === 1 ? '' : 's'}${failed.length ? ` (${failed.length} unreadable left out)` : ''} — delete the file after use`);
 }
 
 // ── Google Authenticator import ─────────────────────────────────────────────
@@ -2441,6 +2501,7 @@ async function lockPopup() {
   document.getElementById('home-creds').innerHTML = '';
   _homeCredsKey = null;
   clearRevealedKey();
+  hideCsvExport();
   await new Promise(r => chrome.storage.local.remove('userPlan', r));
   document.querySelector('.kofi-footer').style.display = '';
   showLockOverlay('login');
