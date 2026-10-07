@@ -970,23 +970,22 @@ function renderAccDetail() {
 
   if (acc._kind) { renderItemDetail(container, acc); return; }
 
-  const cat = (acc.category || '').trim();
-  const body = document.createElement('div');
-  body.className = 'acc-body open';
-  body.innerHTML = `
-    <div class="acc-body-head">
-      <span class="acc-body-title">${esc(acc.name) || `Account ${openAccIdx + 1}`}${sharedBadgeHTML(findSharedCode(acc))}</span>
-      <button class="btn-del" title="Delete account">✕ Delete</button>
-    </div>
+  // "2FA code" (from + Add) opens the same login editor in a compact form:
+  // the 2FA secret first, the password behind "+ Add password". Saved, it's
+  // a regular login (and, with only a 2FA code, doesn't count toward Free).
+  const compact = !!acc._compact;
+  const nameField = `
     <div class="acc-field">
       <label>Name</label>
-      <input class="acc-name" type="text" placeholder="e.g. My Project QA" value="${esc(acc.name)}">
-    </div>
+      <input class="acc-name" type="text" placeholder="${compact ? 'e.g. GitHub' : 'e.g. My Project QA'}" value="${esc(acc.name)}">
+    </div>`;
+  const userField = `
     <div class="acc-field">
       <label>Username or email (optional)</label>
       <input class="acc-email" type="text" placeholder="e.g. user@example.com" value="${esc(acc.email || '')}">
-    </div>
-    <div class="acc-field">
+    </div>`;
+  const passwordField = `
+    <div class="acc-field acc-password-field"${compact ? ' style="display:none"' : ''}>
       <label>Password (optional)</label>
       <div class="field-row">
         <input class="acc-password" type="password" placeholder="Password" value="${esc(acc.password || '')}" autocomplete="new-password">
@@ -994,19 +993,31 @@ function renderAccDetail() {
         <button class="btn-eye btn-gen-password" title="Generate a password">⟳</button>
       </div>
     </div>
-    ${tagFieldsHTML(acc)}
+    ${compact ? '<button type="button" class="coll-link btn-add-password">+ Add password</button>' : ''}`;
+  const secretField = `
     <div class="acc-field">
-      <label>2FA secret (optional, base32 or hex)</label>
+      <label>${compact ? '2FA secret or otpauth:// link' : '2FA secret (optional, base32 or hex)'}</label>
       <div class="field-row">
-        <input class="acc-secret" type="password" placeholder="Secret" value="${esc(acc.secret)}" autocomplete="off">
+        <input class="acc-secret" type="password" placeholder="${compact ? 'Paste the setup key or otpauth:// link' : 'Secret'}" value="${esc(acc.secret)}" autocomplete="off">
         <button class="btn-eye" title="Show/hide">${SVG_EYE}</button>
       </div>
-    </div>
+    </div>`;
+  const urlsField = `
     <div class="acc-field">
-      <label>URLs (one per line, * wildcard ok)</label>
+      <label>${compact ? 'Site (optional, for auto-fill)' : 'URLs (one per line, * wildcard ok)'}</label>
       <textarea class="acc-urls" placeholder="*.example.com&#10;staging.myapp.io">
 ${esc(acc.urls || '')}</textarea>
+    </div>`;
+  const body = document.createElement('div');
+  body.className = 'acc-body open';
+  body.innerHTML = `
+    <div class="acc-body-head">
+      <span class="acc-body-title">${esc(acc.name) || (compact ? 'New 2FA code' : `Account ${openAccIdx + 1}`)}${sharedBadgeHTML(findSharedCode(acc))}</span>
+      <button class="btn-del" title="Delete account">✕ Delete</button>
     </div>
+    ${compact
+      ? nameField + secretField + userField + urlsField + passwordField + tagFieldsHTML(acc)
+      : nameField + userField + passwordField + tagFieldsHTML(acc) + secretField + urlsField}
     <label class="toggle">
       <input type="checkbox" class="acc-autofill" ${acc.autofill !== false ? 'checked' : ''}>
       <span class="toggle-track"></span>
@@ -1017,6 +1028,28 @@ ${esc(acc.urls || '')}</textarea>
       <div class="share-picker" style="display:none"></div>
     </div>
     ${collectionControlsHTML(acc)}`;
+
+  body.querySelector('.btn-add-password')?.addEventListener('click', e => {
+    body.querySelector('.acc-password-field').style.display = '';
+    e.currentTarget.remove();
+    body.querySelector('.acc-password').focus();
+  });
+  // A pasted otpauth:// link fills in the secret, and the name and username
+  // when they're still empty.
+  body.querySelector('.acc-secret').addEventListener('input', e => {
+    const parsed = parseOtpauth(e.target.value);
+    if (!parsed) return;
+    if (parsed.unsupported) {
+      e.target.value = '';
+      setStatus('That code uses settings OTPilot can\'t generate (only 6-digit, 30-second codes)', false);
+      return;
+    }
+    e.target.value = parsed.secret;
+    const name = body.querySelector('.acc-name');
+    const user = body.querySelector('.acc-email');
+    if (!name.value.trim() && parsed.issuer) { name.value = parsed.issuer; name.dispatchEvent(new Event('input')); }
+    if (!user.value.trim() && parsed.account) user.value = parsed.account;
+  });
 
   body.querySelector('.btn-del').addEventListener('click', () => {
     syncOpenAccToDraft(); // pick up an in-progress name edit before naming it in the prompt
@@ -1374,6 +1407,24 @@ async function moveNow(entry, cid) {
   if (removed) setStatus(`Moved to ${c.name}`);
 }
 
+// An otpauth://totp/ link (what a 2FA QR code holds): { secret, issuer,
+// account }, { unsupported: true } for settings OTPilot can't generate, or
+// null when it isn't one.
+function parseOtpauth(text) {
+  const v = String(text || '').trim();
+  if (!/^otpauth:\/\//i.test(v)) return null;
+  let url;
+  try { url = new URL(v); } catch { return null; }
+  const p = url.searchParams;
+  const secret = (p.get('secret') || '').replace(/\s/g, '').toUpperCase();
+  if (!secret) return null;
+  if (url.host.toLowerCase() !== 'totp' || (p.get('digits') ?? '6') !== '6' || (p.get('period') ?? '30') !== '30'
+    || (p.get('algorithm') ?? 'SHA1').toUpperCase() !== 'SHA1') return { unsupported: true };
+  const label = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+  const [labelIssuer, account] = label.includes(':') ? label.split(/:(.*)/s) : ['', label];
+  return { secret, issuer: (p.get('issuer') || labelIssuer || '').trim(), account: (account || '').trim() };
+}
+
 function esc(s = '') {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
@@ -1395,12 +1446,15 @@ function addToDraft(type) {
   // Adding while a category filter is active pre-assigns that category, so the
   // new row matches the active filter and stays visible (instead of being
   // hidden by applyVaultSearch the moment it's created). Same for the type.
-  if (type === 'login') {
-    draft.push({ name: '', email: '', secret: '', urls: '', autofill: true, category: categoryFilter, moreTags: [] });
+  if (type === 'login' || type === '2fa') {
+    draft.push({
+      name: '', email: '', secret: '', urls: '', autofill: true, category: categoryFilter, moreTags: [],
+      ...(type === '2fa' ? { _compact: true } : {}),
+    });
   } else {
     draft.push(entryOf(Vault.newItem(type, { tags: categoryFilter ? [categoryFilter] : [] })));
   }
-  if (typeFilter && typeFilter !== type) typeFilter = '';
+  if (typeFilter && typeFilter !== (type === '2fa' ? 'login' : type)) typeFilter = '';
   openAccIdx = draft.length - 1;
   rebuildAccountsDOM();
   renderVaultTypeBar();
@@ -1408,7 +1462,7 @@ function addToDraft(type) {
   applyVaultSearch();
   renderAccDetail();
   document.getElementById('accounts-list').lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  document.querySelector('#acc-detail .acc-name, #acc-detail .item-title')?.focus();
+  document.querySelector(type === '2fa' ? '#acc-detail .acc-secret' : '#acc-detail .acc-name, #acc-detail .item-title')?.focus();
 }
 
 function closeAddMenu() {
@@ -1420,6 +1474,13 @@ document.getElementById('btn-add').addEventListener('click', e => {
   const menu = document.getElementById('add-type-menu');
   if (menu.style.display !== 'none') { closeAddMenu(); return; }
   menu.innerHTML = '';
+  // "2FA code" first: a login opened in its compact, 2FA-first form.
+  const twoFa = document.createElement('button');
+  twoFa.className = 'add-type';
+  twoFa.dataset.addType = '2fa';
+  twoFa.textContent = '2FA code';
+  twoFa.addEventListener('click', () => { closeAddMenu(); addToDraft('2fa'); });
+  menu.appendChild(twoFa);
   for (const [type, t] of Object.entries(Vault.TYPES)) {
     const b = document.createElement('button');
     b.className = 'add-type';
