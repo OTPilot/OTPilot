@@ -264,3 +264,46 @@ test('moving a login out of the personal vault removes it from the locked-vault 
   await expect(page.locator('#status-msg')).toContainText('Moved to Infra');
   expect(await page.evaluate(() => VaultAccounts.readIndex())).toEqual([]);
 });
+
+test('a move never deletes a personal login updated meanwhile, and runs once', async ({ context, extensionId }) => {
+  const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: 'me@x.com', secret: '', urls: 'example.com', password: 'old' }]);
+  await page.evaluate(async () => {
+    await VaultCollections.create('team-1', 'Infra');
+    await refreshSharedItems();
+    // While the collection save is in flight, a page updates the password.
+    const real = VaultCollections.moveIn;
+    VaultCollections.moveIn = async (...a) => {
+      const key = await VaultKeys.getKey();
+      const mine = (await VaultStore.readAll(key)).items.find(i => i.title === 'Mine');
+      Vault.getField(mine, 'password').value = 'new';
+      await VaultStore.save(mine, key);
+      await new Promise(r => setTimeout(r, 200));
+      return real(...a);
+    };
+  });
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Mine' }).click();
+  page.on('dialog', d => d.accept());
+  await page.evaluate(() => { const b = document.querySelector('#acc-detail .btn-move-collection'); b.click(); b.click(); });
+  await expect(page.locator('#status-msg')).toContainText('It changed while moving');
+  const r = await page.evaluate(async () => ({
+    personal: (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => Vault.getValue(i, 'password')),
+    shared: fake.items.size,
+  }));
+  expect(r).toEqual({ personal: ['new'], shared: 1 });
+});
+
+test('the main Save refuses to drop unsaved edits to a shared item', async ({ context, extensionId }) => {
+  const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: '', secret: TEST_SECRET, urls: '' }]);
+  await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Infra');
+    await VaultCollections.save(c, Vault.newItem('note', { title: 'Shared note', notes: 'v1' }));
+    await refreshSharedItems();
+  });
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Shared note' }).click();
+  await page.fill('#acc-detail .item-notes', 'v2 not saved yet');
+  await page.click('#btn-save-all');
+  await expect(page.locator('#status-msg')).toContainText('use "Save to Infra" first');
+  expect(await page.evaluate(() => draft.find(e => e.name === 'Shared note').item.notes)).toBe('v2 not saved yet');
+});

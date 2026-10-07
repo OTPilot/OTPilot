@@ -1313,21 +1313,42 @@ async function sharedItemsFromLocal() {
   return out;
 }
 
+let _moving = false;
 async function moveToCollection(entry, cid) {
+  if (_moving) return; // a second click would put another copy in the collection
+  _moving = true;
+  const btn = document.querySelector('#acc-detail .btn-move-collection');
+  if (btn) btn.disabled = true;
+  try { await moveNow(entry, cid); } finally { _moving = false; if (btn?.isConnected) btn.disabled = false; }
+}
+
+async function moveNow(entry, cid) {
   syncOpenAccToDraft();
   if (JSON.stringify(draft) !== JSON.stringify(_draftBase)) { setStatus('Save or cancel your changes first', false); return; }
   const c = collections.find(x => x.id === cid);
   const key = await VaultKeys.getKey();
   if (!c?.key || !key) return;
   if (!confirm(`Move "${entry.name}" into "${c.name}"? Everyone in it will see it, and it leaves your personal vault.`)) return;
-  const item = await VaultStore.get(entry._id, key).catch(() => null);
+  // The exact record copied: the personal copy is only removed if it is
+  // still this one once the collection has it (a page may update the login
+  // meanwhile).
+  const copied = (await VaultStore.listRecords())[entry._id];
+  const item = copied && await VaultCrypto.decryptItem(copied, key).catch(() => null);
   if (!item) { setStatus('Could not read this item', false); return; }
   try {
     const res = await VaultCollections.moveIn(c, item);
     if (!res.ok) throw new Error('not saved');
   } catch { setStatus('Could not move it — check your connection', false); return; }
   const before = new Set(sharedItems.map(s => s.item.id));
-  await VaultStore.remove([entry._id]);
+  const removed = await VaultStore.transaction(async tx => {
+    const now = (await tx.listRecords())[entry._id];
+    if (!now || now.data?.iv !== copied.data?.iv) return false;
+    await tx.remove(entry._id);
+    return true;
+  });
+  if (!removed) {
+    setStatus('It changed while moving: the collection has the earlier copy, your updated one stays in your vault', false);
+  }
   // The locked-vault index must stop offering it now, sync or not (rebuilt
   // under the vault lock, so a page saving a login meanwhile isn't undone).
   await VaultAccounts.rebuildIndex(key);
@@ -1337,9 +1358,9 @@ async function moveToCollection(entry, cid) {
   _loadedIds = new Set(accounts.map(a => a._id));
   otherItems = await VaultAccounts.loadOthers(key);
   sharedItems = await sharedItemsFromLocal();
-  patchEntries([entry._id], sharedItems.filter(s => !before.has(s.item.id)).map(sharedEntryOf));
+  patchEntries(removed ? [entry._id] : [], sharedItems.filter(s => !before.has(s.item.id)).map(sharedEntryOf));
   renderAccountBar();
-  setStatus(`Moved to ${c.name}`);
+  if (removed) setStatus(`Moved to ${c.name}`);
 }
 
 function esc(s = '') {
@@ -1440,6 +1461,14 @@ async function saveAccounts(intended) {
   }
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
+  // Shared items are saved to their collection, not by this button: never
+  // drop their edits silently.
+  const baseById = new Map(_draftBase.map(e => [e._id, JSON.stringify(e)]));
+  const sharedDirty = draft.find(e => isSharedEntry(e) && baseById.get(e._id) !== JSON.stringify(e));
+  if (sharedDirty) {
+    setStatus(`"${sharedDirty.name}" is shared: use "Save to ${sharedDirty.collectionName}" first, or Cancel`, false);
+    return;
+  }
 
   // Free plan: up to 50 items (2FA-only logins don't count). Checked before
   // anything changes, so a refused save leaves the editor as it was. The
