@@ -7,11 +7,11 @@ const rights = [
   },
   {
     title: 'Right to erasure (Art. 17)',
-    description: 'You can delete your account at any time from the dashboard Settings page. All synced data (accounts, devices, sync history) is deleted immediately and permanently. Stripe billing records are retained as required by law. Your local extension data is unaffected.',
+    description: 'You can delete your account at any time from the dashboard Settings page. All synced data (vault items, devices, sync history, team memberships) is deleted immediately and permanently. Stripe billing records are retained as required by law. Your local extension data is unaffected.',
   },
   {
     title: 'Right to data portability (Art. 20)',
-    description: 'Your TOTP accounts can be exported as an encrypted backup file from the extension at any time. This file is yours and works independently of our service.',
+    description: 'Your whole vault can be exported from the extension at any time, as an encrypted backup file or as a CSV that other password managers can import. These files are yours and work independently of our service.',
   },
   {
     title: 'Right to rectification (Art. 16)',
@@ -136,11 +136,11 @@ export default function Gdpr() {
                     <td className="py-2.5">Deleted immediately upon account deletion</td>
                   </tr>
                   <tr>
-                    <td className="py-2.5 pr-4">Encrypted accounts blob</td>
+                    <td className="py-2.5 pr-4">Encrypted vault items</td>
                     <td className="py-2.5">Deleted immediately upon account deletion</td>
                   </tr>
                   <tr>
-                    <td className="py-2.5 pr-4">Team data (membership, shared codes, activity log)</td>
+                    <td className="py-2.5 pr-4">Team data (membership, collections, shared codes, activity log)</td>
                     <td className="py-2.5">Deleted when you leave/delete the team, or on account deletion</td>
                   </tr>
                   <tr>
@@ -193,7 +193,7 @@ export default function Gdpr() {
             <h2 className="text-white font-semibold text-lg mb-3">Security measures</h2>
             <ul className="space-y-1.5">
               {[
-                'TOTP secrets are end-to-end encrypted — we cannot access them even if compelled',
+                'Passwords, notes and 2FA secrets are end-to-end encrypted — we cannot access them even if compelled',
                 'All data in transit is protected by TLS 1.2+',
                 'Database access is restricted to the API service with least-privilege credentials',
                 'Authentication tokens are short-lived JWTs signed by Supabase',

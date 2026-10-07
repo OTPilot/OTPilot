@@ -6,13 +6,13 @@ const steps = [
   },
   {
     number: '02',
-    title: 'Add your 2FA accounts',
-    description: 'OTPilot detects QR codes on setup pages and saves them automatically, or add secrets manually.',
+    title: 'Bring your passwords and 2FA',
+    description: 'Import from Chrome, 1Password, Bitwarden or LastPass, save logins as you sign in, and let OTPilot catch 2FA QR codes on setup pages.',
   },
   {
     number: '03',
     title: 'Log in anywhere, faster',
-    description: 'When a 2FA field appears, OTPilot fills it instantly. No switching apps, no copy-pasting.',
+    description: 'OTPilot fills your password, then the 2FA code when it\'s asked for. No switching apps, no copy-pasting.',
   },
 ]
 

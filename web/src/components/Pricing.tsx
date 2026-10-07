@@ -10,38 +10,39 @@ export default function Pricing() {
       name: 'Free',
       price: '$0',
       priceNote: 'forever',
-      description: 'Everything you need for personal use, locally.',
+      description: 'A complete vault for one browser, stored locally.',
       cta: browserAvailable ? `Add to ${browserLabel}` : 'Add to Chrome',
       ctaHref: browserAvailable ? browserHref! : 'https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk',
       ctaExternal: true,
       highlight: false,
       features: [
-        'Unlimited TOTP accounts',
-        'Auto-fill on any site',
-        'Auto-detect 2FA setup',
+        'Unlimited 2FA codes',
+        'Up to 50 passwords, notes & other items',
+        'Auto-fill passwords and 2FA codes',
+        'Password generator',
         'Email code auto-fill',
+        'Import from other password managers',
         'Master password lock',
-        'Local encrypted backup',
-        'Chrome, Firefox & Edge',
       ],
     },
     {
-      name: 'Personal Cloud',
-      price: '$15',
-      priceLabel: 'one-time payment',
-      priceNote: 'your price, locked in forever',
-      annualEquiv: 'No future charges for you',
-      description: 'Sync your accounts across every browser and device.',
-      cta: 'Lock in Early Adopter access',
+      name: 'Personal',
+      price: yearly ? '$30' : '$3',
+      priceNote: yearly ? 'per year' : 'per month',
+      annualEquiv: yearly ? 'Save 2 months vs monthly' : undefined,
+      description: 'Your whole vault, synced across every browser and device.',
+      cta: 'Get Personal',
       ctaHref: '/dashboard/billing',
       ctaExternal: false,
       highlight: true,
-      badge: 'Early Adopter',
+      badge: 'Most popular',
       features: [
         'Everything in Free',
+        'Unlimited passwords, notes & items',
         'End-to-end encrypted sync',
         'Multi-device, multi-browser',
         'Cloud backup',
+        'Cancel anytime',
       ],
     },
     {
@@ -49,7 +50,7 @@ export default function Pricing() {
       price: yearly ? '$80' : '$8',
       priceNote: yearly ? 'per workspace / year' : 'per workspace / month',
       annualEquiv: yearly ? 'Save 2 months vs monthly' : undefined,
-      description: 'Shared 2FA for small teams and startups.',
+      description: 'Shared passwords and 2FA for small teams and startups.',
       cta: 'Get Team',
       ctaHref: '/dashboard/billing',
       ctaExternal: false,
@@ -57,7 +58,9 @@ export default function Pricing() {
       features: [
         'Everything in Personal',
         '5 seats included',
-        'Shared TOTP accounts (end-to-end encrypted)',
+        'Shared collections (end-to-end encrypted)',
+        'Share a 2FA code without revealing its secret',
+        'View / edit / manage permissions',
         'Invite & revoke access instantly',
         '+$2 / extra seat / month',
       ],
@@ -75,7 +78,7 @@ export default function Pricing() {
             Start free. Upgrade when you need more.
           </p>
 
-          {/* Toggle — only relevant for Team */}
+          {/* Monthly / yearly — Personal and Team */}
           <div className="inline-flex items-center gap-3 p-1 rounded-xl bg-white/5 border border-white/10">
             <button
               onClick={() => setYearly(false)}
@@ -123,21 +126,9 @@ export default function Pricing() {
                 </h3>
 
                 {/* Price block */}
-                {'priceLabel' in plan && plan.priceLabel ? (
-                  // Lifetime deal: label first, then price
-                  <div className="mb-1">
-                    <span className="inline-block text-xs font-semibold uppercase tracking-wider text-teal-400 mb-1.5">
-                      {plan.priceLabel}
-                    </span>
-                    <div className="flex items-end gap-1.5">
-                      <span className="text-4xl font-bold text-white">{plan.price}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-end gap-1.5 mb-1">
-                    <span className="text-4xl font-bold text-white">{plan.price}</span>
-                  </div>
-                )}
+                <div className="flex items-end gap-1.5 mb-1">
+                  <span className="text-4xl font-bold text-white">{plan.price}</span>
+                </div>
 
                 <p className="text-xs text-zinc-500">{plan.priceNote}</p>
                 {'annualEquiv' in plan && plan.annualEquiv && (
@@ -181,7 +172,7 @@ export default function Pricing() {
         </div>
 
         <p className="text-center text-xs text-zinc-600 mt-8">
-          All plans include a 14-day refund window for technical issues.{' '}
+          Paid plans renew automatically and can be cancelled anytime. 14-day refund window for technical issues.{' '}
           <a href="/refunds" className="underline hover:text-zinc-400 transition-colors">Refund policy →</a>
         </p>
       </div>

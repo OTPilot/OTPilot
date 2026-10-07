@@ -8,12 +8,12 @@ export default function Refunds() {
           ← Back to home
         </Link>
         <h1 className="text-3xl font-bold text-white mb-2">Refund Policy</h1>
-        <p className="text-zinc-500 text-sm mb-10">Last updated: May 2026</p>
+        <p className="text-zinc-500 text-sm mb-10">Last updated: October 2026</p>
 
         <div className="space-y-8 text-zinc-400 leading-relaxed text-sm">
           <section>
             <h2 className="text-white font-semibold text-lg mb-3">Our approach</h2>
-            <p>We offer refunds for technical failures and billing errors — not for change of mind. We recommend using the free plan before purchasing to make sure OTPilot fits your needs.</p>
+            <p>We offer refunds for technical failures and billing errors — not for change of mind. We recommend using the free plan before purchasing to make sure OTPilot fits your needs. Paid plans are subscriptions: you can cancel at any time and keep the plan until the end of the period you already paid for, so you are never charged again after cancelling.</p>
           </section>
 
           <section>
@@ -64,18 +64,33 @@ export default function Refunds() {
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   <tr>
-                    <td className="py-2.5 pr-4">Personal Lifetime ($15)</td>
-                    <td className="py-2.5 pr-4">Within 14 days</td>
-                    <td className="py-2.5 text-teal-400">Full refund</td>
+                    <td className="py-2.5 pr-4">Personal — monthly ($3)</td>
+                    <td className="py-2.5 pr-4">Within 14 days of a payment, for a valid reason</td>
+                    <td className="py-2.5 text-teal-400">Full refund of that payment</td>
                   </tr>
                   <tr>
-                    <td className="py-2.5 pr-4">Personal Lifetime ($15)</td>
-                    <td className="py-2.5 pr-4">After 14 days</td>
-                    <td className="py-2.5 text-zinc-500">No refund</td>
+                    <td className="py-2.5 pr-4">Personal — yearly ($30)</td>
+                    <td className="py-2.5 pr-4">Within 14 days of a payment (purchase or renewal), for a valid reason</td>
+                    <td className="py-2.5 text-teal-400">Full refund of that payment</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2.5 pr-4">Team Lite — monthly ($8) / yearly ($80), extra seats</td>
+                    <td className="py-2.5 pr-4">Within 14 days of a payment, for a valid reason</td>
+                    <td className="py-2.5 text-teal-400">Full refund of that payment</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2.5 pr-4">Any plan</td>
+                    <td className="py-2.5 pr-4">After 14 days, or without a valid reason</td>
+                    <td className="py-2.5 text-zinc-500">No refund — cancel anytime to stop future charges</td>
                   </tr>
                 </tbody>
               </table>
             </div>
+          </section>
+
+          <section>
+            <h2 className="text-white font-semibold text-lg mb-3">Cancelling</h2>
+            <p>Cancel from the dashboard's Billing page (Billing portal). Cancelling stops renewal; it does not refund the current period, which you keep until it ends. Your vault stays on your devices and moves to the free plan: nothing is deleted, and if you have more than 50 items you keep them all (you just can't add new ones). Cancelling a team subscription dissolves the team and removes access to its shared collections and codes; each member's own vault is not affected.</p>
           </section>
 
           <section>

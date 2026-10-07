@@ -8,7 +8,7 @@ export default function Tos() {
           ← Back to home
         </Link>
         <h1 className="text-3xl font-bold text-white mb-2">Terms of Service</h1>
-        <p className="text-zinc-500 text-sm mb-10">Last updated: June 2026</p>
+        <p className="text-zinc-500 text-sm mb-10">Last updated: October 2026</p>
 
         <div className="prose prose-sm prose-invert max-w-none space-y-8 text-zinc-400 leading-relaxed">
           <section>
@@ -45,18 +45,18 @@ export default function Tos() {
           </section>
 
           <section>
-            <h2 className="text-white font-semibold text-lg mb-3">6. Definition of "Lifetime"</h2>
-            <p>"Lifetime" in the context of the Personal Cloud plan refers to the operational lifetime of the OTPilot Cloud Service, not the User's lifetime. We reserve the right to discontinue the Service at any time with <strong className="text-zinc-300">90 days prior written notice</strong>. No refunds will be issued for Lifetime plans upon service shutdown, except as stated in our <Link to="/refunds" className="text-teal-400 hover:text-teal-300 underline">Refund Policy</Link>.</p>
+            <h2 className="text-white font-semibold text-lg mb-3">6. Plans, subscriptions and billing</h2>
+            <p>The free plan includes unlimited 2FA codes and up to <strong className="text-zinc-300">50 other vault items</strong> (passwords, secure notes, servers, API credentials and similar); a login that only holds a 2FA code and its username does not count toward that limit. Paid plans (Personal, Team Lite and extra seats) are <strong className="text-zinc-300">subscriptions billed monthly or yearly in advance</strong> through Stripe, and renew automatically until cancelled. You can cancel at any time from the dashboard's Billing page; cancellation stops future renewals and the plan remains active until the end of the paid period. Refunds follow our <Link to="/refunds" className="text-teal-400 hover:text-teal-300 underline">Refund Policy</Link>. We may change prices for future billing periods with at least <strong className="text-zinc-300">30 days prior notice</strong> by email. When a paid plan ends, your account moves to the free plan: your data is not deleted, and if you are over the free limit you keep every item but cannot add new ones. We may discontinue the Cloud Service with <strong className="text-zinc-300">90 days prior written notice</strong>; renewals stop and unused prepaid time is refunded pro rata.</p>
           </section>
 
           <section>
             <h2 className="text-white font-semibold text-lg mb-3">7. Local functionality</h2>
-            <p>The browser extension's local functionality — including TOTP generation and local storage — will remain fully operational regardless of the status of the cloud service. Cloud-dependent features will cease to function upon service shutdown, but your locally stored data will never be affected.</p>
+            <p>The browser extension's local functionality — including your local vault, auto-fill and 2FA code generation — will remain fully operational regardless of the status of the cloud service. Cloud-dependent features will cease to function upon service shutdown, but your locally stored data will never be affected.</p>
           </section>
 
           <section>
-            <h2 className="text-white font-semibold text-lg mb-3">7A. Teams and shared codes</h2>
-            <p>On a team plan, the team owner is responsible for managing members, seats, and what is shared. Sharing a code grants the recipient access to the <strong className="text-zinc-300">live, time-based code only</strong> — never the underlying secret — and the owner (or the member who shared it) can revoke that access at any time. You agree to share codes only for accounts you are authorized to share, and to use codes shared with you solely for their intended purpose. Seats are billed per the team plan; the team owner is responsible for all charges on the team subscription, including extra seats. Cancelling the team subscription dissolves the team and revokes all shared access.</p>
+            <h2 className="text-white font-semibold text-lg mb-3">7A. Teams, collections and shared codes</h2>
+            <p>On a team plan, the team owner is responsible for managing members and seats, and for all charges on the team subscription, including extra seats. Team members can share in two ways. A <strong className="text-zinc-300">collection</strong> shares its full contents (passwords, notes, 2FA secrets and other items) with the members added to it, with view, edit or manage permissions; anyone who can view a collection can read and copy what it contains, so removing a member does not undo what they already saw — change the affected passwords if needed. A <strong className="text-zinc-300">shared code</strong> grants access to the live, time-based code only, never the underlying secret, and can be revoked at any time. You agree to share only accounts and information you are authorized to share, and to use what is shared with you solely for its intended purpose. Leaving a team, being removed from it, or cancelling the team subscription removes access to its collections and shared codes; each member's own vault is not affected.</p>
           </section>
 
           <section>

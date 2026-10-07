@@ -5,8 +5,8 @@ const features = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
       </svg>
     ),
-    title: 'Auto-fill, zero friction',
-    description: 'OTPilot detects 2FA fields and fills your TOTP code automatically. No copy-pasting, no interruptions.',
+    title: 'Passwords and 2FA, filled together',
+    description: 'OTPilot fills your login and then the 2FA code, offers to save new passwords, and suggests strong ones on sign-up forms. No copy-pasting.',
     accent: 'from-teal-400/10 to-teal-400/5',
     border: 'border-teal-500/10',
     iconBg: 'bg-teal-500/10 text-teal-400',
@@ -18,7 +18,7 @@ const features = [
       </svg>
     ),
     title: 'End-to-end encrypted sync',
-    description: 'Your secrets never reach our servers in plain text. The encryption key lives only with you — always.',
+    description: 'Every password, note and 2FA secret is encrypted on your device. The key lives only with you — our servers never see your data.',
     accent: 'from-emerald-400/10 to-emerald-400/5',
     border: 'border-emerald-500/10',
     iconBg: 'bg-emerald-500/10 text-emerald-400',
@@ -30,7 +30,7 @@ const features = [
       </svg>
     ),
     title: 'Secure team sharing',
-    description: 'Share TOTP access with teammates without exposing the secret. Revoke access instantly, anytime.',
+    description: 'Share collections of passwords with view or edit access, or just a live 2FA code without exposing its secret. Revoke anytime.',
     accent: 'from-cyan-400/10 to-cyan-400/5',
     border: 'border-cyan-500/10',
     iconBg: 'bg-cyan-500/10 text-cyan-400',
@@ -42,7 +42,7 @@ const features = [
       </svg>
     ),
     title: 'Works locally, always',
-    description: 'No account needed. OTPilot is fully functional offline. Cloud is optional — your local data is never held hostage.',
+    description: 'No account needed. Free covers unlimited 2FA codes and 50 passwords or notes, fully offline. Import from your old password manager in a click.',
     accent: 'from-violet-400/10 to-violet-400/5',
     border: 'border-violet-500/10',
     iconBg: 'bg-violet-500/10 text-violet-400',
