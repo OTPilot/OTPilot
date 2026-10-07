@@ -701,7 +701,11 @@ let _justSavedMessage = false;
 // used by the "edit this account" shortcut on the Home view. draft entries
 // are clones, so the origin index has to be tracked through the sort to
 // translate it into draft's index space.
+// Bumped each time the editor starts over from the saved list (a new draft).
+let _editSession = 0;
+
 function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {}) {
+  _editSession++;
   const withOrigin = accounts.map((a, i) => ({ acc: { ...a }, origIdx: i }));
   withOrigin.sort((x, y) => (x.acc.name || '').localeCompare(y.acc.name || ''));
   draft = withOrigin.map(w => w.acc);
@@ -1001,10 +1005,56 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
   showView('home');
 });
 
+// One save at a time: a second click while one is in flight would read the
+// open form into a draft the first save already merged and re-sorted.
+let _savingAccounts = false;
 document.getElementById('btn-save-all').addEventListener('click', async () => {
+  if (_savingAccounts) return;
+  _savingAccounts = true;
+  // What this click saves is captured now, before waiting for the lock: if
+  // the user leaves the editor or starts over meanwhile, the queued save
+  // stops instead of saving a later editing session nobody clicked Save on.
   syncOpenAccToDraft();
+  const intended = { session: _editSession, draft: JSON.stringify(draft) };
+  // Counting toward the Free limit and writing share one lock with every
+  // other user-initiated add (the page's Save login, CSV import), so two of
+  // them can't both take the last free slot.
+  try { await navigator.locks.request('otpilot-item-limit', () => saveAccounts(intended)); } finally { _savingAccounts = false; }
+});
+
+async function saveAccounts(intended) {
+  if (_editSession !== intended.session || JSON.stringify(draft) !== intended.draft) {
+    setStatus('The list changed while saving — save again', false);
+    return;
+  }
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
+
+  // Free plan: up to 50 items (2FA-only logins don't count). Checked before
+  // anything changes, so a refused save leaves the editor as it was. The
+  // check is async: an edit made meanwhile (Add clicked again, typing in the
+  // open form) stops the save instead of saving something unchecked or
+  // dropping the typing. The draft is merged only after the check, so the
+  // open row's index still matches it when the form is read again.
+  const edited = JSON.stringify(draft);
+  let overLimit;
+  try {
+    const key = await VaultKeys.getKey();
+    const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+    overLimit = !!key && await VaultAccounts.exceedsFreeLimit(mergeDraftWithCurrent(), key, _loadedIds, userPlan);
+  } catch {
+    setStatus('Could not check the Free plan limit — try again', false);
+    return;
+  }
+  if (overLimit) {
+    setStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items (2FA-only logins don't count). Upgrade to add more.`, false);
+    return;
+  }
+  syncOpenAccToDraft();
+  if (JSON.stringify(draft) !== edited) {
+    setStatus('The list changed while saving — save again', false);
+    return;
+  }
   draft = mergeDraftWithCurrent();
 
   // Diff old accounts vs draft: stamp _updatedAt on new/changed, tombstone deleted
@@ -1046,7 +1096,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   _justSavedMessage = true;
   showView('accounts', { openAccountIdx: -1, preserveSearch: true });
   setStatus('Saved');
-});
+}
 
 // ── View switching ────────────────────────────────────────────────────────────
 

@@ -117,6 +117,17 @@ const VaultAccounts = (() => {
   // account added meanwhile elsewhere (a page's "Add to OTPilot") is kept.
   // Assigns `_id` to new accounts in place.
   async function save(accounts, key, knownIds = new Set()) {
+    const { changed, removed, ids } = await planSave(accounts, key, knownIds);
+    ids.forEach((id, i) => { if (id) accounts[i]._id = id; });
+    if (changed.length) await VaultStore.save(changed, key);
+    if (removed.length) await VaultStore.remove(removed);
+    await rebuildIndex(key);
+    return accounts;
+  }
+
+  // What save() would write: the items to store, the ids to delete, and the
+  // item id of each account (null for an unreadable one, left alone).
+  async function planSave(accounts, key, knownIds) {
     const { items, failed } = await readLogins(key);
     const existing = new Map(items.map(i => [i.id, i]));
     // Accounts from the v1 sync blob carry no _id, or another device's: pair
@@ -150,22 +161,34 @@ const VaultAccounts = (() => {
     }
 
     const changed = [];
-    accounts.forEach((acc, position) => {
-      if (acc._id && failed.has(acc._id)) return; // unreadable record: leave it alone
+    const ids = accounts.map((acc, position) => {
+      if (acc._id && failed.has(acc._id)) return null; // unreadable record: leave it alone
       const base = pairs.get(position) || Vault.newItem('login', acc._id ? { id: acc._id } : {});
-      acc._id = base.id;
       const next = applyAccount(base, acc, position);
       if (!existing.has(base.id) || comparable(next) !== comparable(existing.get(base.id))) {
         next.updatedAt = acc._updatedAt || new Date().toISOString();
         changed.push(next);
       }
+      return base.id;
     });
-    if (changed.length) await VaultStore.save(changed, key);
-    const kept = new Set(accounts.map(a => a._id));
+    const kept = new Set(accounts.map((a, i) => ids[i] ?? a._id));
     const removed = [...knownIds].filter(id => existing.has(id) && !kept.has(id));
-    if (removed.length) await VaultStore.remove(removed);
-    await rebuildIndex(key);
-    return accounts;
+    return { changed, removed, ids };
+  }
+
+  // Whether saving `accounts` from the editor would add items that count
+  // toward the Free plan past its limit. Over the limit (e.g. after leaving a
+  // team) existing items stay editable; only growing the count is refused.
+  // Sync merges don't ask: what other devices saved is never dropped.
+  async function exceedsFreeLimit(accounts, key, knownIds, plan) {
+    if (Vault.PAID_PLANS.includes(plan)) return false;
+    const { changed, removed } = await planSave(accounts, key, knownIds);
+    const all = (await VaultStore.readAll(key)).items;
+    const after = new Map(all.map(i => [i.id, i]));
+    removed.forEach(id => after.delete(id));
+    changed.forEach(i => after.set(i.id, i));
+    const count = Vault.countedItems([...after.values()]);
+    return count > Vault.FREE_ITEM_LIMIT && count > Vault.countedItems(all);
   }
 
   // One account from a page ("Add to OTPilot"). Skips a secret already saved.
@@ -198,5 +221,5 @@ const VaultAccounts = (() => {
     return true;
   }
 
-  return { load, save, add, update, writeIndex, readIndex, toAccount };
+  return { load, save, exceedsFreeLimit, add, update, writeIndex, readIndex, toAccount };
 })();
