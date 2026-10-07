@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in (SPA)</title></head>
+<body>
+  <div id="app"></div>
+  <script>
+    // The form appears after load, like a SPA's sign-in modal.
+    setTimeout(() => {
+      document.getElementById('app').innerHTML =
+        '<input name="user"><input type="password" name="pass">';
+    }, 300);
+  </script>
+</body></html>

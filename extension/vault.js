@@ -100,6 +100,26 @@ const Vault = (() => {
     return getField(item, id)?.value ?? '';
   }
 
+  // Whether a login's saved URLs cover the page `hostname`, for filling its
+  // password. Stricter than the OTP auto-fill's matchesPattern (content.js /
+  // popup.js), which also matches a parent domain: a password only goes to the
+  // saved host or one of its subdomains. A leading `www.` on the saved host is
+  // ignored (saved www.site.com fills on site.com); `*.base` is a wildcard.
+  function urlCoversHost(pattern, hostname) {
+    let host = String(pattern).trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/?#]/)[0]
+      .replace(/:\d+$/, '').toLowerCase();
+    hostname = String(hostname || '').toLowerCase();
+    if (!host || !hostname) return false;
+    if (host.startsWith('*.')) host = host.slice(2);
+    else if (host.startsWith('www.')) host = host.slice(4);
+    return !!host && (hostname === host || hostname.endsWith('.' + host));
+  }
+
+  function loginCoversHost(urls, hostname) {
+    const list = Array.isArray(urls) ? urls : String(urls || '').split('\n');
+    return list.some(u => urlCoversHost(u, hostname));
+  }
+
   // Free plan counts every item except logins that hold a 2FA secret and
   // nothing else besides a username (no other field, notes or password
   // history) — 2FA stays unlimited on Free.
@@ -170,5 +190,6 @@ const Vault = (() => {
     isKnownType, newItem, getField, getValue,
     countsForLimit, countedItems, canSaveItem,
     fromV1Account, toV1Account,
+    loginCoversHost,
   };
 })();

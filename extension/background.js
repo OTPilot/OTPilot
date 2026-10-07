@@ -27,6 +27,177 @@ async function accountsForContent() {
   return { locked: true, activeIndex, accounts: index };
 }
 
+// The host of the page a top-frame content script runs on, or null.
+function senderHost(sender) {
+  if (!sender?.tab || sender.frameId !== 0 || !sender.url) return null;
+  try {
+    const url = new URL(sender.url);
+    return /^https?:$/.test(url.protocol) ? url.hostname : null;
+  } catch { return null; }
+}
+
+// Logins that can fill the sender page's sign-in form: unlocked, those with a
+// password whose URLs cover the host ({ id, name, username }); locked, the
+// same from the plaintext index ({ id, name }), to offer an unlock.
+async function loginsForPage(sender) {
+  const host = senderHost(sender);
+  const state = await VaultLock.state();
+  if (!host || state === 'setup') return { state, logins: [] };
+  if (state === 'unlocked') {
+    const { items } = await VaultStore.readAll(await VaultKeys.getKey());
+    const logins = items
+      .filter(i => i.type === 'login' && Vault.getValue(i, 'password') && Vault.loginCoversHost(i.urls, host))
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map(i => ({ id: i.id, name: i.title || host, username: Vault.getValue(i, 'username') }));
+    return { state, logins };
+  }
+  const logins = (await VaultAccounts.readIndex())
+    .filter(e => e.hasPassword && Vault.loginCoversHost(e.urls, host))
+    .map(e => ({ id: e.id, name: e.name || host }));
+  return { state, logins };
+}
+
+async function fillLogin(sender, id) {
+  const host = senderHost(sender);
+  if (!host || typeof id !== 'string' || (await VaultLock.state()) !== 'unlocked') return { ok: false };
+  const item = await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null);
+  const password = item && Vault.getValue(item, 'password');
+  if (!item || item.type !== 'login' || !password || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
+  await VaultLock.touch();
+  return { ok: true, username: Vault.getValue(item, 'username'), password };
+}
+
+// ── Saving sign-ins ──────────────────────────────────────────────────────────
+// A submitted sign-in form's credentials wait in chrome.storage.session
+// (memory-only, unreadable by content scripts) for the next page in the same
+// tab to offer saving them. The password never goes back to a page: the
+// offer only names the host, the username and the login it would update.
+const PENDING_LOGIN_TTL = 3 * 60 * 1000;
+const NEVER_SAVE = 'loginNeverSave';
+const pendingLoginKey = tabId => `pendingLogin:${tabId}`;
+
+// The offer shows on the signed-in host, or a parent or subdomain of it
+// (login.site.com → site.com). Not on a sibling host: without the Public
+// Suffix List, "same site" can't be told apart from two unrelated sites under
+// one public suffix (a.co.uk / b.co.uk, x.github.io / y.github.io).
+const relatedHost = (a, b) => a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+
+// A capture still being stored, per tab: the next page's offer request can
+// arrive while it is (the sign-in navigated right away), and waits for it.
+const _capturesInFlight = new Map();
+
+function captureLogin(sender, msg) {
+  const tabId = sender?.tab?.id;
+  const run = storeCapture(sender, msg);
+  if (tabId === undefined) return run;
+  const tracked = run.catch(() => {}).finally(() => {
+    if (_capturesInFlight.get(tabId) === tracked) _capturesInFlight.delete(tabId);
+  });
+  _capturesInFlight.set(tabId, tracked);
+  return run;
+}
+
+async function storeCapture(sender, msg) {
+  const host = senderHost(sender);
+  const password = typeof msg.password === 'string' ? msg.password : '';
+  if (!host || !password || password.length > 1024) return;
+  if ((await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE]?.includes(host)) return;
+  const username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
+  const id = crypto.randomUUID(); // offers and choices name the capture they're about
+  await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { id, host, username, password, at: Date.now() } });
+}
+
+// Removes the tab's capture only if it is still `id` (a newer sign-in may
+// have replaced it meanwhile).
+async function dropPendingLogin(key, id) {
+  const current = (await chrome.storage.session.get(key))[key];
+  if (current?.id === id) await chrome.storage.session.remove(key);
+}
+
+async function readPendingLogin(sender) {
+  const host = senderHost(sender);
+  if (!host) return null;
+  await _capturesInFlight.get(sender.tab.id);
+  const key = pendingLoginKey(sender.tab.id);
+  const pending = (await chrome.storage.session.get(key))[key];
+  if (!pending) return null;
+  if (Date.now() - pending.at > PENDING_LOGIN_TTL) { await dropPendingLogin(key, pending.id); return null; }
+  return relatedHost(pending.host, host) ? { key, pending } : null;
+}
+
+// What saving the pending sign-in would do: a new login, a password update of
+// the saved login with that username, or nothing (already saved as is).
+async function planPendingLogin({ host, username, password }) {
+  const key = await VaultKeys.getKey();
+  const { items } = await VaultStore.readAll(key);
+  const covering = items.filter(i => i.type === 'login' && Vault.loginCoversHost(i.urls, host));
+  const userOf = i => Vault.getValue(i, 'username').trim();
+  // The exact username first. Usernames can be case-sensitive: a match
+  // ignoring case is used only when it is the only one.
+  const loose = covering.filter(i => userOf(i).toLowerCase() === username.toLowerCase());
+  const match = covering.find(i => userOf(i) === username)
+    || (loose.length === 1 ? loose[0] : null)
+    || (!username && covering.length === 1 ? covering[0] : null);
+  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+  if (match) {
+    if (Vault.getValue(match, 'password') === password) return { kind: 'none' };
+    // A 2FA-only login that gains a password starts counting toward the limit.
+    const updated = structuredClone(match);
+    Vault.getField(updated, 'password').value = password;
+    return { kind: 'update', item: match, limit: !Vault.canSaveItem(items, userPlan, updated) };
+  }
+  const candidate = Vault.newItem('login', { urls: [host] });
+  Vault.getField(candidate, 'password').value = password;
+  return { kind: 'new', limit: !Vault.canSaveItem(items, userPlan, candidate) };
+}
+
+async function pendingLoginOffer(sender) {
+  const found = await readPendingLogin(sender);
+  if (!found) return null;
+  const { key, pending } = found;
+  const offer = { id: pending.id, host: pending.host, username: pending.username };
+  const state = await VaultLock.state();
+  if (state === 'setup') { await dropPendingLogin(key, pending.id); return null; }
+  if (state === 'locked') return { ...offer, kind: 'locked' };
+  const plan = await planPendingLogin(pending);
+  if (plan.kind === 'none') { await dropPendingLogin(key, pending.id); return null; }
+  return { ...offer, kind: plan.kind, name: plan.item?.title || '', limit: !!plan.limit };
+}
+
+// `id` is the capture the offer showed: a choice never applies to another.
+// Counting toward the Free limit and writing happen under one lock, so two
+// tabs saving at once can't both pass the check.
+async function resolvePendingLogin(sender, id, choice) {
+  const found = await readPendingLogin(sender);
+  if (!found || typeof id !== 'string' || found.pending.id !== id) return { ok: false };
+  const { key, pending } = found;
+  if (choice === 'never') {
+    const never = (await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE] || [];
+    await chrome.storage.local.set({ [NEVER_SAVE]: [...new Set([...never, pending.host])] });
+  }
+  if (choice !== 'save') { await dropPendingLogin(key, id); return { ok: true }; }
+
+  if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
+  return navigator.locks.request('otpilot-login-save', async () => {
+    const plan = await planPendingLogin(pending);
+    if (plan.limit) return { ok: false, limit: true };
+    const vk = await VaultKeys.getKey();
+    if (plan.kind === 'new') {
+      await VaultAccounts.add({
+        name: pending.host.replace(/^www\./, ''), email: pending.username, secret: '',
+        urls: pending.host, password: pending.password,
+      }, vk);
+    } else if (plan.kind === 'update') {
+      const current = VaultAccounts.toAccount(plan.item);
+      if (!(await VaultAccounts.update(plan.item.id, current, { password: pending.password }, vk))) return { ok: false };
+    }
+    await dropPendingLogin(key, id);
+    return { ok: true, kind: plan.kind };
+  });
+}
+
+chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove(pendingLoginKey(tabId)); });
+
 // Latest email OTP detected by email-reader.js (expires after 10 min).
 let _emailOtp = null;
 
@@ -264,6 +435,36 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
       return { ok: await VaultAccounts.update(msg.id, msg.expected, msg.patch, await VaultKeys.getKey()) };
     })().then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // Sign-in forms (forms.js). The page's host comes from the sender (the
+  // browser), never from the message, and only the top frame is served. The
+  // list carries no passwords; one is released only for a login the user
+  // picked whose saved URLs cover that host.
+  if (msg.action === 'vaultLoginsForPage') {
+    loginsForPage(_sender).then(sendResponse).catch(() => sendResponse({ state: 'locked', logins: [] }));
+    return true;
+  }
+
+  if (msg.action === 'vaultFillLogin') {
+    fillLogin(_sender, msg.id).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // Saving a submitted sign-in (forms.js): capture, then ask on the next page.
+  if (msg.action === 'vaultCaptureLogin') {
+    captureLogin(_sender, msg).finally(() => sendResponse({}));
+    return true;
+  }
+
+  if (msg.action === 'vaultPendingLogin') {
+    pendingLoginOffer(_sender).then(sendResponse).catch(() => sendResponse(null));
+    return true;
+  }
+
+  if (msg.action === 'vaultResolvePendingLogin') {
+    resolvePendingLogin(_sender, msg.id, msg.choice).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 

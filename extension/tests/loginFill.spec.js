@@ -1,0 +1,151 @@
+import { test, expect, seedUnlocked, waitForVault, writeAccounts, TEST_PASSWORD, TEST_SECRET } from './fixtures.js';
+
+// In-page sign-in form fill (forms.js + background vaultLoginsForPage /
+// vaultFillLogin).
+
+const SITE = 'http://localhost:8765/test';
+
+async function vaultWith(context, extensionId, accounts) {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedUnlocked(page, { accounts: [] });
+  await page.reload();
+  await waitForVault(page);
+  await writeAccounts(page, accounts);
+  return page;
+}
+
+const github = { name: 'GitHub', email: 'me@example.com', secret: '', urls: 'localhost', password: 'hunter2!' };
+
+test('a matching login is offered and filled only on click', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+
+  const overlay = site.locator('#otpilot-login-fill');
+  await expect(overlay).toBeVisible();
+  await expect(overlay.locator('.otpilot-login-choice')).toHaveCount(1);
+  await expect(overlay).toContainText('GitHub');
+  await expect(overlay).toContainText('me@example.com');
+  // Nothing is filled until the user picks the login, and the page's DOM
+  // holds no password before that.
+  await expect(site.locator('input[name="password"]')).toHaveValue('');
+  expect(await site.content()).not.toContain('hunter2!');
+
+  await overlay.locator('.otpilot-login-choice').click();
+  await expect(site.locator('input[name="email"]')).toHaveValue('me@example.com');
+  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+  await expect(overlay).toHaveCount(0);
+  // The sign-up form on the same page is left alone.
+  await expect(site.locator('input[name="new_user"]')).toHaveValue('');
+  await expect(site.locator('input[name="new_pw"]')).toHaveValue('');
+});
+
+test('only logins with a password whose URLs cover the page are offered', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [
+    github,
+    { name: 'Elsewhere', email: 'x@example.com', secret: '', urls: 'example.com', password: 'nope' },
+    { name: 'Codes only', email: 'y@example.com', secret: TEST_SECRET, urls: 'localhost' },
+    { name: 'Work GitHub', email: 'work@example.com', secret: '', urls: 'http://localhost:8765/login', password: 'w0rk' },
+  ]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  const choices = site.locator('#otpilot-login-fill .otpilot-login-choice');
+  await expect(choices).toHaveCount(2);
+  await expect(choices.nth(0)).toContainText('GitHub');
+  await expect(choices.nth(1)).toContainText('Work GitHub');
+
+  await choices.nth(1).click();
+  await expect(site.locator('input[name="password"]')).toHaveValue('w0rk');
+});
+
+test('no offer where no login matches, or on a sign-up form', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ ...github, urls: 'example.com' }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await site.waitForTimeout(1000);
+  await expect(site.locator('#otpilot-login-fill')).toHaveCount(0);
+
+  await vaultWith(context, extensionId, [github]);
+  await site.goto(`${SITE}/signup.html`);
+  await site.waitForTimeout(1000);
+  await expect(site.locator('#otpilot-login-fill')).toHaveCount(0);
+});
+
+test('a form that appears after load is offered too; closing the offer keeps it closed', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-late.html`);
+  const overlay = site.locator('#otpilot-login-fill');
+  await expect(overlay).toBeVisible();
+
+  await overlay.locator('.otpilot-overlay-close').click();
+  await expect(overlay).toHaveCount(0);
+  // The page keeps changing (a re-rendered form): the offer stays closed.
+  await site.evaluate(() => { document.getElementById('app').innerHTML = '<input name="user"><input type="password" name="pass2">'; });
+  await site.waitForTimeout(1000);
+  await expect(overlay).toHaveCount(0);
+});
+
+test('locked: the offer unlocks in the extension frame, then fills', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, [github]);
+  await page.evaluate(() => VaultLock.lock());
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+
+  const overlay = site.locator('#otpilot-login-fill');
+  await expect(overlay).toBeVisible();
+  const frame = site.frameLocator('#otpilot-login-fill iframe');
+  await expect(frame.locator('#label')).toContainText('GitHub');
+  await frame.locator('#pw').fill(TEST_PASSWORD);
+  await frame.locator('#unlock').click();
+
+  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+  await expect(site.locator('input[name="email"]')).toHaveValue('me@example.com');
+  await expect(overlay).toHaveCount(0);
+});
+
+test('the plaintext index says whether a login has a password, never the password', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, [github, { name: 'Codes only', email: '', secret: TEST_SECRET, urls: 'localhost' }]);
+  const index = await page.evaluate(() => VaultAccounts.readIndex());
+  expect(index.map(e => [e.name, e.hasPassword])).toEqual([['GitHub', true], ['Codes only', false]]);
+  expect(JSON.stringify(index)).not.toContain('hunter2!');
+  expect(JSON.stringify(index)).not.toContain('me@example.com');
+});
+
+test('the background serves passwords only to a top-frame page its URLs cover', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, [github]);
+  // An extension page is not a tab's top frame: nothing is listed or released.
+  const r = await page.evaluate(async () => {
+    const id = (await VaultAccounts.load(await VaultKeys.getKey()))[0]._id;
+    return {
+      list: await chrome.runtime.sendMessage({ action: 'vaultLoginsForPage' }),
+      fill: await chrome.runtime.sendMessage({ action: 'vaultFillLogin', id }),
+    };
+  });
+  expect(r.list.logins).toEqual([]);
+  expect(r.fill).toEqual({ ok: false });
+});
+
+test('password URL matching: the saved host or its subdomains, never a parent', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/test/blank.html`);
+  await page.addScriptTag({ url: `chrome-extension://${extensionId}/vault.js` });
+  const r = await page.evaluate(() => {
+    const m = (urls, host) => Vault.loginCoversHost(urls, host);
+    return [
+      m(['github.com'], 'github.com'),
+      m(['github.com'], 'gist.github.com'),
+      m(['https://www.github.com/login'], 'github.com'),
+      m(['*.github.com'], 'api.github.com'),
+      m('example.com\ngithub.com:443', 'github.com'),
+      m(['gist.github.com'], 'github.com'),        // parent: no
+      m(['github.com'], 'evilgithub.com'),         // not a subdomain: no
+      m(['github.com'], 'github.com.evil.io'),     // no
+      m(['myname.github.io'], 'evil.github.io'),   // sibling: no
+      m([''], 'github.com'),
+    ];
+  });
+  expect(r).toEqual([true, true, true, true, true, false, false, false, false, false]);
+});

@@ -58,6 +58,12 @@ const VaultLock = (() => {
   // Moves v1 accounts into the vault on the first unlock in 2.0 (no-op after).
   async function migrateVault() {
     if (typeof VaultMigration !== 'undefined') await VaultMigration.migrate();
+    // An index written before it carried `hasPassword` (early 2.0 builds)
+    // can't offer "Unlock & fill": rebuild it now that the vault is readable.
+    if (typeof VaultAccounts !== 'undefined' && (await VaultAccounts.readIndex()).some(e => !('hasPassword' in e))) {
+      const key = await VaultKeys.getKey();
+      if (key) await VaultAccounts.writeIndex((await VaultStore.readAll(key)).items);
+    }
   }
 
   // A fresh inactivity deadline from now. Only after proving the password.

@@ -52,11 +52,12 @@ test('v1 accounts become encrypted vault items; the plaintext list goes, an encr
   expect(result.v1Accounts).toBeUndefined();
   expect(result.backupAtRest).not.toContain('JBSWY3DP');
   expect(result.backup.accounts).toEqual(V1_ACCOUNTS);
-  // The locked-vault index: names, URL patterns and autofill only, in v1 order.
+  // The locked-vault index: names, URL patterns, autofill and whether a
+  // password exists (v1 accounts have none), in v1 order.
   expect(result.index.map(({ id, ...rest }) => rest)).toEqual([
-    { name: 'GitHub', urls: 'github.com', autofill: true },
-    { name: 'GitHub', urls: 'github.com', autofill: true },
-    { name: 'Namecheap', urls: '', autofill: false },
+    { name: 'GitHub', urls: 'github.com', autofill: true, hasPassword: false },
+    { name: 'GitHub', urls: 'github.com', autofill: true, hasPassword: false },
+    { name: 'Namecheap', urls: '', autofill: false, hasPassword: false },
   ]);
   expect(JSON.stringify(result.index)).not.toContain('JBSWY3DP');
   expect(result.backup.tombstones).toEqual(V1_TOMBSTONES);

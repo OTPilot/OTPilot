@@ -25,7 +25,7 @@
   "content_scripts": [
     {
       "matches": ["*://*/*"],
-      "js": ["jsqr.js", "totp.js", "email-reader.js", "content.js"],
+      "js": ["jsqr.js", "totp.js", "email-reader.js", "content.js", "generator.js", "forms.js"],
       "run_at": "document_idle"
     }
   ],
