@@ -19,6 +19,10 @@ pub struct AppState {
     /// kid → DecodingKey, built from Supabase JWKS at startup
     pub jwt_keys: Arc<HashMap<String, jsonwebtoken::DecodingKey>>,
     pub stripe_secret_key: String,
+    /// https://api.stripe.com (tests point it at a local stand-in).
+    pub stripe_api_base: String,
+    /// Supabase admin API base, normally `supabase_url` (tests: a stand-in).
+    pub supabase_admin_base: String,
     pub stripe_webhook_secret: String,
     pub stripe_personal_monthly_price_id: String,
     pub stripe_personal_annual_price_id: String,
@@ -125,6 +129,8 @@ async fn main() -> anyhow::Result<()> {
         db,
         jwt_keys: Arc::new(jwt_keys),
         stripe_secret_key,
+        stripe_api_base: "https://api.stripe.com".into(),
+        supabase_admin_base: supabase_url.clone(),
         stripe_webhook_secret,
         stripe_personal_monthly_price_id,
         stripe_personal_annual_price_id,

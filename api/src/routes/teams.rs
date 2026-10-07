@@ -248,7 +248,11 @@ async fn require_owner(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Resul
 /// reconstruct K even with a cached cid), and downgrades their plan — all in one
 /// transaction so a partial failure can't leave them on `team_lite` with no team.
 /// Returns the number of membership rows deleted (0 if they weren't a member).
-async fn remove_member_atomic(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Result<u64> {
+pub(crate) async fn remove_member_atomic(
+    db: &sqlx::PgPool,
+    team_id: Uuid,
+    user_id: Uuid,
+) -> Result<u64> {
     let mut tx = db.begin().await?;
     // Same lock as collection membership changes: nobody can be added to a
     // collection of this team between this removal and its cleanup.
@@ -316,6 +320,14 @@ async fn create_team(
     let plan = user_plan(&state.db, auth.id).await?;
     if !is_team_plan(&plan) {
         return Err(ApiError::Forbidden);
+    }
+    let deleting: bool =
+        sqlx::query_scalar("SELECT deletion_started_at IS NOT NULL FROM users WHERE id = $1")
+            .bind(auth.id)
+            .fetch_one(&state.db)
+            .await?;
+    if deleting {
+        return Err(ApiError::Forbidden); // the account is being deleted
     }
     let name = body.name.unwrap_or_else(|| "My Team".to_string());
     check_len(name.trim(), MAX_NAME_LEN, "name")?;

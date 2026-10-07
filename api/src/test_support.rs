@@ -98,6 +98,9 @@ pub fn test_state(db: PgPool) -> AppState {
         db,
         jwt_keys: Arc::new(jwt_keys),
         stripe_secret_key: String::new(),
+        // Unreachable unless a test points them at its own stand-in.
+        stripe_api_base: "http://127.0.0.1:9".into(),
+        supabase_admin_base: "http://127.0.0.1:9".into(),
         stripe_webhook_secret: String::new(),
         stripe_personal_monthly_price_id: "price_personal_monthly".into(),
         stripe_personal_annual_price_id: "price_personal_annual".into(),
