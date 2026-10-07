@@ -44,8 +44,12 @@ ALTER TABLE vault_items ADD CONSTRAINT vault_items_owner_or_collection
 -- as manager. (Skipped when the collection itself is being deleted.)
 CREATE FUNCTION collection_member_removed() RETURNS trigger AS $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM collections WHERE id = OLD.collection_id) THEN
-    RETURN NULL;
+  -- Serializes concurrent removals from the same collection (e.g. two
+  -- accounts deleted at once): the second waits here, and its checks below
+  -- (each a fresh snapshot under READ COMMITTED) see the first one's result.
+  PERFORM 1 FROM collections WHERE id = OLD.collection_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN NULL; -- the collection itself is being deleted
   END IF;
   IF NOT EXISTS (SELECT 1 FROM collection_members WHERE collection_id = OLD.collection_id) THEN
     DELETE FROM collections WHERE id = OLD.collection_id;

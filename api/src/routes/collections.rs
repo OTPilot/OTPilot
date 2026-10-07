@@ -299,12 +299,16 @@ async fn delete_collection(
     auth: AuthUser,
     Path(cid): Path<Uuid>,
 ) -> Result<Json<Value>> {
-    require_role(&state.db, cid, auth.id, &["manage"]).await?;
     let team_id = team_of(&state.db, cid).await?;
+    // The collection's write lock first (as item writes take it), then the
+    // member row: never the reverse order, so no deadlock with a write.
+    let mut tx = begin_collection_tx(&state, cid).await?;
+    allowed(&role_locked(&mut tx, cid, auth.id).await?, &["manage"])?;
     sqlx::query("DELETE FROM collections WHERE id = $1")
         .bind(cid)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     audit(
         &state.db,
         team_id,
@@ -1105,5 +1109,63 @@ mod db_tests {
         .await;
         assert_eq!(items["items"][0]["id"], json!(item));
         assert_eq!(items["items"][0]["deleted"], false);
+    }
+
+    #[tokio::test]
+    async fn two_accounts_deleted_at_once_never_orphan_a_collection() {
+        let (app, db, _g) = app().await;
+        for _ in 0..5 {
+            let (owner, alice, bob) = (
+                create_user(&db, "team_lite").await,
+                create_user(&db, "team_lite").await,
+                create_user(&db, "team_lite").await,
+            );
+            let t = team(&db, owner, &[alice, bob]).await;
+            let cid = new_collection(&app, alice, t).await;
+            call(
+                &app,
+                alice,
+                Method::PUT,
+                &format!("/collections/{cid}/members/{bob}"),
+                Some(json!({ "role": "manage", "wrapped_key": "k" })),
+            )
+            .await;
+            // Neither references the other (created_by / added_by would block
+            // a deletion), so both deletions can run at the same time.
+            sqlx::query("UPDATE collections SET created_by = NULL WHERE id = $1")
+                .bind(cid)
+                .execute(&db)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE collection_members SET added_by = NULL WHERE collection_id = $1")
+                .bind(cid)
+                .execute(&db)
+                .await
+                .unwrap();
+            let (a, b) = (db.clone(), db.clone());
+            let (ra, rb) = tokio::join!(
+                tokio::spawn(async move {
+                    sqlx::query("DELETE FROM users WHERE id = $1")
+                        .bind(alice)
+                        .execute(&a)
+                        .await
+                }),
+                tokio::spawn(async move {
+                    sqlx::query("DELETE FROM users WHERE id = $1")
+                        .bind(bob)
+                        .execute(&b)
+                        .await
+                }),
+            );
+            ra.unwrap().unwrap();
+            rb.unwrap().unwrap();
+            let left: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM collections WHERE id = $1)")
+                    .bind(cid)
+                    .fetch_one(&db)
+                    .await
+                    .unwrap();
+            assert!(!left, "a collection without members was left behind");
+        }
     }
 }
