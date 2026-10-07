@@ -19,6 +19,9 @@ pub fn router() -> Router<AppState> {
 struct SyncUserResponse {
     id: uuid::Uuid,
     plan: String,
+    /// Has a Personal subscription of their own (also while on a team), so
+    /// the dashboard can offer to manage it.
+    personal_subscription: bool,
     created_at: chrono::DateTime<Utc>,
     last_sync_at: Option<chrono::DateTime<Utc>>,
     accounts_count: i32,
@@ -180,7 +183,7 @@ async fn sync_user(
     let user = sqlx::query_as::<_, SyncUserResponse>(
         r#"
         SELECT
-            u.id, u.plan, u.created_at,
+            u.id, u.plan, (u.personal_subscription_id IS NOT NULL) AS personal_subscription, u.created_at,
             (SELECT updated_at FROM accounts WHERE user_id = u.id) AS last_sync_at,
             COALESCE((
                 SELECT accounts_count FROM sync_logs

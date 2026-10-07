@@ -20,7 +20,8 @@ pub struct AppState {
     pub jwt_keys: Arc<HashMap<String, jsonwebtoken::DecodingKey>>,
     pub stripe_secret_key: String,
     pub stripe_webhook_secret: String,
-    pub stripe_personal_price_id: String,
+    pub stripe_personal_monthly_price_id: String,
+    pub stripe_personal_annual_price_id: String,
     pub stripe_team_lite_monthly_price_id: String,
     pub stripe_team_lite_annual_price_id: String,
     pub stripe_extra_seat_price_id: String,
@@ -91,8 +92,12 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("STRIPE_SECRET_KEY").expect("STRIPE_SECRET_KEY must be set");
     let stripe_webhook_secret =
         std::env::var("STRIPE_WEBHOOK_SECRET").expect("STRIPE_WEBHOOK_SECRET must be set");
-    let stripe_personal_price_id =
-        std::env::var("STRIPE_PERSONAL_PRICE_ID").expect("STRIPE_PERSONAL_PRICE_ID must be set");
+    // Personal subscription prices (2.0). Optional so a deploy without them
+    // still starts; checkout then answers 503 until they're set.
+    let stripe_personal_monthly_price_id =
+        std::env::var("STRIPE_PERSONAL_MONTHLY_PRICE_ID").unwrap_or_default();
+    let stripe_personal_annual_price_id =
+        std::env::var("STRIPE_PERSONAL_ANNUAL_PRICE_ID").unwrap_or_default();
     // Team plan prices are optional (feature unconfigured → empty string).
     let stripe_team_lite_monthly_price_id =
         std::env::var("STRIPE_TEAM_LITE_MONTHLY_PRICE_ID").unwrap_or_default();
@@ -121,7 +126,8 @@ async fn main() -> anyhow::Result<()> {
         jwt_keys: Arc::new(jwt_keys),
         stripe_secret_key,
         stripe_webhook_secret,
-        stripe_personal_price_id,
+        stripe_personal_monthly_price_id,
+        stripe_personal_annual_price_id,
         stripe_team_lite_monthly_price_id,
         stripe_team_lite_annual_price_id,
         stripe_extra_seat_price_id,

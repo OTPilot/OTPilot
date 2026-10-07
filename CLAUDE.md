@@ -70,7 +70,7 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `users` | `id`, `plan`, `stripe_customer_id`, `created_at`, `pending_deletion_at` | One row per Supabase user |
+| `users` | `id`, `plan`, `stripe_customer_id`, `created_at`, `pending_deletion_at`, `personal_subscription_id` | One row per Supabase user |
 | `accounts` | `user_id`, `encrypted_blob`, `updated_at` | AES-GCM ciphertext only |
 | `teams` | `id`, `name`, `owner_id`, `stripe_subscription_id`, `seat_limit` | Team Lite; 1 team per owner |
 | `team_members` | `team_id`, `user_id`, `role` | `role` = owner/member |
@@ -184,7 +184,9 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 `apiFetch()` in `web/src/lib/api.ts` appends the Supabase JWT automatically to every request.
 
 ### Billing
-`POST /billing/checkout` creates a Stripe Checkout session. Stripe calls `POST /billing/webhook` on payment; the webhook verifies the signature and sets `users.plan`. Plan values: `free`, `personal`, `team_lite`, `team_pro`.
+`POST /billing/checkout` (body `{annual}`) creates a Stripe Checkout **subscription** for Personal ($3/mo or $30/yr, `STRIPE_PERSONAL_MONTHLY_PRICE_ID` / `STRIPE_PERSONAL_ANNUAL_PRICE_ID`; optional — checkout answers 503 until set). Both checkouts tag the session and subscription with `metadata.plan` (`personal` / `team_lite`) so the webhook can tell them apart. Stripe calls `POST /billing/webhook`; the webhook verifies the signature and sets `users.plan`. Plan values: `free`, `personal`, `team_lite`, `team_pro`.
+
+`users.has_personal_cloud` means "entitled to Personal": it's what a team downgrade falls back to (`CASE WHEN has_personal_cloud THEN 'personal' ELSE 'free'`). A Personal subscription sets it plus `personal_subscription_id`; `customer.subscription.deleted` for that id clears both and moves `personal` → `free` (a team plan stays). Buying Personal while on a team keeps the team plan effective. 1.x one-time buyers keep the flag without an id (grandfathered); a one-time session still completing after the 2.0 deploy is handled by the `mode=payment` branch. Webhooks can arrive out of order: every `subscription.deleted` id is recorded in `stripe_ended_subscriptions`, and a checkout completion for one of them grants nothing. One Personal subscription per user: a second completion keeps the stored one and cancels the new subscription in Stripe. Both checkouts reuse the user's `stripe_customer_id` (so the billing portal shows every subscription); `sync-user` returns `personal_subscription` so team members can still manage their own.
 
 ### Plan label mapping
 `Overview.tsx` maps plan strings to display names via a `PLAN_LABELS` record. Add new plan tiers there when they're introduced in the backend.
