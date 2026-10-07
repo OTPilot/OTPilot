@@ -600,6 +600,22 @@
     }
     .acc-body-head .type-tag { margin-left: auto; margin-right: 8px; }
     .item-body textarea { min-height: 64px; }
+
+    /* ── Team collections ── */
+    .coll-row { border: 1px solid var(--border); border-radius: 9px; margin-bottom: 6px; background: var(--surface); }
+    .coll-head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; color: var(--ink-1); font: inherit; font-size: 12px; padding: 8px 10px; cursor: pointer; text-align: left; }
+    .coll-head .coll-name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .coll-meta { font-size: 10px; color: var(--ink-4); }
+    .coll-body { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+    .coll-member { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-2); }
+    .coll-member .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .coll-member select, .coll-add select { font: inherit; font-size: 11px; background: var(--bg); color: var(--ink-1); border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; }
+    .coll-add { display: flex; gap: 5px; align-items: center; }
+    .coll-add select.who { flex: 1; min-width: 0; }
+    .coll-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .coll-link { background: none; border: 0; color: var(--accent-2); font: inherit; font-size: 11px; cursor: pointer; padding: 0; }
+    .coll-link.danger { color: var(--danger); }
+    .coll-note { font-size: 11px; color: var(--warning); line-height: 1.5; }
     /* ── Export / Import ── */
     .backup-row {
       display: flex; gap: 8px; margin-top: 10px;
@@ -1562,6 +1578,15 @@
     </div>
     <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-5);margin-bottom:5px;">Members</div>
     <div id="team-members"></div>
+    <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-5);margin:14px 0 5px;">Shared collections</div>
+    <div style="font-size:11px;color:var(--ink-4);line-height:1.5;margin-bottom:6px;">
+      Everything in a collection — passwords, notes, 2FA — is shared end-to-end with the teammates you add. Removing someone takes away the collection only, never their own vault.
+    </div>
+    <div id="team-collections"></div>
+    <div id="collection-create-row" style="display:none;gap:5px;margin-top:6px;">
+      <input id="collection-new-name" class="sync-input" type="text" placeholder="New collection, e.g. Infra" maxlength="60" autocomplete="off" style="flex:1;">
+      <button id="collection-create" class="btn-crypto-ok">Create</button>
+    </div>
     <div style="font-size:11px;color:var(--ink-5);margin-top:12px;">Share codes from the <strong>Accounts</strong> tab (↗ Share with team), or manage everything on the <a id="team-web-link" href="#" target="_blank" style="color:var(--accent-2);text-decoration:none;">web dashboard ↗</a>.</div>
   </div>
 </div>

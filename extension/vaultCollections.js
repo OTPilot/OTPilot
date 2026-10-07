@@ -19,6 +19,14 @@ const VaultCollections = (() => {
   const RECORD = cid => `cr:${cid}:`;
   const STATE = cid => `cs:${cid}`;
   const KEYS = 'collectionKeys';
+  // The last GET /collections rows, as the server sent them (names and keys
+  // still encrypted/wrapped), with the user they belong to: lets shared items
+  // load without a connection — only for that same signed-in user.
+  const LIST_CACHE = 'collectionsList';
+
+  async function currentUserId() {
+    try { return (await SupabaseAuth.getSession())?.user?.id ?? null; } catch { return null; }
+  }
   const local = chrome.storage.local;
   const session = chrome.storage.session;
 
@@ -72,7 +80,21 @@ const VaultCollections = (() => {
   // another device that never synced here). Local data of collections no
   // longer listed (removed, deleted) is dropped.
   async function list() {
-    const { collections = [] } = await ok('/collections');
+    let collections, offline = false;
+    const userId = await currentUserId();
+    try {
+      ({ collections = [] } = await ok('/collections'));
+      await local.set({ [LIST_CACHE]: { userId, collections } });
+    } catch (e) {
+      // No connection (or the API is down): the last known list, if it is
+      // this user's. An answer from the server (e.g. 401/403) isn't
+      // "offline" — rethrown.
+      if (e.status) throw e;
+      const cached = (await local.get(LIST_CACHE))[LIST_CACHE];
+      if (!userId || cached?.userId !== userId || !Array.isArray(cached.collections)) throw e;
+      collections = cached.collections;
+      offline = true;
+    }
     const out = [];
     for (const c of collections) {
       let key = null, name = null;
@@ -80,9 +102,9 @@ const VaultCollections = (() => {
         key = await keyFor(c);
         name = await VaultCrypto.decryptName(c.encrypted_name, key, c.id);
       } catch { key = null; }
-      out.push({ id: c.id, teamId: c.team_id, name, role: c.role, members: c.members, key });
+      out.push({ id: c.id, teamId: c.team_id, name, role: c.role, members: c.members, key, offline });
     }
-    await forgetOthers(new Set(collections.map(c => c.id)));
+    if (!offline) await forgetOthers(new Set(collections.map(c => c.id)));
     return out;
   }
 

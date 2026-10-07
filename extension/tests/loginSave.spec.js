@@ -110,7 +110,7 @@ test('"Never" stops the offers for that site; "Not now" just closes this one', a
 
   await signIn(site, 'a@example.com', 'p1');
   await offer.locator('.otpilot-save-never').click();
-  expect(await popup.evaluate(async () => (await chrome.storage.local.get('loginNeverSave')).loginNeverSave)).toEqual(['localhost']);
+  await expect.poll(() => popup.evaluate(async () => (await chrome.storage.local.get('loginNeverSave')).loginNeverSave)).toEqual(['localhost']);
   await signIn(site, 'b@example.com', 'p2');
   await expect(site).toHaveURL(/welcome\.html/);
   await site.waitForTimeout(1000);

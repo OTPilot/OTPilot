@@ -1,14 +1,14 @@
 import { test as base, chromium, expect as pwExpect } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const extensionPath = path.resolve(__dirname, '..');
 
 export const test = base.extend({
-  context: async ({}, use) => {
+  context: async ({}, use, testInfo) => {
     // Fresh isolated profile per test — prevents session-restore from stale tabs
     // and lock conflicts when tests run in parallel.
     const userDataDir = mkdtempSync(path.join(tmpdir(), 'otpilot-test-'));
@@ -22,7 +22,19 @@ export const test = base.extend({
         '--enable-blink-features=BarcodeDetection',
       ],
     });
+    // On failure, keep what each page showed and logged (content scripts
+    // log to their page's console) — CI uploads test-results/.
+    const logs = [];
+    const watch = page => page.on('console', m => logs.push(`[${page.url()}] ${m.type()}: ${m.text()}`));
+    context.pages().forEach(watch);
+    context.on('page', watch);
     await use(context);
+    if (testInfo.status !== testInfo.expectedStatus) {
+      for (const [i, page] of context.pages().entries()) {
+        await page.screenshot({ path: testInfo.outputPath(`page-${i}.png`) }).catch(() => {});
+      }
+      try { writeFileSync(testInfo.outputPath('console.txt'), logs.join('\n') || '(no console output)'); } catch { /* ignore */ }
+    }
     await context.close();
     try { rmSync(userDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
   },

@@ -722,7 +722,11 @@ let _editSession = 0;
 // other item as an entry wrapping it: { _kind: 'item', _id, type, name,
 // category, moreTags, email (the row's summary line), item }. Save splits them.
 const isItemEntry = e => e?._kind === 'item';
-const entryType = e => (isItemEntry(e) ? e.type : 'login');
+// Items of a team collection: { _kind: 'shared', cid, collection, …entry }.
+// Listed with the rest but saved straight to their collection, never by Save.
+const isSharedEntry = e => e?._kind === 'shared';
+const isLoginEntry = e => !e?._kind; // a personal login (v1 account)
+const entryType = e => (e?._kind ? e.type : 'login');
 const typeLabel = type => Vault.TYPES[type]?.label || type;
 // The fields that summarize an item on its row.
 const ITEM_SUMMARY = { server: ['host', 'username'], api: ['environment', 'clientId'] };
@@ -749,11 +753,38 @@ function itemOfEntry(entry) {
 
 const parseTags = text => VaultAccounts.normalizeTags(String(text || '').split(','));
 
+// ── Team collections in the vault ──
+let collections = [];  // VaultCollections.list()
+let sharedItems = [];  // [{ collection, item }]
+
+function sharedEntryOf({ collection, item }) {
+  return { ...entryOf(item), _kind: 'shared', cid: collection.id, collectionName: collection.name || 'Shared', role: collection.role };
+}
+
+// Pulls every collection this user is in and redraws (team plans only; a
+// failure, e.g. offline, keeps what was shown).
+async function refreshSharedItems() {
+  const { userPlan } = await chrome.storage.local.get('userPlan');
+  if (!['team_lite', 'team_pro'].includes(userPlan)) { collections = []; sharedItems = []; return; }
+  let list;
+  try { list = await VaultCollections.list(); } catch { return; }
+  const out = [];
+  for (const c of list) {
+    if (!c.key) continue;
+    try { await VaultCollections.pull(c); } catch { /* offline: local copy */ }
+    for (const item of await VaultCollections.items(c)) out.push({ collection: c, item });
+  }
+  collections = list;
+  sharedItems = out;
+  refreshAccountsUI();
+}
+
 function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {}) {
   _editSession++;
   const withOrigin = [
     ...accounts.map((a, i) => ({ acc: { ...a }, origIdx: i })),
     ...otherItems.map(item => ({ acc: entryOf(item), origIdx: -1 })),
+    ...sharedItems.map(s => ({ acc: sharedEntryOf(s), origIdx: -1 })),
   ];
   withOrigin.sort((x, y) => (x.acc.name || '').localeCompare(y.acc.name || ''));
   draft = withOrigin.map(w => w.acc);
@@ -789,10 +820,15 @@ function syncOpenAccToDraft() {
   const body = document.querySelector('#acc-detail .acc-body');
   if (!body) return;
   const entry = draft[openAccIdx];
+  if (isSharedEntry(entry) && entry.role === 'view') return; // read-only: nothing to read back
   entry.category = (body.querySelector('.cat-choose')?.dataset.value || '').trim();
   entry.moreTags = parseTags(body.querySelector('.acc-more-tags')?.value).filter(t => t !== entry.category);
-  if (isItemEntry(entry)) {
+  if (entry._kind) {
     entry.name = body.querySelector('.item-title').value.trim();
+    const urls = body.querySelector('.item-urls');
+    if (urls) entry.item.urls = urls.value.split('\n').map(u => u.trim()).filter(Boolean);
+    const secret = body.querySelector('.item-totp');
+    if (secret?.dataset.dirty) entry.item.totp = secret.value.trim() ? { ...(entry.item.totp || { digits: 6, period: 30, algorithm: 'SHA1' }), secret: secret.value.trim() } : null;
     // Only fields the user changed: an input can't always hold a stored
     // value exactly (a date in another format, a newer version's kind).
     body.querySelectorAll('.item-field[data-dirty]').forEach(inp => {
@@ -815,7 +851,7 @@ function updateVaultCount() {
   const rows = document.querySelectorAll('.acc-row');
   const visible = [...rows].filter(r => r.style.display !== 'none').length;
   const total = draft.length;
-  const noun = draft.some(isItemEntry) ? 'item' : 'account';
+  const noun = draft.some(e => e._kind) ? 'item' : 'account';
   const el = document.getElementById('acc-count');
   if (el) el.textContent = visible === total
     ? `${total} ${noun}${total !== 1 ? 's' : ''}`
@@ -885,13 +921,14 @@ function rebuildAccountsDOM() {
     const head = document.createElement('button');
     head.className = 'acc-head' + (i === openAccIdx ? ' open' : '');
     const cat = (acc.category || '').trim();
-    const item = isItemEntry(acc);
+    const item = !!acc._kind;
     head.innerHTML = `
       ${avatarHTML(acc, 'acc-av-md')}
       <span class="acc-head-text">
-        <span class="acc-head-name">${esc(acc.name) || (item ? `Untitled ${typeLabel(acc.type).toLowerCase()}` : `Account ${i + 1}`)}${item ? '' : sharedBadgeHTML(findSharedCode(acc))}</span>
+        <span class="acc-head-name">${esc(acc.name) || (item ? esc(`Untitled ${typeLabel(acc.type).toLowerCase()}`) : `Account ${i + 1}`)}${item ? '' : sharedBadgeHTML(findSharedCode(acc))}</span>
         ${cat || acc.email || item ? `<span class="acc-head-sub">
           ${item ? `<span class="type-tag">${esc(typeLabel(acc.type))}</span>` : ''}
+          ${isSharedEntry(acc) ? `<span class="type-tag shared-tag">Shared · ${esc(acc.collectionName)}</span>` : ''}
           ${cat ? `<span class="cat-tag">${catDot(cat)}${esc(cat)}</span>` : ''}
           ${acc.email ? `<span class="acc-head-email">${esc(acc.email)}</span>` : ''}
         </span>` : ''}
@@ -931,7 +968,7 @@ function renderAccDetail() {
     return;
   }
 
-  if (isItemEntry(acc)) { renderItemDetail(container, acc); return; }
+  if (acc._kind) { renderItemDetail(container, acc); return; }
 
   const cat = (acc.category || '').trim();
   const body = document.createElement('div');
@@ -967,7 +1004,8 @@ function renderAccDetail() {
     </div>
     <div class="acc-field">
       <label>URLs (one per line, * wildcard ok)</label>
-      <textarea class="acc-urls" placeholder="*.example.com&#10;staging.myapp.io">${esc(acc.urls || '')}</textarea>
+      <textarea class="acc-urls" placeholder="*.example.com&#10;staging.myapp.io">
+${esc(acc.urls || '')}</textarea>
     </div>
     <label class="toggle">
       <input type="checkbox" class="acc-autofill" ${acc.autofill !== false ? 'checked' : ''}>
@@ -977,7 +1015,8 @@ function renderAccDetail() {
     <div class="acc-share">
       <button type="button" class="btn-share-team">↗ Share with team</button>
       <div class="share-picker" style="display:none"></div>
-    </div>`;
+    </div>
+    ${collectionControlsHTML(acc)}`;
 
   body.querySelector('.btn-del').addEventListener('click', () => {
     syncOpenAccToDraft(); // pick up an in-progress name edit before naming it in the prompt
@@ -1016,6 +1055,8 @@ function renderAccDetail() {
     const head = document.querySelector(`.acc-row[data-i="${idx}"] .acc-head-name`);
     if (head) head.innerHTML = esc(e.target.value.trim() || `Account ${idx + 1}`) + sharedBadgeHTML(findSharedCode(draft[idx]));
   });
+
+  mountCollectionControls(body, acc);
 
   // ── Share with team ──
   body.querySelector('.btn-share-team').addEventListener('click', () => {
@@ -1090,7 +1131,8 @@ function renderItemDetail(container, entry) {
     const secret = Vault.SECRET_KINDS.includes(f.kind);
     let input;
     const known = Vault.FIELD_KINDS.includes(f.kind);
-    if (f.kind === 'multiline' || !known) input = `<textarea class="item-field" data-id="${id}">${val}</textarea>`;
+    if (f.kind === 'multiline' || !known) input = `<textarea class="item-field" data-id="${id}">
+${val}</textarea>`;
     else if (f.kind === 'date') input = `<input class="item-field" data-id="${id}" type="date" value="${val}">`;
     else input = `<input class="item-field" data-id="${id}" type="${secret ? 'password' : 'text'}" value="${val}" autocomplete="off">`;
     return `<div class="acc-field">
@@ -1108,7 +1150,7 @@ function renderItemDetail(container, entry) {
   body.dataset.type = entry.type;
   body.innerHTML = `
     <div class="acc-body-head">
-      <span class="acc-body-title">${esc(entry.name) || `Untitled ${typeLabel(entry.type).toLowerCase()}`}</span>
+      <span class="acc-body-title">${esc(entry.name) || esc(`Untitled ${typeLabel(entry.type).toLowerCase()}`)}</span>
       <span class="type-tag">${esc(typeLabel(entry.type))}</span>
       <button class="btn-del" title="Delete">✕ Delete</button>
     </div>
@@ -1117,15 +1159,53 @@ function renderItemDetail(container, entry) {
       <input class="item-title" type="text" placeholder="${esc(typeLabel(entry.type))} name" value="${esc(entry.name)}">
     </div>
     ${(item.fields || []).map(fieldHTML).join('')}
+    ${Vault.TYPES[entry.type]?.urls ? `
+    <div class="acc-field">
+      <label>2FA secret (optional, base32 or hex)</label>
+      <div class="field-row">
+        <input class="item-totp" type="password" value="${esc(item.totp?.secret || '')}" autocomplete="off">
+        <button class="btn-eye btn-eye-totp" title="Show/hide">${SVG_EYE}</button>
+      </div>
+    </div>
+    <div class="acc-field">
+      <label>URLs (one per line, * wildcard ok)</label>
+      <textarea class="item-urls">
+${esc((item.urls || []).join('\n'))}</textarea>
+    </div>` : ''}
     <div class="acc-field">
       <label>Notes</label>
-      <textarea class="item-notes" placeholder="${entry.type === 'note' ? 'Write your note' : 'Anything else worth keeping'}">${esc(item.notes || '')}</textarea>
+      <textarea class="item-notes" placeholder="${entry.type === 'note' ? 'Write your note' : 'Anything else worth keeping'}">
+${esc(item.notes || '')}</textarea>
     </div>
-    ${tagFieldsHTML(entry)}`;
+    ${tagFieldsHTML(entry)}
+    ${collectionControlsHTML(entry)}`;
 
   body.querySelectorAll('.item-field').forEach(inp => inp.addEventListener('input', () => { inp.dataset.dirty = '1'; }));
-  body.querySelector('.btn-del').addEventListener('click', () => {
+  const shared = isSharedEntry(entry);
+  if (shared) {
+    body.querySelector('.acc-body-head .type-tag').textContent = `Shared · ${entry.collectionName}`;
+    if (entry.role === 'view') {
+      body.querySelectorAll('input, textarea').forEach(el => { el.readOnly = true; });
+      body.querySelectorAll('.cat-choice').forEach(el => { el.disabled = true; });
+      body.querySelectorAll('.btn-gen-password, .btn-del').forEach(el => el.remove());
+    }
+  }
+  body.querySelector('.item-totp')?.addEventListener('input', e => { e.target.dataset.dirty = '1'; });
+  body.querySelector('.btn-eye-totp')?.addEventListener('click', e => {
+    const inp = body.querySelector('.item-totp');
+    const reveal = inp.type === 'password';
+    inp.type = reveal ? 'text' : 'password';
+    e.currentTarget.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
+  });
+  mountCollectionControls(body, entry);
+
+  body.querySelector('.btn-del')?.addEventListener('click', async () => {
     syncOpenAccToDraft();
+    if (shared) {
+      if (!confirm(`Delete "${draft[idx].name}" from "${entry.collectionName}" for everyone in it?`)) return;
+      await deleteSharedEntry(entry);
+      return;
+    }
     const name = draft[idx].name || `this ${typeLabel(entry.type).toLowerCase()}`;
     if (!confirm(`Delete "${name}"? This can't be undone once you save.`)) return;
     draft.splice(idx, 1);
@@ -1136,7 +1216,7 @@ function renderItemDetail(container, entry) {
     applyVaultSearch();
     renderAccDetail();
   });
-  body.querySelectorAll('.btn-eye:not(.btn-gen-password):not(.btn-copy-field)').forEach(b => b.addEventListener('click', e => {
+  body.querySelectorAll('.btn-eye:not(.btn-gen-password):not(.btn-copy-field):not(.btn-eye-totp)').forEach(b => b.addEventListener('click', e => {
     const btn = e.currentTarget;
     const inp = btn.parentElement.querySelector('.item-field');
     const reveal = inp.type === 'password';
@@ -1161,6 +1241,137 @@ function renderItemDetail(container, entry) {
   mountCategoryChooser(body);
   container.innerHTML = '';
   container.appendChild(body);
+}
+
+// ── Collections in the editor ──
+// A shared item: "Save to <collection>" (edit/manage). A saved personal item
+// or login: "Move to collection…" (re-encrypted under the collection key,
+// then removed from the personal vault).
+function collectionControlsHTML(entry) {
+  if (isSharedEntry(entry)) {
+    return entry.role === 'view'
+      ? `<div class="coll-meta">View only — ask a manager of "${esc(entry.collectionName)}" for edit access.</div>`
+      : `<button type="button" class="btn-save-all btn-save-shared">Save to ${esc(entry.collectionName)}</button>`;
+  }
+  const targets = collections.filter(c => c.key && c.role !== 'view');
+  if (!targets.length || !entry._id || !_draftBase.some(b => b._id === entry._id)) return '';
+  return `<div class="acc-field move-to-collection">
+    <label>Share in a team collection</label>
+    <div class="field-row">
+      <select class="move-target">${targets.map(c => `<option value="${esc(c.id)}">${esc(c.name || 'Collection')}</option>`).join('')}</select>
+      <button type="button" class="btn-crypto-ok btn-move-collection">Move</button>
+    </div>
+  </div>`;
+}
+
+function mountCollectionControls(body, entry) {
+  body.querySelector('.btn-save-shared')?.addEventListener('click', () => saveSharedEntry(entry));
+  body.querySelector('.btn-move-collection')?.addEventListener('click', () =>
+    moveToCollection(entry, body.querySelector('.move-target').value));
+}
+
+// Replaces the rows of the given ids (in the draft and its base) with fresh
+// entries, keeping every other unsaved edit in the editor.
+function patchEntries(ids, fresh) {
+  const drop = new Set(ids);
+  const keep = list => list.filter(e => !drop.has(e._id));
+  draft = [...keep(draft), ...fresh];
+  _draftBase = [...keep(_draftBase), ...fresh.map(e => structuredClone(e))];
+  openAccIdx = -1;
+  rebuildAccountsDOM();
+  renderVaultTypeBar();
+  renderVaultCatBar();
+  applyVaultSearch();
+  renderAccDetail();
+}
+
+async function saveSharedEntry(entry) {
+  syncOpenAccToDraft();
+  const c = collections.find(x => x.id === entry.cid);
+  if (!c?.key) { setStatus('This collection is not available on this device', false); return; }
+  if (!entry.name) { setStatus('It needs a name', false); return; }
+  let res;
+  try { res = await VaultCollections.save(c, itemOfEntry(entry)); } catch { setStatus('Could not save — check your connection', false); return; }
+  if (res.conflict) setStatus('Someone changed this meanwhile — showing their version', false);
+  else setStatus(`Saved to ${c.name}`);
+  sharedItems = await sharedItemsFromLocal();
+  const fresh = sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf);
+  patchEntries([entry._id], fresh);
+}
+
+async function deleteSharedEntry(entry) {
+  const c = collections.find(x => x.id === entry.cid);
+  if (!c?.key) return;
+  let res;
+  try { res = await VaultCollections.deleteItem(c, entry._id); } catch { setStatus('Could not delete — check your connection', false); return; }
+  if (res.conflict) setStatus('Someone changed this meanwhile — not deleted', false);
+  sharedItems = await sharedItemsFromLocal();
+  patchEntries([entry._id], sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf));
+}
+
+async function sharedItemsFromLocal() {
+  const out = [];
+  for (const c of collections) {
+    if (!c.key) continue;
+    for (const item of await VaultCollections.items(c)) out.push({ collection: c, item });
+  }
+  return out;
+}
+
+let _moving = false;
+async function moveToCollection(entry, cid) {
+  if (_moving) return; // a second click would put another copy in the collection
+  _moving = true;
+  const btn = document.querySelector('#acc-detail .btn-move-collection');
+  if (btn) btn.disabled = true;
+  try { await moveNow(entry, cid); } finally { _moving = false; if (btn?.isConnected) btn.disabled = false; }
+}
+
+async function moveNow(entry, cid) {
+  syncOpenAccToDraft();
+  if (JSON.stringify(draft) !== JSON.stringify(_draftBase)) { setStatus('Save or cancel your changes first', false); return; }
+  const c = collections.find(x => x.id === cid);
+  const key = await VaultKeys.getKey();
+  if (!c?.key || !key) return;
+  if (!confirm(`Move "${entry.name}" into "${c.name}"? Everyone in it will see it, and it leaves your personal vault.`)) return;
+  // The exact record copied: the personal copy is only removed if it is
+  // still this one once the collection has it (a page may update the login
+  // meanwhile).
+  const copied = (await VaultStore.listRecords())[entry._id];
+  const item = copied && await VaultCrypto.decryptItem(copied, key).catch(() => null);
+  if (!item) { setStatus('Could not read this item', false); return; }
+  try {
+    const res = await VaultCollections.moveIn(c, item);
+    if (!res.ok) throw new Error('not saved');
+  } catch { setStatus('Could not move it — check your connection', false); return; }
+  const before = new Set(sharedItems.map(s => s.item.id));
+  const removed = await VaultStore.transaction(async tx => {
+    const now = (await tx.listRecords())[entry._id];
+    if (!now || now.data?.iv !== copied.data?.iv) return false;
+    await tx.remove(entry._id);
+    return true;
+  });
+  if (!removed) {
+    setStatus('It changed while moving: the collection has the earlier copy, your updated one stays in your vault', false);
+  }
+  // The locked-vault index must stop offering it now, sync or not (rebuilt
+  // under the vault lock, so a page saving a login meanwhile isn't undone).
+  await VaultAccounts.rebuildIndex(key);
+  await stampLocalChange();
+  silentPullSync(); // the removal reaches the user's other devices
+  accounts = await VaultAccounts.load(key);
+  _loadedIds = new Set(accounts.map(a => a._id));
+  otherItems = await VaultAccounts.loadOthers(key);
+  sharedItems = await sharedItemsFromLocal();
+  const added = sharedItems.filter(s => !before.has(s.item.id)).map(sharedEntryOf);
+  if (removed) patchEntries([entry._id], added);
+  else {
+    // Kept: show (and base later saves on) the updated version, not the copy.
+    const kept = [...accounts, ...otherItems.map(entryOf)].find(e => e._id === entry._id);
+    patchEntries([entry._id], [...(kept ? [{ ...structuredClone(kept) }] : []), ...added]);
+  }
+  renderAccountBar();
+  if (removed) setStatus(`Moved to ${c.name}`);
 }
 
 function esc(s = '') {
@@ -1261,6 +1472,14 @@ async function saveAccounts(intended) {
   }
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
+  // Shared items are saved to their collection, not by this button: never
+  // drop their edits silently.
+  const baseById = new Map(_draftBase.map(e => [e._id, JSON.stringify(e)]));
+  const sharedDirty = draft.find(e => isSharedEntry(e) && baseById.get(e._id) !== JSON.stringify(e));
+  if (sharedDirty) {
+    setStatus(`"${sharedDirty.name}" is shared: use "Save to ${sharedDirty.collectionName}" first, or Cancel`, false);
+    return;
+  }
 
   // Free plan: up to 50 items (2FA-only logins don't count). Checked before
   // anything changes, so a refused save leaves the editor as it was. The
@@ -1275,7 +1494,7 @@ async function saveAccounts(intended) {
     const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
     const merged = mergeDraftWithCurrent();
     overLimit = !!key && await VaultAccounts.exceedsFreeLimit(
-      merged.filter(e => !isItemEntry(e)), key, _loadedIds, userPlan, planOtherItems(merged));
+      merged.filter(isLoginEntry), key, _loadedIds, userPlan, planOtherItems(merged));
   } catch {
     setStatus('Could not check the Free plan limit — try again', false);
     return;
@@ -1300,7 +1519,7 @@ async function saveAccounts(intended) {
     if (others.remove.length) await VaultStore.remove(others.remove);
     otherItems = await VaultAccounts.loadOthers(key);
   }
-  draft = draft.filter(e => !isItemEntry(e));
+  draft = draft.filter(isLoginEntry);
 
   // Diff old accounts vs draft: stamp _updatedAt on new/changed, tombstone deleted
   const now      = new Date().toISOString();
@@ -1380,7 +1599,7 @@ const remapId = a => (a._id && _idRemaps[a._id] ? { ...a, _id: _idRemaps[a._id] 
 
 function mergeDraftWithCurrent() {
   const base = new Map(_draftBase.filter(a => a._id).map(remapId).map(a => [a._id, JSON.stringify(a)]));
-  const currentList = [...accounts, ...otherItems.map(entryOf)];
+  const currentList = [...accounts, ...otherItems.map(entryOf), ...sharedItems.map(sharedEntryOf)];
   const current = new Map(currentList.filter(a => a._id).map(a => [a._id, a]));
   const merged = [];
   for (const d0 of draft) {
@@ -2999,6 +3218,7 @@ async function silentPullSync() {
   await syncActiveIndexToUrl();
   // The user may have opened Accounts while the vault was still loading.
   refreshAccountsUI();
+  refreshSharedItems(); // team collections: pulled in the background, list redrawn when they land
   requestIcons(); // resolve+cache site favicons, then re-render when ready
   startTimer();
   if (justAuthenticated) tryAutoFillCurrentTab();
@@ -3154,6 +3374,7 @@ async function renderTeamPanel() {
   const isOwner = team.owner_id === myId;
 
   const members = await Sharing.getMembers(team.id).catch(() => []);
+  renderTeamCollections(team, members, myId);
   membersEl.innerHTML = members.map(m => `
     <div class="acc-overflow-item" style="cursor:default">
       <span class="acc-av acc-av-md" style="background:${accentColor(m.email || m.user_id)}">${esc(nameInitials(m.email || '?'))}</span>
@@ -3189,6 +3410,182 @@ async function renderTeamPanel() {
       btn.disabled = false;
     };
   }
+}
+
+// ── Team collections (manage) ──────────────────────────────────────────────────
+// Listed in the Team tab: create, rename/delete (manage), members and roles
+// (manage), leave. Their items show in the Vault view (see sharedEntries).
+
+const ROLE_LABELS = { manage: 'Can manage', edit: 'Can edit', view: 'Can view' };
+let _openCollectionId = null;
+
+async function renderTeamCollections(team, members, myId) {
+  const box = document.getElementById('team-collections');
+  const createRow = document.getElementById('collection-create-row');
+  createRow.style.display = 'flex';
+  let list;
+  try { list = await VaultCollections.list(); } catch { box.innerHTML = '<div class="coll-meta">Could not load collections.</div>'; return; }
+  collections = list;
+  const mine = list.filter(c => c.teamId === team.id);
+  box.innerHTML = mine.length ? '' : '<div class="coll-meta">No collections yet.</div>';
+  for (const c of mine) box.appendChild(collectionRow(c, team, members, myId));
+
+  const input = document.getElementById('collection-new-name');
+  const createBtn = document.getElementById('collection-create');
+  createBtn.onclick = async () => {
+    const name = input.value.trim();
+    if (!name) { input.focus(); return; }
+    if (createBtn.disabled) return; // one at a time: a double click would make two
+    createBtn.disabled = true;
+    try {
+      const c = await VaultCollections.create(team.id, name);
+      input.value = '';
+      _openCollectionId = c.id;
+      setStatus(`Created "${name}"`);
+      await renderTeamCollections(team, members, myId);
+    } catch { setStatus('Could not create the collection', false); }
+    finally { createBtn.disabled = false; }
+  };
+}
+
+function collectionRow(c, team, members, myId) {
+  const row = document.createElement('div');
+  row.className = 'coll-row';
+  row.dataset.cid = c.id;
+  const name = c.name ?? 'Collection (key not on this device)';
+  row.innerHTML = `
+    <button class="coll-head">
+      <span class="coll-name">${esc(name)}</span>
+      <span class="coll-meta">${c.members} member${c.members === 1 ? '' : 's'} · ${esc(ROLE_LABELS[c.role] || c.role)}</span>
+    </button>
+    <div class="coll-body" style="display:none"></div>`;
+  const body = row.querySelector('.coll-body');
+  row.querySelector('.coll-head').addEventListener('click', async () => {
+    const open = body.style.display === 'none';
+    _openCollectionId = open ? c.id : null;
+    body.style.display = open ? '' : 'none';
+    if (open) await renderCollectionBody(body, c, team, members, myId);
+  });
+  if (_openCollectionId === c.id) {
+    body.style.display = '';
+    renderCollectionBody(body, c, team, members, myId);
+  }
+  return row;
+}
+
+async function renderCollectionBody(body, c, team, teamMembers, myId) {
+  const manage = c.role === 'manage';
+  body.innerHTML = '<div class="coll-meta">Loading…</div>';
+  let inCollection = [];
+  try { inCollection = await VaultCollections.members(c); } catch { /* shown empty */ }
+  const rerender = () => renderTeamPanel();
+  body.innerHTML = '';
+  for (const m of inCollection) {
+    const el = document.createElement('div');
+    el.className = 'coll-member';
+    el.dataset.uid = m.user_id;
+    const you = m.user_id === myId;
+    el.innerHTML = `<span class="who">${esc(m.email || m.user_id)}${you ? ' (you)' : ''}</span>`;
+    if (manage && !you) {
+      const sel = document.createElement('select');
+      sel.className = 'coll-role';
+      for (const r of ['view', 'edit', 'manage']) sel.add(new Option(ROLE_LABELS[r], r, false, r === m.role));
+      sel.addEventListener('change', async () => {
+        try { await VaultCollections.setRole(c, m.user_id, sel.value); setStatus('Role updated'); } catch { setStatus('Could not change the role', false); rerender(); }
+      });
+      const rm = document.createElement('button');
+      rm.className = 'coll-link danger coll-remove';
+      rm.textContent = 'Remove';
+      rm.addEventListener('click', async () => {
+        if (!confirm(`Remove ${m.email || 'this teammate'} from "${c.name}"?`)) return;
+        try {
+          await VaultCollections.removeMember(c, m.user_id);
+          el.remove();
+          await showRotationAdvice(body, c, m.email);
+        } catch { setStatus('Could not remove them', false); }
+      });
+      el.append(sel, rm);
+    } else {
+      el.insertAdjacentHTML('beforeend', `<span class="coll-meta">${esc(ROLE_LABELS[m.role] || m.role)}</span>`);
+    }
+    body.appendChild(el);
+  }
+
+  if (manage && c.key) {
+    const candidates = teamMembers.filter(t => !inCollection.some(m => m.user_id === t.user_id));
+    if (candidates.length) {
+      const add = document.createElement('div');
+      add.className = 'coll-add';
+      const who = document.createElement('select');
+      who.className = 'who';
+      for (const t of candidates) who.add(new Option(`${t.email || t.user_id}${t.public_key ? '' : ' (not signed in yet)'}`, t.user_id));
+      const role = document.createElement('select');
+      role.className = 'coll-new-role';
+      for (const r of ['view', 'edit', 'manage']) role.add(new Option(ROLE_LABELS[r], r, false, r === 'edit'));
+      const btn = document.createElement('button');
+      btn.className = 'btn-crypto-ok coll-add-btn';
+      btn.textContent = 'Add';
+      btn.addEventListener('click', async () => {
+        const user = candidates.find(t => t.user_id === who.value);
+        btn.disabled = true;
+        try { await VaultCollections.addMember(c, user, role.value); setStatus(`Added ${user.email || 'teammate'}`); rerender(); }
+        catch (e) { setStatus(e.message || 'Could not add them', false); btn.disabled = false; }
+      });
+      add.append(who, role, btn);
+      body.appendChild(add);
+    }
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'coll-actions';
+  if (manage && c.key) {
+    const rename = document.createElement('button');
+    rename.className = 'coll-link coll-rename';
+    rename.textContent = 'Rename';
+    rename.addEventListener('click', async () => {
+      const name = prompt('New name', c.name || '')?.trim();
+      if (!name) return;
+      try { await VaultCollections.rename(c, name); await refreshSharedItems(); rerender(); } catch { setStatus('Could not rename it', false); }
+    });
+    const del = document.createElement('button');
+    del.className = 'coll-link danger coll-delete';
+    del.textContent = 'Delete collection';
+    del.addEventListener('click', async () => {
+      if (!confirm(`Delete "${c.name}" and everything in it, for everyone?`)) return;
+      try { await VaultCollections.remove(c); _openCollectionId = null; await refreshSharedItems(); rerender(); } catch { setStatus('Could not delete it', false); }
+    });
+    actions.append(rename, del);
+  }
+  const leave = document.createElement('button');
+  leave.className = 'coll-link danger coll-leave';
+  leave.textContent = 'Leave';
+  leave.addEventListener('click', async () => {
+    if (!confirm(`Leave "${c.name}"? Its items disappear from your vault (yours are untouched).`)) return;
+    try { await VaultCollections.removeMember(c, myId); await VaultCollections.forget(c.id); await refreshSharedItems(); rerender(); }
+    catch { setStatus('Could not leave it', false); }
+  });
+  actions.append(leave);
+  body.appendChild(actions);
+}
+
+// Someone removed from a collection may have copied what they saw: suggest
+// changing the passwords they had access to.
+async function showRotationAdvice(body, c, who) {
+  const note = document.createElement('div');
+  note.className = 'coll-note rotate-advice';
+  let titles;
+  try {
+    await VaultCollections.pull(c); // what's in it now, not what this popup saw
+    titles = (await VaultCollections.items(c)).filter(i => Vault.getValue(i, 'password') || Vault.getValue(i, 'clientSecret') || Vault.getValue(i, 'apiKey')).map(i => i.title);
+  } catch { titles = null; }
+  if (titles === null) {
+    note.textContent = `${who || 'They'} could see everything in "${c.name}". Consider changing the passwords and keys kept there.`;
+  } else if (!titles.length) {
+    return;
+  } else {
+    note.textContent = `${who || 'They'} could see ${titles.length} secret${titles.length === 1 ? '' : 's'} here: ${titles.slice(0, 5).join(', ')}${titles.length > 5 ? '…' : ''}. Consider changing ${titles.length === 1 ? 'it' : 'them'}.`;
+  }
+  body.prepend(note);
 }
 
 // ── Team shared codes ("Shared with you") ──────────────────────────────────────
