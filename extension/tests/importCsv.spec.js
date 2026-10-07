@@ -222,3 +222,47 @@ test('a double click on Import imports once', async ({ context, extensionId }) =
   await page.waitForTimeout(500);
   expect(await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.length)).toBe(1);
 });
+
+test('planning: exact usernames first; a row\'s missing 2FA secret is added, not skipped', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  const r = await page.evaluate(() => {
+    const mk = (title, user, pw, secret) => {
+      const i = Vault.newItem('login', { title, urls: ['site.example'], totp: secret ? { secret } : null });
+      Vault.getField(i, 'username').value = user;
+      Vault.getField(i, 'password').value = pw;
+      return i;
+    };
+    const items = [mk('Upper', 'Alice', '', ''), mk('Lower', 'alice', '', ''), mk('Pw', 'bob', 'same', '')];
+    const e = (username, password, totp = '') => ({ title: 'X', urls: ['site.example'], username, password, notes: '', totp, tag: '' });
+    const entries = [e('alice', 'p1'), e('bob', 'same', 'JBSWY3DPEHPK3PXP')];
+    const plans = Importers.plan(entries, items);
+    const out = Importers.toItems(entries, plans, items);
+    return { plans: plans.map(p => [p.action, items.find(i => i.id === p.target)?.title]), out: out.map(i => [i.title, Vault.getValue(i, 'password'), i.totp?.secret || '']) };
+  });
+  expect(r.plans).toEqual([['merge', 'Lower'], ['merge', 'Pw']]);
+  expect(r.out).toEqual([['Lower', 'p1', ''], ['Pw', 'same', 'JBSWY3DPEHPK3PXP']]);
+});
+
+test('picking another file while a review loads shows only the newer file', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, []);
+  await page.evaluate(() => {
+    const real = VaultStore.readAll;
+    let first = true;
+    VaultStore.readAll = async (...a) => { if (first) { first = false; await new Promise(r => setTimeout(r, 600)); } return real(...a); };
+  });
+  await page.setInputFiles('#csv-import-file', csvFile('name,url,username,password\nOld,old.com,u,p\nOld2,old2.com,u,p\n'));
+  await page.setInputFiles('#csv-import-file', csvFile('name,url,username,password\nNew,new.com,u,p\n'));
+  await page.waitForTimeout(1000);
+  await expect(page.locator('#csv-import-list .export-acc-row')).toHaveCount(1);
+  await expect(page.locator('#csv-import-list')).toContainText('New');
+});
+
+test('a failed import says so and leaves the vault unchanged', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, []);
+  await page.setInputFiles('#csv-import-file', csvFile('name,url,username,password\nA,a.com,u,p\n'));
+  await expect(page.locator('#csv-import-list .export-acc-row')).toHaveCount(1);
+  await page.evaluate(() => { VaultCrypto.encryptItem = async () => { throw new Error('QUOTA_BYTES quota exceeded'); }; });
+  await page.click('#csv-import-confirm');
+  await expect(page.locator('#csv-import-status')).toContainText('Import failed — nothing was changed');
+  expect(await page.evaluate(async () => (await chrome.storage.local.get(null)) && Object.keys(await chrome.storage.local.get(null)).filter(k => k.startsWith('vi:')).length)).toBe(0);
+});

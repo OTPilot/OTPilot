@@ -1534,16 +1534,21 @@ function hideCsvReview() {
   document.getElementById('csv-import-list').innerHTML = '';
 }
 
+let _csvReviewSeq = 0; // a newer file picked meanwhile makes an older review stale
 async function showCsvReview(file) {
+  const seq = ++_csvReviewSeq;
   hideCsvReview();
   let parsed;
   try { parsed = Importers.parse(await file.text()); } catch (e) {
+    if (seq !== _csvReviewSeq) return;
     csvImportStatus(e.message === 'No password column found' ? 'This CSV has no password column.' : 'Could not read this file.', false);
     return;
   }
   const key = await VaultKeys.getKey();
   if (!key) { csvImportStatus('Unlock OTPilot first.', false); return; }
   const { items } = await VaultStore.readAll(key);
+  if (seq !== _csvReviewSeq) return;
+  hideCsvReview();
   const plans = Importers.plan(parsed.entries, items);
   const names = new Map(items.map(i => [i.id, i.title]));
   _csvImport = { entries: parsed.entries, plans };
@@ -1599,33 +1604,49 @@ document.getElementById('csv-import-confirm').addEventListener('click', async ()
   _csvImporting = true;
   const btn = document.getElementById('csv-import-confirm');
   btn.disabled = true;
-  try { await importCsvEntries(chosen); } finally { _csvImporting = false; btn.disabled = false; }
+  try {
+    await importCsvEntries(chosen);
+  } catch (e) {
+    csvImportStatus(`Import failed — nothing was changed${e?.message ? ` (${e.message})` : ''}.`, false);
+  } finally {
+    _csvImporting = false;
+    btn.disabled = false;
+  }
 });
 
 async function importCsvEntries(chosen) {
   const key = await VaultKeys.getKey();
   if (!key) { csvImportStatus('Unlock OTPilot first.', false); return; }
-  // Planned again with only the chosen rows (an unchecked row must not take
-  // a merge target), against the vault as it is now.
-  const { items } = await VaultStore.readAll(key);
-  const plans = Importers.plan(chosen, items);
-  const toSave = Importers.toItems(chosen, plans, items);
-
   const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
-  if (!Vault.PAID_PLANS.includes(userPlan)) {
-    const after = new Map(items.map(i => [i.id, i]));
-    toSave.forEach(i => after.set(i.id, i));
-    const count = Vault.countedItems([...after.values()]);
-    const before = Vault.countedItems(items);
-    if (count > Vault.FREE_ITEM_LIMIT && count > before) {
-      const room = Math.max(Vault.FREE_ITEM_LIMIT - before, 0);
-      csvImportStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items: ${room ? `select at most ${room} more` : 'there is no room for more'}, or upgrade.`, false);
-      return;
+  // Read, plan, check the Free limit and write as one step under the vault
+  // lock: a sync or another writer can't change a merge target (or delete
+  // it) in between. Planned with only the chosen rows (an unchecked row
+  // must not take a merge target).
+  const result = await VaultStore.transaction(async tx => {
+    const items = [];
+    for (const rec of Object.values(await tx.listRecords())) {
+      try { items.push(await VaultCrypto.decryptItem(rec, key)); } catch { /* unreadable: never a merge target */ }
     }
+    const toSave = Importers.toItems(chosen, Importers.plan(chosen, items), items);
+    if (!Vault.PAID_PLANS.includes(userPlan)) {
+      const after = new Map(items.map(i => [i.id, i]));
+      toSave.forEach(i => after.set(i.id, i));
+      const count = Vault.countedItems([...after.values()]);
+      const before = Vault.countedItems(items);
+      if (count > Vault.FREE_ITEM_LIMIT && count > before) return { room: Math.max(Vault.FREE_ITEM_LIMIT - before, 0) };
+    }
+    const records = [];
+    for (const item of toSave) records.push([item.id, await VaultCrypto.encryptItem(item, key)]);
+    for (const [id, rec] of records) await tx.put(id, rec);
+    return { items, toSave };
+  });
+  if (result.room !== undefined) {
+    const { room } = result;
+    csvImportStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items: ${room ? `select at most ${room} more` : 'there is no room for more'}, or upgrade.`, false);
+    return;
   }
-
+  const { items, toSave } = result;
   if (toSave.length) {
-    await VaultStore.save(toSave, key);
     await reloadFromVault(key);
     await stampLocalChange();
     silentPullSync();

@@ -152,31 +152,36 @@ const Importers = (() => {
     return { source, entries, notes, invalid, unsupportedTotp };
   }
 
-  const sameUser = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
   const hostsOverlap = (item, entry) => entry.urls.some(h => Vault.loginCoversHost(item.urls, h))
     || (item.urls || []).some(h => Vault.loginCoversHost(entry.urls, h));
 
   // What importing each entry does against the vault's current `items`:
-  //   exists — a login for that site + username already holds this entry
-  //            (same password, or for a 2FA-only row, the same secret)
-  //   merge  — adds it to a login for that site + username that has no
-  //            password and no different 2FA secret (typically a 2FA-only
-  //            login): `target` is its id
-  //   new    — a new login
-  // Every matching login is looked at, not just the first. Pass only the
-  // entries being imported: an entry left out must not take a merge target.
+  //   exists — a login for that site + username already holds everything the
+  //            row has (its password and its 2FA secret)
+  //   merge  — adds what's missing to a login for that site + username whose
+  //            password and 2FA secret are each empty or the same as the
+  //            row's (typically a 2FA-only login gaining its password):
+  //            `target` is its id
+  //   new    — a new login (never overwrites a different password or secret)
+  // Usernames can be case-sensitive: the exact username first, a match
+  // ignoring case only when it's the only one. Pass only the entries being
+  // imported: an entry left out must not take a merge target.
   function plan(entries, items) {
     const logins = items.filter(i => i.type === 'login');
     const taken = new Set();
     return entries.map(entry => {
-      const matches = logins.filter(i => hostsOverlap(i, entry) && sameUser(Vault.getValue(i, 'username'), entry.username));
-      const holds = i => (entry.password
-        ? Vault.getValue(i, 'password') === entry.password
-        : !!entry.totp && i.totp?.secret === entry.totp);
-      const same = matches.find(holds);
+      const onSite = logins.filter(i => hostsOverlap(i, entry));
+      const userOf = i => Vault.getValue(i, 'username').trim();
+      const exact = onSite.filter(i => userOf(i) === entry.username.trim());
+      const loose = onSite.filter(i => userOf(i).toLowerCase() === entry.username.trim().toLowerCase());
+      const matches = exact.length ? exact : (loose.length === 1 ? loose : []);
+      const pwOk = i => !entry.password || [entry.password, ''].includes(Vault.getValue(i, 'password'));
+      const totpOk = i => !entry.totp || !i.totp?.secret || i.totp.secret === entry.totp;
+      const holdsAll = i => (!entry.password || Vault.getValue(i, 'password') === entry.password)
+        && (!entry.totp || i.totp?.secret === entry.totp);
+      const same = matches.find(holdsAll);
       if (same) return { action: 'exists', target: same.id };
-      const target = matches.find(i => !taken.has(i.id) && !Vault.getValue(i, 'password')
-        && (!entry.totp || !i.totp?.secret || i.totp.secret === entry.totp));
+      const target = matches.find(i => !taken.has(i.id) && pwOk(i) && totpOk(i));
       if (target) { taken.add(target.id); return { action: 'merge', target: target.id }; }
       return { action: 'new' };
     });
