@@ -2134,14 +2134,19 @@ async function v1Snapshot(list) {
   const bytes = new TextEncoder().encode(JSON.stringify(list.map(v1Fields)));
   return VaultCrypto.b64e(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
 }
+// Returns false when the server kept a newer blob instead (written meanwhile
+// by another device): nothing is recorded, so the caller merges it and retries.
 async function exportV1Blob(serverMeta, fromV1Device) {
   const { v1Export } = await chrome.storage.local.get('v1Export');
   const snapshot = await v1Snapshot(accounts);
-  const now = new Date().toISOString();
+  // The server keeps the blob with the newest timestamp: stamp the export
+  // after the one it holds, so a clock behind another device's still wins.
+  const serverMs = serverMeta?.updatedAt ? Date.parse(serverMeta.updatedAt) : NaN;
+  const now = new Date(Math.max(Date.now(), Number.isNaN(serverMs) ? 0 : serverMs + 1)).toISOString();
   if (!fromV1Device && serverMeta && v1Export?.snapshot === snapshot) {
     // Up to date (possibly written by another 2.0 device): nothing to upload.
     if (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt) await writeLastSyncedAt(serverMeta.updatedAt);
-    return;
+    return true;
   }
   const current = new Set(accounts.map(a => a.name));
   for (const name of v1Export?.names || []) {
@@ -2149,9 +2154,30 @@ async function exportV1Blob(serverMeta, fromV1Device) {
   }
   for (const name of current) delete tombstones[name];
   await saveTombstones();
-  await CloudSync.push(accounts, tombstones, now, 'v2');
+  const res = await CloudSync.push(accounts, tombstones, now, 'v2');
+  if (res?.conflict) return false;
   await chrome.storage.local.set({ v1Export: { snapshot, names: [...current] } });
   await writeLastSyncedAt(now);
+  return true;
+}
+
+// One pass of the v1 transition: merge a blob from a 1.x device, then export.
+async function syncV1Blob(key) {
+  const serverMeta = await CloudSync.getServerMeta();
+  const fromV1Device = !!serverMeta && serverMeta.writer !== 'v2' &&
+    (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt);
+  if (fromV1Device) {
+    const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
+      accounts, tombstones, serverMeta.accounts, serverMeta.tombstones, lastSyncedAt
+    );
+    accounts   = merged;
+    tombstones = mergedTombs;
+    await saveState();
+    await saveTombstones();
+    Object.assign(_idRemaps, (await VaultSync.sync(key)).remapped); // so the 1.x edits reach other 2.0 devices too
+    await reloadFromVault(key);
+  }
+  return { serverMeta, exported: await exportV1Blob(serverMeta, fromV1Device) };
 }
 
 async function doSync() {
@@ -2168,21 +2194,10 @@ async function doSync() {
     Object.assign(_idRemaps, (await VaultSync.sync(key)).remapped);
     await reloadFromVault(key);
 
-    const serverMeta = await CloudSync.getServerMeta();
-    const fromV1Device = !!serverMeta && serverMeta.writer !== 'v2' &&
-      (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt);
-    if (fromV1Device) {
-      const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
-        accounts, tombstones, serverMeta.accounts, serverMeta.tombstones, lastSyncedAt
-      );
-      accounts   = merged;
-      tombstones = mergedTombs;
-      await saveState();
-      await saveTombstones();
-      Object.assign(_idRemaps, (await VaultSync.sync(key)).remapped); // so the 1.x edits reach other 2.0 devices too
-      await reloadFromVault(key);
-    }
-    await exportV1Blob(serverMeta, fromV1Device);
+    let { serverMeta, exported } = await syncV1Blob(key);
+    // Refused: a blob written meanwhile by another device. Merge it and export
+    // again, once; past that the next sync picks it up.
+    if (!exported) ({ serverMeta } = await syncV1Blob(key));
 
     if (serverMeta?.command) {
       await CloudSync.executeCommand(serverMeta.command);

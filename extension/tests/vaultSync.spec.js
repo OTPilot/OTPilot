@@ -198,9 +198,13 @@ async function fakeBlob(page, blob = null) {
   await page.evaluate(b => {
     window.fakeBlobState = b;
     CloudSync.getServerMeta = async () => window.fakeBlobState;
+    // Like the API: an upload older than the stored blob is refused (HTTP 200).
     CloudSync.push = async (accounts, tombstones, updatedAt, writer) => {
+      window.fakeBlobPushes = (window.fakeBlobPushes || 0) + 1;
+      const cur = window.fakeBlobState;
+      if (cur && Date.parse(updatedAt) < Date.parse(cur.updatedAt)) return { conflict: true };
       window.fakeBlobState = { accounts: structuredClone(accounts), tombstones: { ...tombstones }, updatedAt, writer };
-      return {};
+      return { conflict: false };
     };
   }, blob);
 }
@@ -269,6 +273,34 @@ test('doSync ignores a blob written by another 2.0 device and merges one from a 
   expect(serverTitles.sort()).toEqual(['From 1.x', 'GitHub']);
   // And the blob is now a 2.0 export of the vault.
   expect(await page.evaluate(() => fakeBlobState.writer)).toBe('v2');
+});
+
+test('a v1 export the server refuses is not recorded; the newer blob is merged and the export retried', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [ACC('GitHub', 'JBSWY3DPEHPK3PXP')]);
+  await fakeBlob(page, null);
+  // A 1.x device writes a newer blob between this device reading the blob
+  // and exporting: the first export is refused.
+  await page.evaluate(() => {
+    const realPush = CloudSync.push;
+    let first = true;
+    CloudSync.push = async (...args) => {
+      if (first) {
+        first = false;
+        window.fakeBlobState = {
+          accounts: [{ name: 'From 1.x', email: '', secret: 'MFRGGZDFMZTWQ2LK', urls: '', autofill: true, _updatedAt: '2099-01-01T00:00:00.000Z' }],
+          tombstones: {}, updatedAt: '2099-01-01T00:00:00.000Z', writer: null,
+        };
+      }
+      return realPush(...args);
+    };
+  });
+  await page.evaluate(() => doSync());
+  expect((await readAccounts(page)).map(a => a.name).sort()).toEqual(['From 1.x', 'GitHub']);
+  const blob = await page.evaluate(() => fakeBlobState);
+  expect(blob.writer).toBe('v2');
+  expect(blob.accounts.map(a => a.name).sort()).toEqual(['From 1.x', 'GitHub']);
+  expect(Date.parse(blob.updatedAt)).toBeGreaterThan(Date.parse('2099-01-01T00:00:00.000Z'));
+  expect(await page.evaluate(async () => (await chrome.storage.local.get('lastSyncedAt')).lastSyncedAt)).toBe(blob.updatedAt);
 });
 
 test('the v1 export tombstones accounts removed since the last export', async ({ context, extensionId }) => {
