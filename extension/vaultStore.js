@@ -131,6 +131,9 @@ const VaultStore = (() => {
       listRecords,
       listTombstones,
       put: (id, rec) => set({ [RECORD + id]: rec }).then(() => del(TOMB + id)),
+      // Several records in one storage write: all are stored, or none.
+      putMany: entries => set(Object.fromEntries(entries.map(([id, rec]) => [RECORD + id, rec])))
+        .then(() => del(entries.map(([id]) => TOMB + id))),
       drop: id => del([RECORD + id, TOMB + id]),
       dropTombstone: id => del(TOMB + id),
     }));
