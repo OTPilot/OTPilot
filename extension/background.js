@@ -39,13 +39,47 @@ function senderHost(sender) {
 // Logins that can fill the sender page's sign-in form: unlocked, those with a
 // password whose URLs cover the host ({ id, name, username }); locked, the
 // same from the plaintext index ({ id, name }), to offer an unlock.
+// Logins of the team collections unlocked this session (vaultCollections.js:
+// keys in chrome.storage.session `collectionKeys`, cleared on lock; records
+// under cr:<cid>:<id>). Only read here, for filling.
+async function sharedLogins() {
+  const keys = (await chrome.storage.session.get('collectionKeys')).collectionKeys || {};
+  if (!Object.keys(keys).length) return [];
+  const out = [];
+  for (const [k, rec] of Object.entries(await chrome.storage.local.get(null))) {
+    const m = /^cr:([0-9a-f-]{36}):/.exec(k);
+    if (!m || !keys[m[1]]) continue;
+    try {
+      const item = await VaultCrypto.decryptItem(rec, keys[m[1]]);
+      if (item.type === 'login') out.push(item);
+    } catch { /* unreadable: skipped */ }
+  }
+  return out;
+}
+
+// One shared login by id: only that record is decrypted (a direct lookup in
+// each unlocked collection), not every record.
+async function sharedLogin(id) {
+  const keys = (await chrome.storage.session.get('collectionKeys')).collectionKeys || {};
+  for (const [cid, key] of Object.entries(keys)) {
+    const k = `cr:${cid}:${id}`;
+    const rec = (await chrome.storage.local.get(k))[k];
+    if (!rec) continue;
+    try {
+      const item = await VaultCrypto.decryptItem(rec, key);
+      return item.type === 'login' ? item : null;
+    } catch { return null; }
+  }
+  return null;
+}
+
 async function loginsForPage(sender) {
   const host = senderHost(sender);
   const state = await VaultLock.state();
   if (!host || state === 'setup') return { state, logins: [] };
   if (state === 'unlocked') {
     const { items } = await VaultStore.readAll(await VaultKeys.getKey());
-    const logins = items
+    const logins = [...items, ...(await sharedLogins())]
       .filter(i => i.type === 'login' && Vault.getValue(i, 'password') && Vault.loginCoversHost(i.urls, host))
       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
       .map(i => ({ id: i.id, name: i.title || host, username: Vault.getValue(i, 'username') }));
@@ -60,7 +94,8 @@ async function loginsForPage(sender) {
 async function fillLogin(sender, id) {
   const host = senderHost(sender);
   if (!host || typeof id !== 'string' || (await VaultLock.state()) !== 'unlocked') return { ok: false };
-  const item = await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null);
+  const item = (await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null))
+    || (await sharedLogin(id));
   const password = item && Vault.getValue(item, 'password');
   if (!item || item.type !== 'login' || !password || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
   await VaultLock.touch();
@@ -139,6 +174,16 @@ async function planPendingLogin({ host, username, password }) {
     || (loose.length === 1 ? loose[0] : null)
     || (!username && covering.length === 1 ? covering[0] : null);
   const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+  // A team collection already has this login: never offer a personal copy.
+  // (A changed password there is updated from the popup, which writes to the
+  // collection; the background doesn't.)
+  if (!match) {
+    // Same username rule as above: exact, or ignoring case when it's the
+    // only one.
+    const shared = (await sharedLogins()).filter(i => Vault.loginCoversHost(i.urls, host));
+    const sharedLoose = shared.filter(i => userOf(i).toLowerCase() === username.toLowerCase());
+    if (shared.some(i => userOf(i) === username) || sharedLoose.length === 1) return { kind: 'none' };
+  }
   if (match) {
     if (Vault.getValue(match, 'password') === password) return { kind: 'none' };
     // A 2FA-only login that gains a password starts counting toward the limit.

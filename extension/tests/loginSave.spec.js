@@ -277,3 +277,43 @@ test('an index from before hasPassword is rebuilt on unlock, so a locked vault o
   await site.goto(`${SITE}/login.html`);
   await expect(site.frameLocator('#otpilot-login-fill iframe').locator('#label')).toContainText('GitHub');
 });
+
+test('signing in with a login a team collection already has offers no personal copy', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  await popup.evaluate(async () => {
+    const cid = crypto.randomUUID();
+    const ck = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const item = Vault.newItem('login', { title: 'Shared', urls: ['localhost'] });
+    Vault.getField(item, 'username').value = 'ops@team.test';
+    Vault.getField(item, 'password').value = 'team-pass';
+    await chrome.storage.local.set({ [`cr:${cid}:${item.id}`]: await VaultCrypto.encryptItem(item, ck) });
+    await chrome.storage.session.set({ collectionKeys: { [cid]: ck } });
+  });
+  const site = await context.newPage();
+  await signIn(site, 'ops@team.test', 'team-pass');
+  await expect(site).toHaveURL(/welcome\.html/);
+  await site.waitForTimeout(1200);
+  await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
+  expect(await logins(popup)).toEqual([]);
+});
+
+test('an ambiguous shared match (two usernames differing only by case) still offers to save', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const popup = context.pages().find(p => p.url().includes('popup.html'));
+  await popup.evaluate(async () => {
+    const cid = crypto.randomUUID();
+    const ck = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const sets = {};
+    for (const user of ['Alice@x.com', 'ALICE@x.com']) {
+      const item = Vault.newItem('login', { title: user, urls: ['localhost'] });
+      Vault.getField(item, 'username').value = user;
+      Vault.getField(item, 'password').value = 'pw';
+      sets[`cr:${cid}:${item.id}`] = await VaultCrypto.encryptItem(item, ck);
+    }
+    await chrome.storage.local.set(sets);
+    await chrome.storage.session.set({ collectionKeys: { [cid]: ck } });
+  });
+  const site = await context.newPage();
+  await signIn(site, 'alice@x.com', 'mine');
+  await expect(site.locator('#otpilot-login-save')).toContainText('Save this login for localhost?');
+});
