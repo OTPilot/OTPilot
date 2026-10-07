@@ -104,11 +104,21 @@ pub(crate) async fn lock_team(
 /// The caller's role, read inside `tx` with a share lock on their member row:
 /// a concurrent role change or removal waits for this transaction (or this
 /// one sees its result). 404 when not a member.
+///
+/// Lock order, the same on every path: the collection row first (KEY SHARE
+/// here; the removal trigger takes it FOR UPDATE), then member rows. An item
+/// write's foreign-key check also takes KEY SHARE on the collection, so
+/// without this a write and a departure's promotion could wait on each other.
 async fn role_locked(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     cid: Uuid,
     user_id: Uuid,
 ) -> Result<String> {
+    sqlx::query("SELECT 1 FROM collections WHERE id = $1 FOR KEY SHARE")
+        .bind(cid)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     sqlx::query_scalar(
         "SELECT role FROM collection_members WHERE collection_id = $1 AND user_id = $2 FOR SHARE",
     )
@@ -1167,5 +1177,61 @@ mod db_tests {
                     .unwrap();
             assert!(!left, "a collection without members was left behind");
         }
+    }
+
+    #[tokio::test]
+    async fn an_item_write_and_the_last_managers_account_deletion_dont_deadlock() {
+        let (app, db, _g) = app().await;
+        let (owner, alice, bob) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        let t = team(&db, owner, &[alice, bob]).await;
+        let cid = new_collection(&app, alice, t).await;
+        call(
+            &app,
+            alice,
+            Method::PUT,
+            &format!("/collections/{cid}/members/{bob}"),
+            Some(json!({ "role": "edit", "wrapped_key": "k" })),
+        )
+        .await;
+        sqlx::query("UPDATE collections SET created_by = NULL WHERE id = $1")
+            .bind(cid)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE collection_members SET added_by = NULL WHERE collection_id = $1")
+            .bind(cid)
+            .execute(&db)
+            .await
+            .unwrap();
+
+        // Bob's write has checked his role (as put_item does) when Alice, the
+        // only manager, deletes her account — which promotes Bob.
+        let mut write = db.begin().await.unwrap();
+        assert_eq!(role_locked(&mut write, cid, bob).await.unwrap(), "edit");
+        let d = db.clone();
+        let deletion = tokio::spawn(async move {
+            sqlx::query("DELETE FROM users WHERE id = $1")
+                .bind(alice)
+                .execute(&d)
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        sqlx::query("INSERT INTO vault_items (id, owner_id, collection_id, encrypted_item, counts_for_limit) VALUES ($1, NULL, $2, 'x', false)")
+            .bind(Uuid::new_v4()).bind(cid).execute(&mut *write).await.unwrap();
+        write.commit().await.unwrap();
+        deletion.await.unwrap().unwrap();
+        let role: String = sqlx::query_scalar(
+            "SELECT role FROM collection_members WHERE collection_id = $1 AND user_id = $2",
+        )
+        .bind(cid)
+        .bind(bob)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(role, "manage");
     }
 }
