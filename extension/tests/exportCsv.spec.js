@@ -179,3 +179,17 @@ test('re-importing an export into the same vault finds every login (hex secrets,
   });
   expect(plans).toEqual(['exists', 'exists']);
 });
+
+test('OTPilot exports keep short 2FA secrets, and a login saved with the URL http://sn stays a login', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  const back = await page.evaluate(() => {
+    const short = Vault.newItem('login', { title: 'Short', totp: { secret: 'JBSWY3DP' } });
+    Vault.getField(short, 'password').value = 'pw';
+    const sn = Vault.newItem('login', { title: 'SN box', urls: ['http://sn'] });
+    Vault.getField(sn, 'username').value = 'admin';
+    Vault.getField(sn, 'password').value = 'pw';
+    const parsed = Importers.parse(Importers.toCsv([short, sn]));
+    return parsed.entries.map(e => [e.type, e.title, e.totp, e.username, e.urls]);
+  });
+  expect(back).toEqual([['login', 'Short', 'JBSWY3DP', '', []], ['login', 'SN box', '', 'admin', ['http://sn']]]);
+});

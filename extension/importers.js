@@ -102,16 +102,19 @@ const Importers = (() => {
     return { col, source };
   }
 
-  const base32 = v => {
+  // Other managers' secrets: at least 16 characters (anything shorter is
+  // more likely a stray value). OTPilot's own export: any length OTPilot
+  // generates codes for.
+  const base32 = (v, min = 16) => {
     const s = String(v || '').replace(/[\s-]/g, '').toUpperCase();
-    return /^[A-Z2-7]{16,}=*$/.test(s) ? s.replace(/=+$/, '') : '';
+    return new RegExp(`^[A-Z2-7]{${min},}=*$`).test(s) ? s.replace(/=+$/, '') : '';
   };
 
   // A TOTP secret from an otpauth:// URI or a bare base32 secret: { secret }
   // ('' when there is none), or { unsupported: true } for settings OTPilot
   // can't generate (HOTP, not 6 digits / 30 s / SHA1) — those would give
   // codes the site rejects, so they're reported instead of imported.
-  function parseTotp(value) {
+  function parseTotp(value, min = 16) {
     const v = String(value || '').trim();
     if (!v) return { secret: '' };
     if (/^otpauth:\/\//i.test(v)) {
@@ -122,11 +125,11 @@ const Importers = (() => {
         && (p.get('digits') ?? '6') === '6'
         && (p.get('period') ?? '30') === '30'
         && (p.get('algorithm') ?? 'SHA1').toUpperCase() === 'SHA1';
-      const secret = base32(p.get('secret'));
+      const secret = base32(p.get('secret'), min);
       if (!secret) return { secret: '' };
       return supported ? { secret } : { unsupported: true };
     }
-    return { secret: base32(v) };
+    return { secret: base32(v, min) };
   }
 
   const totpSecret = value => parseTotp(value).secret || '';
@@ -185,13 +188,15 @@ const Importers = (() => {
       // OTPilot's export also lists servers, API credentials…: not rebuilt
       // from CSV yet, reported instead of turned into logins.
       if (own && !['login', 'note'].includes(get(row, 'type').toLowerCase())) { otherTypes++; continue; }
-      if (get(row, 'type').toLowerCase() === 'note' || rawUrl === 'http://sn') {
+      // LastPass marks notes with the URL http://sn; OTPilot's export says so
+      // in `type` (a login may well be saved with that URL).
+      if (get(row, 'type').toLowerCase() === 'note' || (!own && rawUrl === 'http://sn')) {
         const note = withTags({ type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: notesOf(row), totp: '', tag: '' }, row);
         if (note.notes || get(row, 'title')) entries.push(note); else invalid++;
         continue;
       }
       const urls = own ? raw(row, 'url').split('\n').map(u => u.trim()).filter(Boolean) : urlsOf(rawUrl, source);
-      const totp = parseTotp(get(row, 'totp'));
+      const totp = parseTotp(get(row, 'totp'), own ? 1 : 16);
       if (totp.unsupported) unsupportedTotp++;
       const entry = {
         type: 'login',
