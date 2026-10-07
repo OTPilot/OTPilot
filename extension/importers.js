@@ -23,6 +23,20 @@ const Importers = (() => {
     return out;
   }
 
+  // How OTPilot stores an imported base32 secret: as is, unless it also
+  // looks like hex (only 0-9/A-F, even length) — totp.js decodeSecret would
+  // read those as hex, so they're stored as the hex of their bytes.
+  function storableSecret(b32) {
+    if (!b32 || !/^[0-9a-fA-F]+$/.test(b32) || b32.length % 2) return b32;
+    let bits = 0, val = 0, hex = '';
+    for (const ch of b32.toUpperCase()) {
+      val = (val << 5) | B32.indexOf(ch);
+      bits += 5;
+      if (bits >= 8) { hex += ((val >>> (bits - 8)) & 0xff).toString(16).padStart(2, '0'); bits -= 8; }
+    }
+    return hex;
+  }
+
   // OTPilot reads a secret of hex digits (even length) as hex (totp.js
   // decodeSecret); an otpauth URI needs base32.
   const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -282,7 +296,7 @@ const Importers = (() => {
         if (entry.password) Vault.getField(next, 'password').value = entry.password;
         if (!next.urls.length) next.urls = entry.urls;
         if (!next.notes && entry.notes) next.notes = entry.notes;
-        if (!next.totp && entry.totp) next.totp = { secret: entry.totp, digits: 6, period: 30, algorithm: 'SHA1' };
+        if (!next.totp && entry.totp) next.totp = { secret: storableSecret(entry.totp), digits: 6, period: 30, algorithm: 'SHA1' };
         next.tags = uniqueTags([...(next.tags || []), entry.tag, ...(entry.moreTags || [])]);
         next.updatedAt = now;
         out.push(next);
@@ -295,7 +309,7 @@ const Importers = (() => {
       const item = Vault.newItem('login', {
         title: entry.title, urls: entry.urls, notes: entry.notes,
         tags: uniqueTags([entry.tag, ...(entry.moreTags || [])]),
-        totp: entry.totp ? { secret: entry.totp, digits: 6, period: 30, algorithm: 'SHA1' } : null,
+        totp: entry.totp ? { secret: storableSecret(entry.totp), digits: 6, period: 30, algorithm: 'SHA1' } : null,
         position: position++,
       });
       Vault.getField(item, 'username').value = entry.username;

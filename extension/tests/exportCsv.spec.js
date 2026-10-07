@@ -193,3 +193,26 @@ test('OTPilot exports keep short 2FA secrets, and a login saved with the URL htt
   });
   expect(back).toEqual([['login', 'Short', 'JBSWY3DP', '', []], ['login', 'SN box', '', 'admin', ['http://sn']]]);
 });
+
+test('secrets that look like hex keep their bytes through export and import', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  await page.addScriptTag({ url: `chrome-extension://${extensionId}/totp.js` });
+  const r = await page.evaluate(async () => {
+    const short = Vault.newItem('login', { title: 'Short hex', totp: { secret: '01' } });
+    Vault.getField(short, 'password').value = 'pw';
+    const parsed = Importers.parse(Importers.toCsv([short]));
+    const [back] = Importers.toItems(parsed.entries, Importers.plan(parsed.entries, []), []);
+    // Another manager's base32 secret made only of hex-looking characters.
+    const other = Importers.parse('name,url,username,password,totp\nX,x.com,u,p,ABCDEF234567ABCD\n');
+    const [x] = Importers.toItems(other.entries, Importers.plan(other.entries, []), []);
+    return {
+      sameShort: (await generateTOTP(back.totp.secret)) === (await generateTOTP('01')),
+      otherStored: x.totp.secret,
+      otherBytes: [...new Uint8Array(base32Decode('ABCDEF234567ABCD'))].map(b => b.toString(16).padStart(2, '0')).join(''),
+    };
+  });
+  expect(r.sameShort).toBe(true);
+  // Stored as the hex of its bytes, so OTPilot (which reads hex-looking
+  // secrets as hex) generates the same codes as an authenticator app.
+  expect(r.otherStored).toBe(r.otherBytes);
+});
