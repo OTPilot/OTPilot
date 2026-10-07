@@ -282,25 +282,26 @@ async fn prepare_deletion(state: &AppState, user: uuid::Uuid) -> Result<()> {
         crate::routes::billing::cancel_subscription_now(state, sub)
             .await
             .map_err(|_| failed("your Personal subscription", &cancelled))?;
-        sqlx::query("UPDATE users SET personal_subscription_id = NULL, has_personal_cloud = false WHERE id = $1")
-            .bind(user)
-            .execute(&state.db)
-            .await?;
+        // Recorded right away (incl. the plan: Personal ends now, a team
+        // plan stays), so a later failure leaves a consistent account.
+        sqlx::query(
+            "UPDATE users SET personal_subscription_id = NULL, has_personal_cloud = false,
+             plan = CASE WHEN plan = 'personal' THEN 'free' ELSE plan END WHERE id = $1",
+        )
+        .bind(user)
+        .execute(&state.db)
+        .await?;
         cancelled.push("your Personal subscription");
     }
+    // Each team: its subscription cancelled, then the team dissolved — never
+    // a team left without its subscription if a later step fails.
     for team in &owned {
         if let Some(sub) = team.stripe_subscription_id.as_deref() {
             crate::routes::billing::cancel_subscription_now(state, sub)
                 .await
                 .map_err(|_| failed("the team subscription", &cancelled))?;
-            sqlx::query("UPDATE teams SET stripe_subscription_id = NULL WHERE id = $1")
-                .bind(team.id)
-                .execute(&state.db)
-                .await?;
             cancelled.push("the team subscription");
         }
-    }
-    for team in &owned {
         crate::routes::teams::dissolve_team(&state.db, team.id).await?;
         tracing::info!(
             "team {} dissolved: its owner deleted their account",
@@ -357,15 +358,33 @@ async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<St
         "{}/auth/v1/admin/users/{}",
         state.supabase_admin_base, auth.id
     );
-    let sb_res = reqwest::Client::new()
+    let clear_flags = || async {
+        let _ = sqlx::query(
+            "UPDATE users SET pending_deletion_at = NULL, deletion_started_at = NULL WHERE id = $1",
+        )
+        .bind(auth.id)
+        .execute(&state.db)
+        .await;
+    };
+    let sb_res = match reqwest::Client::new()
         .delete(&url)
         .header("apikey", &state.supabase_service_key)
         .bearer_auth(&state.supabase_service_key)
         .send()
         .await
-        .map_err(|e| anyhow::anyhow!("Supabase request failed: {e}"))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            // Supabase not reached: the account stays as it was (billing and
+            // teams already handled), usable, and the deletion can be retried.
+            clear_flags().await;
+            return Err(anyhow::anyhow!("Supabase request failed: {e}").into());
+        }
+    };
 
-    if !sb_res.status().is_success() {
+    // 404: the Supabase user is already gone (an earlier attempt deleted it
+    // but didn't get to the row) — finish the job.
+    if !sb_res.status().is_success() && sb_res.status() != reqwest::StatusCode::NOT_FOUND {
         // Supabase deletion failed — clear the flag so the user can retry.
         let _ = sqlx::query(
             "UPDATE users SET pending_deletion_at = NULL, deletion_started_at = NULL WHERE id = $1",
@@ -605,6 +624,13 @@ mod db_tests {
         // Personal is recorded as cancelled; the team is untouched; the
         // account can still be used and deleted again.
         assert!(exists(&db, "SELECT 1 FROM users WHERE id = $1 AND personal_subscription_id IS NULL AND deletion_started_at IS NULL", owner).await);
+        // Personal ended now: no longer on Personal (the team plan stays).
+        let plan: String = sqlx::query_scalar("SELECT plan FROM users WHERE id = $1")
+            .bind(owner)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(plan, "team_lite");
         assert!(
             exists(
                 &db,
@@ -655,6 +681,38 @@ mod db_tests {
             exists(
                 &db.pool,
                 "SELECT 1 FROM users WHERE id = $1 AND personal_subscription_id = 'sub_personal'",
+                user
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn personal_cancelled_then_supabase_unreachable_leaves_a_usable_free_account() {
+        let db = test_db().await;
+        let (base, seen) = stand_in().await;
+        let mut state = test_state(db.pool.clone());
+        state.stripe_secret_key = "sk_test".into();
+        state.stripe_api_base = base;
+        // Supabase unreachable.
+        state.supabase_admin_base = "http://127.0.0.1:9".into();
+        let app = router().with_state(state);
+        let user = create_user(&db.pool, "personal").await;
+        sqlx::query("UPDATE users SET has_personal_cloud = true, personal_subscription_id = 'sub_personal' WHERE id = $1")
+            .bind(user).execute(&db.pool).await.unwrap();
+        let (s, _) = call(&app, user, Method::DELETE, "/users/me", None).await;
+        assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(seen
+            .lock()
+            .unwrap()
+            .contains(&"DELETE /v1/subscriptions/sub_personal".to_string()));
+        // Still there, on Free (Personal really ended), and not stuck as
+        // "being deleted": it can buy again or retry the deletion.
+        assert!(
+            exists(
+                &db.pool,
+                "SELECT 1 FROM users WHERE id = $1 AND plan = 'free'
+            AND deletion_started_at IS NULL AND pending_deletion_at IS NULL",
                 user
             )
             .await
