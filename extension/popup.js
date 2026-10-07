@@ -1615,13 +1615,9 @@ document.getElementById('csv-import-confirm').addEventListener('click', async ()
 
   if (toSave.length) {
     await VaultStore.save(toSave, key);
-    await VaultAccounts.writeIndex((await VaultStore.readAll(key)).items);
-    await loadState();
+    await reloadFromVault(key);
     await stampLocalChange();
     silentPullSync();
-    renderAccountBar();
-    requestIcons();
-    startTimer();
   }
   const added = toSave.filter(i => !items.some(x => x.id === i.id)).length;
   const merged = toSave.length - added;
