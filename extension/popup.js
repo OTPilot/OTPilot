@@ -1637,7 +1637,7 @@ async function importCsvEntries(chosen) {
     }
     const records = [];
     for (const item of toSave) records.push([item.id, await VaultCrypto.encryptItem(item, key)]);
-    for (const [id, rec] of records) await tx.put(id, rec);
+    if (records.length) await tx.putMany(records); // one write: all or nothing
     return { items, toSave };
   });
   if (result.room !== undefined) {

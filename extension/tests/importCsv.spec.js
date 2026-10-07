@@ -266,3 +266,24 @@ test('a failed import says so and leaves the vault unchanged', async ({ context,
   await expect(page.locator('#csv-import-status')).toContainText('Import failed — nothing was changed');
   expect(await page.evaluate(async () => (await chrome.storage.local.get(null)) && Object.keys(await chrome.storage.local.get(null)).filter(k => k.startsWith('vi:')).length)).toBe(0);
 });
+
+test('a storage failure while writing the import stores none of it', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, []);
+  await page.setInputFiles('#csv-import-file', csvFile('name,url,username,password\nA,a.com,u,p\nB,b.com,u,p\n'));
+  await expect(page.locator('#csv-import-list .export-acc-row')).toHaveCount(2);
+  await page.evaluate(() => {
+    const real = chrome.storage.local.set.bind(chrome.storage.local);
+    // Room for one more record: the second one overflows the quota.
+    let records = 0;
+    chrome.storage.local.set = async items => {
+      const n = Object.keys(items).filter(k => k.startsWith('vi:')).length;
+      if (records + n > 1) throw new Error('QUOTA_BYTES quota exceeded');
+      records += n;
+      return real(items);
+    };
+  });
+  await page.click('#csv-import-confirm');
+  await expect(page.locator('#csv-import-status')).toContainText('Import failed — nothing was changed');
+  const stored = await page.evaluate(async () => Object.keys(await chrome.storage.local.get(null)).filter(k => k.startsWith('vi:')).length);
+  expect(stored).toBe(0);
+});
