@@ -358,5 +358,5 @@ const Importers = (() => {
     return [CSV_COLUMNS, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
   }
 
-  return { parseCsv, parse, plan, toItems, totpSecret, parseTotp, toCsv };
+  return { parseCsv, parse, plan, toItems, totpSecret, parseTotp, toCsv, storableSecret };
 })();

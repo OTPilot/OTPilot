@@ -220,3 +220,25 @@ test('"2FA code": "+ Add password" reveals the password; unsupported otpauth set
   await expect(page.locator('#acc-detail .acc-password')).toBeFocused();
   await expect(page.locator('#acc-detail .btn-add-password')).toHaveCount(0);
 });
+
+test('"2FA code": hex-looking link secrets keep their bytes; malformed links are refused; an added password stays visible', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId);
+  await page.click('#btn-add');
+  await page.click('[data-add-type="2fa"]');
+  await page.fill('#acc-detail .acc-secret', 'otpauth://totp/Example%?secret=JBSWY3DPEHPK3PXP');
+  await expect(page.locator('#status-msg')).toContainText('malformed');
+  await expect(page.locator('#acc-detail .acc-secret')).toHaveValue('');
+
+  await page.fill('#acc-detail .acc-secret', 'otpauth://totp/Example:user?secret=ABCDEFABCDEFABCD');
+  const stored = await page.locator('#acc-detail .acc-secret').inputValue();
+  const expected = await page.evaluate(() => [...new Uint8Array(base32Decode('ABCDEFABCDEFABCD'))].map(b => b.toString(16).padStart(2, '0')).join(''));
+  expect(stored).toBe(expected);
+
+  await page.click('#acc-detail .btn-add-password');
+  await page.fill('#acc-detail .acc-password', 'pw');
+  await page.click('#btn-add');
+  await page.click('[data-add-type="note"]');
+  await page.locator('.acc-head', { hasText: 'Example' }).click();
+  await expect(page.locator('#acc-detail .acc-password')).toHaveValue('pw');
+  await expect(page.locator('#acc-detail .acc-password-field')).toBeVisible();
+});

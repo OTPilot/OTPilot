@@ -974,6 +974,8 @@ function renderAccDetail() {
   // the 2FA secret first, the password behind "+ Add password". Saved, it's
   // a regular login (and, with only a 2FA code, doesn't count toward Free).
   const compact = !!acc._compact;
+  // Shown once it has a password or the user asked for it (kept while editing).
+  const hidePassword = compact && !acc.password && !acc._showPassword;
   const nameField = `
     <div class="acc-field">
       <label>Name</label>
@@ -985,7 +987,7 @@ function renderAccDetail() {
       <input class="acc-email" type="text" placeholder="e.g. user@example.com" value="${esc(acc.email || '')}">
     </div>`;
   const passwordField = `
-    <div class="acc-field acc-password-field"${compact ? ' style="display:none"' : ''}>
+    <div class="acc-field acc-password-field"${hidePassword ? ' style="display:none"' : ''}>
       <label>Password (optional)</label>
       <div class="field-row">
         <input class="acc-password" type="password" placeholder="Password" value="${esc(acc.password || '')}" autocomplete="new-password">
@@ -993,7 +995,7 @@ function renderAccDetail() {
         <button class="btn-eye btn-gen-password" title="Generate a password">⟳</button>
       </div>
     </div>
-    ${compact ? '<button type="button" class="coll-link btn-add-password">+ Add password</button>' : ''}`;
+    ${hidePassword ? '<button type="button" class="coll-link btn-add-password">+ Add password</button>' : ''}`;
   const secretField = `
     <div class="acc-field">
       <label>${compact ? '2FA secret or otpauth:// link' : '2FA secret (optional, base32 or hex)'}</label>
@@ -1030,6 +1032,7 @@ ${esc(acc.urls || '')}</textarea>
     ${collectionControlsHTML(acc)}`;
 
   body.querySelector('.btn-add-password')?.addEventListener('click', e => {
+    acc._showPassword = true;
     body.querySelector('.acc-password-field').style.display = '';
     e.currentTarget.remove();
     body.querySelector('.acc-password').focus();
@@ -1039,9 +1042,9 @@ ${esc(acc.urls || '')}</textarea>
   body.querySelector('.acc-secret').addEventListener('input', e => {
     const parsed = parseOtpauth(e.target.value);
     if (!parsed) return;
-    if (parsed.unsupported) {
+    if (parsed.unsupported || parsed.invalid) {
       e.target.value = '';
-      setStatus('That code uses settings OTPilot can\'t generate (only 6-digit, 30-second codes)', false);
+      setStatus(parsed.invalid ? 'That otpauth:// link is malformed' : 'That code uses settings OTPilot can\'t generate (only 6-digit, 30-second codes)', false);
       return;
     }
     e.target.value = parsed.secret;
@@ -1408,8 +1411,8 @@ async function moveNow(entry, cid) {
 }
 
 // An otpauth://totp/ link (what a 2FA QR code holds): { secret, issuer,
-// account }, { unsupported: true } for settings OTPilot can't generate, or
-// null when it isn't one.
+// account }, { unsupported: true } for settings OTPilot can't generate,
+// { invalid: true } for a malformed one, or null when it isn't one.
 function parseOtpauth(text) {
   const v = String(text || '').trim();
   if (!/^otpauth:\/\//i.test(v)) return null;
@@ -1420,9 +1423,12 @@ function parseOtpauth(text) {
   if (!secret) return null;
   if (url.host.toLowerCase() !== 'totp' || (p.get('digits') ?? '6') !== '6' || (p.get('period') ?? '30') !== '30'
     || (p.get('algorithm') ?? 'SHA1').toUpperCase() !== 'SHA1') return { unsupported: true };
-  const label = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+  let label;
+  try { label = decodeURIComponent(url.pathname.replace(/^\/+/, '')); } catch { return { invalid: true }; }
   const [labelIssuer, account] = label.includes(':') ? label.split(/:(.*)/s) : ['', label];
-  return { secret, issuer: (p.get('issuer') || labelIssuer || '').trim(), account: (account || '').trim() };
+  // Links carry base32; one that also looks like hex would be read as hex
+  // (totp.js decodeSecret), so it's stored as the hex of its bytes.
+  return { secret: Importers.storableSecret(secret.replace(/=+$/, '')), issuer: (p.get('issuer') || labelIssuer || '').trim(), account: (account || '').trim() };
 }
 
 function esc(s = '') {
