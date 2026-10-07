@@ -1605,7 +1605,9 @@ document.getElementById('csv-import-confirm').addEventListener('click', async ()
   const btn = document.getElementById('csv-import-confirm');
   btn.disabled = true;
   try {
-    await importCsvEntries(chosen);
+    // The Free-limit lock shared by every user-initiated add (editor Save,
+    // the page's Save login), then the vault lock inside: same order everywhere.
+    await navigator.locks.request('otpilot-item-limit', () => importCsvEntries(chosen));
   } catch (e) {
     csvImportStatus(`Import failed — nothing was changed${e?.message ? ` (${e.message})` : ''}.`, false);
   } finally {
