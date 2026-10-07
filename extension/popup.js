@@ -1008,15 +1008,28 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   draft = mergeDraftWithCurrent();
 
   // Free plan: up to 50 items (2FA-only logins don't count). Checked before
-  // anything changes, so a refused save leaves the editor as it was.
+  // anything changes, so a refused save leaves the editor as it was. The
+  // check is async: what gets saved must be exactly what was checked, so an
+  // edit made meanwhile (Add clicked again) stops the save instead.
+  const checked = JSON.stringify(draft);
+  let overLimit;
   try {
     const key = await VaultKeys.getKey();
     const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
-    if (key && await VaultAccounts.exceedsFreeLimit(draft, key, _loadedIds, userPlan)) {
-      setStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items (2FA-only logins don't count). Upgrade to add more.`, false);
-      return;
-    }
-  } catch { /* locked: saveState refuses below */ }
+    overLimit = !!key && await VaultAccounts.exceedsFreeLimit(draft, key, _loadedIds, userPlan);
+  } catch {
+    setStatus('Could not check the Free plan limit — try again', false);
+    return;
+  }
+  if (overLimit) {
+    setStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items (2FA-only logins don't count). Upgrade to add more.`, false);
+    return;
+  }
+  syncOpenAccToDraft();
+  if (JSON.stringify(draft) !== checked) {
+    setStatus('The list changed while saving — save again', false);
+    return;
+  }
 
   // Diff old accounts vs draft: stamp _updatedAt on new/changed, tombstone deleted
   const now      = new Date().toISOString();

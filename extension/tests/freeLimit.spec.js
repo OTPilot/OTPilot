@@ -68,3 +68,33 @@ test('over the limit, existing items stay editable but a 2FA-only login cannot g
     Vault.getValue((await VaultStore.readAll(await VaultKeys.getKey())).items.find(i => i.title === 'ZZ Codes'), 'password'));
   expect(pw).toBe('');
 });
+
+test('an account added while the limit check runs is not saved unchecked', async ({ context, extensionId }) => {
+  const page = await editorWith(context, extensionId, counted(49));
+  await addAccount(page, 'Fiftieth', { password: 'p' });
+  await expect.poll(() => itemCount(page)).toBe(50);
+
+  // The check is slow; the user clicks Add again meanwhile.
+  await page.click('#nav-settings');
+  await page.evaluate(() => {
+    const real = VaultAccounts.exceedsFreeLimit;
+    VaultAccounts.exceedsFreeLimit = async (...args) => {
+      const r = await real(...args);
+      document.getElementById('btn-add').click();
+      return r;
+    };
+  });
+  await page.locator('.acc-head', { hasText: 'Site 00' }).click();
+  await page.fill('#acc-detail .acc-name', 'Site 00 renamed');
+  await page.click('#btn-save-all');
+  await expect(page.locator('#status-msg')).toContainText('changed while saving');
+  expect(await itemCount(page)).toBe(50);
+});
+
+test('a failed limit check saves nothing', async ({ context, extensionId }) => {
+  const page = await editorWith(context, extensionId, counted(2));
+  await page.evaluate(() => { VaultAccounts.exceedsFreeLimit = async () => { throw new Error('storage hiccup'); }; });
+  await addAccount(page, 'Third', { password: 'p' });
+  await expect(page.locator('#status-msg')).toContainText('Could not check the Free plan limit');
+  expect(await itemCount(page)).toBe(2);
+});
