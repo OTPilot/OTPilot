@@ -127,8 +127,10 @@ const VaultKeys = (() => {
     });
   }
 
+  // Also drops the team collection keys unwrapped this session
+  // (vaultCollections.js), which are as sensitive as the vault key.
   function lock() {
-    return exclusive(() => session.remove(UNLOCKED));
+    return exclusive(() => session.remove([UNLOCKED, 'collectionKeys']));
   }
 
   // Sets or changes the master password. Needs VK available (open, or
