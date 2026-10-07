@@ -149,3 +149,29 @@ test('password URL matching: the saved host or its subdomains, never a parent', 
   });
   expect(r).toEqual([true, true, true, true, true, false, false, false, false, false]);
 });
+
+test('logins in a team collection unlocked this session are offered and filled too; not after locking', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, []);
+  await page.evaluate(async () => {
+    const cid = crypto.randomUUID();
+    const ck = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const item = Vault.newItem('login', { title: 'Shared admin', urls: ['localhost'] });
+    Vault.getField(item, 'username').value = 'ops@team.test';
+    Vault.getField(item, 'password').value = 'team-pass';
+    await chrome.storage.local.set({ [`cr:${cid}:${item.id}`]: await VaultCrypto.encryptItem(item, ck) });
+    await chrome.storage.session.set({ collectionKeys: { [cid]: ck } });
+  });
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  const choice = site.locator('#otpilot-login-fill .otpilot-login-choice');
+  await expect(choice).toContainText('Shared admin');
+  await choice.click();
+  await expect(site.locator('input[name="password"]')).toHaveValue('team-pass');
+  await expect(site.locator('input[name="email"]')).toHaveValue('ops@team.test');
+
+  await page.evaluate(() => VaultLock.lock());
+  const again = await context.newPage();
+  await again.goto(`${SITE}/login.html`);
+  await again.waitForTimeout(1000);
+  await expect(again.locator('#otpilot-login-fill')).toHaveCount(0); // locked: no index entry, keys gone
+});
