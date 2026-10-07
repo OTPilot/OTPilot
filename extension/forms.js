@@ -1,9 +1,11 @@
 'use strict';
 
 // Sign-in forms (2.0): offers to fill a saved login's username and password,
-// and to save (or update) the one the user just signed in with.
+// to save (or update) the one the user just signed in with, and a generated
+// password for a new-password field (sign-up, change password).
 // Loaded after content.js (same isolated world): uses its overlay helpers
-// (makeOverlay, OVERLAY_HEADER, mountUnlockFrame, fillInputValue, showToast).
+// (makeOverlay, OVERLAY_HEADER, mountUnlockFrame, fillInputValue, showToast)
+// and generator.js.
 //
 // Nothing is filled without a click: the overlay lists the logins whose saved
 // URLs cover this host, and only the chosen one's password is requested from
@@ -158,7 +160,7 @@
 
   document.addEventListener('submit', e => capture(e.target instanceof HTMLFormElement ? e.target : document), true);
   document.addEventListener('click', e => {
-    if (e.target.closest?.(`#${OVERLAY_ID}, #${SAVE_ID}`)) return; // our own buttons
+    if (e.target.closest?.(`#${OVERLAY_ID}, #${SAVE_ID}, #otpilot-password-suggest`)) return; // our own buttons
     const btn = e.target.closest?.('button, input[type="submit"], [role="button"]');
     if (!btn) return;
     const scope = btn.form || btn.closest('form') || document;
@@ -244,6 +246,51 @@
     }
     body.appendChild(row);
   }
+
+  // ── Suggesting a password ──────────────────────────────────────────────
+  // Focusing a new-password field offers a generated one (the user's
+  // generator settings, always a password, never a PIN). "Use" fills it and
+  // the confirmation field next to it; saving happens on submit, as above.
+  const GEN_ID = 'otpilot-password-suggest';
+  let _genDismissed = false;
+
+  const isNewPassword = el => el instanceof HTMLInputElement && el.type === 'password'
+    && autocompleteOf(el).includes('new-password');
+
+  async function suggestPassword(field) {
+    if (_genDismissed || document.getElementById(GEN_ID) || !chrome.runtime?.id) return;
+    let options = {};
+    try { options = (await chrome.storage.local.get('generatorOptions')).generatorOptions || {}; } catch { /* defaults */ }
+    if (document.getElementById(GEN_ID)) return;
+    let value = Generator.generate({ ...options, mode: 'password' });
+
+    const el = makeOverlay(GEN_ID);
+    el.innerHTML = `${OVERLAY_HEADER}<div style="padding:10px 12px 12px;color:#f1f5f9;font-size:13px;">
+      <div style="margin-bottom:6px;">Use a strong password?</div>
+      <div class="otpilot-gen-value" style="font-family:ui-monospace,Menlo,monospace;font-size:13px;background:#0f172a;border:1px solid #1e3a5f;border-radius:7px;padding:7px 9px;margin-bottom:8px;word-break:break-all;"></div>
+      <div class="otpilot-gen-row" style="display:flex;gap:6px;"></div></div>`;
+    const shown = el.querySelector('.otpilot-gen-value');
+    shown.textContent = value;
+    el.querySelector('.otpilot-overlay-close').addEventListener('click', () => { _genDismissed = true; el.remove(); });
+
+    const use = saveButton('Use', true);
+    use.className = 'otpilot-gen-use';
+    use.addEventListener('click', () => {
+      const scope = field.form || document;
+      const targets = [...scope.querySelectorAll('input[type="password"]')].filter(f => isNewPassword(f) && isVisible(f));
+      for (const f of targets.length ? targets : [field]) fillInputValue(f, value);
+      el.remove();
+    });
+    const again = saveButton('New');
+    again.className = 'otpilot-gen-again';
+    again.addEventListener('click', () => { value = Generator.generate({ ...options, mode: 'password' }); shown.textContent = value; });
+    el.querySelector('.otpilot-gen-row').append(use, again);
+    document.body.appendChild(el);
+  }
+
+  document.addEventListener('focusin', e => {
+    if (isNewPassword(e.target) && isVisible(e.target) && !e.target.value) suggestPassword(e.target);
+  }, true);
 
   // Sign-in forms often appear after load (SPAs, modals).
   let timer;
