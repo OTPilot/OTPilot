@@ -140,8 +140,8 @@ export default function Gdpr() {
                     <td className="py-2.5">Deleted immediately upon account deletion</td>
                   </tr>
                   <tr>
-                    <td className="py-2.5 pr-4">Team data (membership, collections, shared codes, activity log)</td>
-                    <td className="py-2.5">Deleted when you leave/delete the team, or on account deletion</td>
+                    <td className="py-2.5 pr-4">Team data (membership, collection access, shared codes, activity log)</td>
+                    <td className="py-2.5">Deleted when you leave/delete the team, or on account deletion. Items you put in a team collection stay with that collection for its other members until they delete them or the collection is deleted</td>
                   </tr>
                   <tr>
                     <td className="py-2.5 pr-4">IP address logs</td>
