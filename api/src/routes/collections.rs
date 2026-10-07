@@ -72,14 +72,59 @@ fn valid_role(role: &str) -> Result<()> {
     }
 }
 
-async fn is_team_member(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Result<bool> {
+async fn is_team_member(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    team_id: Uuid,
+    user_id: Uuid,
+) -> Result<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2)",
     )
     .bind(team_id)
     .bind(user_id)
-    .fetch_one(db)
+    .fetch_one(&mut **tx)
     .await?)
+}
+
+/// Serializes every change to who belongs to a team or its collections
+/// (creating a collection, adding/removing members, changing roles, leaving
+/// or being removed from the team): checks and counts made inside the
+/// transaction can't be invalidated by a concurrent change.
+pub(crate) async fn lock_team(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    team_id: Uuid,
+) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('team_membership'), hashtext($1::text))")
+        .bind(team_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// The caller's role, read inside `tx` with a share lock on their member row:
+/// a concurrent role change or removal waits for this transaction (or this
+/// one sees its result). 404 when not a member.
+async fn role_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    cid: Uuid,
+    user_id: Uuid,
+) -> Result<String> {
+    sqlx::query_scalar(
+        "SELECT role FROM collection_members WHERE collection_id = $1 AND user_id = $2 FOR SHARE",
+    )
+    .bind(cid)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(ApiError::NotFound)
+}
+
+fn allowed(role: &str, roles: &[&str]) -> Result<()> {
+    if roles.contains(&role) {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
 }
 
 /// The caller's role in a collection, or 404 (not a member: as if it didn't
@@ -154,10 +199,11 @@ async fn create(
 ) -> Result<Response> {
     opaque("encrypted_name", &body.encrypted_name)?;
     opaque("wrapped_key", &body.wrapped_key)?;
-    if !is_team_member(&state.db, team_id, auth.id).await? {
+    let mut tx = state.db.begin().await?;
+    lock_team(&mut tx, team_id).await?;
+    if !is_team_member(&mut tx, team_id, auth.id).await? {
         return Err(ApiError::Forbidden);
     }
-    let mut tx = state.db.begin().await?;
     let created = sqlx::query(
         "INSERT INTO collections (id, team_id, encrypted_name, created_by) VALUES ($1, $2, $3, $4)
          ON CONFLICT (id) DO NOTHING",
@@ -319,9 +365,11 @@ async fn put_member(
     Json(body): Json<PutMemberRequest>,
 ) -> Result<Json<Value>> {
     valid_role(&body.role)?;
-    require_role(&state.db, cid, auth.id, &["manage"]).await?;
     let team_id = team_of(&state.db, cid).await?;
-    if !is_team_member(&state.db, team_id, uid).await? {
+    let mut tx = state.db.begin().await?;
+    lock_team(&mut tx, team_id).await?;
+    allowed(&role_locked(&mut tx, cid, auth.id).await?, &["manage"])?;
+    if !is_team_member(&mut tx, team_id, uid).await? {
         return Err(ApiError::BadRequest("not a member of this team".into()));
     }
     if uid == auth.id && body.role != "manage" {
@@ -330,7 +378,7 @@ async fn put_member(
             "SELECT COUNT(*) FROM collection_members WHERE collection_id = $1 AND role = 'manage'",
         )
         .bind(cid)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await?;
         if managers <= 1 {
             return Err(ApiError::BadRequest(
@@ -351,7 +399,7 @@ async fn put_member(
             .bind(&body.role)
             .bind(key)
             .bind(auth.id)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await?
             .rows_affected()
         }
@@ -361,7 +409,7 @@ async fn put_member(
         .bind(cid)
         .bind(uid)
         .bind(&body.role)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?
         .rows_affected(),
     };
@@ -370,6 +418,7 @@ async fn put_member(
             "wrapped_key is required to add a member".into(),
         ));
     }
+    tx.commit().await?;
     audit(
         &state.db,
         team_id,
@@ -383,52 +432,34 @@ async fn put_member(
 }
 
 /// Removes a member (manage), or the caller leaves. They lose the
-/// collection's items only, never their own vault.
+/// collection's items only, never their own vault. The last manager leaving
+/// makes the oldest remaining member manager; the last member leaving
+/// deletes the collection (a database trigger, so account deletion and team
+/// departures get the same treatment).
 async fn remove_member(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((cid, uid)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>> {
-    if uid != auth.id {
-        require_role(&state.db, cid, auth.id, &["manage"]).await?;
-    } else {
-        role_in(&state.db, cid, auth.id).await?;
-    }
     let team_id = team_of(&state.db, cid).await?;
     let mut tx = state.db.begin().await?;
-    let removed = sqlx::query(
-        "DELETE FROM collection_members WHERE collection_id = $1 AND user_id = $2 RETURNING role",
-    )
-    .bind(cid)
-    .bind(uid)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if removed.is_none() {
+    lock_team(&mut tx, team_id).await?;
+    let role = role_locked(&mut tx, cid, auth.id).await?;
+    if uid != auth.id {
+        allowed(&role, &["manage"])?;
+    }
+    let removed =
+        sqlx::query("DELETE FROM collection_members WHERE collection_id = $1 AND user_id = $2")
+            .bind(cid)
+            .bind(uid)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    if removed == 0 {
         return Err(ApiError::NotFound);
     }
-    let managers: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM collection_members WHERE collection_id = $1 AND role = 'manage'",
-    )
-    .bind(cid)
-    .fetch_one(&mut *tx)
-    .await?;
-    let left: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM collection_members WHERE collection_id = $1")
-            .bind(cid)
-            .fetch_one(&mut *tx)
-            .await?;
-    if left > 0 && managers == 0 {
-        return Err(ApiError::BadRequest(
-            "a collection needs at least one manager".into(),
-        ));
-    }
-    if left == 0 {
-        // Nobody can read it any more.
-        sqlx::query("DELETE FROM collections WHERE id = $1")
-            .bind(cid)
-            .execute(&mut *tx)
-            .await?;
-    }
+    // The collection_member_removed trigger deletes an emptied collection and
+    // promotes a member when no manager is left.
     tx.commit().await?;
     audit(
         &state.db,
@@ -515,18 +546,23 @@ async fn current_item(
     .await?)
 }
 
-/// Creates or updates an item in the collection (edit/manage). Same
-/// base_revision / 409 contract as personal items. Collection items never
-/// count toward a personal Free limit (collections are a team feature).
+/// Creates or updates an item in the collection (edit/manage, checked inside
+/// the write's transaction). Same base_revision / 409 contract as personal
+/// items. Collection items have no owner: they belong to the collection
+/// (deleting a writer's account keeps them) and never count toward a
+/// personal Free limit.
 async fn put_item(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((cid, id)): Path<(Uuid, Uuid)>,
     Json(body): Json<PutItemRequest>,
 ) -> Result<Response> {
-    require_role(&state.db, cid, auth.id, &["manage", "edit"]).await?;
     let record = validate_record(&body.record)?;
     let mut tx = begin_collection_tx(&state, cid).await?;
+    allowed(
+        &role_locked(&mut tx, cid, auth.id).await?,
+        &["manage", "edit"],
+    )?;
     let existing = sqlx::query_as::<_, LockedItem>(
         "SELECT collection_id, revision FROM vault_items WHERE id = $1 FOR UPDATE",
     )
@@ -554,10 +590,9 @@ async fn put_item(
         None => {
             let created: Option<i64> = sqlx::query_scalar(
                 "INSERT INTO vault_items (id, owner_id, collection_id, encrypted_item, counts_for_limit)
-                 VALUES ($1, $2, $3, $4, false) ON CONFLICT (id) DO NOTHING RETURNING revision",
+                 VALUES ($1, NULL, $2, $3, false) ON CONFLICT (id) DO NOTHING RETURNING revision",
             )
             .bind(id)
-            .bind(auth.id)
             .bind(cid)
             .bind(&record)
             .fetch_optional(&mut *tx)
@@ -583,8 +618,11 @@ async fn delete_item(
     Path((cid, id)): Path<(Uuid, Uuid)>,
     Query(params): Query<DeleteParams>,
 ) -> Result<Response> {
-    require_role(&state.db, cid, auth.id, &["manage", "edit"]).await?;
     let mut tx = begin_collection_tx(&state, cid).await?;
+    allowed(
+        &role_locked(&mut tx, cid, auth.id).await?,
+        &["manage", "edit"],
+    )?;
     let existing = sqlx::query_as::<_, LockedItem>(
         "SELECT collection_id, revision FROM vault_items WHERE id = $1 FOR UPDATE",
     )
@@ -955,6 +993,74 @@ mod db_tests {
     #[tokio::test]
     async fn a_collection_always_keeps_a_manager() {
         let (app, db, _g) = app().await;
+        let (owner, alice, bob, carol) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        let t = team(&db, owner, &[alice, bob, carol]).await;
+        let cid = new_collection(&app, alice, t).await;
+        for u in [bob, carol] {
+            call(
+                &app,
+                alice,
+                Method::PUT,
+                &format!("/collections/{cid}/members/{u}"),
+                Some(json!({ "role": "view", "wrapped_key": "k" })),
+            )
+            .await;
+        }
+        // The only manager can't demote themselves...
+        let (s, _) = call(
+            &app,
+            alice,
+            Method::PUT,
+            &format!("/collections/{cid}/members/{alice}"),
+            Some(json!({ "role": "edit" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        // ...and leaving makes the oldest remaining member manager.
+        let (s, _) = call(
+            &app,
+            alice,
+            Method::DELETE,
+            &format!("/collections/{cid}/members/{alice}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, bobs) = call(&app, bob, Method::GET, "/collections", None).await;
+        assert_eq!(bobs["collections"][0]["role"], "manage");
+        // The last member leaving deletes it.
+        call(
+            &app,
+            carol,
+            Method::DELETE,
+            &format!("/collections/{cid}/members/{carol}"),
+            None,
+        )
+        .await;
+        let (s, _) = call(
+            &app,
+            bob,
+            Method::DELETE,
+            &format!("/collections/{cid}/members/{bob}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM collections")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[tokio::test]
+    async fn deleting_an_account_keeps_shared_items_and_a_manager() {
+        let (app, db, _g) = app().await;
         let (owner, alice, bob) = (
             create_user(&db, "team_lite").await,
             create_user(&db, "team_lite").await,
@@ -970,48 +1076,34 @@ mod db_tests {
             Some(json!({ "role": "view", "wrapped_key": "k" })),
         )
         .await;
-        let (s, _) = call(
+        let item = Uuid::new_v4();
+        call(
             &app,
             alice,
             Method::PUT,
-            &format!("/collections/{cid}/members/{alice}"),
-            Some(json!({ "role": "edit" })),
+            &format!("/collections/{cid}/items/{item}"),
+            Some(json!({ "record": record("a") })),
         )
         .await;
-        assert_eq!(s, StatusCode::BAD_REQUEST);
-        let (s, _) = call(
-            &app,
-            alice,
-            Method::DELETE,
-            &format!("/collections/{cid}/members/{alice}"),
-            None,
-        )
-        .await;
-        assert_eq!(s, StatusCode::BAD_REQUEST);
-        // A viewer can leave on their own.
-        let (s, _) = call(
-            &app,
-            bob,
-            Method::DELETE,
-            &format!("/collections/{cid}/members/{bob}"),
-            None,
-        )
-        .await;
-        assert_eq!(s, StatusCode::OK);
-        // The last member leaving deletes it.
-        let (s, _) = call(
-            &app,
-            alice,
-            Method::DELETE,
-            &format!("/collections/{cid}/members/{alice}"),
-            None,
-        )
-        .await;
-        assert_eq!(s, StatusCode::OK);
-        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM collections")
-            .fetch_one(&db)
+
+        // Alice (the writer and only manager) deletes her account.
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(alice)
+            .execute(&db)
             .await
             .unwrap();
-        assert_eq!(left, 0);
+
+        let (_, bobs) = call(&app, bob, Method::GET, "/collections", None).await;
+        assert_eq!(bobs["collections"][0]["role"], "manage");
+        let (_, items) = call(
+            &app,
+            bob,
+            Method::GET,
+            &format!("/collections/{cid}/items?since=0"),
+            None,
+        )
+        .await;
+        assert_eq!(items["items"][0]["id"], json!(item));
+        assert_eq!(items["items"][0]["deleted"], false);
     }
 }

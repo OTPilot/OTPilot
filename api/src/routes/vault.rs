@@ -53,7 +53,7 @@ pub(crate) struct ItemRow {
 
 #[derive(sqlx::FromRow)]
 struct LockedRow {
-    owner_id: Uuid,
+    owner_id: Option<Uuid>,
     collection_id: Option<Uuid>,
     revision: i64,
 }
@@ -204,7 +204,7 @@ async fn put_item(
     let revision: Option<i64> = match existing {
         // Another user's id, or a collection item: answer as if it didn't
         // exist, without touching it.
-        Some(row) if row.owner_id != auth.id || row.collection_id.is_some() => {
+        Some(row) if row.owner_id != Some(auth.id) || row.collection_id.is_some() => {
             return Err(ApiError::NotFound)
         }
         Some(row) => {
@@ -293,7 +293,7 @@ async fn delete_item(
     .fetch_optional(&mut *tx)
     .await?;
     match existing {
-        Some(row) if row.owner_id == auth.id && row.collection_id.is_none() => {
+        Some(row) if row.owner_id == Some(auth.id) && row.collection_id.is_none() => {
             if row.revision != params.base_revision {
                 let current = current_row(&mut tx, id).await?;
                 return Ok(conflict(current.as_ref()));
