@@ -1007,6 +1007,17 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
   draft = mergeDraftWithCurrent();
 
+  // Free plan: up to 50 items (2FA-only logins don't count). Checked before
+  // anything changes, so a refused save leaves the editor as it was.
+  try {
+    const key = await VaultKeys.getKey();
+    const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+    if (key && await VaultAccounts.exceedsFreeLimit(draft, key, _loadedIds, userPlan)) {
+      setStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items (2FA-only logins don't count). Upgrade to add more.`, false);
+      return;
+    }
+  } catch { /* locked: saveState refuses below */ }
+
   // Diff old accounts vs draft: stamp _updatedAt on new/changed, tombstone deleted
   const now      = new Date().toISOString();
   const oldMap   = new Map(accounts.map(a => [a.name, a]));
