@@ -35,7 +35,7 @@ const stored = page => page.evaluate(async () => (await VaultStore.readAll(await
 test('Add offers every type, and the planned ones as Soon', async ({ context, extensionId }) => {
   const page = await vault(context, extensionId);
   await page.click('#btn-add');
-  await expect(page.locator('#add-type-menu [data-add-type]')).toHaveText(['Login', 'Secure note', 'Server', 'API credential']);
+  await expect(page.locator('#add-type-menu [data-add-type]')).toHaveText(['2FA code', 'Login', 'Secure note', 'Server', 'API credential']);
   await expect(page.locator('#add-type-menu .add-type.soon').first()).toBeDisabled();
   await expect(page.locator('#add-type-menu .add-type.soon')).toHaveCount(8);
   // A click elsewhere closes it.
@@ -182,4 +182,63 @@ test('opening and saving an item never rewrites fields the user did not touch', 
   await expect.poll(async () => (await stored(page))[0].fields).toEqual({
     clientId: '', clientSecret: '', apiKey: 'k2', environment: '', expires: '07/10/2026', cert: 'line1\nline2',
   });
+});
+
+// ── "2FA code" ───────────────────────────────────────────────────────────────
+
+test('"2FA code" comes first and opens a 2FA-first form; a pasted otpauth link fills it in', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { plan: 'free' });
+  await page.click('#btn-add');
+  await expect(page.locator('#add-type-menu [data-add-type]').first()).toHaveText('2FA code');
+  await page.click('[data-add-type="2fa"]');
+  await expect(page.locator('#acc-detail .acc-secret')).toBeFocused();
+  await expect(page.locator('#acc-detail .acc-password-field')).toBeHidden();
+
+  await page.fill('#acc-detail .acc-secret', 'otpauth://totp/GitHub:me%40x.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub');
+  await expect(page.locator('#acc-detail .acc-secret')).toHaveValue('JBSWY3DPEHPK3PXP');
+  await expect(page.locator('#acc-detail .acc-name')).toHaveValue('GitHub');
+  await expect(page.locator('#acc-detail .acc-email')).toHaveValue('me@x.com');
+  await page.click('#btn-save-all');
+
+  await expect.poll(() => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
+    .map(i => ({ type: i.type, title: i.title, user: Vault.getValue(i, 'username'), pw: Vault.getValue(i, 'password'), secret: i.totp?.secret, counts: Vault.countsForLimit(i) }))))
+    .toEqual([{ type: 'login', title: 'GitHub', user: 'me@x.com', pw: '', secret: 'JBSWY3DPEHPK3PXP', counts: false }]);
+  // Reopened, it's a regular login (full form).
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'GitHub' }).click();
+  await expect(page.locator('#acc-detail .acc-password-field')).toBeVisible();
+});
+
+test('"2FA code": "+ Add password" reveals the password; unsupported otpauth settings are refused', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId);
+  await page.click('#btn-add');
+  await page.click('[data-add-type="2fa"]');
+  await page.fill('#acc-detail .acc-secret', 'otpauth://totp/X?secret=JBSWY3DPEHPK3PXP&digits=8');
+  await expect(page.locator('#status-msg')).toContainText("can't generate");
+  await expect(page.locator('#acc-detail .acc-secret')).toHaveValue('');
+  await page.click('#acc-detail .btn-add-password');
+  await expect(page.locator('#acc-detail .acc-password')).toBeFocused();
+  await expect(page.locator('#acc-detail .btn-add-password')).toHaveCount(0);
+});
+
+test('"2FA code": hex-looking link secrets keep their bytes; malformed links are refused; an added password stays visible', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId);
+  await page.click('#btn-add');
+  await page.click('[data-add-type="2fa"]');
+  await page.fill('#acc-detail .acc-secret', 'otpauth://totp/Example%?secret=JBSWY3DPEHPK3PXP');
+  await expect(page.locator('#status-msg')).toContainText('malformed');
+  await expect(page.locator('#acc-detail .acc-secret')).toHaveValue('');
+
+  await page.fill('#acc-detail .acc-secret', 'otpauth://totp/Example:user?secret=ABCDEFABCDEFABCD');
+  const stored = await page.locator('#acc-detail .acc-secret').inputValue();
+  const expected = await page.evaluate(() => [...new Uint8Array(base32Decode('ABCDEFABCDEFABCD'))].map(b => b.toString(16).padStart(2, '0')).join(''));
+  expect(stored).toBe(expected);
+
+  await page.click('#acc-detail .btn-add-password');
+  await page.fill('#acc-detail .acc-password', 'pw');
+  await page.click('#btn-add');
+  await page.click('[data-add-type="note"]');
+  await page.locator('.acc-head', { hasText: 'Example' }).click();
+  await expect(page.locator('#acc-detail .acc-password')).toHaveValue('pw');
+  await expect(page.locator('#acc-detail .acc-password-field')).toBeVisible();
 });
