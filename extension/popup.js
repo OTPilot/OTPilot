@@ -62,10 +62,13 @@ const THEMES = [
 ];
 const DEFAULT_THEME = 'original';
 
-function applyTheme(id) {
+// `persist`: only when the user picks a theme. Applying the stored one at
+// startup must not write it back — a theme changed meanwhile (another popup,
+// Settings elsewhere) would be overwritten by the value read earlier.
+function applyTheme(id, { persist = false } = {}) {
   document.body.dataset.theme = id;
   try { localStorage.setItem('otpilotTheme', id); } catch { /* private mode etc. */ }
-  chrome.storage.local.set({ theme: id });
+  if (persist) chrome.storage.local.set({ theme: id });
   const sub = document.getElementById('row-settings-theme-sub');
   if (sub) sub.textContent = THEMES.find(t => t.id === id)?.name ?? id;
 }
@@ -88,7 +91,7 @@ function renderThemePicker(current) {
         : ''}</span>`;
     row.addEventListener('click', () => {
       if (t.id === current) return;
-      applyTheme(t.id);
+      applyTheme(t.id, { persist: true });
       current = t.id;
       renderThemePicker(current);
     });

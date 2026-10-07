@@ -165,10 +165,23 @@ function retryThemeLoad() {
 
 function loadThemeVars() {
   _themeLoad ??= new Promise(resolve => {
-    const failed = () => { _themeLoad = null; resolve(null); retryThemeLoad(); };
+    let settled = false;
+    const failed = () => {
+      if (settled) return;
+      settled = true;
+      _themeLoad = null;
+      resolve(null);
+      retryThemeLoad();
+    };
+    // A request can get no answer at all (the worker restarting under
+    // load); without this the pending promise would hold every later overlay.
+    const timer = setTimeout(failed, 2000);
     try {
       chrome.runtime.sendMessage({ action: 'themeVars' }, vars => {
+        clearTimeout(timer);
+        if (settled) return;
         if (chrome.runtime.lastError || !vars || !Object.keys(vars).length) { failed(); return; }
+        settled = true;
         _themeVars = vars;
         _themeStale = false;
         _themeRetries = 0;

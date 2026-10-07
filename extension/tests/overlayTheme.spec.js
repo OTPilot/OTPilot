@@ -129,3 +129,30 @@ test('the sign-in fill overlay follows the theme', async ({ context, extensionId
   await expect.poll(() => surface(overlay)).toBe('rgb(255, 255, 255)');
   await expect.poll(() => surface(overlay.locator('.otpilot-login-choice'))).toBe('rgb(250, 249, 245)');
 });
+
+test('opening the popup applies the stored theme without writing it back', async ({ context, extensionId }) => {
+  const seed = await context.newPage();
+  await seed.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(seed, { accounts: [], theme: 'daylight' });
+  // A spy on storage writes, in place before the popup's own scripts run.
+  await context.addInitScript(() => {
+    if (!location.pathname.endsWith('/popup.html') || !globalThis.chrome?.storage) return;
+    window.themeWrites = [];
+    const set = chrome.storage.local.set.bind(chrome.storage.local);
+    chrome.storage.local.set = (items, ...rest) => {
+      if (items && 'theme' in items) window.themeWrites.push(items.theme);
+      return set(items, ...rest);
+    };
+  });
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await expect(popup.locator('body')).toHaveAttribute('data-theme', 'daylight');
+  await popup.waitForTimeout(500);
+  // Startup applied it without writing (a theme changed elsewhere right after
+  // the popup read it would otherwise be overwritten with the old value).
+  expect(await popup.evaluate(() => window.themeWrites)).toEqual([]);
+  // Picking one in Settings does write it.
+  await popup.click('#nav-config');
+  await popup.locator('.theme-row', { hasText: 'Vault' }).click();
+  expect(await popup.evaluate(() => window.themeWrites)).toEqual(['vault']);
+});
