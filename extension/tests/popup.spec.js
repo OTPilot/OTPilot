@@ -199,6 +199,7 @@ test('adding an account while a category filter is active keeps it visible and p
 
   // Add an account while the Work filter is active
   await page.click('#btn-add');
+  await page.click('[data-add-type="login"]');
 
   // The new row is visible (not hidden by the filter) → 3 visible rows
   const visibleAfter = await page.locator('.acc-row').evaluateAll(els =>

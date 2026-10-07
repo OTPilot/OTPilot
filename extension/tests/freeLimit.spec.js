@@ -23,6 +23,7 @@ const itemCount = page => page.evaluate(async () => (await VaultStore.readAll(aw
 
 async function addAccount(page, name, { password = '', secret = '' } = {}) {
   await page.click('#btn-add');
+  await page.click('[data-add-type="login"]');
   await page.fill('.acc-body.open .acc-name, #acc-detail .acc-name', name);
   if (password) await page.fill('#acc-detail .acc-password', password);
   if (secret) await page.fill('#acc-detail .acc-secret', secret);
@@ -80,7 +81,7 @@ test('an account added while the limit check runs is not saved unchecked', async
     const real = VaultAccounts.exceedsFreeLimit;
     VaultAccounts.exceedsFreeLimit = async (...args) => {
       const r = await real(...args);
-      document.getElementById('btn-add').click();
+      document.getElementById('btn-add').click(); document.querySelector('[data-add-type="login"]').click();
       return r;
     };
   });
@@ -162,7 +163,7 @@ test('the editor and the page\'s Save login cannot both take the last free slot'
     await new Promise(r => setTimeout(r, 50));
     const real = VaultAccounts.exceedsFreeLimit;
     VaultAccounts.exceedsFreeLimit = async (...a) => { events.push('editor check'); return real(...a); };
-    document.getElementById('btn-add').click();
+    document.getElementById('btn-add').click(); document.querySelector('[data-add-type="login"]').click();
     document.querySelector('#acc-detail .acc-name').value = 'Fiftieth';
     document.getElementById('btn-save-all').click();
     await new Promise(r => setTimeout(r, 300));

@@ -24,11 +24,11 @@ test('each manager\'s export maps to logins', async ({ context, extensionId }) =
 
   const chrome = await parse(page, 'name,url,username,password,note\nGitHub,https://github.com/login,me@x.com,pw1,hello\n');
   expect(chrome.source).toBe('Chrome');
-  expect(chrome.entries).toEqual([{ title: 'GitHub', urls: ['github.com'], username: 'me@x.com', password: 'pw1', notes: 'hello', totp: '', tag: '' }]);
+  expect(chrome.entries).toEqual([{ type: 'login', title: 'GitHub', urls: ['github.com'], username: 'me@x.com', password: 'pw1', notes: 'hello', totp: '', tag: '' }]);
 
   const dashlane = await parse(page, 'username,username2,username3,title,password,note,url,category,otpSecret\nops@x.com,,,Vercel,pw7,team login,https://vercel.com,Work,\n');
   expect(dashlane.source).toBe('Dashlane');
-  expect(dashlane.entries).toEqual([{ title: 'Vercel', urls: ['vercel.com'], username: 'ops@x.com', password: 'pw7', notes: 'team login', totp: '', tag: 'Work' }]);
+  expect(dashlane.entries).toEqual([{ type: 'login', title: 'Vercel', urls: ['vercel.com'], username: 'ops@x.com', password: 'pw7', notes: 'team login', totp: '', tag: 'Work' }]);
 
   const bitwarden = await parse(page, [
     'folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp',
@@ -36,8 +36,7 @@ test('each manager\'s export maps to logins', async ({ context, extensionId }) =
     ',,note,Wifi,the code is 1234,,0,,,,',
   ].join('\n'));
   expect(bitwarden.source).toBe('Bitwarden');
-  expect(bitwarden.notes).toBe(1);
-  expect(bitwarden.entries).toEqual([{ title: 'AWS', urls: ['console.aws.amazon.com', 'aws.amazon.com'], username: 'admin', password: 'pw2', notes: '', totp: 'JBSWY3DPEHPK3PXP', tag: 'Work' }]);
+  expect(bitwarden.entries).toEqual([{ type: 'login', title: 'AWS', urls: ['console.aws.amazon.com', 'aws.amazon.com'], username: 'admin', password: 'pw2', notes: '', totp: 'JBSWY3DPEHPK3PXP', tag: 'Work' }, { type: 'note', title: 'Wifi', urls: [], username: '', password: '', notes: 'the code is 1234', totp: '', tag: '' }]);
 
   const onePassword = await parse(page, 'Title,Url,Username,Password,OTPAuth,Favorite,Archived,Tags,Notes\nStripe,dashboard.stripe.com,ops@x.com,pw3,,false,false,Finance,\n');
   expect(onePassword.source).toBe('1Password');
@@ -45,7 +44,7 @@ test('each manager\'s export maps to logins', async ({ context, extensionId }) =
 
   const lastpass = await parse(page, 'url,username,password,totp,extra,name,grouping,fav\nhttps://namecheap.com,me,pw4,JBSW Y3DP EHPK 3PXP,,Namecheap,Domains,0\nhttp://sn,,,,secret note,Note,,0\n');
   expect(lastpass.source).toBe('LastPass');
-  expect(lastpass.notes).toBe(1);
+  expect(lastpass.entries.map(e => [e.type, e.title, e.notes])).toEqual([['login', 'Namecheap', ''], ['note', 'Note', 'secret note']]);
   expect(lastpass.entries[0]).toMatchObject({ title: 'Namecheap', urls: ['namecheap.com'], totp: 'JBSWY3DPEHPK3PXP', tag: 'Domains' });
 
   const keepass = await parse(page, '"Group","Title","Username","Password","URL","Notes","TOTP"\n"Root/Email","Fastmail","me","pw5","https://app.fastmail.com","",""\n');
@@ -61,7 +60,7 @@ test('rows without a password (or 2FA secret) and non-web URIs are skipped; a fi
   const page = await lib(context, extensionId);
   const r = await parse(page, 'name,url,username,password\nApp,android://com.app,me,pw\nEmpty,https://x.com,me,\n');
   expect(r.invalid).toBe(1);
-  expect(r.entries).toEqual([{ title: 'App', urls: [], username: 'me', password: 'pw', notes: '', totp: '', tag: '' }]);
+  expect(r.entries).toEqual([{ type: 'login', title: 'App', urls: [], username: 'me', password: 'pw', notes: '', totp: '', tag: '' }]);
   await expect(page.evaluate(() => Importers.parse('name,url\nA,b.com\n'))).rejects.toThrow('No password column found');
 });
 
@@ -286,4 +285,24 @@ test('a storage failure while writing the import stores none of it', async ({ co
   await expect(page.locator('#csv-import-status')).toContainText('Import failed — nothing was changed');
   const stored = await page.evaluate(async () => Object.keys(await chrome.storage.local.get(null)).filter(k => k.startsWith('vi:')).length);
   expect(stored).toBe(0);
+});
+
+test('secure notes are imported as note items, and a note already saved is not duplicated', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, []);
+  const file = csvFile([
+    'folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp',
+    'Home,,note,Wifi,SSID Home / pass 1234,,0,,,,',
+    ',,login,AWS,,,0,https://aws.amazon.com,admin,pw,',
+  ].join('\n'));
+  await page.setInputFiles('#csv-import-file', file);
+  await expect(page.locator('#csv-import-status')).toContainText('Bitwarden: 1 login and 1 secure note found');
+  await expect(page.locator('#csv-import-list .export-acc-row', { hasText: 'Wifi' }).locator('.type-tag')).toHaveText('Secure note');
+  await page.click('#csv-import-confirm');
+  await expect(page.locator('#csv-import-status')).toContainText('Imported 1 login and 1 secure note.');
+  const notes = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
+    .filter(i => i.type === 'note').map(i => [i.title, i.notes, i.tags]));
+  expect(notes).toEqual([['Wifi', 'SSID Home / pass 1234', ['Home']]]);
+
+  await page.setInputFiles('#csv-import-file', file);
+  await expect(page.locator('#csv-import-list .export-acc-row', { hasText: 'Wifi' })).toContainText('already in vault');
 });

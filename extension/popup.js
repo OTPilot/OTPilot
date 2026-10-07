@@ -152,11 +152,16 @@ async function syncActiveIndexToUrl() {
 // account added meanwhile from a page isn't in `accounts` and must survive).
 let _loadedIds = new Set();
 
+// Vault items that aren't logins (secure notes, servers, API credentials):
+// listed and edited in the Vault view next to the logins in `accounts`.
+let otherItems = [];
+
 async function loadState() {
   // Accounts live encrypted in the vault (only read once unlocked).
   const key = await VaultKeys.getKey();
   const vaultAccounts = key ? await VaultAccounts.load(key) : [];
   _loadedIds = new Set(vaultAccounts.map(a => a._id));
+  otherItems = key ? await VaultAccounts.loadOthers(key) : [];
   return new Promise(r =>
     chrome.storage.local.get(['activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'categoryFilter', 'iconCache'], d => {
       accounts       = vaultAccounts;
@@ -276,13 +281,18 @@ let categoryFilter = ''; // '' = All
 
 // Unique, sorted category labels present in a list of accounts (defaults to the
 // saved set; the vault passes its in-progress `draft` so counts match the rows).
+// Every tag of an account or vault entry: the category (first tag) plus the
+// rest ("More tags").
+function tagsOf(a) {
+  return [(a.category || '').trim(), ...(a.moreTags || []).map(t => String(t).trim())].filter(Boolean);
+}
+
 function getCategories(list = accounts) {
-  return [...new Set(list.map(a => (a.category || '').trim()).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b));
+  return [...new Set(list.flatMap(tagsOf))].sort((a, b) => a.localeCompare(b));
 }
 
 function categoryCount(name, list = accounts) {
-  return list.filter(a => (a.category || '').trim() === name).length;
+  return list.filter(a => tagsOf(a).includes(name)).length;
 }
 
 // Categories present in the in-progress vault draft (so a label created on one
@@ -328,7 +338,7 @@ function renderCategoryBar(barEl, onPick, source = accounts) {
 }
 
 function accountMatchesFilter(acc) {
-  return !categoryFilter || (acc.category || '').trim() === categoryFilter;
+  return !categoryFilter || tagsOf(acc).includes(categoryFilter);
 }
 
 // ── Site icons ────────────────────────────────────────────────────────────────
@@ -704,9 +714,44 @@ let _justSavedMessage = false;
 // Bumped each time the editor starts over from the saved list (a new draft).
 let _editSession = 0;
 
+// ── Vault entries ──
+// The editor's draft holds logins as v1 accounts (see VaultAccounts) and every
+// other item as an entry wrapping it: { _kind: 'item', _id, type, name,
+// category, moreTags, email (the row's summary line), item }. Save splits them.
+const isItemEntry = e => e?._kind === 'item';
+const entryType = e => (isItemEntry(e) ? e.type : 'login');
+const typeLabel = type => Vault.TYPES[type]?.label || type;
+// The fields that summarize an item on its row.
+const ITEM_SUMMARY = { server: ['host', 'username'], api: ['environment', 'clientId'] };
+let typeFilter = ''; // '' = every type
+
+function itemSummary(item) {
+  return (ITEM_SUMMARY[item.type] || []).map(id => Vault.getValue(item, id)).filter(Boolean).join(' · ');
+}
+
+function entryOf(item) {
+  const tags = item.tags || [];
+  return {
+    _kind: 'item', _id: item.id, type: item.type, name: item.title || '',
+    category: tags[0] || '', moreTags: tags.slice(1), email: itemSummary(item), item: structuredClone(item),
+  };
+}
+
+function itemOfEntry(entry) {
+  const item = structuredClone(entry.item);
+  item.title = entry.name;
+  item.tags = VaultAccounts.normalizeTags([entry.category, ...(entry.moreTags || [])]);
+  return item;
+}
+
+const parseTags = text => VaultAccounts.normalizeTags(String(text || '').split(','));
+
 function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {}) {
   _editSession++;
-  const withOrigin = accounts.map((a, i) => ({ acc: { ...a }, origIdx: i }));
+  const withOrigin = [
+    ...accounts.map((a, i) => ({ acc: { ...a }, origIdx: i })),
+    ...otherItems.map(item => ({ acc: entryOf(item), origIdx: -1 })),
+  ];
   withOrigin.sort((x, y) => (x.acc.name || '').localeCompare(y.acc.name || ''));
   draft = withOrigin.map(w => w.acc);
   _draftBase = structuredClone(draft);
@@ -719,6 +764,7 @@ function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {})
     categoryFilter = '';
     chrome.storage.local.set({ categoryFilter });
   }
+  renderVaultTypeBar();
   renderVaultCatBar();
   rebuildAccountsDOM();
   applyVaultSearch();
@@ -739,22 +785,35 @@ function syncOpenAccToDraft() {
   if (openAccIdx < 0) return;
   const body = document.querySelector('#acc-detail .acc-body');
   if (!body) return;
+  const entry = draft[openAccIdx];
+  entry.category = (body.querySelector('.cat-choose')?.dataset.value || '').trim();
+  entry.moreTags = parseTags(body.querySelector('.acc-more-tags')?.value).filter(t => t !== entry.category);
+  if (isItemEntry(entry)) {
+    entry.name = body.querySelector('.item-title').value.trim();
+    body.querySelectorAll('.item-field').forEach(inp => {
+      const field = Vault.getField(entry.item, inp.dataset.id);
+      if (field) field.value = inp.value;
+    });
+    entry.item.notes = body.querySelector('.item-notes').value;
+    entry.email = itemSummary(entry.item);
+    return;
+  }
   draft[openAccIdx].name     = body.querySelector('.acc-name').value.trim();
   draft[openAccIdx].email    = body.querySelector('.acc-email').value.trim();
   draft[openAccIdx].password = body.querySelector('.acc-password').value;
   draft[openAccIdx].secret   = body.querySelector('.acc-secret').value.trim();
   draft[openAccIdx].urls     = body.querySelector('.acc-urls').value.trim();
   draft[openAccIdx].autofill = body.querySelector('.acc-autofill').checked;
-  draft[openAccIdx].category = (body.querySelector('.cat-choose')?.dataset.value || '').trim();
 }
 
 function updateVaultCount() {
   const rows = document.querySelectorAll('.acc-row');
   const visible = [...rows].filter(r => r.style.display !== 'none').length;
   const total = draft.length;
+  const noun = draft.some(isItemEntry) ? 'item' : 'account';
   const el = document.getElementById('acc-count');
   if (el) el.textContent = visible === total
-    ? `${total} account${total !== 1 ? 's' : ''}`
+    ? `${total} ${noun}${total !== 1 ? 's' : ''}`
     : `${visible} of ${total}`;
 }
 
@@ -766,10 +825,34 @@ function applyVaultSearch() {
     const textMatch = !q
       || (acc.name  || '').toLowerCase().includes(q)
       || (acc.email || '').toLowerCase().includes(q);
-    const catMatch = !categoryFilter || (acc.category || '').trim() === categoryFilter;
-    row.style.display = (textMatch && catMatch) ? '' : 'none';
+    const catMatch = !categoryFilter || tagsOf(acc).includes(categoryFilter);
+    const typeMatch = !typeFilter || entryType(acc) === typeFilter;
+    row.style.display = (textMatch && catMatch && typeMatch) ? '' : 'none';
   });
   updateVaultCount();
+}
+
+// Type filter (All · Logins · Secure notes · …): shown once the vault holds
+// more than one type.
+function renderVaultTypeBar() {
+  const bar = document.getElementById('vault-type-bar');
+  const types = [...new Set(draft.map(entryType))];
+  if (typeFilter && !types.includes(typeFilter)) typeFilter = '';
+  if (types.length < 2) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  bar.style.display = '';
+  bar.innerHTML = '';
+  const order = Object.keys(Vault.TYPES);
+  const options = [['', 'All', draft.length],
+    ...types.sort((a, b) => order.indexOf(a) - order.indexOf(b))
+      .map(t => [t, `${typeLabel(t)}s`, draft.filter(e => entryType(e) === t).length])];
+  for (const [value, label, count] of options) {
+    const pill = document.createElement('button');
+    pill.className = 'cat-pill type-pill' + (typeFilter === value ? ' active' : '');
+    pill.dataset.type = value;
+    pill.innerHTML = `${esc(label)} <span class="count">${count}</span>`;
+    pill.addEventListener('click', () => { typeFilter = value; renderVaultTypeBar(); applyVaultSearch(); });
+    bar.appendChild(pill);
+  }
 }
 
 function renderVaultCatBar() {
@@ -797,11 +880,13 @@ function rebuildAccountsDOM() {
     const head = document.createElement('button');
     head.className = 'acc-head' + (i === openAccIdx ? ' open' : '');
     const cat = (acc.category || '').trim();
+    const item = isItemEntry(acc);
     head.innerHTML = `
       ${avatarHTML(acc, 'acc-av-md')}
       <span class="acc-head-text">
-        <span class="acc-head-name">${esc(acc.name) || `Account ${i + 1}`}${sharedBadgeHTML(findSharedCode(acc))}</span>
-        ${cat || acc.email ? `<span class="acc-head-sub">
+        <span class="acc-head-name">${esc(acc.name) || (item ? `Untitled ${typeLabel(acc.type).toLowerCase()}` : `Account ${i + 1}`)}${item ? '' : sharedBadgeHTML(findSharedCode(acc))}</span>
+        ${cat || acc.email || item ? `<span class="acc-head-sub">
+          ${item ? `<span class="type-tag">${esc(typeLabel(acc.type))}</span>` : ''}
           ${cat ? `<span class="cat-tag">${catDot(cat)}${esc(cat)}</span>` : ''}
           ${acc.email ? `<span class="acc-head-email">${esc(acc.email)}</span>` : ''}
         </span>` : ''}
@@ -811,6 +896,7 @@ function rebuildAccountsDOM() {
       syncOpenAccToDraft();
       openAccIdx = i;
       rebuildAccountsDOM();
+      renderVaultTypeBar();
       renderVaultCatBar();
       applyVaultSearch();
       renderAccDetail();
@@ -840,6 +926,8 @@ function renderAccDetail() {
     return;
   }
 
+  if (isItemEntry(acc)) { renderItemDetail(container, acc); return; }
+
   const cat = (acc.category || '').trim();
   const body = document.createElement('div');
   body.className = 'acc-body open';
@@ -864,14 +952,7 @@ function renderAccDetail() {
         <button class="btn-eye btn-gen-password" title="Generate a password">⟳</button>
       </div>
     </div>
-    <div class="acc-field">
-      <label>Category</label>
-      <div class="cat-choose" data-value="${esc(cat)}">
-        <button type="button" class="cat-choice${cat ? '' : ' sel'}" data-cat=""><span class="cat-dot" style="background:var(--ink-4)"></span>None</button>
-        ${draftCategories().map(c => `<button type="button" class="cat-choice${cat === c ? ' sel' : ''}" data-cat="${esc(c)}">${catDot(c)}${esc(c)}</button>`).join('')}
-        <button type="button" class="cat-choice new">+ New</button>
-      </div>
-    </div>
+    ${tagFieldsHTML(acc)}
     <div class="acc-field">
       <label>2FA secret (optional, base32 or hex)</label>
       <div class="field-row">
@@ -900,6 +981,7 @@ function renderAccDetail() {
     draft.splice(openAccIdx, 1);
     openAccIdx = -1;
     rebuildAccountsDOM();
+    renderVaultTypeBar();
     renderVaultCatBar();
     applyVaultSearch();
     renderAccDetail();
@@ -936,7 +1018,31 @@ function renderAccDetail() {
     openSharePicker(body.querySelector('.share-picker'), draft[idx]);
   });
 
-  // ── Category chooser ──
+  mountCategoryChooser(body);
+
+  container.innerHTML = '';
+  container.appendChild(body);
+}
+
+// The category (first tag) chooser plus "More tags", shared by every editor.
+function tagFieldsHTML(entry) {
+  const cat = (entry.category || '').trim();
+  return `
+    <div class="acc-field">
+      <label>Category</label>
+      <div class="cat-choose" data-value="${esc(cat)}">
+        <button type="button" class="cat-choice${cat ? '' : ' sel'}" data-cat=""><span class="cat-dot" style="background:var(--ink-4)"></span>None</button>
+        ${draftCategories().map(c => `<button type="button" class="cat-choice${cat === c ? ' sel' : ''}" data-cat="${esc(c)}">${catDot(c)}${esc(c)}</button>`).join('')}
+        <button type="button" class="cat-choice new">+ New</button>
+      </div>
+    </div>
+    <div class="acc-field">
+      <label>More tags (comma separated)</label>
+      <input class="acc-more-tags" type="text" placeholder="e.g. client-x, infra" value="${esc((entry.moreTags || []).join(', '))}">
+    </div>`;
+}
+
+function mountCategoryChooser(body) {
   const choose = body.querySelector('.cat-choose');
   choose.querySelectorAll('.cat-choice:not(.new)').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -965,7 +1071,86 @@ function renderAccDetail() {
     field.appendChild(inp);
     inp.focus();
   });
+}
 
+// Editor for a non-login item, built from its fields (the type's template,
+// plus any field it carries that this version doesn't know — kept as text).
+// Secret kinds are masked with show/copy; password kinds can be generated.
+function renderItemDetail(container, entry) {
+  const idx = openAccIdx;
+  const item = entry.item;
+  const fieldHTML = f => {
+    const id = esc(f.id);
+    const val = esc(String(f.value ?? ''));
+    const secret = Vault.SECRET_KINDS.includes(f.kind);
+    let input;
+    if (f.kind === 'multiline') input = `<textarea class="item-field" data-id="${id}">${val}</textarea>`;
+    else if (f.kind === 'date') input = `<input class="item-field" data-id="${id}" type="date" value="${val}">`;
+    else input = `<input class="item-field" data-id="${id}" type="${secret ? 'password' : 'text'}" value="${val}" autocomplete="off">`;
+    return `<div class="acc-field">
+      <label>${esc(f.label || f.id)}</label>
+      <div class="field-row">
+        ${input}
+        ${secret ? `<button class="btn-eye" title="Show/hide">${SVG_EYE}</button>` : ''}
+        ${f.kind === 'password' ? '<button class="btn-eye btn-gen-password" title="Generate">⟳</button>' : ''}
+        ${f.kind === 'multiline' ? '' : '<button class="btn-eye btn-copy-field" title="Copy">⧉</button>'}
+      </div>
+    </div>`;
+  };
+  const body = document.createElement('div');
+  body.className = 'acc-body open item-body';
+  body.dataset.type = entry.type;
+  body.innerHTML = `
+    <div class="acc-body-head">
+      <span class="acc-body-title">${esc(entry.name) || `Untitled ${typeLabel(entry.type).toLowerCase()}`}</span>
+      <span class="type-tag">${esc(typeLabel(entry.type))}</span>
+      <button class="btn-del" title="Delete">✕ Delete</button>
+    </div>
+    <div class="acc-field">
+      <label>Name</label>
+      <input class="item-title" type="text" placeholder="${esc(typeLabel(entry.type))} name" value="${esc(entry.name)}">
+    </div>
+    ${(item.fields || []).map(fieldHTML).join('')}
+    <div class="acc-field">
+      <label>Notes</label>
+      <textarea class="item-notes" placeholder="${entry.type === 'note' ? 'Write your note' : 'Anything else worth keeping'}">${esc(item.notes || '')}</textarea>
+    </div>
+    ${tagFieldsHTML(entry)}`;
+
+  body.querySelector('.btn-del').addEventListener('click', () => {
+    syncOpenAccToDraft();
+    const name = draft[idx].name || `this ${typeLabel(entry.type).toLowerCase()}`;
+    if (!confirm(`Delete "${name}"? This can't be undone once you save.`)) return;
+    draft.splice(idx, 1);
+    openAccIdx = -1;
+    rebuildAccountsDOM();
+    renderVaultTypeBar();
+    renderVaultCatBar();
+    applyVaultSearch();
+    renderAccDetail();
+  });
+  body.querySelectorAll('.btn-eye:not(.btn-gen-password):not(.btn-copy-field)').forEach(b => b.addEventListener('click', e => {
+    const btn = e.currentTarget;
+    const inp = btn.parentElement.querySelector('.item-field');
+    const reveal = inp.type === 'password';
+    inp.type = reveal ? 'text' : 'password';
+    btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
+  }));
+  body.querySelectorAll('.btn-gen-password').forEach(b => b.addEventListener('click', async () => {
+    const inp = b.parentElement.querySelector('.item-field');
+    const { generatorOptions } = await chrome.storage.local.get('generatorOptions');
+    inp.value = Generator.generate({ ...generatorOptions, mode: 'password' });
+    inp.type = 'text';
+  }));
+  body.querySelectorAll('.btn-copy-field').forEach(b => b.addEventListener('click', async () => {
+    const inp = b.parentElement.querySelector('.item-field');
+    if (inp.value && await copyText(inp.value)) setStatus('Copied');
+  }));
+  body.querySelector('.item-title').addEventListener('input', e => {
+    const head = document.querySelector(`.acc-row[data-i="${idx}"] .acc-head-name`);
+    if (head) head.textContent = e.target.value.trim() || `Untitled ${typeLabel(entry.type).toLowerCase()}`;
+  });
+  mountCategoryChooser(body);
   container.innerHTML = '';
   container.appendChild(body);
 }
@@ -984,18 +1169,57 @@ function sharedBadgeHTML(code) {
   </span>`;
 }
 
-document.getElementById('btn-add').addEventListener('click', () => {
+// "+ Add" opens the type picker: the item types, and the planned ones as
+// "Soon". A Login starts the login editor; the others an item editor.
+function addToDraft(type) {
   syncOpenAccToDraft();
   // Adding while a category filter is active pre-assigns that category, so the
   // new row matches the active filter and stays visible (instead of being
-  // hidden by applyVaultSearch the moment it's created).
-  draft.push({ name: '', email: '', secret: '', urls: '', autofill: true, category: categoryFilter });
+  // hidden by applyVaultSearch the moment it's created). Same for the type.
+  if (type === 'login') {
+    draft.push({ name: '', email: '', secret: '', urls: '', autofill: true, category: categoryFilter, moreTags: [] });
+  } else {
+    draft.push(entryOf(Vault.newItem(type, { tags: categoryFilter ? [categoryFilter] : [] })));
+  }
+  if (typeFilter && typeFilter !== type) typeFilter = '';
   openAccIdx = draft.length - 1;
   rebuildAccountsDOM();
+  renderVaultTypeBar();
   renderVaultCatBar();
   applyVaultSearch();
   renderAccDetail();
   document.getElementById('accounts-list').lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  document.querySelector('#acc-detail .acc-name, #acc-detail .item-title')?.focus();
+}
+
+function closeAddMenu() {
+  document.getElementById('add-type-menu').style.display = 'none';
+}
+
+document.getElementById('btn-add').addEventListener('click', e => {
+  e.stopPropagation();
+  const menu = document.getElementById('add-type-menu');
+  if (menu.style.display !== 'none') { closeAddMenu(); return; }
+  menu.innerHTML = '';
+  for (const [type, t] of Object.entries(Vault.TYPES)) {
+    const b = document.createElement('button');
+    b.className = 'add-type';
+    b.dataset.addType = type;
+    b.textContent = t.label;
+    b.addEventListener('click', () => { closeAddMenu(); addToDraft(type); });
+    menu.appendChild(b);
+  }
+  for (const t of Vault.UPCOMING_TYPES) {
+    const b = document.createElement('button');
+    b.className = 'add-type soon';
+    b.disabled = true;
+    b.innerHTML = `${esc(t.label)} <span class="soon-tag">Soon</span>`;
+    menu.appendChild(b);
+  }
+  menu.style.display = '';
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest?.('#add-type-menu')) closeAddMenu();
 });
 
 document.getElementById('acc-search').addEventListener('input', applyVaultSearch);
@@ -1041,7 +1265,9 @@ async function saveAccounts(intended) {
   try {
     const key = await VaultKeys.getKey();
     const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
-    overLimit = !!key && await VaultAccounts.exceedsFreeLimit(mergeDraftWithCurrent(), key, _loadedIds, userPlan);
+    const merged = mergeDraftWithCurrent();
+    overLimit = !!key && await VaultAccounts.exceedsFreeLimit(
+      merged.filter(e => !isItemEntry(e)), key, _loadedIds, userPlan, planOtherItems(merged));
   } catch {
     setStatus('Could not check the Free plan limit — try again', false);
     return;
@@ -1056,6 +1282,17 @@ async function saveAccounts(intended) {
     return;
   }
   draft = mergeDraftWithCurrent();
+
+  // Non-login items are written as items; the rest of this works on logins.
+  const others = planOtherItems(draft);
+  if (others.put.length || others.remove.length) {
+    const key = await VaultKeys.getKey();
+    if (!key) { setStatus('OTPilot is locked', false); return; }
+    if (others.put.length) await VaultStore.save(others.put, key);
+    if (others.remove.length) await VaultStore.remove(others.remove);
+    otherItems = await VaultAccounts.loadOthers(key);
+  }
+  draft = draft.filter(e => !isItemEntry(e));
 
   // Diff old accounts vs draft: stamp _updatedAt on new/changed, tombstone deleted
   const now      = new Date().toISOString();
@@ -1134,7 +1371,8 @@ const remapId = a => (a._id && _idRemaps[a._id] ? { ...a, _id: _idRemaps[a._id] 
 
 function mergeDraftWithCurrent() {
   const base = new Map(_draftBase.filter(a => a._id).map(remapId).map(a => [a._id, JSON.stringify(a)]));
-  const current = new Map(accounts.filter(a => a._id).map(a => [a._id, a]));
+  const currentList = [...accounts, ...otherItems.map(entryOf)];
+  const current = new Map(currentList.filter(a => a._id).map(a => [a._id, a]));
   const merged = [];
   for (const d0 of draft) {
     const d = remapId(d0);
@@ -1143,10 +1381,27 @@ function mergeDraftWithCurrent() {
     else if (current.has(d._id)) merged.push({ ...current.get(d._id) });
     // untouched here and gone from the vault: deleted elsewhere, stays deleted
   }
-  for (const a of accounts) {
+  for (const a of currentList) {
     if (a._id && !base.has(a._id)) merged.push({ ...a }); // arrived while editing
   }
   return merged;
+}
+
+// The non-login item writes for a merged draft: changed or new items (`put`)
+// and the ids the user deleted (`remove`: in the vault, gone from the draft).
+function planOtherItems(merged) {
+  const current = new Map(otherItems.map(i => [i.id, i]));
+  const same = (a, b) => JSON.stringify({ ...a, updatedAt: null }) === JSON.stringify({ ...b, updatedAt: null });
+  const now = new Date().toISOString();
+  const put = [];
+  const kept = new Set();
+  for (const entry of merged.filter(isItemEntry)) {
+    kept.add(entry._id);
+    const item = itemOfEntry(entry);
+    const cur = current.get(entry._id);
+    if (!cur || !same(item, cur)) put.push({ ...item, updatedAt: now });
+  }
+  return { put, remove: [...current.keys()].filter(id => !kept.has(id)) };
 }
 
 function showView(view, opts = {}) {
@@ -1604,11 +1859,13 @@ async function showCsvReview(file) {
   _csvImport = { entries: parsed.entries, plans };
 
   const skipped = [
-    parsed.notes ? `${parsed.notes} secure note${parsed.notes === 1 ? '' : 's'} skipped (supported soon)` : '',
     parsed.invalid ? `${parsed.invalid} row${parsed.invalid === 1 ? '' : 's'} without a password skipped` : '',
     parsed.unsupportedTotp ? `${parsed.unsupportedTotp} 2FA code${parsed.unsupportedTotp === 1 ? '' : 's'} with unsupported settings (HOTP, 8 digits, SHA256…) not imported` : '',
   ].filter(Boolean);
-  csvImportStatus([`${parsed.source}: ${parsed.entries.length} login${parsed.entries.length === 1 ? '' : 's'} found`, ...skipped].join(' · '));
+  const nLogins = parsed.entries.filter(e => e.type === 'login').length;
+  const nNotes = parsed.entries.length - nLogins;
+  const found = `${nLogins} login${nLogins === 1 ? '' : 's'}${nNotes ? ` and ${nNotes} secure note${nNotes === 1 ? '' : 's'}` : ''}`;
+  csvImportStatus([`${parsed.source}: ${found} found`, ...skipped].join(' · '));
   if (!parsed.entries.length) return;
 
   const list = document.getElementById('csv-import-list');
@@ -1619,6 +1876,7 @@ async function showCsvReview(file) {
     label.className = 'export-acc-row' + (exists ? ' disabled' : '');
     label.innerHTML = `<input type="checkbox" ${exists ? 'disabled' : 'checked'} data-idx="${i}">
       <span class="export-acc-name">${esc(entry.title)}</span>
+      ${entry.type === 'note' ? '<span class="type-tag">Secure note</span>' : ''}
       ${entry.username ? `<span class="export-acc-email">${esc(entry.username)}</span>` : ''}
       ${exists ? '<span class="export-acc-exists">already in vault</span>' : ''}
       ${p.action === 'merge' ? `<span class="export-acc-exists">adds password to ${esc(names.get(p.target) || 'login')}</span>` : ''}`;
@@ -1703,10 +1961,12 @@ async function importCsvEntries(chosen) {
     await stampLocalChange();
     silentPullSync();
   }
-  const added = toSave.filter(i => !items.some(x => x.id === i.id)).length;
-  const merged = toSave.length - added;
+  const created = toSave.filter(i => !items.some(x => x.id === i.id));
+  const added = created.filter(i => i.type === 'login').length;
+  const notes = created.length - added;
+  const merged = toSave.length - created.length;
   hideCsvReview();
-  csvImportStatus(`Imported ${added} login${added === 1 ? '' : 's'}${merged ? `, added ${merged} to existing logins` : ''}.`);
+  csvImportStatus(`Imported ${added} login${added === 1 ? '' : 's'}${notes ? ` and ${notes} secure note${notes === 1 ? '' : 's'}` : ''}${merged ? `, added ${merged} to existing logins` : ''}.`);
 }
 
 // ── Google Authenticator import ─────────────────────────────────────────────
@@ -2309,6 +2569,7 @@ let _syncInProgress = false;
 async function reloadFromVault(key) {
   accounts = await VaultAccounts.load(key);
   _loadedIds = new Set(accounts.map(a => a._id));
+  otherItems = await VaultAccounts.loadOthers(key);
   activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
   await VaultAccounts.writeIndex((await VaultStore.readAll(key)).items);
   refreshAccountsUI();
