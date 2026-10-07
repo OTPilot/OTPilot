@@ -69,21 +69,43 @@ const Importers = (() => {
     return { col, source };
   }
 
-  // A TOTP secret from an otpauth:// URI or a bare base32 secret; '' otherwise.
-  function totpSecret(value) {
-    const v = String(value || '').trim();
-    if (!v) return '';
-    if (/^otpauth:\/\//i.test(v)) {
-      try { return totpSecret(new URL(v).searchParams.get('secret')); } catch { return ''; }
-    }
-    const s = v.replace(/[\s-]/g, '').toUpperCase();
+  const base32 = v => {
+    const s = String(v || '').replace(/[\s-]/g, '').toUpperCase();
     return /^[A-Z2-7]{16,}=*$/.test(s) ? s.replace(/=+$/, '') : '';
+  };
+
+  // A TOTP secret from an otpauth:// URI or a bare base32 secret: { secret }
+  // ('' when there is none), or { unsupported: true } for settings OTPilot
+  // can't generate (HOTP, not 6 digits / 30 s / SHA1) — those would give
+  // codes the site rejects, so they're reported instead of imported.
+  function parseTotp(value) {
+    const v = String(value || '').trim();
+    if (!v) return { secret: '' };
+    if (/^otpauth:\/\//i.test(v)) {
+      let url;
+      try { url = new URL(v); } catch { return { secret: '' }; }
+      const p = url.searchParams;
+      const supported = url.host.toLowerCase() === 'totp'
+        && (p.get('digits') ?? '6') === '6'
+        && (p.get('period') ?? '30') === '30'
+        && (p.get('algorithm') ?? 'SHA1').toUpperCase() === 'SHA1';
+      const secret = base32(p.get('secret'));
+      if (!secret) return { secret: '' };
+      return supported ? { secret } : { unsupported: true };
+    }
+    return { secret: base32(v) };
   }
+
+  const totpSecret = value => parseTotp(value).secret || '';
 
   // Saved URL patterns are hosts (what matching uses); non-web URIs (an
   // Android app, a note marker) are dropped.
-  function urlsOf(value) {
-    return String(value || '').split(/[\s,]+/).map(u => u.trim()).filter(Boolean).flatMap(u => {
+  // One URL per cell, except where the source lists several: newlines, and
+  // commas in a Bitwarden export. Never split elsewhere: a comma inside a URL
+  // (`?next=,other.example`) must not become a saved host.
+  function urlsOf(value, source) {
+    const sep = source === 'Bitwarden' ? /[\n,]+/ : /\n+/;
+    return String(value || '').split(sep).map(u => u.trim()).filter(Boolean).flatMap(u => {
       const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : `https://${u}`;
       try {
         const url = new URL(withScheme);
@@ -98,33 +120,36 @@ const Importers = (() => {
     return parts[parts.length - 1] || '';
   }
 
-  // → { source, entries: [{ title, urls, username, password, notes, totp, tag }], notes, invalid }
+  // → { source, entries: [{ title, urls, username, password, notes, totp, tag }],
+  //     notes, invalid, unsupportedTotp }
   function parse(text) {
     const rows = parseCsv(text);
-    if (rows.length < 2) return { source: 'CSV', entries: [], notes: 0, invalid: 0 };
+    if (rows.length < 2) return { source: 'CSV', entries: [], notes: 0, invalid: 0, unsupportedTotp: 0 };
     const { col, source } = columns(rows[0]);
     if (col.password === undefined && col.totp === undefined) throw new Error('No password column found');
     const get = (row, key) => (col[key] !== undefined ? String(row[col[key]] ?? '').trim() : '');
     const entries = [];
-    let notes = 0, invalid = 0;
+    let notes = 0, invalid = 0, unsupportedTotp = 0;
     for (const row of rows.slice(1)) {
       const rawUrl = get(row, 'url');
       if (get(row, 'type').toLowerCase() === 'note' || rawUrl === 'http://sn') { notes++; continue; }
-      const urls = urlsOf(rawUrl);
+      const urls = urlsOf(rawUrl, source);
+      const totp = parseTotp(get(row, 'totp'));
+      if (totp.unsupported) unsupportedTotp++;
       const entry = {
         title: get(row, 'title') || urls[0] || '',
         urls,
         username: get(row, 'username'),
         password: col.password !== undefined ? String(row[col.password] ?? '') : '',
         notes: get(row, 'notes'),
-        totp: totpSecret(get(row, 'totp')),
+        totp: totp.secret || '',
         tag: folderTag(get(row, 'folder')),
       };
       if (!entry.password && !entry.totp) { invalid++; continue; }
       if (!entry.title) entry.title = entry.username || 'Imported login';
       entries.push(entry);
     }
-    return { source, entries, notes, invalid };
+    return { source, entries, notes, invalid, unsupportedTotp };
   }
 
   const sameUser = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -132,38 +157,47 @@ const Importers = (() => {
     || (item.urls || []).some(h => Vault.loginCoversHost(entry.urls, h));
 
   // What importing each entry does against the vault's current `items`:
-  //   exists — a login for that site + username already holds this password
-  //   merge  — adds the password to a login for that site + username that
-  //            has none (typically a 2FA-only login): `target` is its id
+  //   exists — a login for that site + username already holds this entry
+  //            (same password, or for a 2FA-only row, the same secret)
+  //   merge  — adds it to a login for that site + username that has no
+  //            password and no different 2FA secret (typically a 2FA-only
+  //            login): `target` is its id
   //   new    — a new login
+  // Every matching login is looked at, not just the first. Pass only the
+  // entries being imported: an entry left out must not take a merge target.
   function plan(entries, items) {
     const logins = items.filter(i => i.type === 'login');
     const taken = new Set();
     return entries.map(entry => {
-      const match = logins.find(i => !taken.has(i.id) && hostsOverlap(i, entry)
-        && sameUser(Vault.getValue(i, 'username'), entry.username));
-      if (match && Vault.getValue(match, 'password') === entry.password && entry.password) return { action: 'exists', target: match.id };
-      if (match && !Vault.getValue(match, 'password')) { taken.add(match.id); return { action: 'merge', target: match.id }; }
+      const matches = logins.filter(i => hostsOverlap(i, entry) && sameUser(Vault.getValue(i, 'username'), entry.username));
+      const holds = i => (entry.password
+        ? Vault.getValue(i, 'password') === entry.password
+        : !!entry.totp && i.totp?.secret === entry.totp);
+      const same = matches.find(holds);
+      if (same) return { action: 'exists', target: same.id };
+      const target = matches.find(i => !taken.has(i.id) && !Vault.getValue(i, 'password')
+        && (!entry.totp || !i.totp?.secret || i.totp.secret === entry.totp));
+      if (target) { taken.add(target.id); return { action: 'merge', target: target.id }; }
       return { action: 'new' };
     });
   }
 
-  // The items to store for the chosen entries (indexes into `entries`).
-  function toItems(entries, plans, items, chosen) {
+  // The items to store for `entries` (planned together by plan()).
+  function toItems(entries, plans, items) {
     const byId = new Map(items.map(i => [i.id, i]));
     let position = items.reduce((m, i) => Math.max(m, (i.position ?? -1) + 1), 0);
     const now = new Date().toISOString();
     const out = [];
-    for (const idx of chosen) {
-      const entry = entries[idx];
+    for (const [idx, entry] of entries.entries()) {
       const p = plans[idx];
       if (p.action === 'exists') continue;
       if (p.action === 'merge') {
         const next = structuredClone(byId.get(p.target));
-        Vault.getField(next, 'password').value = entry.password;
+        if (entry.password) Vault.getField(next, 'password').value = entry.password;
         if (!next.urls.length) next.urls = entry.urls;
         if (!next.notes && entry.notes) next.notes = entry.notes;
         if (!next.totp && entry.totp) next.totp = { secret: entry.totp, digits: 6, period: 30, algorithm: 'SHA1' };
+        if (entry.tag && !(next.tags || []).includes(entry.tag)) next.tags = [...(next.tags || []), entry.tag];
         next.updatedAt = now;
         out.push(next);
         continue;
@@ -181,5 +215,5 @@ const Importers = (() => {
     return out;
   }
 
-  return { parseCsv, parse, plan, toItems, totpSecret };
+  return { parseCsv, parse, plan, toItems, totpSecret, parseTotp };
 })();

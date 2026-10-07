@@ -1551,6 +1551,7 @@ async function showCsvReview(file) {
   const skipped = [
     parsed.notes ? `${parsed.notes} secure note${parsed.notes === 1 ? '' : 's'} skipped (supported soon)` : '',
     parsed.invalid ? `${parsed.invalid} row${parsed.invalid === 1 ? '' : 's'} without a password skipped` : '',
+    parsed.unsupportedTotp ? `${parsed.unsupportedTotp} 2FA code${parsed.unsupportedTotp === 1 ? '' : 's'} with unsupported settings (HOTP, 8 digits, SHA256…) not imported` : '',
   ].filter(Boolean);
   csvImportStatus([`${parsed.source}: ${parsed.entries.length} login${parsed.entries.length === 1 ? '' : 's'} found`, ...skipped].join(' · '));
   if (!parsed.entries.length) return;
@@ -1588,17 +1589,27 @@ document.getElementById('csv-import-all').addEventListener('change', e => {
 });
 document.getElementById('csv-import-cancel').addEventListener('click', () => { hideCsvReview(); csvImportStatus(''); });
 
+let _csvImporting = false;
 document.getElementById('csv-import-confirm').addEventListener('click', async () => {
-  if (!_csvImport) return;
-  const chosen = [...document.querySelectorAll('#csv-import-list input:checked')].map(cb => +cb.dataset.idx);
+  if (!_csvImport || _csvImporting) return;
+  const chosen = [...document.querySelectorAll('#csv-import-list input:checked')].map(cb => _csvImport.entries[+cb.dataset.idx]);
   if (!chosen.length) { setStatus('Select at least one login', false); return; }
+  // One import at a time: a second click would read the same vault and add
+  // the same rows again under new ids.
+  _csvImporting = true;
+  const btn = document.getElementById('csv-import-confirm');
+  btn.disabled = true;
+  try { await importCsvEntries(chosen); } finally { _csvImporting = false; btn.disabled = false; }
+});
+
+async function importCsvEntries(chosen) {
   const key = await VaultKeys.getKey();
   if (!key) { csvImportStatus('Unlock OTPilot first.', false); return; }
-  // Planned against the vault as it is now (it may have changed since the
-  // review was shown).
+  // Planned again with only the chosen rows (an unchecked row must not take
+  // a merge target), against the vault as it is now.
   const { items } = await VaultStore.readAll(key);
-  const plans = Importers.plan(_csvImport.entries, items);
-  const toSave = Importers.toItems(_csvImport.entries, plans, items, chosen);
+  const plans = Importers.plan(chosen, items);
+  const toSave = Importers.toItems(chosen, plans, items);
 
   const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
   if (!Vault.PAID_PLANS.includes(userPlan)) {
@@ -1622,8 +1633,8 @@ document.getElementById('csv-import-confirm').addEventListener('click', async ()
   const added = toSave.filter(i => !items.some(x => x.id === i.id)).length;
   const merged = toSave.length - added;
   hideCsvReview();
-  csvImportStatus(`Imported ${added} login${added === 1 ? '' : 's'}${merged ? `, added ${merged} password${merged === 1 ? '' : 's'} to existing logins` : ''}.`);
-});
+  csvImportStatus(`Imported ${added} login${added === 1 ? '' : 's'}${merged ? `, added ${merged} to existing logins` : ''}.`);
+}
 
 // ── Google Authenticator import ─────────────────────────────────────────────
 

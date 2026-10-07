@@ -26,6 +26,10 @@ test('each manager\'s export maps to logins', async ({ context, extensionId }) =
   expect(chrome.source).toBe('Chrome');
   expect(chrome.entries).toEqual([{ title: 'GitHub', urls: ['github.com'], username: 'me@x.com', password: 'pw1', notes: 'hello', totp: '', tag: '' }]);
 
+  const dashlane = await parse(page, 'username,username2,username3,title,password,note,url,category,otpSecret\nops@x.com,,,Vercel,pw7,team login,https://vercel.com,Work,\n');
+  expect(dashlane.source).toBe('Dashlane');
+  expect(dashlane.entries).toEqual([{ title: 'Vercel', urls: ['vercel.com'], username: 'ops@x.com', password: 'pw7', notes: 'team login', totp: '', tag: 'Work' }]);
+
   const bitwarden = await parse(page, [
     'folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp',
     `Work,,login,AWS,,,0,"https://console.aws.amazon.com,https://aws.amazon.com",admin,pw2,otpauth://totp/AWS:admin?secret=${'JBSWY3DPEHPK3PXP'}&issuer=AWS`,
@@ -76,7 +80,7 @@ test('planning: a password for an existing 2FA-only login is merged into it; an 
     ];
     const items = [twofa, saved];
     const plans = Importers.plan(entries, items);
-    const out = Importers.toItems(entries, plans, items, [0, 1, 2]);
+    const out = Importers.toItems(entries, plans, items);
     return {
       plans: plans.map(p => p.action),
       out: out.map(i => ({ same: i.id === twofa.id, title: i.title, pw: Vault.getValue(i, 'password'), secret: i.totp?.secret || '', notes: i.notes })),
@@ -118,7 +122,7 @@ test('Settings import: review, then the logins land in the vault and the account
   await expect(rows.nth(0)).toContainText('adds password to GitHub');
 
   await page.click('#csv-import-confirm');
-  await expect(page.locator('#csv-import-status')).toContainText('Imported 1 login, added 1 password to existing logins.');
+  await expect(page.locator('#csv-import-status')).toContainText('Imported 1 login, added 1 to existing logins.');
   const items = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
     .map(i => [i.title, Vault.getValue(i, 'password'), i.totp?.secret || '', i.notes]).sort());
   expect(items).toEqual([
@@ -148,4 +152,73 @@ test('Settings import respects the Free plan limit', async ({ context, extension
   await page.locator('#csv-import-list input').nth(1).uncheck();
   await page.click('#csv-import-confirm');
   await expect(page.locator('#csv-import-status')).toContainText('Imported 1 login');
+});
+
+// ── Review hardening ─────────────────────────────────────────────────────────
+
+test('a comma inside a URL never becomes another saved host; Bitwarden lists are split', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  const chrome = await parse(page, 'name,url,username,password\nX,"https://example.com/login?next=,other.example",me,pw\n');
+  expect(chrome.entries[0].urls).toEqual(['example.com']);
+  const bw = await parse(page, 'folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n,,login,X,,,0,"https://a.example,https://b.example",me,pw,\n');
+  expect(bw.entries[0].urls).toEqual(['a.example', 'b.example']);
+});
+
+test('2FA settings OTPilot cannot generate are reported, not imported as wrong codes', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  const r = await parse(page, [
+    'Title,Url,Username,Password,OTPAuth,Favorite,Archived,Tags,Notes',
+    'Ok,ok.example,me,pw,otpauth://totp/Ok?secret=JBSWY3DPEHPK3PXP,,,,',
+    'Eight,e.example,me,pw,otpauth://totp/E?secret=JBSWY3DPEHPK3PXP&digits=8,,,,',
+    'Sha256,s.example,me,pw,otpauth://totp/S?secret=JBSWY3DPEHPK3PXP&algorithm=SHA256,,,,',
+    'Hotp,h.example,me,pw,otpauth://hotp/H?secret=JBSWY3DPEHPK3PXP&counter=1,,,,',
+    'Only,o.example,me,,otpauth://totp/O?secret=JBSWY3DPEHPK3PXP&period=60,,,,',
+  ].join('\n'));
+  expect(r.unsupportedTotp).toBe(4);
+  expect(r.invalid).toBe(1); // nothing left to import on the last row
+  expect(r.entries.map(e => [e.title, e.password, e.totp])).toEqual([
+    ['Ok', 'pw', 'JBSWY3DPEHPK3PXP'], ['Eight', 'pw', ''], ['Sha256', 'pw', ''], ['Hotp', 'pw', ''],
+  ]);
+});
+
+test('planning looks at every matching login, keeps folders on merge, and never overwrites a different 2FA secret', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  const r = await page.evaluate(() => {
+    const mk = (title, user, pw, secret, tags = []) => {
+      const i = Vault.newItem('login', { title, urls: ['site.example'], tags, totp: secret ? { secret } : null });
+      Vault.getField(i, 'username').value = user;
+      Vault.getField(i, 'password').value = pw;
+      return i;
+    };
+    const items = [mk('First', 'me', 'one', ''), mk('Second', 'me', 'two', ''), mk('Codes', 'ops', '', 'JBSWY3DPEHPK3PXP', ['Work'])];
+    const e = (username, password, totp = '', tag = '') => ({ title: 'X', urls: ['site.example'], username, password, notes: '', totp, tag });
+    const entries = [e('me', 'two'), e('ops', '', 'GEZDGNBVGY3TQOJQ'), e('ops', '', 'JBSWY3DPEHPK3PXP'), e('ops', 'pw', '', 'Infra')];
+    const plans = Importers.plan(entries, items);
+    const merged = Importers.toItems([entries[3]], Importers.plan([entries[3]], items), items)[0];
+    return { plans: plans.map(p => p.action), mergedTags: merged.tags, mergedPw: Vault.getValue(merged, 'password'), mergedSecret: merged.totp.secret };
+  });
+  // 'two' is already in Second; a different secret is not merged into Codes; the same secret exists.
+  expect(r.plans).toEqual(['exists', 'new', 'exists', 'merge']);
+  expect(r).toMatchObject({ mergedTags: ['Work', 'Infra'], mergedPw: 'pw', mergedSecret: 'JBSWY3DPEHPK3PXP' });
+});
+
+test('an unchecked row does not take the merge target of a checked one', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, [{ name: 'GitHub', email: 'me@x.com', secret: TEST_SECRET, urls: 'github.com' }]);
+  await page.setInputFiles('#csv-import-file', csvFile('name,url,username,password\nGitHub,https://github.com,me@x.com,old-pass\nGitHub,https://github.com,me@x.com,new-pass\n'));
+  await expect(page.locator('#csv-import-list .export-acc-row')).toHaveCount(2);
+  await page.locator('#csv-import-list input').nth(0).uncheck();
+  await page.click('#csv-import-confirm');
+  await expect(page.locator('#csv-import-status')).toContainText('Imported 0 logins, added 1 to existing logins.');
+  const items = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => [i.title, Vault.getValue(i, 'password')]));
+  expect(items).toEqual([['GitHub', 'new-pass']]);
+});
+
+test('a double click on Import imports once', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, []);
+  await page.setInputFiles('#csv-import-file', csvFile('name,url,username,password\nA,a.com,u,p\n'));
+  await expect(page.locator('#csv-import-list .export-acc-row')).toHaveCount(1);
+  await page.evaluate(() => { const b = document.getElementById('csv-import-confirm'); b.click(); b.click(); });
+  await expect(page.locator('#csv-import-status')).toContainText('Imported 1 login');
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.length)).toBe(1);
 });
