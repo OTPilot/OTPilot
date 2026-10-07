@@ -1001,7 +1001,16 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
   showView('home');
 });
 
+// One save at a time: a second click while one is in flight would read the
+// open form into a draft the first save already merged and re-sorted.
+let _savingAccounts = false;
 document.getElementById('btn-save-all').addEventListener('click', async () => {
+  if (_savingAccounts) return;
+  _savingAccounts = true;
+  try { await saveAccounts(); } finally { _savingAccounts = false; }
+});
+
+async function saveAccounts() {
   syncOpenAccToDraft();
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
@@ -1072,7 +1081,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   _justSavedMessage = true;
   showView('accounts', { openAccountIdx: -1, preserveSearch: true });
   setStatus('Saved');
-});
+}
 
 // ── View switching ────────────────────────────────────────────────────────────
 

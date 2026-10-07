@@ -137,3 +137,17 @@ test('typing in the open form while the limit check runs is not dropped', async 
   await expect.poll(() => page.evaluate(async () =>
     (await VaultStore.readAll(await VaultKeys.getKey())).items.some(i => i.title === 'Typed meanwhile'))).toBe(true);
 });
+
+test('a double click on Save while renaming saves once, without touching other accounts', async ({ context, extensionId }) => {
+  const page = await editorWith(context, extensionId, [
+    { name: 'Alpha', email: 'a@x.com', secret: '', urls: '', password: 'pa' },
+    { name: 'Bravo', email: 'b@x.com', secret: '', urls: '', password: 'pb' },
+  ]);
+  await page.locator('.acc-head', { hasText: 'Alpha' }).click();
+  await page.fill('#acc-detail .acc-name', 'Zulu'); // re-sorts below Bravo on save
+  await page.evaluate(() => { const b = document.getElementById('btn-save-all'); b.click(); b.click(); });
+  await expect.poll(() => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
+    .map(i => [i.title, Vault.getValue(i, 'username'), Vault.getValue(i, 'password')]).sort())).toEqual([
+    ['Bravo', 'b@x.com', 'pb'], ['Zulu', 'a@x.com', 'pa'],
+  ]);
+});
