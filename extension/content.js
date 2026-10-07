@@ -151,14 +151,27 @@ let _themeVars = null;
 let _themeLoad = null;
 let _themeStale = false; // the theme changed and the new one hasn't loaded yet
 
+// A failed request (the service worker still starting, typically) is retried
+// a few times; when one succeeds, every open OTPilot element gets the theme.
+let _themeRetries = 0;
+function retryThemeLoad() {
+  if (_themeRetries >= 5) return;
+  _themeRetries++;
+  setTimeout(() => {
+    if (!chrome.runtime?.id || (_themeVars && !_themeStale)) return;
+    loadThemeVars().then(vars => { if (vars) document.querySelectorAll('[data-otpilot-ui]').forEach(applyThemeVars); });
+  }, 300 * _themeRetries);
+}
+
 function loadThemeVars() {
   _themeLoad ??= new Promise(resolve => {
-    const failed = () => { _themeLoad = null; resolve(null); }; // retried by the next caller
+    const failed = () => { _themeLoad = null; resolve(null); retryThemeLoad(); };
     try {
       chrome.runtime.sendMessage({ action: 'themeVars' }, vars => {
         if (chrome.runtime.lastError || !vars || !Object.keys(vars).length) { failed(); return; }
         _themeVars = vars;
         _themeStale = false;
+        _themeRetries = 0;
         resolve(vars);
       });
     } catch { failed(); }
