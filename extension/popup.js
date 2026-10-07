@@ -924,7 +924,7 @@ function rebuildAccountsDOM() {
     head.innerHTML = `
       ${avatarHTML(acc, 'acc-av-md')}
       <span class="acc-head-text">
-        <span class="acc-head-name">${esc(acc.name) || (item ? `Untitled ${typeLabel(acc.type).toLowerCase()}` : `Account ${i + 1}`)}${item ? '' : sharedBadgeHTML(findSharedCode(acc))}</span>
+        <span class="acc-head-name">${esc(acc.name) || (item ? esc(`Untitled ${typeLabel(acc.type).toLowerCase()}`) : `Account ${i + 1}`)}${item ? '' : sharedBadgeHTML(findSharedCode(acc))}</span>
         ${cat || acc.email || item ? `<span class="acc-head-sub">
           ${item ? `<span class="type-tag">${esc(typeLabel(acc.type))}</span>` : ''}
           ${isSharedEntry(acc) ? `<span class="type-tag shared-tag">Shared · ${esc(acc.collectionName)}</span>` : ''}
@@ -1147,7 +1147,7 @@ function renderItemDetail(container, entry) {
   body.dataset.type = entry.type;
   body.innerHTML = `
     <div class="acc-body-head">
-      <span class="acc-body-title">${esc(entry.name) || `Untitled ${typeLabel(entry.type).toLowerCase()}`}</span>
+      <span class="acc-body-title">${esc(entry.name) || esc(`Untitled ${typeLabel(entry.type).toLowerCase()}`)}</span>
       <span class="type-tag">${esc(typeLabel(entry.type))}</span>
       <button class="btn-del" title="Delete">✕ Delete</button>
     </div>
@@ -1265,6 +1265,21 @@ function mountCollectionControls(body, entry) {
     moveToCollection(entry, body.querySelector('.move-target').value));
 }
 
+// Replaces the rows of the given ids (in the draft and its base) with fresh
+// entries, keeping every other unsaved edit in the editor.
+function patchEntries(ids, fresh) {
+  const drop = new Set(ids);
+  const keep = list => list.filter(e => !drop.has(e._id));
+  draft = [...keep(draft), ...fresh];
+  _draftBase = [...keep(_draftBase), ...fresh.map(e => structuredClone(e))];
+  openAccIdx = -1;
+  rebuildAccountsDOM();
+  renderVaultTypeBar();
+  renderVaultCatBar();
+  applyVaultSearch();
+  renderAccDetail();
+}
+
 async function saveSharedEntry(entry) {
   syncOpenAccToDraft();
   const c = collections.find(x => x.id === entry.cid);
@@ -1275,8 +1290,8 @@ async function saveSharedEntry(entry) {
   if (res.conflict) setStatus('Someone changed this meanwhile — showing their version', false);
   else setStatus(`Saved to ${c.name}`);
   sharedItems = await sharedItemsFromLocal();
-  openAccIdx = -1;
-  renderAccountsList(-1, { preserveSearch: true });
+  const fresh = sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf);
+  patchEntries([entry._id], fresh);
 }
 
 async function deleteSharedEntry(entry) {
@@ -1286,8 +1301,7 @@ async function deleteSharedEntry(entry) {
   try { res = await VaultCollections.deleteItem(c, entry._id); } catch { setStatus('Could not delete — check your connection', false); return; }
   if (res.conflict) setStatus('Someone changed this meanwhile — not deleted', false);
   sharedItems = await sharedItemsFromLocal();
-  openAccIdx = -1;
-  renderAccountsList(-1, { preserveSearch: true });
+  patchEntries([entry._id], sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf));
 }
 
 async function sharedItemsFromLocal() {
@@ -1312,11 +1326,16 @@ async function moveToCollection(entry, cid) {
     const res = await VaultCollections.moveIn(c, item);
     if (!res.ok) throw new Error('not saved');
   } catch { setStatus('Could not move it — check your connection', false); return; }
+  const before = new Set(sharedItems.map(s => s.item.id));
   await VaultStore.remove([entry._id]);
-  await reloadFromVault(key);
+  await stampLocalChange();
+  silentPullSync(); // the removal reaches the user's other devices
+  accounts = await VaultAccounts.load(key);
+  _loadedIds = new Set(accounts.map(a => a._id));
+  otherItems = await VaultAccounts.loadOthers(key);
   sharedItems = await sharedItemsFromLocal();
-  openAccIdx = -1;
-  renderAccountsList(-1, { preserveSearch: true });
+  patchEntries([entry._id], sharedItems.filter(s => !before.has(s.item.id)).map(sharedEntryOf));
+  renderAccountBar();
   setStatus(`Moved to ${c.name}`);
 }
 
@@ -3308,9 +3327,12 @@ async function renderTeamCollections(team, members, myId) {
   for (const c of mine) box.appendChild(collectionRow(c, team, members, myId));
 
   const input = document.getElementById('collection-new-name');
-  document.getElementById('collection-create').onclick = async () => {
+  const createBtn = document.getElementById('collection-create');
+  createBtn.onclick = async () => {
     const name = input.value.trim();
     if (!name) { input.focus(); return; }
+    if (createBtn.disabled) return; // one at a time: a double click would make two
+    createBtn.disabled = true;
     try {
       const c = await VaultCollections.create(team.id, name);
       input.value = '';
@@ -3318,6 +3340,7 @@ async function renderTeamCollections(team, members, myId) {
       setStatus(`Created "${name}"`);
       await renderTeamCollections(team, members, myId);
     } catch { setStatus('Could not create the collection', false); }
+    finally { createBtn.disabled = false; }
   };
 }
 
@@ -3418,7 +3441,7 @@ async function renderCollectionBody(body, c, team, teamMembers, myId) {
     rename.addEventListener('click', async () => {
       const name = prompt('New name', c.name || '')?.trim();
       if (!name) return;
-      try { await VaultCollections.rename(c, name); rerender(); } catch { setStatus('Could not rename it', false); }
+      try { await VaultCollections.rename(c, name); await refreshSharedItems(); rerender(); } catch { setStatus('Could not rename it', false); }
     });
     const del = document.createElement('button');
     del.className = 'coll-link danger coll-delete';
@@ -3444,12 +3467,20 @@ async function renderCollectionBody(body, c, team, teamMembers, myId) {
 // Someone removed from a collection may have copied what they saw: suggest
 // changing the passwords they had access to.
 async function showRotationAdvice(body, c, who) {
-  let titles = [];
-  try { titles = (await VaultCollections.items(c)).filter(i => Vault.getValue(i, 'password') || Vault.getValue(i, 'clientSecret') || Vault.getValue(i, 'apiKey')).map(i => i.title); } catch { /* none */ }
-  if (!titles.length) return;
   const note = document.createElement('div');
   note.className = 'coll-note rotate-advice';
-  note.textContent = `${who || 'They'} could see ${titles.length} secret${titles.length === 1 ? '' : 's'} here: ${titles.slice(0, 5).join(', ')}${titles.length > 5 ? '…' : ''}. Consider changing ${titles.length === 1 ? 'it' : 'them'}.`;
+  let titles;
+  try {
+    await VaultCollections.pull(c); // what's in it now, not what this popup saw
+    titles = (await VaultCollections.items(c)).filter(i => Vault.getValue(i, 'password') || Vault.getValue(i, 'clientSecret') || Vault.getValue(i, 'apiKey')).map(i => i.title);
+  } catch { titles = null; }
+  if (titles === null) {
+    note.textContent = `${who || 'They'} could see everything in "${c.name}". Consider changing the passwords and keys kept there.`;
+  } else if (!titles.length) {
+    return;
+  } else {
+    note.textContent = `${who || 'They'} could see ${titles.length} secret${titles.length === 1 ? '' : 's'} here: ${titles.slice(0, 5).join(', ')}${titles.length > 5 ? '…' : ''}. Consider changing ${titles.length === 1 ? 'it' : 'them'}.`;
+  }
   body.prepend(note);
 }
 

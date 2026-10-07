@@ -148,3 +148,92 @@ test('moving a personal item into a collection takes it out of the personal vaul
   }));
   expect(r).toEqual({ personal: 0, shared: [['Mine', 'pw', TEST_SECRET]] });
 });
+
+// ── Review hardening ─────────────────────────────────────────────────────────
+
+test('offline, shared items still load from the local copy', async ({ context, extensionId }) => {
+  const page = await teamPopup(context, extensionId);
+  const n = await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Infra');
+    await VaultCollections.save(c, Vault.newItem('note', { title: 'Runbook' }));
+    await refreshSharedItems();
+    sharedItems = [];
+    CloudSync.api = async () => { throw new TypeError('Failed to fetch'); };
+    await refreshSharedItems();
+    return sharedItems.map(s => s.item.title);
+  });
+  expect(n).toEqual(['Runbook']);
+});
+
+test('saving a shared item keeps unsaved edits to other rows; a move starts personal sync', async ({ context, extensionId }) => {
+  const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: '', secret: TEST_SECRET, urls: '' }, { name: 'Other', email: '', secret: TEST_SECRET, urls: '', password: 'pw' }]);
+  await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Infra');
+    await VaultCollections.save(c, Vault.newItem('note', { title: 'Shared note' }));
+    await refreshSharedItems();
+  });
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Mine' }).click();
+  await page.fill('#acc-detail .acc-email', 'kept@x.com');
+  await page.locator('.acc-head', { hasText: 'Shared note' }).click();
+  await page.fill('#acc-detail .item-notes', 'edited');
+  await page.click('#acc-detail .btn-save-shared');
+  await expect(page.locator('#status-msg')).toContainText('Saved to Infra');
+  expect(await page.evaluate(() => draft.find(e => e.name === 'Mine').email)).toBe('kept@x.com');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
+    .find(i => i.title === 'Mine'))) && page.evaluate(async () => Vault.getValue((await VaultStore.readAll(await VaultKeys.getKey())).items.find(i => i.title === 'Mine'), 'username'))).toBe('kept@x.com');
+
+  // Moving "Other" stamps a local change (personal sync runs).
+  await page.evaluate(() => chrome.storage.local.remove('localChangedAt'));
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Other' }).click();
+  page.once('dialog', d => d.accept());
+  await page.click('#acc-detail .btn-move-collection');
+  await expect(page.locator('#status-msg')).toContainText('Moved to Infra');
+  expect(await page.evaluate(async () => !!(await chrome.storage.local.get('localChangedAt')).localChangedAt)).toBe(true);
+});
+
+test('a teammate cannot inject markup through an unknown type with no title', async ({ context, extensionId }) => {
+  const page = await teamPopup(context, extensionId);
+  await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Infra');
+    const item = { ...Vault.newItem('note'), type: '<img class="pwned" src="x">', title: '' };
+    await VaultCollections.save(c, item);
+    await refreshSharedItems();
+  });
+  await page.click('#nav-settings');
+  await expect(page.locator('.acc-row')).toHaveCount(1);
+  await page.locator('.acc-head').first().click();
+  expect(await page.locator('img.pwned').count()).toBe(0);
+});
+
+test('removal advice includes secrets added since the popup opened; Create runs once; renames reach the vault', async ({ context, extensionId }) => {
+  const page = await teamPopup(context, extensionId);
+  await openTeam(page);
+  await page.fill('#collection-new-name', 'Infra');
+  await page.evaluate(() => { const b = document.getElementById('collection-create'); b.click(); b.click(); });
+  await expect(page.locator('.coll-row', { hasText: 'Infra' })).toHaveCount(1);
+  expect(await page.evaluate(() => fake.collections.size)).toBe(1);
+
+  // A teammate adds a secret the popup hasn't pulled yet; then Bob is removed.
+  await page.evaluate(async () => {
+    const [c] = await VaultCollections.list();
+    const k = Vault.newItem('api', { title: 'Stripe' });
+    Vault.getField(k, 'apiKey').value = 'sk_live';
+    fake.items.set(k.id, { id: k.id, cid: c.id, record: await VaultCrypto.encryptItem(k, c.key), revision: ++fake.rev });
+    fake.collections.get(c.id).members.set('user-bob', { role: 'edit', wrapped_key: 'k' });
+  });
+  await openTeam(page);
+  const row = page.locator('.coll-row', { hasText: 'Infra' });
+  await expect(row.locator('.coll-body')).toBeVisible(); // still open since it was created
+  page.once('dialog', d => d.accept());
+  await row.locator('.coll-member', { hasText: 'bob@team.test' }).locator('.coll-remove').click();
+  await expect(page.locator('.rotate-advice')).toContainText('Stripe');
+
+  // Rename: the vault's shared tags follow.
+  page.once('dialog', d => d.accept('Platform'));
+  await row.locator('.coll-rename').click();
+  await page.click('#nav-settings');
+  await expect(page.locator('.acc-row', { hasText: 'Stripe' }).locator('.shared-tag')).toHaveText('Shared · Platform');
+});
