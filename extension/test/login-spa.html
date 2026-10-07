@@ -1,17 +1,27 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Sign in (SPA)</title></head>
 <body>
-  <div id="app">
-    <form id="f">
-      <input name="user">
-      <input type="password" name="pass">
-      <button type="button" id="go">Continue</button>
-    </form>
-  </div>
+  <div id="app"></div>
   <script>
     // Signs in without a page load or a submit event, like many SPAs.
-    document.getElementById('go').addEventListener('click', () => {
-      setTimeout(() => { document.getElementById('app').innerHTML = '<h1>Dashboard</h1>'; }, 200);
-    });
+    // ?delay=ms: how long the sign-in takes. Cancel closes the form without
+    // signing in. window.showForm() brings the form back (sign in again).
+    const delay = Number(new URLSearchParams(location.search).get('delay') || 200);
+    window.showForm = () => {
+      document.getElementById('app').innerHTML = `
+        <form id="f">
+          <input name="user">
+          <input type="password" name="pass">
+          <button type="button" id="go">Continue</button>
+          <button type="button" id="cancel">Cancel</button>
+        </form>`;
+      document.getElementById('go').addEventListener('click', () => {
+        setTimeout(() => { document.getElementById('app').innerHTML = '<h1>Dashboard</h1>'; }, delay);
+      });
+      document.getElementById('cancel').addEventListener('click', () => {
+        document.getElementById('app').innerHTML = '<h1>Welcome</h1>';
+      });
+    };
+    showForm();
   </script>
 </body></html>

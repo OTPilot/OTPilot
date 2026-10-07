@@ -156,3 +156,124 @@ test('Free plan at 50 items: a new login is not saved, the offer says why', asyn
   // Even asked directly, the background refuses.
   expect((await logins(popup)).length).toBe(50);
 });
+
+// ── Review hardening ─────────────────────────────────────────────────────────
+
+test('a page script cannot click the overlays to fill or save credentials', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ name: 'GitHub', email: 'me@example.com', secret: '', urls: 'localhost', password: 'hunter2!' }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await expect(site.locator('#otpilot-login-fill .otpilot-login-choice')).toBeVisible();
+  await site.evaluate(() => document.querySelector('.otpilot-login-choice').click());
+  await site.waitForTimeout(500);
+  await expect(site.locator('input[name="password"]')).toHaveValue('');
+
+  await signIn(site, 'new@example.com', 'pw');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer.locator('.otpilot-save-confirm')).toBeVisible();
+  await site.evaluate(() => document.querySelector('.otpilot-save-confirm').click());
+  await site.waitForTimeout(500);
+  expect((await logins(popup)).map(l => l.username)).toEqual(['me@example.com']);
+});
+
+test('the offer shows on a parent or subdomain of the signed-in host, not on a sibling', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  const signInVia = async (from, to) => {
+    await site.goto(`http://${from}:8765/test/login-nav.html`);
+    await site.evaluate(t => { document.querySelector('form').action = `http://${t}:8765/test/welcome.html`; }, to);
+    await site.fill('input[name="email"]', 'me@example.com');
+    await site.fill('input[name="password"]', 'pw');
+    await site.click('button');
+    await expect(site).toHaveURL(new RegExp(`${to}.*welcome`));
+  };
+  await signInVia('login.localhost', 'app.localhost');
+  await site.waitForTimeout(1500);
+  await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
+
+  await signInVia('login.localhost', 'localhost');
+  await expect(site.locator('#otpilot-login-save')).toContainText('login.localhost');
+});
+
+test('a single-page sign-in slower than the first check still gets the offer', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-spa.html?delay=3500`);
+  await site.fill('input[name="user"]', 'slow@example.com');
+  await site.fill('input[name="pass"]', 'slow');
+  await site.click('#go');
+  await expect(site.locator('h1')).toHaveText('Dashboard', { timeout: 6000 });
+  await expect(site.locator('#otpilot-login-save')).toContainText('slow@example.com');
+});
+
+test('Cancel is not a sign-in: no offer', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-spa.html`);
+  await site.fill('input[name="user"]', 'me@example.com');
+  await site.fill('input[name="pass"]', 'typed');
+  await site.click('#cancel');
+  await expect(site.locator('h1')).toHaveText('Welcome');
+  await site.waitForTimeout(2500);
+  await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
+});
+
+test('an open offer only ever saves the sign-in it showed', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-spa.html`);
+  await site.fill('input[name="user"]', 'first@example.com');
+  await site.fill('input[name="pass"]', 'one');
+  await site.click('#go');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('first@example.com');
+  // Another sign-in on the same page replaces the pending capture.
+  await site.evaluate(() => showForm());
+  await site.fill('input[name="user"]', 'second@example.com');
+  await site.fill('input[name="pass"]', 'two');
+  await site.click('#go');
+  await expect(site.locator('h1')).toHaveText('Dashboard');
+  await offer.locator('.otpilot-save-confirm').click(); // still the first offer
+  await site.waitForTimeout(500);
+  expect(await logins(popup)).toEqual([]);
+});
+
+test('Update picks the login with the exact username when several differ only by case', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [
+    { name: 'Upper', email: 'Alice@x.com', secret: '', urls: 'localhost', password: 'a1' },
+    { name: 'Lower', email: 'alice@x.com', secret: '', urls: 'localhost', password: 'a2' },
+  ]);
+  const site = await context.newPage();
+  await signIn(site, 'alice@x.com', 'changed');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update the password for Lower?');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup)).map(l => [l.title, l.password]).sort()).toEqual([['Lower', 'changed'], ['Upper', 'a1']]);
+});
+
+test('Free plan at 50 items: a 2FA-only login does not gain a password through Update', async ({ context, extensionId }) => {
+  const full = Array.from({ length: 50 }, (_, i) => ({ name: `Site ${i}`, email: '', secret: '', urls: `site${i}.example`, password: 'x' }));
+  const popup = await vaultWith(context, extensionId, [...full, { name: 'Local', email: 'me@example.com', secret: TEST_SECRET, urls: 'localhost' }], { userPlan: 'free' });
+  const site = await context.newPage();
+  await signIn(site, 'me@example.com', 'would-count');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update the password for Local?');
+  await expect(offer.locator('.otpilot-save-limit')).toBeVisible();
+  await expect(offer.locator('.otpilot-save-confirm')).toHaveCount(0);
+  expect((await logins(popup)).find(l => l.title === 'Local').password).toBe('');
+});
+
+test('an index from before hasPassword is rebuilt on unlock, so a locked vault offers to fill again', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ name: 'GitHub', email: 'me@example.com', secret: '', urls: 'localhost', password: 'hunter2!' }]);
+  await popup.evaluate(async () => {
+    const index = (await chrome.storage.local.get('vaultIndex')).vaultIndex.map(({ hasPassword, ...e }) => e);
+    await chrome.storage.local.set({ vaultIndex: index });
+    await VaultLock.lock();
+    await VaultLock.unlock('test');
+    await VaultLock.lock();
+  });
+  expect((await popup.evaluate(() => VaultAccounts.readIndex())).map(e => e.hasPassword)).toEqual([true]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await expect(site.frameLocator('#otpilot-login-fill iframe').locator('#label')).toContainText('GitHub');
+});

@@ -16,6 +16,10 @@
   if (window.top !== window) return;
 
   const OVERLAY_ID = 'otpilot-login-fill';
+  // These overlays live in the page's DOM, where its scripts can call
+  // .click() on them: anything that fills, saves or changes credentials only
+  // acts on a real user event.
+  const trusted = fn => e => { if (e.isTrusted) fn(e); };
   let _dismissed = false;   // closed by the user: not again on this page
   let _checkedFor = null;   // the last password field asked about (one ask per field)
   let _checking = false;
@@ -98,7 +102,7 @@
       });
       btn.innerHTML = `<div style="font-weight:600;">${esc(login.name)}</div>`
         + (login.username ? `<div style="color:#94a3b8;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(login.username)}</div>` : '');
-      btn.addEventListener('click', () => fill(login.id));
+      btn.addEventListener('click', trusted(() => fill(login.id)));
       body.appendChild(btn);
     }
   }
@@ -145,24 +149,40 @@
     return { username: username?.value || '', password: password.value };
   }
 
-  let _lastCapture = '';
+  // Only duplicate events of one submission (click + submit + Enter) are
+  // collapsed: the same credentials submitted again later are a new attempt.
+  let _lastCapture = { sig: '', at: 0 };
+  let _capturedAt = 0; // while a capture may be pending, DOM changes re-check the offer
   function capture(root) {
     if (!chrome.runtime?.id) return;
     const fields = findSubmittedFields(root);
     if (!fields) return;
     const sig = `${fields.username}\u0000${fields.password}`;
-    if (sig === _lastCapture) return;
-    _lastCapture = sig;
+    if (sig === _lastCapture.sig && Date.now() - _lastCapture.at < 1500) return;
+    _lastCapture = { sig, at: Date.now() };
+    _capturedAt = Date.now();
     chrome.runtime.sendMessage({ action: 'vaultCaptureLogin', ...fields }).catch(() => {});
     // A single-page app may never navigate: ask again once it settles.
     setTimeout(offerSave, 2000);
+  }
+
+  // A click counts as submitting a sign-in only on a submit button (a
+  // <button> with no type is one, inside a form) or a control that reads
+  // like one — never Cancel, Back, Show/Hide password, Forgot password.
+  const NOT_SUBMIT = /\b(cancel|back|close|show|hide|reveal|forgot|reset|clear|cancelar|volver|cerrar|mostrar|ocultar|olvid\w*)\b/i;
+  const LOOKS_SUBMIT = /\b(sign\s*in|log\s*in|login|sign\s*up|register|continue|next|submit|enter|go|verify|ingresar|iniciar|acceder|entrar|continuar|siguiente)\b/i;
+  function isSubmitControl(btn) {
+    const text = [btn.textContent, btn.value, btn.getAttribute('aria-label'), btn.title].filter(Boolean).join(' ');
+    if (NOT_SUBMIT.test(text)) return false;
+    if (btn.form && btn.type === 'submit') return true;
+    return LOOKS_SUBMIT.test(text);
   }
 
   document.addEventListener('submit', e => capture(e.target instanceof HTMLFormElement ? e.target : document), true);
   document.addEventListener('click', e => {
     if (e.target.closest?.(`#${OVERLAY_ID}, #${SAVE_ID}, #otpilot-password-suggest`)) return; // our own buttons
     const btn = e.target.closest?.('button, input[type="submit"], [role="button"]');
-    if (!btn) return;
+    if (!btn || !isSubmitControl(btn)) return;
     const scope = btn.form || btn.closest('form') || document;
     if (scope.querySelector('input[type="password"]')) capture(scope);
   }, true);
@@ -176,13 +196,14 @@
     if (!chrome.runtime?.id || document.getElementById(SAVE_ID) || passwordFormShowing()) return;
     let offer;
     try { offer = await chrome.runtime.sendMessage({ action: 'vaultPendingLogin' }); } catch { offer = null; }
-    if (!offer || document.getElementById(SAVE_ID) || passwordFormShowing()) return;
+    if (!offer) { _capturedAt = 0; return; } // nothing pending: stop re-checking
+    if (document.getElementById(SAVE_ID) || passwordFormShowing()) return;
     const el = makeOverlay(SAVE_ID);
     renderSave(el, offer);
     document.body.appendChild(el);
   }
 
-  const resolve = choice => chrome.runtime.sendMessage({ action: 'vaultResolvePendingLogin', choice }).catch(() => ({ ok: false }));
+  const resolve = (offer, choice) => chrome.runtime.sendMessage({ action: 'vaultResolvePendingLogin', id: offer.id, choice }).catch(() => ({ ok: false }));
   const closeSave = () => document.getElementById(SAVE_ID)?.remove();
 
   function saveButton(label, primary) {
@@ -199,7 +220,7 @@
 
   function renderSave(el, offer) {
     el.innerHTML = `${OVERLAY_HEADER}<div class="otpilot-save-body" style="padding:10px 12px 12px;color:#f1f5f9;font-size:13px;"></div>`;
-    el.querySelector('.otpilot-overlay-close').addEventListener('click', () => { resolve('dismiss'); closeSave(); });
+    el.querySelector('.otpilot-overlay-close').addEventListener('click', trusted(() => { resolve(offer, 'dismiss'); closeSave(); }));
     const body = el.querySelector('.otpilot-save-body');
     const title = offer.kind === 'update'
       ? `Update the password for <b>${esc(offer.name || offer.host)}</b>?`
@@ -213,7 +234,7 @@
           if (!next) { closeSave(); return; }
           renderSave(el, next);
         },
-        () => { resolve('dismiss'); closeSave(); });
+        () => { resolve(offer, 'dismiss'); closeSave(); });
       return;
     }
 
@@ -227,21 +248,21 @@
     Object.assign(row.style, { display: 'flex', gap: '6px' });
     const save = saveButton(offer.kind === 'update' ? 'Update' : 'Save', true);
     save.className = 'otpilot-save-confirm';
-    save.addEventListener('click', async () => {
+    save.addEventListener('click', trusted(async () => {
       save.disabled = true;
-      const res = await resolve('save');
+      const res = await resolve(offer, 'save');
       closeSave();
       showToast(res?.ok ? (offer.kind === 'update' ? 'Password updated in OTPilot' : 'Login saved to OTPilot') : 'OTPilot could not save this login', !!res?.ok);
-    });
+    }));
     const later = saveButton('Not now');
     later.className = 'otpilot-save-later';
-    later.addEventListener('click', () => { resolve('dismiss'); closeSave(); });
+    later.addEventListener('click', trusted(() => { resolve(offer, 'dismiss'); closeSave(); }));
     row.append(save, later);
     if (offer.kind === 'new') {
       const never = saveButton('Never');
       never.className = 'otpilot-save-never';
       never.title = `Never offer to save logins on ${offer.host}`;
-      never.addEventListener('click', () => { resolve('never'); closeSave(); });
+      never.addEventListener('click', trusted(() => { resolve(offer, 'never'); closeSave(); }));
       row.append(never);
     }
     body.appendChild(row);
@@ -275,12 +296,12 @@
 
     const use = saveButton('Use', true);
     use.className = 'otpilot-gen-use';
-    use.addEventListener('click', () => {
+    use.addEventListener('click', trusted(() => {
       const scope = field.form || document;
       const targets = [...scope.querySelectorAll('input[type="password"]')].filter(f => isNewPassword(f) && isVisible(f));
       for (const f of targets.length ? targets : [field]) fillInputValue(f, value);
       el.remove();
-    });
+    }));
     const again = saveButton('New');
     again.className = 'otpilot-gen-again';
     again.addEventListener('click', () => { value = Generator.generate({ ...options, mode: 'password' }); shown.textContent = value; });
@@ -299,6 +320,8 @@
     timer = setTimeout(() => {
       if (!chrome.runtime?.id) { observer.disconnect(); return; } // extension reloaded
       check();
+      // A sign-in that takes a while to finish: offer once its form is gone.
+      if (_capturedAt && Date.now() - _capturedAt < 3 * 60 * 1000) offerSave();
     }, 400);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });

@@ -76,10 +76,11 @@ const PENDING_LOGIN_TTL = 3 * 60 * 1000;
 const NEVER_SAVE = 'loginNeverSave';
 const pendingLoginKey = tabId => `pendingLogin:${tabId}`;
 
-// Rough "same site" (the last two host labels): the offer can show on the
-// page a sign-in redirected to (login.site.com → app.site.com), not on an
-// unrelated site the user went to next.
-const siteOf = host => host.split('.').slice(-2).join('.');
+// The offer shows on the signed-in host, or a parent or subdomain of it
+// (login.site.com → site.com). Not on a sibling host: without the Public
+// Suffix List, "same site" can't be told apart from two unrelated sites under
+// one public suffix (a.co.uk / b.co.uk, x.github.io / y.github.io).
+const relatedHost = (a, b) => a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
 
 // A capture still being stored, per tab: the next page's offer request can
 // arrive while it is (the sign-in navigated right away), and waits for it.
@@ -102,7 +103,15 @@ async function storeCapture(sender, msg) {
   if (!host || !password || password.length > 1024) return;
   if ((await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE]?.includes(host)) return;
   const username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
-  await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { host, username, password, at: Date.now() } });
+  const id = crypto.randomUUID(); // offers and choices name the capture they're about
+  await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { id, host, username, password, at: Date.now() } });
+}
+
+// Removes the tab's capture only if it is still `id` (a newer sign-in may
+// have replaced it meanwhile).
+async function dropPendingLogin(key, id) {
+  const current = (await chrome.storage.session.get(key))[key];
+  if (current?.id === id) await chrome.storage.session.remove(key);
 }
 
 async function readPendingLogin(sender) {
@@ -112,8 +121,8 @@ async function readPendingLogin(sender) {
   const key = pendingLoginKey(sender.tab.id);
   const pending = (await chrome.storage.session.get(key))[key];
   if (!pending) return null;
-  if (Date.now() - pending.at > PENDING_LOGIN_TTL) { await chrome.storage.session.remove(key); return null; }
-  return siteOf(pending.host) === siteOf(host) ? { key, pending } : null;
+  if (Date.now() - pending.at > PENDING_LOGIN_TTL) { await dropPendingLogin(key, pending.id); return null; }
+  return relatedHost(pending.host, host) ? { key, pending } : null;
 }
 
 // What saving the pending sign-in would do: a new login, a password update of
@@ -122,14 +131,21 @@ async function planPendingLogin({ host, username, password }) {
   const key = await VaultKeys.getKey();
   const { items } = await VaultStore.readAll(key);
   const covering = items.filter(i => i.type === 'login' && Vault.loginCoversHost(i.urls, host));
-  const sameUser = i => Vault.getValue(i, 'username').trim().toLowerCase() === username.toLowerCase();
-  const match = covering.find(sameUser)
+  const userOf = i => Vault.getValue(i, 'username').trim();
+  // The exact username first. Usernames can be case-sensitive: a match
+  // ignoring case is used only when it is the only one.
+  const loose = covering.filter(i => userOf(i).toLowerCase() === username.toLowerCase());
+  const match = covering.find(i => userOf(i) === username)
+    || (loose.length === 1 ? loose[0] : null)
     || (!username && covering.length === 1 ? covering[0] : null);
+  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
   if (match) {
     if (Vault.getValue(match, 'password') === password) return { kind: 'none' };
-    return { kind: 'update', item: match };
+    // A 2FA-only login that gains a password starts counting toward the limit.
+    const updated = structuredClone(match);
+    Vault.getField(updated, 'password').value = password;
+    return { kind: 'update', item: match, limit: !Vault.canSaveItem(items, userPlan, updated) };
   }
-  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
   const candidate = Vault.newItem('login', { urls: [host] });
   Vault.getField(candidate, 'password').value = password;
   return { kind: 'new', limit: !Vault.canSaveItem(items, userPlan, candidate) };
@@ -139,40 +155,45 @@ async function pendingLoginOffer(sender) {
   const found = await readPendingLogin(sender);
   if (!found) return null;
   const { key, pending } = found;
-  const offer = { host: pending.host, username: pending.username };
+  const offer = { id: pending.id, host: pending.host, username: pending.username };
   const state = await VaultLock.state();
-  if (state === 'setup') { await chrome.storage.session.remove(key); return null; }
+  if (state === 'setup') { await dropPendingLogin(key, pending.id); return null; }
   if (state === 'locked') return { ...offer, kind: 'locked' };
   const plan = await planPendingLogin(pending);
-  if (plan.kind === 'none') { await chrome.storage.session.remove(key); return null; }
+  if (plan.kind === 'none') { await dropPendingLogin(key, pending.id); return null; }
   return { ...offer, kind: plan.kind, name: plan.item?.title || '', limit: !!plan.limit };
 }
 
-async function resolvePendingLogin(sender, choice) {
+// `id` is the capture the offer showed: a choice never applies to another.
+// Counting toward the Free limit and writing happen under one lock, so two
+// tabs saving at once can't both pass the check.
+async function resolvePendingLogin(sender, id, choice) {
   const found = await readPendingLogin(sender);
-  if (!found) return { ok: false };
+  if (!found || typeof id !== 'string' || found.pending.id !== id) return { ok: false };
   const { key, pending } = found;
   if (choice === 'never') {
     const never = (await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE] || [];
     await chrome.storage.local.set({ [NEVER_SAVE]: [...new Set([...never, pending.host])] });
   }
-  if (choice !== 'save') { await chrome.storage.session.remove(key); return { ok: true }; }
+  if (choice !== 'save') { await dropPendingLogin(key, id); return { ok: true }; }
 
   if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
-  const plan = await planPendingLogin(pending);
-  const vk = await VaultKeys.getKey();
-  if (plan.kind === 'new') {
+  return navigator.locks.request('otpilot-login-save', async () => {
+    const plan = await planPendingLogin(pending);
     if (plan.limit) return { ok: false, limit: true };
-    await VaultAccounts.add({
-      name: pending.host.replace(/^www\./, ''), email: pending.username, secret: '',
-      urls: pending.host, password: pending.password,
-    }, vk);
-  } else if (plan.kind === 'update') {
-    const current = VaultAccounts.toAccount(plan.item);
-    if (!(await VaultAccounts.update(plan.item.id, current, { password: pending.password }, vk))) return { ok: false };
-  }
-  await chrome.storage.session.remove(key);
-  return { ok: true, kind: plan.kind };
+    const vk = await VaultKeys.getKey();
+    if (plan.kind === 'new') {
+      await VaultAccounts.add({
+        name: pending.host.replace(/^www\./, ''), email: pending.username, secret: '',
+        urls: pending.host, password: pending.password,
+      }, vk);
+    } else if (plan.kind === 'update') {
+      const current = VaultAccounts.toAccount(plan.item);
+      if (!(await VaultAccounts.update(plan.item.id, current, { password: pending.password }, vk))) return { ok: false };
+    }
+    await dropPendingLogin(key, id);
+    return { ok: true, kind: plan.kind };
+  });
 }
 
 chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove(pendingLoginKey(tabId)); });
@@ -443,7 +464,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.action === 'vaultResolvePendingLogin') {
-    resolvePendingLogin(_sender, msg.choice).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    resolvePendingLogin(_sender, msg.id, msg.choice).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 
