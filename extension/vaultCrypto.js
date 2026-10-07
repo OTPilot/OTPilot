@@ -38,6 +38,7 @@ const VaultCrypto = (() => {
   const itemAad = id => enc.encode(`otpilot:item:v${ITEM_FORMAT}:${id}`);
   const keyAad  = id => enc.encode(`otpilot:ik:v${ITEM_FORMAT}:${id}`);
   const vkAad   = enc.encode('otpilot:vk:v1');
+  const nameAad = id => enc.encode(`otpilot:collection-name:v1:${id}`);
 
   function generateKey() {
     return crypto.getRandomValues(new Uint8Array(32));
@@ -155,8 +156,21 @@ const VaultCrypto = (() => {
     }
   }
 
+  // A team collection's name, encrypted under its collection key with the
+  // collection id as AAD (a name can't be moved to another collection).
+  // Stored by the server as an opaque string.
+  async function encryptName(name, collectionKey, collectionId) {
+    const box = await seal(await importAes(collectionKey, ['encrypt']), enc.encode(String(name)), nameAad(collectionId));
+    return JSON.stringify(box);
+  }
+
+  async function decryptName(encrypted, collectionKey, collectionId) {
+    const pt = await open(await importAes(collectionKey, ['decrypt']), JSON.parse(encrypted), nameAad(collectionId));
+    return dec.decode(pt);
+  }
+
   return {
-    ITEM_FORMAT, KDF_ITERATIONS,
+    ITEM_FORMAT, KDF_ITERATIONS, encryptName, decryptName,
     b64e, b64d, generateKey,
     encryptItem, decryptItem, rewrapItemKey,
     wrapVaultKey, unwrapVaultKey,
