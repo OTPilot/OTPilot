@@ -198,11 +198,11 @@ async function fakeBlob(page, blob = null) {
   await page.evaluate(b => {
     window.fakeBlobState = b;
     CloudSync.getServerMeta = async () => window.fakeBlobState;
-    // Like the API: an upload older than the stored blob is refused (HTTP 200).
+    // Like the API: an upload not newer than the stored blob is refused (HTTP 200).
     CloudSync.push = async (accounts, tombstones, updatedAt, writer) => {
       window.fakeBlobPushes = (window.fakeBlobPushes || 0) + 1;
       const cur = window.fakeBlobState;
-      if (cur && Date.parse(updatedAt) < Date.parse(cur.updatedAt)) return { conflict: true };
+      if (cur && Date.parse(updatedAt) <= Date.parse(cur.updatedAt)) return { conflict: true };
       window.fakeBlobState = { accounts: structuredClone(accounts), tombstones: { ...tombstones }, updatedAt, writer };
       return { conflict: false };
     };
