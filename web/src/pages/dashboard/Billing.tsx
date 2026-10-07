@@ -24,7 +24,7 @@ export default function Billing() {
   const { data: userData, isLoading } = useUserPlan(justUpgraded)
   const [upgrading, setUpgrading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [teamYearly, setTeamYearly] = useState(false)
+  const [yearly, setYearly] = useState(false)
 
   async function checkout(path: string, body?: unknown) {
     setUpgrading(true)
@@ -39,7 +39,7 @@ export default function Billing() {
       setUpgrading(false)
     }
   }
-  const handleUpgrade = () => checkout('/billing/checkout')
+  const handleUpgrade = () => checkout('/billing/checkout', { annual: yearly })
 
   const [seatMsg, setSeatMsg] = useState<string | null>(null)
   const [confirmingSeat, setConfirmingSeat] = useState(false)
@@ -82,7 +82,8 @@ export default function Billing() {
   }
 
   const freePlanFeatures = [
-    'Unlimited TOTP accounts',
+    'Unlimited 2FA codes',
+    'Up to 50 passwords & notes',
     'Auto-fill on any site',
     'Auto-detect 2FA setup',
     'Email code auto-fill',
@@ -93,6 +94,7 @@ export default function Billing() {
 
   const personalFeatures = [
     'Everything in Free',
+    'Unlimited passwords & notes',
     'End-to-end encrypted sync',
     'Multi-device, multi-browser',
     'Cloud backup',
@@ -124,12 +126,12 @@ export default function Billing() {
       {/* Billing-period toggle (applies to Team Lite) */}
       <div className="flex justify-center">
         <div className="inline-flex items-center gap-2 p-1 rounded-xl bg-white/5 border border-white/10">
-          <button onClick={() => setTeamYearly(false)}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${!teamYearly ? 'bg-white/10 text-white' : 'text-zinc-400 hover:text-white'}`}>
+          <button onClick={() => setYearly(false)}
+            className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${!yearly ? 'bg-white/10 text-white' : 'text-zinc-400 hover:text-white'}`}>
             Monthly
           </button>
-          <button onClick={() => setTeamYearly(true)}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${teamYearly ? 'bg-white/10 text-white' : 'text-zinc-400 hover:text-white'}`}>
+          <button onClick={() => setYearly(true)}
+            className={`px-3 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${yearly ? 'bg-white/10 text-white' : 'text-zinc-400 hover:text-white'}`}>
             Yearly <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-400">Save 2 months</span>
           </button>
         </div>
@@ -151,32 +153,30 @@ export default function Billing() {
 
         {/* Personal Cloud */}
         <PlanCard
-          name="Personal Cloud"
-          price="$15"
-          priceLabel="one-time payment"
-          priceNote="your price, locked in forever"
-          badge={isPaid ? undefined : 'Early Adopter'}
+          name="Personal"
+          price={yearly ? '$30' : '$3'}
+          priceNote={yearly ? 'per year' : 'per month'}
           features={personalFeatures}
           current={plan === 'personal'}
           highlight={!isPaid}
-          cta={isPaid ? 'Current plan' : (upgrading ? 'Redirecting to Stripe…' : 'Upgrade — $15 one-time')}
+          cta={isPaid ? (plan === 'personal' ? 'Current plan' : null) : (upgrading ? 'Redirecting to Stripe…' : (yearly ? 'Upgrade — $30/yr' : 'Upgrade — $3/mo'))}
           ctaDisabled={isPaid || isLoading}
           onCtaClick={!isPaid ? handleUpgrade : undefined}
-          ctaNote={!isPaid ? 'Secure payment via Stripe · 14-day refund policy' : undefined}
+          ctaNote={!isPaid ? 'Secure payment via Stripe · cancel anytime' : undefined}
         />
 
         {/* Team Lite */}
         <PlanCard
           name="Team Lite"
-          price={teamYearly ? '$80' : '$8'}
-          priceNote={teamYearly ? 'per workspace / year' : 'per workspace / month'}
+          price={yearly ? '$80' : '$8'}
+          priceNote={yearly ? 'per workspace / year' : 'per workspace / month'}
           features={teamFeatures}
           current={isTeam}
           highlight={false}
-          cta={isTeam ? 'Current plan' : (upgrading ? 'Redirecting to Stripe…' : (teamYearly ? 'Upgrade — $80/yr' : 'Upgrade — $8/mo'))}
+          cta={isTeam ? 'Current plan' : (upgrading ? 'Redirecting to Stripe…' : (yearly ? 'Upgrade — $80/yr' : 'Upgrade — $8/mo'))}
           ctaDisabled={isTeam || isLoading}
-          onCtaClick={!isTeam ? () => checkout('/billing/checkout/team', { annual: teamYearly }) : undefined}
-          ctaNote={teamYearly && !isTeam ? 'Save 2 months vs monthly' : undefined}
+          onCtaClick={!isTeam ? () => checkout('/billing/checkout/team', { annual: yearly }) : undefined}
+          ctaNote={yearly && !isTeam ? 'Save 2 months vs monthly' : undefined}
         />
 
       </div>

@@ -18,6 +18,8 @@ pub enum ApiError {
     BadRequest(String),
     #[error("too many requests")]
     TooManyRequests,
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
     #[error("internal error: {0}")]
@@ -32,6 +34,7 @@ impl IntoResponse for ApiError {
             ApiError::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             ApiError::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
+            ApiError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.clone()),
             ApiError::Db(e) => {
                 tracing::error!("db error: {e}");
                 (

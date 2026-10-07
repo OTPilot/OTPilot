@@ -28,8 +28,18 @@ struct UserPlanRow {
     plan: String,
 }
 
-/// Creates a Stripe Checkout session and returns the redirect URL.
-async fn create_checkout(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Value>> {
+/// Personal subscription checkout ($3/mo or $30/yr). Body `{ "annual": bool }`.
+/// Returns the Stripe Checkout URL.
+async fn create_checkout(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>> {
+    let annual = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v["annual"].as_bool())
+        .unwrap_or(false);
+
     let user = sqlx::query_as::<_, UserPlanRow>("SELECT plan FROM users WHERE id = $1")
         .bind(auth.id)
         .fetch_optional(&state.db)
@@ -40,25 +50,35 @@ async fn create_checkout(State(state): State<AppState>, auth: AuthUser) -> Resul
         return Err(ApiError::BadRequest("Already on a paid plan".into()));
     }
 
+    let price = if annual {
+        state.stripe_personal_annual_price_id.as_str()
+    } else {
+        state.stripe_personal_monthly_price_id.as_str()
+    };
+    if price.is_empty() {
+        return Err(ApiError::ServiceUnavailable(
+            "Personal plan is not configured".into(),
+        ));
+    }
+
     let client = reqwest::Client::new();
     let user_id = auth.id.to_string();
     let email = auth.email.unwrap_or_default();
     let mut params = vec![
-        ("mode", "payment"),
+        ("mode", "subscription"),
         ("success_url", state.success_url.as_str()),
         ("cancel_url", state.cancel_url.as_str()),
-        (
-            "line_items[0][price]",
-            state.stripe_personal_price_id.as_str(),
-        ),
+        ("line_items[0][price]", price),
         ("line_items[0][quantity]", "1"),
         ("client_reference_id", user_id.as_str()),
+        // Tells the webhook this subscription is Personal, not Team Lite.
+        ("metadata[plan]", "personal"),
+        ("subscription_data[metadata][plan]", "personal"),
     ];
     if !email.is_empty() {
         params.push(("customer_email", email.as_str()));
     }
     params.push(("automatic_tax[enabled]", "true"));
-    // params.push(("allow_promotion_codes", "true"));
 
     let res = client
         .post("https://api.stripe.com/v1/checkout/sessions")
@@ -116,6 +136,8 @@ async fn create_team_checkout(
         ("line_items[0][price]", price),
         ("line_items[0][quantity]", "1"),
         ("client_reference_id", user_id.as_str()),
+        ("metadata[plan]", "team_lite"),
+        ("subscription_data[metadata][plan]", "team_lite"),
         ("automatic_tax[enabled]", "true"),
     ];
     if !email.is_empty() {
@@ -278,7 +300,34 @@ async fn webhook(
                 .unwrap_or("")
                 .to_string();
 
-            if obj["mode"].as_str() == Some("subscription") {
+            let personal_sub = obj["mode"].as_str() == Some("subscription")
+                && obj["metadata"]["plan"].as_str() == Some("personal");
+            if personal_sub {
+                // Personal subscription. A team plan, if any, stays the
+                // effective plan; has_personal_cloud is what leaving or
+                // losing the team falls back to.
+                let sub_id = obj["subscription"].as_str().unwrap_or("");
+                sqlx::query(
+                    "UPDATE users SET plan = CASE WHEN plan IN ('team_lite', 'team_pro') THEN plan ELSE 'personal' END, \
+                     has_personal_cloud = true, personal_subscription_id = NULLIF($1, ''), stripe_customer_id = $2 \
+                     WHERE id = $3",
+                )
+                .bind(sub_id)
+                .bind(customer_id)
+                .bind(user_id)
+                .execute(&state.db)
+                .await?;
+                tracing::info!("user {user_id} subscribed to personal");
+                if !email.is_empty() {
+                    crate::email::send_personal_upgrade_email(
+                        state.send_emails,
+                        state.resend_api_key.as_deref(),
+                        &state.from_email,
+                        &email,
+                    )
+                    .await;
+                }
+            } else if obj["mode"].as_str() == Some("subscription") {
                 // Team Lite: upgrade + auto-create the team (1 per owner).
                 let sub_id = obj["subscription"].as_str().unwrap_or("");
                 sqlx::query(
@@ -312,7 +361,8 @@ async fn webhook(
                 }
                 tracing::info!("upgraded user {user_id} to team_lite");
             } else {
-                // Personal Cloud (one-time): set plan + the persistent flag.
+                // Personal Cloud one-time purchase (1.x; a session created
+                // before 2.0 can still complete): set plan + the flag.
                 sqlx::query(
                     "UPDATE users SET plan = 'personal', has_personal_cloud = true, stripe_customer_id = $1 WHERE id = $2",
                 )
@@ -344,6 +394,20 @@ async fn webhook(
                 // Atomic: downgrade all members + delete the team in one transaction.
                 crate::routes::teams::dissolve_team(&state.db, team_id).await?;
                 tracing::info!("team {team_id} dissolved on subscription cancel");
+            } else {
+                // Personal subscription ended: back to Free (a team plan, if
+                // any, stays; it no longer falls back to Personal).
+                let ended = sqlx::query(
+                    "UPDATE users SET has_personal_cloud = false, personal_subscription_id = NULL, \
+                     plan = CASE WHEN plan = 'personal' THEN 'free' ELSE plan END \
+                     WHERE personal_subscription_id = $1",
+                )
+                .bind(sub_id)
+                .execute(&state.db)
+                .await?;
+                if ended.rows_affected() > 0 {
+                    tracing::info!("personal subscription {sub_id} ended");
+                }
             }
         }
         "customer.subscription.updated" => {
@@ -419,4 +483,154 @@ fn verify_signature(payload: &[u8], sig_header: &str, secret: &str) -> Result<()
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(all(test, feature = "db-tests"))]
+mod db_tests {
+    use super::*;
+    use crate::test_support::{call, create_user, test_db, test_state, TestDb};
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    const SECRET: &str = "whsec_test";
+
+    async fn app() -> (Router, sqlx::PgPool, TestDb) {
+        let db = test_db().await;
+        let pool = db.pool.clone();
+        let mut state = test_state(pool.clone());
+        state.stripe_webhook_secret = SECRET.into();
+        (router().with_state(state), pool, db)
+    }
+
+    /// Posts a Stripe event signed like Stripe does.
+    async fn send_event(app: &Router, event: Value) -> StatusCode {
+        let body = event.to_string();
+        let ts = chrono::Utc::now().timestamp().to_string();
+        let mut mac = Hmac::<Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
+        mac.update(format!("{ts}.{body}").as_bytes());
+        let sig = hex_encode(&mac.finalize().into_bytes());
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/billing/webhook")
+            .header("stripe-signature", format!("t={ts},v1={sig}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        app.clone().oneshot(req).await.unwrap().status()
+    }
+
+    fn completed(user: Uuid, plan: &str, sub: &str) -> Value {
+        json!({ "type": "checkout.session.completed", "data": { "object": {
+            "client_reference_id": user.to_string(), "customer": "cus_1", "mode": "subscription",
+            "subscription": sub, "metadata": { "plan": plan }, "customer_details": { "email": "" },
+        } } })
+    }
+
+    fn deleted(sub: &str) -> Value {
+        json!({ "type": "customer.subscription.deleted", "data": { "object": { "id": sub } } })
+    }
+
+    async fn row(db: &sqlx::PgPool, user: Uuid) -> (String, bool, Option<String>) {
+        sqlx::query_as(
+            "SELECT plan, has_personal_cloud, personal_subscription_id FROM users WHERE id = $1",
+        )
+        .bind(user)
+        .fetch_one(db)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn personal_subscription_starts_and_ends() {
+        let (app, db, _guard) = app().await;
+        let user = create_user(&db, "free").await;
+
+        assert_eq!(
+            send_event(&app, completed(user, "personal", "sub_p1")).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            row(&db, user).await,
+            ("personal".into(), true, Some("sub_p1".into()))
+        );
+
+        // Another subscription ending changes nothing.
+        assert_eq!(send_event(&app, deleted("sub_other")).await, StatusCode::OK);
+        assert_eq!(row(&db, user).await.0, "personal");
+
+        assert_eq!(send_event(&app, deleted("sub_p1")).await, StatusCode::OK);
+        assert_eq!(row(&db, user).await, ("free".into(), false, None));
+    }
+
+    #[tokio::test]
+    async fn a_team_member_with_personal_falls_back_to_it_when_the_team_ends() {
+        let (app, db, _guard) = app().await;
+        let owner = create_user(&db, "free").await;
+        assert_eq!(
+            send_event(&app, completed(owner, "team_lite", "sub_team")).await,
+            StatusCode::OK
+        );
+        assert_eq!(row(&db, owner).await.0, "team_lite");
+
+        // Personal bought while on the team: the team plan stays effective.
+        assert_eq!(
+            send_event(&app, completed(owner, "personal", "sub_p2")).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            row(&db, owner).await,
+            ("team_lite".into(), true, Some("sub_p2".into()))
+        );
+
+        // The team subscription ends: back to Personal, not Free.
+        assert_eq!(send_event(&app, deleted("sub_team")).await, StatusCode::OK);
+        assert_eq!(row(&db, owner).await.0, "personal");
+
+        // Then Personal ends too.
+        assert_eq!(send_event(&app, deleted("sub_p2")).await, StatusCode::OK);
+        assert_eq!(row(&db, owner).await, ("free".into(), false, None));
+    }
+
+    #[tokio::test]
+    async fn personal_ending_while_on_a_team_keeps_the_team_plan() {
+        let (app, db, _guard) = app().await;
+        let user = create_user(&db, "free").await;
+        send_event(&app, completed(user, "team_lite", "sub_team2")).await;
+        send_event(&app, completed(user, "personal", "sub_p3")).await;
+        send_event(&app, deleted("sub_p3")).await;
+        assert_eq!(row(&db, user).await, ("team_lite".into(), false, None));
+    }
+
+    #[tokio::test]
+    async fn checkout_answers_503_until_the_personal_prices_are_set() {
+        let db = test_db().await;
+        let mut state = test_state(db.pool.clone());
+        state.stripe_personal_monthly_price_id = String::new();
+        let app = router().with_state(state);
+        let user = create_user(&db.pool, "free").await;
+        let (s, _) = call(
+            &app,
+            user,
+            Method::POST,
+            "/billing/checkout",
+            Some(json!({ "annual": false })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+
+        let paid = create_user(&db.pool, "personal").await;
+        let (s, _) = call(
+            &app,
+            paid,
+            Method::POST,
+            "/billing/checkout",
+            Some(json!({ "annual": true })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
 }
