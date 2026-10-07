@@ -29,6 +29,7 @@ const VaultAccounts = (() => {
       urls: (item.urls || []).join('\n'),
       autofill: item.autofill !== false,
       category: item.tags?.[0] || '',
+      moreTags: (item.tags || []).slice(1),
       password: Vault.getValue(item, 'password'),
       _updatedAt: item.updatedAt,
     };
@@ -57,11 +58,18 @@ const VaultAccounts = (() => {
     next.urls = String(acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
     next.autofill = acc.autofill !== false;
     const category = String(acc.category || '').trim();
-    const others = (item.tags || []).slice(1);
-    next.tags = category ? [category, ...others.filter(t => t !== category)] : others;
+    // Tags after the first: the editor's "More tags", or kept as they were
+    // for callers that don't know them (a 1.x device's account).
+    const others = Array.isArray(acc.moreTags) ? acc.moreTags : (item.tags || []).slice(1);
+    next.tags = normalizeTags([category, ...others]);
     if (acc.domain) next.iconDomain = acc.domain; else delete next.iconDomain;
     next.position = position;
     return next;
+  }
+
+  // Trimmed, non-empty, no duplicates; order kept (the first is the category).
+  function normalizeTags(tags) {
+    return [...new Set(tags.map(t => String(t || '').trim()).filter(Boolean))];
   }
 
   const comparable = item => JSON.stringify({ ...item, updatedAt: null });
@@ -108,6 +116,15 @@ const VaultAccounts = (() => {
   // The account list, in the user's order.
   async function load(key) {
     return (await loginItems(key)).map(toAccount);
+  }
+
+  // Every item that isn't a login (notes, servers, API credentials, and types
+  // a newer version added), by title. Unreadable records are left out.
+  async function loadOthers(key) {
+    await VaultMigration.migrate();
+    const { items } = await VaultStore.readAll(key);
+    return items.filter(i => i.type !== 'login')
+      .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
   }
 
   const identity = a => `${a.secret || ''}\u0000${a.name || ''}\u0000${a.email || ''}`;
@@ -180,13 +197,14 @@ const VaultAccounts = (() => {
   // toward the Free plan past its limit. Over the limit (e.g. after leaving a
   // team) existing items stay editable; only growing the count is refused.
   // Sync merges don't ask: what other devices saved is never dropped.
-  async function exceedsFreeLimit(accounts, key, knownIds, plan) {
+  // `others`: the editor's non-login changes saved along ({ put, remove }).
+  async function exceedsFreeLimit(accounts, key, knownIds, plan, others = { put: [], remove: [] }) {
     if (Vault.PAID_PLANS.includes(plan)) return false;
     const { changed, removed } = await planSave(accounts, key, knownIds);
     const all = (await VaultStore.readAll(key)).items;
     const after = new Map(all.map(i => [i.id, i]));
-    removed.forEach(id => after.delete(id));
-    changed.forEach(i => after.set(i.id, i));
+    [...removed, ...others.remove].forEach(id => after.delete(id));
+    [...changed, ...others.put].forEach(i => after.set(i.id, i));
     const count = Vault.countedItems([...after.values()]);
     return count > Vault.FREE_ITEM_LIMIT && count > Vault.countedItems(all);
   }
@@ -221,5 +239,5 @@ const VaultAccounts = (() => {
     return true;
   }
 
-  return { load, save, exceedsFreeLimit, add, update, writeIndex, readIndex, toAccount };
+  return { load, loadOthers, save, exceedsFreeLimit, add, update, writeIndex, readIndex, toAccount, normalizeTags };
 })();

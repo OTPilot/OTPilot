@@ -6,8 +6,8 @@
 // One header-alias mapper reads every supported export (Chrome / Edge /
 // Brave, Firefox, Bitwarden, 1Password, LastPass, Dashlane, KeePass(XC)) and
 // most generic CSVs; the recognized source is only reported to the user.
-// Secure notes (Bitwarden type "note", LastPass "http://sn") are counted and
-// skipped until the popup can show note items.
+// Secure notes (Bitwarden type "note", LastPass "http://sn") become note
+// items.
 const Importers = (() => {
   // RFC 4180: quoted fields, "" escapes, newlines inside quotes, CRLF or LF.
   function parseCsv(text) {
@@ -120,23 +120,28 @@ const Importers = (() => {
     return parts[parts.length - 1] || '';
   }
 
-  // → { source, entries: [{ title, urls, username, password, notes, totp, tag }],
-  //     notes, invalid, unsupportedTotp }
+  // → { source, entries: [{ type: 'login' | 'note', title, urls, username,
+  //       password, notes, totp, tag }], invalid, unsupportedTotp }
   function parse(text) {
     const rows = parseCsv(text);
-    if (rows.length < 2) return { source: 'CSV', entries: [], notes: 0, invalid: 0, unsupportedTotp: 0 };
+    if (rows.length < 2) return { source: 'CSV', entries: [], invalid: 0, unsupportedTotp: 0 };
     const { col, source } = columns(rows[0]);
     if (col.password === undefined && col.totp === undefined) throw new Error('No password column found');
     const get = (row, key) => (col[key] !== undefined ? String(row[col[key]] ?? '').trim() : '');
     const entries = [];
-    let notes = 0, invalid = 0, unsupportedTotp = 0;
+    let invalid = 0, unsupportedTotp = 0;
     for (const row of rows.slice(1)) {
       const rawUrl = get(row, 'url');
-      if (get(row, 'type').toLowerCase() === 'note' || rawUrl === 'http://sn') { notes++; continue; }
+      if (get(row, 'type').toLowerCase() === 'note' || rawUrl === 'http://sn') {
+        const note = { type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: get(row, 'notes'), totp: '', tag: folderTag(get(row, 'folder')) };
+        if (note.notes || get(row, 'title')) entries.push(note); else invalid++;
+        continue;
+      }
       const urls = urlsOf(rawUrl, source);
       const totp = parseTotp(get(row, 'totp'));
       if (totp.unsupported) unsupportedTotp++;
       const entry = {
+        type: 'login',
         title: get(row, 'title') || urls[0] || '',
         urls,
         username: get(row, 'username'),
@@ -149,7 +154,7 @@ const Importers = (() => {
       if (!entry.title) entry.title = entry.username || 'Imported login';
       entries.push(entry);
     }
-    return { source, entries, notes, invalid, unsupportedTotp };
+    return { source, entries, invalid, unsupportedTotp };
   }
 
   const hostsOverlap = (item, entry) => entry.urls.some(h => Vault.loginCoversHost(item.urls, h))
@@ -163,13 +168,24 @@ const Importers = (() => {
   //            row's (typically a 2FA-only login gaining its password):
   //            `target` is its id
   //   new    — a new login (never overwrites a different password or secret)
+  // A secure note is `exists` when the same title and text are saved, else new.
   // Usernames can be case-sensitive: the exact username first, a match
   // ignoring case only when it's the only one. Pass only the entries being
   // imported: an entry left out must not take a merge target.
   function plan(entries, items) {
     const logins = items.filter(i => i.type === 'login');
     const taken = new Set();
+    const notesPlanned = new Set(); // a note repeated in the same file is added once
     return entries.map(entry => {
+      if (entry.type === 'note') {
+        // The same note (title and text) already saved: nothing to add.
+        const same = items.find(i => i.type === 'note' && i.title === entry.title && (i.notes || '') === entry.notes);
+        if (same) return { action: 'exists', target: same.id };
+        const key = `${entry.title}\u0000${entry.notes}`;
+        if (notesPlanned.has(key)) return { action: 'exists' };
+        notesPlanned.add(key);
+        return { action: 'new' };
+      }
       const onSite = logins.filter(i => hostsOverlap(i, entry));
       const userOf = i => Vault.getValue(i, 'username').trim();
       const exact = onSite.filter(i => userOf(i) === entry.username.trim());
@@ -205,6 +221,10 @@ const Importers = (() => {
         if (entry.tag && !(next.tags || []).includes(entry.tag)) next.tags = [...(next.tags || []), entry.tag];
         next.updatedAt = now;
         out.push(next);
+        continue;
+      }
+      if (entry.type === 'note') {
+        out.push(Vault.newItem('note', { title: entry.title, notes: entry.notes, tags: entry.tag ? [entry.tag] : [] }));
         continue;
       }
       const item = Vault.newItem('login', {
