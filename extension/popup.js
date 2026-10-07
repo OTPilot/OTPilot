@@ -1328,8 +1328,9 @@ async function moveToCollection(entry, cid) {
   } catch { setStatus('Could not move it — check your connection', false); return; }
   const before = new Set(sharedItems.map(s => s.item.id));
   await VaultStore.remove([entry._id]);
-  // The locked-vault index must stop offering it now, sync or not.
-  await VaultAccounts.writeIndex((await VaultStore.readAll(key)).items);
+  // The locked-vault index must stop offering it now, sync or not (rebuilt
+  // under the vault lock, so a page saving a login meanwhile isn't undone).
+  await VaultAccounts.rebuildIndex(key);
   await stampLocalChange();
   silentPullSync(); // the removal reaches the user's other devices
   accounts = await VaultAccounts.load(key);

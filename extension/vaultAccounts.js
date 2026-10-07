@@ -239,5 +239,5 @@ const VaultAccounts = (() => {
     return true;
   }
 
-  return { load, loadOthers, save, exceedsFreeLimit, add, update, writeIndex, readIndex, toAccount, normalizeTags };
+  return { load, loadOthers, save, exceedsFreeLimit, add, update, writeIndex, rebuildIndex, readIndex, toAccount, normalizeTags };
 })();
