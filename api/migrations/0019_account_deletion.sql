@@ -14,3 +14,9 @@ ALTER TABLE share_access ADD CONSTRAINT share_access_user_id_fkey
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
 -- teams.owner_id stays without ON DELETE on purpose: a team is dissolved
 -- explicitly (members downgraded) before its owner's account goes.
+
+-- Set when an account deletion starts (before its billing is collected and
+-- cancelled): from then on no checkout or team creation is accepted, and a
+-- checkout completion that still arrives cancels its subscription instead of
+-- granting the plan. Cleared again if the deletion fails, so it can be retried.
+ALTER TABLE users ADD COLUMN deletion_started_at TIMESTAMPTZ;

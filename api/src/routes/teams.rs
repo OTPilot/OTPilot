@@ -321,6 +321,14 @@ async fn create_team(
     if !is_team_plan(&plan) {
         return Err(ApiError::Forbidden);
     }
+    let deleting: bool =
+        sqlx::query_scalar("SELECT deletion_started_at IS NOT NULL FROM users WHERE id = $1")
+            .bind(auth.id)
+            .fetch_one(&state.db)
+            .await?;
+    if deleting {
+        return Err(ApiError::Forbidden); // the account is being deleted
+    }
     let name = body.name.unwrap_or_else(|| "My Team".to_string());
     check_len(name.trim(), MAX_NAME_LEN, "name")?;
     let team = create_team_row(&state.db, auth.id, name.trim(), None).await?;

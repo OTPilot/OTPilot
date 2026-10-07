@@ -7,7 +7,11 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::{error::Result, middleware::auth::AuthUser, AppState};
+use crate::{
+    error::{ApiError, Result},
+    middleware::auth::AuthUser,
+    AppState,
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -254,30 +258,47 @@ async fn owned_teams(db: &sqlx::PgPool, user: uuid::Uuid) -> Result<Vec<TeamRef>
     .await?)
 }
 
-/// Deletes the caller's account, in an order that never leaves anything
-/// half-done:
-/// 1. every subscription they pay for is cancelled now in Stripe (Personal,
-///    and the team's if they own one) — if Stripe fails, nothing else
-///    happens and they can retry;
-/// 2. a team they own is dissolved (members go back to Personal/Free and
-///    lose its shared items; their own vaults are untouched);
-/// 3. a team they belong to is left;
-/// 4. the Supabase user and the database row are deleted (cascades take
-///    their vault, devices, invites and shares — migration 0019).
-async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<StatusCode> {
+/// Steps 1–3 of `delete_user`: billing, then teams.
+async fn prepare_deletion(state: &AppState, user: uuid::Uuid) -> Result<()> {
     let personal: Option<String> =
         sqlx::query_scalar("SELECT personal_subscription_id FROM users WHERE id = $1")
-            .bind(auth.id)
+            .bind(user)
             .fetch_optional(&state.db)
             .await?
             .flatten();
-    let owned = owned_teams(&state.db, auth.id).await?;
-    for sub in personal.iter().chain(
-        owned
-            .iter()
-            .filter_map(|t| t.stripe_subscription_id.as_ref()),
-    ) {
-        crate::routes::billing::cancel_subscription_now(&state, sub).await?;
+    let owned = owned_teams(&state.db, user).await?;
+    let mut cancelled: Vec<&str> = Vec::new();
+    let failed = |what: &str, cancelled: &[&str]| {
+        let done = if cancelled.is_empty() {
+            String::new()
+        } else {
+            format!(" Already cancelled: {}.", cancelled.join(", "))
+        };
+        ApiError::ServiceUnavailable(format!(
+            "Could not cancel {what}; your account was not deleted.{done} Try again in a moment."
+        ))
+    };
+    if let Some(sub) = personal.as_deref() {
+        crate::routes::billing::cancel_subscription_now(state, sub)
+            .await
+            .map_err(|_| failed("your Personal subscription", &cancelled))?;
+        sqlx::query("UPDATE users SET personal_subscription_id = NULL, has_personal_cloud = false WHERE id = $1")
+            .bind(user)
+            .execute(&state.db)
+            .await?;
+        cancelled.push("your Personal subscription");
+    }
+    for team in &owned {
+        if let Some(sub) = team.stripe_subscription_id.as_deref() {
+            crate::routes::billing::cancel_subscription_now(state, sub)
+                .await
+                .map_err(|_| failed("the team subscription", &cancelled))?;
+            sqlx::query("UPDATE teams SET stripe_subscription_id = NULL WHERE id = $1")
+                .bind(team.id)
+                .execute(&state.db)
+                .await?;
+            cancelled.push("the team subscription");
+        }
     }
     for team in &owned {
         crate::routes::teams::dissolve_team(&state.db, team.id).await?;
@@ -288,13 +309,43 @@ async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<St
     }
     let memberships: Vec<uuid::Uuid> =
         sqlx::query_scalar("SELECT team_id FROM team_members WHERE user_id = $1")
-            .bind(auth.id)
+            .bind(user)
             .fetch_all(&state.db)
             .await?;
     for team_id in memberships {
-        crate::routes::teams::remove_member_atomic(&state.db, team_id, auth.id).await?;
+        crate::routes::teams::remove_member_atomic(&state.db, team_id, user).await?;
     }
+    Ok(())
+}
 
+/// Deletes the caller's account:
+/// 0. `deletion_started_at` is set first: from then on no checkout or team
+///    creation is accepted, and a checkout completing anyway cancels its
+///    subscription (billing.rs webhook) — so nothing is missed below;
+/// 1. every subscription they pay for is cancelled now in Stripe (Personal,
+///    and the team's if they own one). Each one is recorded as cancelled as
+///    soon as Stripe confirms, so if a later one fails the request stops,
+///    says what was already cancelled, and a retry continues from there;
+/// 2. a team they own is dissolved (members go back to Personal/Free and
+///    lose its shared items; their own vaults are untouched);
+/// 3. a team they belong to is left;
+/// 4. the Supabase user and the database row are deleted (cascades take
+///    their vault, devices, invites and shares — migration 0019).
+async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<StatusCode> {
+    sqlx::query("UPDATE users SET deletion_started_at = NOW() WHERE id = $1")
+        .bind(auth.id)
+        .execute(&state.db)
+        .await?;
+    match prepare_deletion(&state, auth.id).await {
+        Ok(()) => {}
+        Err(e) => {
+            let _ = sqlx::query("UPDATE users SET deletion_started_at = NULL WHERE id = $1")
+                .bind(auth.id)
+                .execute(&state.db)
+                .await;
+            return Err(e);
+        }
+    }
     // Mark for deletion first. If the DELETE below fails after Supabase succeeds,
     // the flag survives and the startup cleanup in main() finishes the job.
     sqlx::query("UPDATE users SET pending_deletion_at = NOW() WHERE id = $1")
@@ -316,10 +367,12 @@ async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<St
 
     if !sb_res.status().is_success() {
         // Supabase deletion failed — clear the flag so the user can retry.
-        let _ = sqlx::query("UPDATE users SET pending_deletion_at = NULL WHERE id = $1")
-            .bind(auth.id)
-            .execute(&state.db)
-            .await;
+        let _ = sqlx::query(
+            "UPDATE users SET pending_deletion_at = NULL, deletion_started_at = NULL WHERE id = $1",
+        )
+        .bind(auth.id)
+        .execute(&state.db)
+        .await;
         let status = sb_res.status();
         return Err(anyhow::anyhow!("Supabase deletion returned {status}").into());
     }
@@ -517,20 +570,94 @@ mod db_tests {
         );
         let t = team(&db, owner, member, "sub_fail_team").await;
         let (s, _) = call(&app, owner, Method::DELETE, "/users/me", None).await;
-        assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
         assert!(!seen
             .lock()
             .unwrap()
             .iter()
             .any(|c| c.contains("/auth/v1/admin/users/")));
+        assert!(exists(&db, "SELECT 1 FROM users WHERE id = $1 AND pending_deletion_at IS NULL AND deletion_started_at IS NULL", owner).await);
+        assert!(exists(&db, "SELECT 1 FROM teams WHERE id = $1", t).await);
+    }
+
+    #[tokio::test]
+    async fn a_second_cancellation_failing_says_what_was_cancelled_and_a_retry_continues() {
+        let (app, db, _g, seen) = app().await;
+        let (owner, member) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        sqlx::query("UPDATE users SET has_personal_cloud = true, personal_subscription_id = 'sub_personal' WHERE id = $1")
+            .bind(owner).execute(&db).await.unwrap();
+        let t = team(&db, owner, member, "sub_fail_team").await;
+
+        let (s, body) = call(&app, owner, Method::DELETE, "/users/me", None).await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+        let msg = body["error"].as_str().unwrap();
+        assert!(
+            msg.contains("Could not cancel the team subscription"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("Already cancelled: your Personal subscription"),
+            "{msg}"
+        );
+        // Personal is recorded as cancelled; the team is untouched; the
+        // account can still be used and deleted again.
+        assert!(exists(&db, "SELECT 1 FROM users WHERE id = $1 AND personal_subscription_id IS NULL AND deletion_started_at IS NULL", owner).await);
         assert!(
             exists(
                 &db,
-                "SELECT 1 FROM users WHERE id = $1 AND pending_deletion_at IS NULL",
-                owner
+                "SELECT 1 FROM teams WHERE id = $1 AND stripe_subscription_id = 'sub_fail_team'",
+                t
             )
             .await
         );
-        assert!(exists(&db, "SELECT 1 FROM teams WHERE id = $1", t).await);
+
+        // Stripe works again: the retry only cancels what's left.
+        sqlx::query("UPDATE teams SET stripe_subscription_id = 'sub_team_ok' WHERE id = $1")
+            .bind(t)
+            .execute(&db)
+            .await
+            .unwrap();
+        seen.lock().unwrap().clear();
+        let (s, _) = call(&app, owner, Method::DELETE, "/users/me", None).await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+        let calls = seen.lock().unwrap().clone();
+        assert!(
+            calls.contains(&"DELETE /v1/subscriptions/sub_team_ok".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|c| c.contains("sub_personal")),
+            "{calls:?}"
+        );
+        assert!(!exists(&db, "SELECT 1 FROM users WHERE id = $1", owner).await);
+    }
+
+    #[tokio::test]
+    async fn without_a_stripe_key_a_paid_account_is_not_deleted() {
+        let db = test_db().await;
+        let (base, _) = stand_in().await;
+        let mut state = test_state(db.pool.clone());
+        state.stripe_api_base = base.clone();
+        state.supabase_admin_base = base; // stripe_secret_key stays empty
+        let app = router().with_state(state);
+        let user = create_user(&db.pool, "personal").await;
+        sqlx::query("UPDATE users SET personal_subscription_id = 'sub_personal' WHERE id = $1")
+            .bind(user)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let (s, _) = call(&app, user, Method::DELETE, "/users/me", None).await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            exists(
+                &db.pool,
+                "SELECT 1 FROM users WHERE id = $1 AND personal_subscription_id = 'sub_personal'",
+                user
+            )
+            .await
+        );
     }
 }

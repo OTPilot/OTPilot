@@ -47,8 +47,15 @@ async fn customer_params<'a>(
 /// configured (development). Used by account deletion, which must not leave
 /// a subscription charging a deleted account.
 pub(crate) async fn cancel_subscription_now(state: &AppState, sub_id: &str) -> Result<()> {
-    if state.stripe_secret_key.is_empty() || sub_id.is_empty() {
+    if sub_id.is_empty() {
         return Ok(());
+    }
+    if state.stripe_secret_key.is_empty() {
+        // A real subscription can't be left charging because the key is
+        // missing: fail, so the caller stops.
+        return Err(ApiError::ServiceUnavailable(
+            "Stripe is not configured; the subscription can't be cancelled".into(),
+        ));
     }
     let res = reqwest::Client::new()
         .delete(format!(
@@ -114,11 +121,13 @@ async fn create_checkout(
         .and_then(|v| v["annual"].as_bool())
         .unwrap_or(false);
 
-    let user = sqlx::query_as::<_, UserPlanRow>("SELECT plan FROM users WHERE id = $1")
-        .bind(auth.id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or(ApiError::Unauthorized)?;
+    let user = sqlx::query_as::<_, UserPlanRow>(
+        "SELECT plan FROM users WHERE id = $1 AND deletion_started_at IS NULL",
+    )
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::Forbidden)?; // missing, or being deleted
 
     if matches!(user.plan.as_str(), "personal" | "team_lite" | "team_pro") {
         return Err(ApiError::BadRequest("Already on a paid plan".into()));
@@ -185,11 +194,13 @@ async fn create_team_checkout(
         .and_then(|v| v["annual"].as_bool())
         .unwrap_or(false);
 
-    let plan = sqlx::query_scalar::<_, String>("SELECT plan FROM users WHERE id = $1")
-        .bind(auth.id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or(ApiError::Unauthorized)?;
+    let plan = sqlx::query_scalar::<_, String>(
+        "SELECT plan FROM users WHERE id = $1 AND deletion_started_at IS NULL",
+    )
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::Forbidden)?; // missing, or being deleted
     if matches!(plan.as_str(), "team_lite" | "team_pro") {
         return Err(ApiError::BadRequest("Already on a team plan".into()));
     }
@@ -399,7 +410,8 @@ async fn webhook(
                 let granted = sqlx::query(
                     "UPDATE users SET plan = CASE WHEN plan IN ('team_lite', 'team_pro') THEN plan ELSE 'personal' END, \
                      has_personal_cloud = true, personal_subscription_id = NULLIF($1, ''), stripe_customer_id = $2 \
-                     WHERE id = $3 AND (personal_subscription_id IS NULL OR personal_subscription_id = $1)",
+                     WHERE id = $3 AND deletion_started_at IS NULL
+                       AND (personal_subscription_id IS NULL OR personal_subscription_id = $1)",
                 )
                 .bind(sub_id)
                 .bind(customer_id)
@@ -425,13 +437,21 @@ async fn webhook(
                 }
             } else if is_subscription {
                 // Team Lite: upgrade + auto-create the team (1 per owner).
-                sqlx::query(
-                    "UPDATE users SET plan = 'team_lite', stripe_customer_id = $1 WHERE id = $2",
+                // An account being deleted (or gone) gets nothing: the new
+                // subscription is cancelled instead of left charging.
+                let granted = sqlx::query(
+                    "UPDATE users SET plan = 'team_lite', stripe_customer_id = $1
+                     WHERE id = $2 AND deletion_started_at IS NULL",
                 )
                 .bind(customer_id)
                 .bind(user_id)
                 .execute(&state.db)
                 .await?;
+                if granted.rows_affected() == 0 {
+                    tracing::warn!("team checkout for a deleted/deleting account {user_id}; canceling {sub_id}");
+                    cancel_subscription(&state, sub_id).await;
+                    return Ok(Json(json!({ "received": true })));
+                }
 
                 let has_team: bool =
                     sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM teams WHERE owner_id = $1)")
@@ -798,5 +818,45 @@ mod db_tests {
         )
         .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn an_account_being_deleted_cannot_check_out_and_a_late_completion_grants_nothing() {
+        let (app, db, _guard) = app().await;
+        let user = create_user(&db, "free").await;
+        sqlx::query("UPDATE users SET deletion_started_at = NOW() WHERE id = $1")
+            .bind(user)
+            .execute(&db)
+            .await
+            .unwrap();
+        let (s, _) = call(
+            &app,
+            user,
+            Method::POST,
+            "/billing/checkout",
+            Some(json!({ "annual": false })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _) = call(
+            &app,
+            user,
+            Method::POST,
+            "/billing/checkout/team",
+            Some(json!({ "annual": false })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+
+        // A checkout opened before the deletion completes now: not granted.
+        send_event(&app, completed(user, "personal", "sub_late")).await;
+        send_event(&app, completed(user, "team_lite", "sub_late_team")).await;
+        assert_eq!(row(&db, user).await, ("free".into(), false, None));
+        let teams: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM teams WHERE owner_id = $1")
+            .bind(user)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(teams, 0);
     }
 }

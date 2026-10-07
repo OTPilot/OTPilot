@@ -18,14 +18,27 @@ export default function Settings() {
   const navigate = useNavigate()
   const [phase, setPhase] = useState<Phase>('idle')
   const [confirmText, setConfirmText] = useState('')
+  const confirmed = confirmText === 'DELETE'
   const [preview, setPreview] = useState<DeletionPreview | null>(null)
+  const [previewFailed, setPreviewFailed] = useState(false)
+  const [errorText, setErrorText] = useState<string | null>(null)
 
-  async function startDelete() {
-    setPhase('warn')
+  // Confirming is only possible once we know (and show) what will happen.
+  async function loadPreview() {
+    setPreview(null)
+    setPreviewFailed(false)
     try {
       const res = await apiFetch('/users/me/deletion')
-      if (res.ok) setPreview(await res.json())
-    } catch { /* shown without the details */ }
+      if (!res.ok) throw new Error('preview')
+      setPreview(await res.json())
+    } catch {
+      setPreviewFailed(true)
+    }
+  }
+
+  function startDelete() {
+    setPhase('warn')
+    loadPreview()
   }
 
   const consequences = [
@@ -37,15 +50,21 @@ export default function Settings() {
     ...(preview?.member_of ? [`You leave the "${preview.member_of}" team.`] : []),
   ]
 
-  const confirmed = confirmText === 'DELETE'
 
   async function handleDeleteAccount() {
     setPhase('deleting')
+    setErrorText(null)
     try {
       const res = await apiFetch('/users/me', { method: 'DELETE' })
-      if (!res.ok) throw new Error('Failed')
+      if (!res.ok) {
+        // e.g. "Could not cancel the team subscription; your account was not
+        // deleted. Already cancelled: your Personal subscription. Try again…"
+        setErrorText((await res.json().catch(() => null))?.error ?? null)
+        throw new Error('Failed')
+      }
     } catch {
       setPhase('error')
+      loadPreview() // what's left to do may have changed
       return
     }
     await supabase.auth.signOut()
@@ -111,20 +130,29 @@ export default function Settings() {
               />
             </div>
 
+            {!preview && !previewFailed && (
+              <p className="text-xs text-zinc-500">Checking your subscriptions and team…</p>
+            )}
+            {previewFailed && (
+              <p className="text-xs text-red-400">
+                Couldn't check your subscriptions and team.{' '}
+                <button onClick={loadPreview} className="underline hover:text-red-300">Try again</button>
+              </p>
+            )}
             {phase === 'error' && (
-              <p className="text-xs text-red-400">Something went wrong. Try again or contact support.</p>
+              <p className="text-xs text-red-400">{errorText ?? 'Something went wrong. Try again or contact support.'}</p>
             )}
 
             <div className="flex gap-3">
               <button
-                onClick={() => { setPhase('idle'); setConfirmText(''); setPreview(null) }}
+                onClick={() => { setPhase('idle'); setConfirmText(''); setPreview(null); setPreviewFailed(false); setErrorText(null) }}
                 className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleDeleteAccount}
-                disabled={!confirmed}
+                disabled={!confirmed || !preview}
                 className="text-sm font-medium text-red-500 hover:text-red-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 Permanently delete my account
