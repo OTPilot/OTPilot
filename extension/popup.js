@@ -1008,10 +1008,10 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 
   // Free plan: up to 50 items (2FA-only logins don't count). Checked before
   // anything changes, so a refused save leaves the editor as it was. The
-  // check is async: an edit made meanwhile (Add clicked again) changes the
-  // draft, and stops the save instead of saving something unchecked. The
-  // draft is only compared here, never written: the open row's index is
-  // only valid for the draft as the editor shows it.
+  // check is async: an edit made meanwhile (Add clicked again, typing in the
+  // open form) stops the save instead of saving something unchecked or
+  // dropping the typing. The draft is merged only after the check, so the
+  // open row's index still matches it when the form is read again.
   const edited = JSON.stringify(draft);
   let overLimit;
   try {
@@ -1026,6 +1026,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
     setStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items (2FA-only logins don't count). Upgrade to add more.`, false);
     return;
   }
+  syncOpenAccToDraft();
   if (JSON.stringify(draft) !== edited) {
     setStatus('The list changed while saving — save again', false);
     return;

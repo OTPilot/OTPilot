@@ -117,3 +117,23 @@ test('a sync that deleted an account above the open one does not misplace the op
   await expect.poll(() => page.evaluate(async () =>
     (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => [i.title, i.totp?.secret]))).toEqual([['Bravo renamed', 'GEZDGNBVGY3TQOJQ']]);
 });
+
+test('typing in the open form while the limit check runs is not dropped', async ({ context, extensionId }) => {
+  const page = await editorWith(context, extensionId, counted(2));
+  await page.locator('.acc-head', { hasText: 'Site 00' }).click();
+  await page.fill('#acc-detail .acc-name', 'First edit');
+  await page.evaluate(() => {
+    const real = VaultAccounts.exceedsFreeLimit;
+    VaultAccounts.exceedsFreeLimit = async (...args) => {
+      const r = await real(...args);
+      document.querySelector('#acc-detail .acc-name').value = 'Typed meanwhile';
+      return r;
+    };
+  });
+  await page.click('#btn-save-all');
+  await expect(page.locator('#status-msg')).toContainText('changed while saving');
+  await expect(page.locator('#acc-detail .acc-name')).toHaveValue('Typed meanwhile');
+  await page.click('#btn-save-all');
+  await expect.poll(() => page.evaluate(async () =>
+    (await VaultStore.readAll(await VaultKeys.getKey())).items.some(i => i.title === 'Typed meanwhile'))).toBe(true);
+});
