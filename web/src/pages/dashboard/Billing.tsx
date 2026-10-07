@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/api'
 
-type UserData = { id: string; plan: string; created_at: string }
+type UserData = { id: string; plan: string; personal_subscription?: boolean; created_at: string }
 
 function useUserPlan(forceRefresh: boolean) {
   return useQuery<UserData>({
@@ -77,6 +77,19 @@ export default function Billing() {
           <p className="text-sm text-zinc-300">You're on a team plan.</p>
           <p className="text-xs text-zinc-500">Billing is managed by your team owner. You can leave the team from the Team page.</p>
         </div>
+        {userData?.personal_subscription && (
+          <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-zinc-200">Your Personal subscription</p>
+              <p className="text-xs text-zinc-500">It keeps running while you're on the team (it's what you go back to if you leave). Update payment or cancel it here.</p>
+              {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
+            </div>
+            <button onClick={manageBilling}
+              className="shrink-0 px-4 py-2 rounded-xl bg-white/8 text-white hover:bg-white/12 border border-white/10 text-sm font-semibold">
+              Billing portal →
+            </button>
+          </div>
+        )}
       </div>
     )
   }

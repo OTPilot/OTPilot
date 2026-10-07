@@ -6,3 +6,11 @@
 ALTER TABLE users ADD COLUMN personal_subscription_id TEXT;
 CREATE UNIQUE INDEX users_personal_subscription_id ON users (personal_subscription_id)
   WHERE personal_subscription_id IS NOT NULL;
+
+-- Subscriptions Stripe reported as ended. Webhooks can arrive out of order:
+-- a checkout completing for a subscription already deleted must not grant
+-- the plan.
+CREATE TABLE stripe_ended_subscriptions (
+  subscription_id TEXT PRIMARY KEY,
+  ended_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

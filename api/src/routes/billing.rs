@@ -18,6 +18,49 @@ pub fn router() -> Router<AppState> {
         .route("/billing/webhook", post(webhook))
 }
 
+/// The Stripe customer to attach a checkout to: the user's existing one (so
+/// the billing portal shows all their subscriptions), else a new one from the
+/// email.
+async fn customer_params<'a>(
+    db: &sqlx::PgPool,
+    user: uuid::Uuid,
+    email: &'a str,
+    customer: &'a mut Option<String>,
+) -> Result<Vec<(&'static str, &'a str)>> {
+    *customer = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT stripe_customer_id FROM users WHERE id = $1",
+    )
+    .bind(user)
+    .fetch_optional(db)
+    .await?
+    .flatten()
+    .filter(|c| !c.is_empty());
+    Ok(match customer.as_deref() {
+        Some(c) => vec![("customer", c)],
+        None if !email.is_empty() => vec![("customer_email", email)],
+        None => vec![],
+    })
+}
+
+/// Cancels a subscription right away (best effort: logged on failure).
+async fn cancel_subscription(state: &AppState, sub_id: &str) {
+    if state.stripe_secret_key.is_empty() || sub_id.is_empty() {
+        return;
+    }
+    let res = reqwest::Client::new()
+        .delete(format!("https://api.stripe.com/v1/subscriptions/{sub_id}"))
+        .basic_auth(&state.stripe_secret_key, Some(""))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            tracing::info!("canceled duplicate subscription {sub_id}")
+        }
+        Ok(r) => tracing::error!("could not cancel subscription {sub_id}: {}", r.status()),
+        Err(e) => tracing::error!("could not cancel subscription {sub_id}: {e}"),
+    }
+}
+
 /// Seats included in the base Team Lite subscription (owner + 4).
 const BASE_SEATS: i32 = 5;
 
@@ -75,9 +118,8 @@ async fn create_checkout(
         ("metadata[plan]", "personal"),
         ("subscription_data[metadata][plan]", "personal"),
     ];
-    if !email.is_empty() {
-        params.push(("customer_email", email.as_str()));
-    }
+    let mut customer = None;
+    params.extend(customer_params(&state.db, auth.id, &email, &mut customer).await?);
     params.push(("automatic_tax[enabled]", "true"));
 
     let res = client
@@ -140,9 +182,8 @@ async fn create_team_checkout(
         ("subscription_data[metadata][plan]", "team_lite"),
         ("automatic_tax[enabled]", "true"),
     ];
-    if !email.is_empty() {
-        params.push(("customer_email", email.as_str()));
-    }
+    let mut customer = None;
+    params.extend(customer_params(&state.db, auth.id, &email, &mut customer).await?);
 
     let res = client
         .post("https://api.stripe.com/v1/checkout/sessions")
@@ -300,26 +341,50 @@ async fn webhook(
                 .unwrap_or("")
                 .to_string();
 
-            let personal_sub = obj["mode"].as_str() == Some("subscription")
-                && obj["metadata"]["plan"].as_str() == Some("personal");
+            let is_subscription = obj["mode"].as_str() == Some("subscription");
+            let sub_id = obj["subscription"].as_str().unwrap_or("");
+            // Webhooks can arrive out of order: a subscription already
+            // reported as ended grants nothing.
+            if is_subscription {
+                let ended: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM stripe_ended_subscriptions WHERE subscription_id = $1)",
+                )
+                .bind(sub_id)
+                .fetch_one(&state.db)
+                .await?;
+                if ended {
+                    tracing::warn!("checkout completed for already-ended subscription {sub_id}");
+                    return Ok(Json(json!({ "received": true })));
+                }
+            }
+            let personal_sub =
+                is_subscription && obj["metadata"]["plan"].as_str() == Some("personal");
             if personal_sub {
                 // Personal subscription. A team plan, if any, stays the
                 // effective plan; has_personal_cloud is what leaving or
-                // losing the team falls back to.
-                let sub_id = obj["subscription"].as_str().unwrap_or("");
-                sqlx::query(
+                // losing the team falls back to. Only one Personal
+                // subscription per user: a second checkout completing (two
+                // tabs) keeps the first, and the new one is canceled.
+                let granted = sqlx::query(
                     "UPDATE users SET plan = CASE WHEN plan IN ('team_lite', 'team_pro') THEN plan ELSE 'personal' END, \
                      has_personal_cloud = true, personal_subscription_id = NULLIF($1, ''), stripe_customer_id = $2 \
-                     WHERE id = $3",
+                     WHERE id = $3 AND (personal_subscription_id IS NULL OR personal_subscription_id = $1)",
                 )
                 .bind(sub_id)
                 .bind(customer_id)
                 .bind(user_id)
                 .execute(&state.db)
                 .await?;
+                if granted.rows_affected() == 0 {
+                    tracing::warn!(
+                        "user {user_id} already has a Personal subscription; canceling {sub_id}"
+                    );
+                    cancel_subscription(&state, sub_id).await;
+                    return Ok(Json(json!({ "received": true })));
+                }
                 tracing::info!("user {user_id} subscribed to personal");
                 if !email.is_empty() {
-                    crate::email::send_personal_upgrade_email(
+                    crate::email::send_personal_subscription_email(
                         state.send_emails,
                         state.resend_api_key.as_deref(),
                         &state.from_email,
@@ -327,9 +392,8 @@ async fn webhook(
                     )
                     .await;
                 }
-            } else if obj["mode"].as_str() == Some("subscription") {
+            } else if is_subscription {
                 // Team Lite: upgrade + auto-create the team (1 per owner).
-                let sub_id = obj["subscription"].as_str().unwrap_or("");
                 sqlx::query(
                     "UPDATE users SET plan = 'team_lite', stripe_customer_id = $1 WHERE id = $2",
                 )
@@ -385,6 +449,13 @@ async fn webhook(
         "customer.subscription.deleted" => {
             // Team subscription canceled → downgrade everyone + dissolve the team.
             let sub_id = obj["id"].as_str().unwrap_or("");
+            // Remembered, so a checkout completion arriving late grants nothing.
+            sqlx::query(
+                "INSERT INTO stripe_ended_subscriptions (subscription_id) VALUES ($1) ON CONFLICT DO NOTHING",
+            )
+            .bind(sub_id)
+            .execute(&state.db)
+            .await?;
             let team: Option<(uuid::Uuid,)> =
                 sqlx::query_as("SELECT id FROM teams WHERE stripe_subscription_id = $1")
                     .bind(sub_id)
@@ -603,6 +674,70 @@ mod db_tests {
         send_event(&app, completed(user, "personal", "sub_p3")).await;
         send_event(&app, deleted("sub_p3")).await;
         assert_eq!(row(&db, user).await, ("team_lite".into(), false, None));
+    }
+
+    #[tokio::test]
+    async fn a_completion_arriving_after_the_cancellation_grants_nothing() {
+        let (app, db, _guard) = app().await;
+        let user = create_user(&db, "free").await;
+        assert_eq!(send_event(&app, deleted("sub_gone")).await, StatusCode::OK);
+        assert_eq!(
+            send_event(&app, completed(user, "personal", "sub_gone")).await,
+            StatusCode::OK
+        );
+        assert_eq!(row(&db, user).await, ("free".into(), false, None));
+        // Same for a team subscription: no plan, no team.
+        assert_eq!(
+            send_event(&app, deleted("sub_team_gone")).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send_event(&app, completed(user, "team_lite", "sub_team_gone")).await,
+            StatusCode::OK
+        );
+        assert_eq!(row(&db, user).await.0, "free");
+        let teams: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM teams WHERE owner_id = $1")
+            .bind(user)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(teams, 0);
+    }
+
+    #[tokio::test]
+    async fn a_second_personal_subscription_does_not_replace_the_first() {
+        let (app, db, _guard) = app().await;
+        let user = create_user(&db, "free").await;
+        send_event(&app, completed(user, "personal", "sub_first")).await;
+        send_event(&app, completed(user, "personal", "sub_second")).await;
+        assert_eq!(
+            row(&db, user).await,
+            ("personal".into(), true, Some("sub_first".into()))
+        );
+        // The same completion delivered twice is fine.
+        send_event(&app, completed(user, "personal", "sub_first")).await;
+        assert_eq!(row(&db, user).await.2, Some("sub_first".into()));
+    }
+
+    #[tokio::test]
+    async fn checkouts_reuse_the_users_stripe_customer() {
+        let db = test_db().await;
+        let user = create_user(&db.pool, "personal").await;
+        let mut customer = None;
+        let p = customer_params(&db.pool, user, "me@x.com", &mut customer)
+            .await
+            .unwrap();
+        assert_eq!(p, vec![("customer_email", "me@x.com")]);
+        sqlx::query("UPDATE users SET stripe_customer_id = 'cus_9' WHERE id = $1")
+            .bind(user)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let mut customer = None;
+        let p = customer_params(&db.pool, user, "me@x.com", &mut customer)
+            .await
+            .unwrap();
+        assert_eq!(p, vec![("customer", "cus_9")]);
     }
 
     #[tokio::test]
