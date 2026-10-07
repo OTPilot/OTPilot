@@ -149,6 +149,7 @@ const DEFAULT_THEME_VARS = {
 
 let _themeVars = null;
 let _themeLoad = null;
+let _themeStale = false; // the theme changed and the new one hasn't loaded yet
 
 function loadThemeVars() {
   _themeLoad ??= new Promise(resolve => {
@@ -157,6 +158,7 @@ function loadThemeVars() {
       chrome.runtime.sendMessage({ action: 'themeVars' }, vars => {
         if (chrome.runtime.lastError || !vars || !Object.keys(vars).length) { failed(); return; }
         _themeVars = vars;
+        _themeStale = false;
         resolve(vars);
       });
     } catch { failed(); }
@@ -186,7 +188,7 @@ function themeUi(el) {
   guardThemeTokens();
   el.dataset.otpilotUi = '';
   applyThemeVars(el);
-  if (!_themeVars) loadThemeVars().then(vars => { if (vars) applyThemeVars(el); });
+  if (!_themeVars || _themeStale) loadThemeVars().then(vars => { if (vars) applyThemeVars(el); });
   return el;
 }
 
@@ -194,6 +196,7 @@ try {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !changes.theme || !chrome.runtime?.id) return;
     _themeLoad = null;
+    _themeStale = true; // until it loads, the next overlay retries
     loadThemeVars().then(vars => { if (vars) document.querySelectorAll('[data-otpilot-ui]').forEach(applyThemeVars); });
   });
 } catch { /* extension context gone */ }
