@@ -1007,7 +1007,10 @@ let _savingAccounts = false;
 document.getElementById('btn-save-all').addEventListener('click', async () => {
   if (_savingAccounts) return;
   _savingAccounts = true;
-  try { await saveAccounts(); } finally { _savingAccounts = false; }
+  // Counting toward the Free limit and writing share one lock with every
+  // other user-initiated add (the page's Save login, CSV import), so two of
+  // them can't both take the last free slot.
+  try { await navigator.locks.request('otpilot-item-limit', saveAccounts); } finally { _savingAccounts = false; }
 });
 
 async function saveAccounts() {

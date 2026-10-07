@@ -151,3 +151,26 @@ test('a double click on Save while renaming saves once, without touching other a
     ['Bravo', 'b@x.com', 'pb'], ['Zulu', 'a@x.com', 'pa'],
   ]);
 });
+
+test('the editor and the page\'s Save login cannot both take the last free slot', async ({ context, extensionId }) => {
+  const page = await editorWith(context, extensionId, counted(49));
+  // While another user save holds the limit lock, the editor's save waits for it.
+  const order = await page.evaluate(async () => {
+    const events = [];
+    let release;
+    const held = navigator.locks.request('otpilot-item-limit', () => new Promise(r => { release = r; events.push('other save'); }));
+    await new Promise(r => setTimeout(r, 50));
+    const real = VaultAccounts.exceedsFreeLimit;
+    VaultAccounts.exceedsFreeLimit = async (...a) => { events.push('editor check'); return real(...a); };
+    document.getElementById('btn-add').click();
+    document.querySelector('#acc-detail .acc-name').value = 'Fiftieth';
+    document.getElementById('btn-save-all').click();
+    await new Promise(r => setTimeout(r, 300));
+    events.push('other done');
+    release();
+    await held;
+    await new Promise(r => setTimeout(r, 500));
+    return events;
+  });
+  expect(order).toEqual(['other save', 'other done', 'editor check']);
+});
