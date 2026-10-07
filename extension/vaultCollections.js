@@ -20,8 +20,13 @@ const VaultCollections = (() => {
   const STATE = cid => `cs:${cid}`;
   const KEYS = 'collectionKeys';
   // The last GET /collections rows, as the server sent them (names and keys
-  // still encrypted/wrapped): lets shared items load without a connection.
+  // still encrypted/wrapped), with the user they belong to: lets shared items
+  // load without a connection — only for that same signed-in user.
   const LIST_CACHE = 'collectionsList';
+
+  async function currentUserId() {
+    try { return (await SupabaseAuth.getSession())?.user?.id ?? null; } catch { return null; }
+  }
   const local = chrome.storage.local;
   const session = chrome.storage.session;
 
@@ -76,16 +81,18 @@ const VaultCollections = (() => {
   // longer listed (removed, deleted) is dropped.
   async function list() {
     let collections, offline = false;
+    const userId = await currentUserId();
     try {
       ({ collections = [] } = await ok('/collections'));
-      await local.set({ [LIST_CACHE]: collections });
+      await local.set({ [LIST_CACHE]: { userId, collections } });
     } catch (e) {
-      // No connection (or the API is down): the last known list. An answer
-      // from the server (e.g. 401/403) isn't "offline" — rethrown.
+      // No connection (or the API is down): the last known list, if it is
+      // this user's. An answer from the server (e.g. 401/403) isn't
+      // "offline" — rethrown.
       if (e.status) throw e;
       const cached = (await local.get(LIST_CACHE))[LIST_CACHE];
-      if (!cached) throw e;
-      collections = cached;
+      if (!userId || cached?.userId !== userId || !Array.isArray(cached.collections)) throw e;
+      collections = cached.collections;
       offline = true;
     }
     const out = [];

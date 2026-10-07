@@ -237,3 +237,30 @@ test('removal advice includes secrets added since the popup opened; Create runs 
   await page.click('#nav-settings');
   await expect(page.locator('.acc-row', { hasText: 'Stripe' }).locator('.shared-tag')).toHaveText('Shared · Platform');
 });
+
+test("offline, another user never gets the previous user's shared items", async ({ context, extensionId }) => {
+  const page = await teamPopup(context, extensionId);
+  const titles = await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Infra');
+    await VaultCollections.save(c, Vault.newItem('note', { title: 'Secret runbook' }));
+    await refreshSharedItems(); // caches the list for user-me
+    SupabaseAuth.getSession = async () => ({ user: { id: 'user-someone-else' } });
+    sharedItems = [];
+    CloudSync.api = async () => { throw new TypeError('Failed to fetch'); };
+    await refreshSharedItems();
+    return sharedItems.map(s => s.item.title);
+  });
+  expect(titles).toEqual([]);
+});
+
+test('moving a login out of the personal vault removes it from the locked-vault index', async ({ context, extensionId }) => {
+  const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: 'me@x.com', secret: '', urls: 'example.com', password: 'pw' }]);
+  await page.evaluate(async () => { await VaultCollections.create('team-1', 'Infra'); await refreshSharedItems(); });
+  expect((await page.evaluate(() => VaultAccounts.readIndex())).map(e => e.name)).toEqual(['Mine']);
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Mine' }).click();
+  page.once('dialog', d => d.accept());
+  await page.click('#acc-detail .btn-move-collection');
+  await expect(page.locator('#status-msg')).toContainText('Moved to Infra');
+  expect(await page.evaluate(() => VaultAccounts.readIndex())).toEqual([]);
+});
