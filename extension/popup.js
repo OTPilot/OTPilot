@@ -1140,7 +1140,7 @@ function showSettingsSubview(id) {
   // requested", so it falls back to the first one instead of showing nothing.
   if (id === 'settings-list') id = 'settings-theme-view';
   if (id !== 'settings-password-view') clearRevealedKey();
-  const views = ['settings-theme-view', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view', 'settings-password-view'];
+  const views = ['settings-theme-view', 'settings-backup-view', 'settings-google-import-view', 'settings-csv-import-view', 'settings-autofill-view', 'settings-password-view'];
   views.forEach(v => { document.getElementById(v).style.display = v === id ? '' : 'none'; });
   document.querySelectorAll('#settings-list .settings-row').forEach(row => {
     row.classList.toggle('sel', row.dataset.view === id);
@@ -1514,6 +1514,120 @@ document.getElementById('import-picker-confirm').addEventListener('click', async
 });
 
 document.getElementById('import-picker-cancel').addEventListener('click', hideImportPicker);
+
+// ── Import from another password manager (CSV) ──────────────────────────────
+// Importers parses the file and plans each entry against the vault (new
+// login / password added to an existing one / already there); the items are
+// written straight to the vault, so notes and folders survive.
+
+let _csvImport = null; // { entries, plans }
+
+function csvImportStatus(text, ok = true) {
+  const el = document.getElementById('csv-import-status');
+  el.textContent = text;
+  el.style.color = ok ? 'var(--ink-4)' : 'var(--danger)';
+}
+
+function hideCsvReview() {
+  _csvImport = null;
+  document.getElementById('csv-import-review').style.display = 'none';
+  document.getElementById('csv-import-list').innerHTML = '';
+}
+
+async function showCsvReview(file) {
+  hideCsvReview();
+  let parsed;
+  try { parsed = Importers.parse(await file.text()); } catch (e) {
+    csvImportStatus(e.message === 'No password column found' ? 'This CSV has no password column.' : 'Could not read this file.', false);
+    return;
+  }
+  const key = await VaultKeys.getKey();
+  if (!key) { csvImportStatus('Unlock OTPilot first.', false); return; }
+  const { items } = await VaultStore.readAll(key);
+  const plans = Importers.plan(parsed.entries, items);
+  const names = new Map(items.map(i => [i.id, i.title]));
+  _csvImport = { entries: parsed.entries, plans };
+
+  const skipped = [
+    parsed.notes ? `${parsed.notes} secure note${parsed.notes === 1 ? '' : 's'} skipped (supported soon)` : '',
+    parsed.invalid ? `${parsed.invalid} row${parsed.invalid === 1 ? '' : 's'} without a password skipped` : '',
+  ].filter(Boolean);
+  csvImportStatus([`${parsed.source}: ${parsed.entries.length} login${parsed.entries.length === 1 ? '' : 's'} found`, ...skipped].join(' · '));
+  if (!parsed.entries.length) return;
+
+  const list = document.getElementById('csv-import-list');
+  parsed.entries.forEach((entry, i) => {
+    const p = plans[i];
+    const exists = p.action === 'exists';
+    const label = document.createElement('label');
+    label.className = 'export-acc-row' + (exists ? ' disabled' : '');
+    label.innerHTML = `<input type="checkbox" ${exists ? 'disabled' : 'checked'} data-idx="${i}">
+      <span class="export-acc-name">${esc(entry.title)}</span>
+      ${entry.username ? `<span class="export-acc-email">${esc(entry.username)}</span>` : ''}
+      ${exists ? '<span class="export-acc-exists">already in vault</span>' : ''}
+      ${p.action === 'merge' ? `<span class="export-acc-exists">adds password to ${esc(names.get(p.target) || 'login')}</span>` : ''}`;
+    list.appendChild(label);
+  });
+  document.getElementById('csv-import-all').checked = plans.some(p => p.action !== 'exists');
+  document.getElementById('csv-import-review').style.display = '';
+}
+
+document.getElementById('row-settings-csv-import').addEventListener('click', () => {
+  hideCsvReview();
+  csvImportStatus('');
+  showSettingsSubview('settings-csv-import-view');
+});
+document.getElementById('csv-import-pick').addEventListener('click', () => document.getElementById('csv-import-file').click());
+document.getElementById('csv-import-file').addEventListener('change', e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (file) showCsvReview(file);
+});
+document.getElementById('csv-import-all').addEventListener('change', e => {
+  document.querySelectorAll('#csv-import-list input:not(:disabled)').forEach(cb => { cb.checked = e.target.checked; });
+});
+document.getElementById('csv-import-cancel').addEventListener('click', () => { hideCsvReview(); csvImportStatus(''); });
+
+document.getElementById('csv-import-confirm').addEventListener('click', async () => {
+  if (!_csvImport) return;
+  const chosen = [...document.querySelectorAll('#csv-import-list input:checked')].map(cb => +cb.dataset.idx);
+  if (!chosen.length) { setStatus('Select at least one login', false); return; }
+  const key = await VaultKeys.getKey();
+  if (!key) { csvImportStatus('Unlock OTPilot first.', false); return; }
+  // Planned against the vault as it is now (it may have changed since the
+  // review was shown).
+  const { items } = await VaultStore.readAll(key);
+  const plans = Importers.plan(_csvImport.entries, items);
+  const toSave = Importers.toItems(_csvImport.entries, plans, items, chosen);
+
+  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+  if (!Vault.PAID_PLANS.includes(userPlan)) {
+    const after = new Map(items.map(i => [i.id, i]));
+    toSave.forEach(i => after.set(i.id, i));
+    const count = Vault.countedItems([...after.values()]);
+    const before = Vault.countedItems(items);
+    if (count > Vault.FREE_ITEM_LIMIT && count > before) {
+      const room = Math.max(Vault.FREE_ITEM_LIMIT - before, 0);
+      csvImportStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items: ${room ? `select at most ${room} more` : 'there is no room for more'}, or upgrade.`, false);
+      return;
+    }
+  }
+
+  if (toSave.length) {
+    await VaultStore.save(toSave, key);
+    await VaultAccounts.writeIndex((await VaultStore.readAll(key)).items);
+    await loadState();
+    await stampLocalChange();
+    silentPullSync();
+    renderAccountBar();
+    requestIcons();
+    startTimer();
+  }
+  const added = toSave.filter(i => !items.some(x => x.id === i.id)).length;
+  const merged = toSave.length - added;
+  hideCsvReview();
+  csvImportStatus(`Imported ${added} login${added === 1 ? '' : 's'}${merged ? `, added ${merged} password${merged === 1 ? '' : 's'} to existing logins` : ''}.`);
+});
 
 // ── Google Authenticator import ─────────────────────────────────────────────
 

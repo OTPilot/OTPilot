@@ -1189,6 +1189,21 @@
         </span>
       </button>
 
+      <button class="settings-row" id="row-settings-csv-import" data-view="settings-csv-import-view">
+        <span class="settings-row-icon">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+        </span>
+        <span class="settings-row-text">
+          <span class="settings-row-title">From a password manager</span>
+          <span class="settings-row-sub">Chrome, Bitwarden, 1Password, LastPass… (CSV)</span>
+        </span>
+        <span class="settings-row-chevron">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </span>
+      </button>
+
       <button class="settings-row" id="row-settings-autofill" data-view="settings-autofill-view">
         <span class="settings-row-icon">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1342,6 +1357,32 @@
       <div id="google-import-status" style="font-size:11px;color:var(--ink-4);margin-bottom:8px"></div>
       <button class="btn-crypto-ok" id="google-import-pick" style="width:100%">Select screenshots…</button>
       <input type="file" id="google-import-file" accept="image/*" multiple style="display:none">
+    </div>
+
+    <!-- Sub-view: Import from another password manager (CSV) -->
+    <div id="settings-csv-import-view" class="settings-subview" style="display:none">
+      <div class="settings-subview-header">
+        <span class="settings-subview-title">Import from a password manager</span>
+      </div>
+      <p style="font-size:11px;color:var(--ink-3);line-height:1.5;margin:0 0 10px">
+        Export your passwords as a <strong>CSV</strong> file from Chrome, Edge, Brave, Firefox, Bitwarden,
+        1Password, LastPass, Dashlane or KeePass, then select it here. Passwords for sites you already have
+        a 2FA code for are added to that login. Delete the CSV afterwards: it isn't encrypted.
+      </p>
+      <div id="csv-import-status" style="font-size:11px;color:var(--ink-4);margin-bottom:8px"></div>
+      <button class="btn-crypto-ok" id="csv-import-pick" style="width:100%">Select CSV file…</button>
+      <input type="file" id="csv-import-file" accept=".csv,text/csv" style="display:none">
+      <div id="csv-import-review" style="display:none;margin-top:10px">
+        <div id="csv-import-list" style="max-height:220px;overflow-y:auto;overflow-x:hidden;margin-bottom:6px"></div>
+        <label class="export-select-all">
+          <input type="checkbox" id="csv-import-all" checked>
+          <span>Select all</span>
+        </label>
+        <div class="field-row" style="margin-top:8px">
+          <button class="btn-crypto-ok" id="csv-import-confirm">Import selected</button>
+          <button class="btn-crypto-cancel" id="csv-import-cancel">✕</button>
+        </div>
+      </div>
     </div>
 
     <!-- Shared: import review (fed by either Backup or Google Authenticator import) -->
@@ -1503,6 +1544,7 @@
 <script src="vaultKeys.js"></script>
 <script src="vaultStore.js"></script>
 <script src="vault.js"></script>
+<script src="importers.js"></script>
 <script src="vaultMigration.js"></script>
 <script src="vaultAccounts.js"></script>
 <script src="cloudSync.js"></script>
