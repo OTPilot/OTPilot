@@ -9,6 +9,8 @@
 // Secure notes (Bitwarden type "note", LastPass "http://sn") become note
 // items.
 const Importers = (() => {
+  const uniqueTags = tags => [...new Set(tags.map(t => String(t || '').trim()).filter(Boolean))];
+
   // RFC 4180: quoted fields, "" escapes, newlines inside quotes, CRLF or LF.
   function parseCsv(text) {
     const rows = [];
@@ -35,6 +37,7 @@ const Importers = (() => {
   }
 
   const SOURCES = [
+    { name: 'OTPilot', has: ['type', 'name', 'url', 'username', 'password', 'totp', 'notes', 'folder', 'fields'] },
     { name: 'Bitwarden', has: ['login_uri', 'login_username', 'login_password'] },
     { name: '1Password', has: ['title', 'url', 'username', 'password', 'otpauth'] },
     { name: 'LastPass', has: ['url', 'username', 'password', 'extra', 'name', 'grouping'] },
@@ -128,12 +131,23 @@ const Importers = (() => {
     const { col, source } = columns(rows[0]);
     if (col.password === undefined && col.totp === undefined) throw new Error('No password column found');
     const get = (row, key) => (col[key] !== undefined ? String(row[col[key]] ?? '').trim() : '');
+    // OTPilot's own export lists every tag in `folder` (a;b;c); other
+    // managers have one folder, possibly a path (Root/Email → Email).
+    const tagsOf = row => (source === 'OTPilot'
+      ? uniqueTags(get(row, 'folder').split(';'))
+      : [folderTag(get(row, 'folder'))].filter(Boolean));
+    const withTags = (entry, row) => {
+      const [tag = '', ...more] = tagsOf(row);
+      entry.tag = tag;
+      if (more.length) entry.moreTags = more;
+      return entry;
+    };
     const entries = [];
     let invalid = 0, unsupportedTotp = 0;
     for (const row of rows.slice(1)) {
       const rawUrl = get(row, 'url');
       if (get(row, 'type').toLowerCase() === 'note' || rawUrl === 'http://sn') {
-        const note = { type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: get(row, 'notes'), totp: '', tag: folderTag(get(row, 'folder')) };
+        const note = withTags({ type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: get(row, 'notes'), totp: '', tag: '' }, row);
         if (note.notes || get(row, 'title')) entries.push(note); else invalid++;
         continue;
       }
@@ -148,8 +162,9 @@ const Importers = (() => {
         password: col.password !== undefined ? String(row[col.password] ?? '') : '',
         notes: get(row, 'notes'),
         totp: totp.secret || '',
-        tag: folderTag(get(row, 'folder')),
+        tag: '',
       };
+      withTags(entry, row);
       if (!entry.password && !entry.totp) { invalid++; continue; }
       if (!entry.title) entry.title = entry.username || 'Imported login';
       entries.push(entry);
@@ -218,18 +233,18 @@ const Importers = (() => {
         if (!next.urls.length) next.urls = entry.urls;
         if (!next.notes && entry.notes) next.notes = entry.notes;
         if (!next.totp && entry.totp) next.totp = { secret: entry.totp, digits: 6, period: 30, algorithm: 'SHA1' };
-        if (entry.tag && !(next.tags || []).includes(entry.tag)) next.tags = [...(next.tags || []), entry.tag];
+        next.tags = uniqueTags([...(next.tags || []), entry.tag, ...(entry.moreTags || [])]);
         next.updatedAt = now;
         out.push(next);
         continue;
       }
       if (entry.type === 'note') {
-        out.push(Vault.newItem('note', { title: entry.title, notes: entry.notes, tags: entry.tag ? [entry.tag] : [] }));
+        out.push(Vault.newItem('note', { title: entry.title, notes: entry.notes, tags: uniqueTags([entry.tag, ...(entry.moreTags || [])]) }));
         continue;
       }
       const item = Vault.newItem('login', {
         title: entry.title, urls: entry.urls, notes: entry.notes,
-        tags: entry.tag ? [entry.tag] : [],
+        tags: uniqueTags([entry.tag, ...(entry.moreTags || [])]),
         totp: entry.totp ? { secret: entry.totp, digits: 6, period: 30, algorithm: 'SHA1' } : null,
         position: position++,
       });
@@ -240,5 +255,41 @@ const Importers = (() => {
     return out;
   }
 
-  return { parseCsv, parse, plan, toItems, totpSecret, parseTotp };
+  // ── Export ────────────────────────────────────────────────────────────────
+  // The vault as CSV, in columns this importer (and most managers' generic
+  // CSV import) reads back: logins and secure notes round-trip; other types
+  // carry their fields as "Label: value" lines in `fields`.
+  const CSV_COLUMNS = ['type', 'name', 'url', 'username', 'password', 'totp', 'notes', 'folder', 'fields'];
+
+  const csvCell = v => {
+    const s = String(v ?? '');
+    return /[",\r\n]/.test(s) || /^\s|\s$/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  function toCsv(items) {
+    const rows = items
+      .slice()
+      .sort((a, b) => (a.type === b.type ? (a.title || '').localeCompare(b.title || '') : a.type.localeCompare(b.type)))
+      .map(item => {
+        const value = id => Vault.getValue(item, id);
+        const known = new Set(['username', 'password']);
+        const extra = (item.fields || [])
+          .filter(f => !(item.type === 'login' && known.has(f.id)) && String(f.value ?? '') !== '')
+          .map(f => `${f.label || f.id}: ${f.value}`);
+        return [
+          item.type,
+          item.title || '',
+          (item.urls || []).join('\n'),
+          item.type === 'login' ? value('username') : '',
+          item.type === 'login' ? value('password') : '',
+          item.totp?.secret ? `otpauth://totp/${encodeURIComponent(item.title || 'OTPilot')}?secret=${item.totp.secret}` : '',
+          item.notes || '',
+          (item.tags || []).join(';'),
+          extra.join('\n'),
+        ];
+      });
+    return [CSV_COLUMNS, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+  }
+
+  return { parseCsv, parse, plan, toItems, totpSecret, parseTotp, toCsv };
 })();

@@ -1978,6 +1978,42 @@ async function importCsvEntries(chosen) {
   csvImportStatus(`Imported ${added} login${added === 1 ? '' : 's'}${notes ? ` and ${notes} secure note${notes === 1 ? '' : 's'}` : ''}${merged ? `, added ${merged} to existing logins` : ''}.`);
 }
 
+// ── Export everything as CSV (not encrypted) ───────────────────────────────
+// Asks for the master password again: the file holds every secret in plain
+// text. Columns are the ones the CSV import reads (Importers.toCsv).
+
+function hideCsvExport() {
+  document.getElementById('csv-export-form').style.display = 'none';
+  document.getElementById('csv-export-password').value = '';
+}
+
+document.getElementById('btn-export-csv').addEventListener('click', () => {
+  const form = document.getElementById('csv-export-form');
+  form.style.display = form.style.display === 'none' ? '' : 'none';
+  if (form.style.display === '') document.getElementById('csv-export-password').focus();
+});
+document.getElementById('csv-export-cancel').addEventListener('click', hideCsvExport);
+document.getElementById('csv-export-password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('csv-export-confirm').click();
+  if (e.key === 'Escape') hideCsvExport();
+});
+
+document.getElementById('csv-export-confirm').addEventListener('click', async () => {
+  const password = document.getElementById('csv-export-password').value;
+  if (!password) { setStatus('Enter your master password', false); return; }
+  const key = await VaultLock.revealRecoveryKey(password).catch(() => null);
+  if (!key) { setStatus('Incorrect password', false); return; }
+  const { items, failed } = await VaultStore.readAll(key);
+  if (!items.length) { setStatus('The vault is empty', false); return; }
+  const a = document.createElement('a');
+  a.download = `otpilot-export-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.href = URL.createObjectURL(new Blob([Importers.toCsv(items)], { type: 'text/csv' }));
+  a.click();
+  URL.revokeObjectURL(a.href);
+  hideCsvExport();
+  setStatus(`Exported ${items.length} item${items.length === 1 ? '' : 's'}${failed.length ? ` (${failed.length} unreadable left out)` : ''} — delete the file after use`);
+});
+
 // ── Google Authenticator import ─────────────────────────────────────────────
 
 async function decodeQrFromImageFile(file) {
