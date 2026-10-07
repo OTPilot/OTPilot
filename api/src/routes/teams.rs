@@ -259,6 +259,40 @@ async fn remove_member_atomic(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -
     if deleted == 0 {
         return Ok(0); // tx dropped without commit → nothing changed
     }
+    // Their team collections go too (only the shared items; their own vault
+    // stays). A collection left without members is deleted with its items;
+    // one left without a manager gets its oldest remaining member as manager.
+    sqlx::query(
+        "DELETE FROM collection_members WHERE user_id = $1
+         AND collection_id IN (SELECT id FROM collections WHERE team_id = $2)",
+    )
+    .bind(user_id)
+    .bind(team_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM collections c WHERE c.team_id = $1
+         AND NOT EXISTS (SELECT 1 FROM collection_members m WHERE m.collection_id = c.id)",
+    )
+    .bind(team_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        r#"
+        UPDATE collection_members m SET role = 'manage'
+        FROM (
+          SELECT DISTINCT ON (collection_id) collection_id, user_id FROM collection_members
+          WHERE collection_id IN (
+            SELECT c.id FROM collections c WHERE c.team_id = $1
+            AND NOT EXISTS (SELECT 1 FROM collection_members x WHERE x.collection_id = c.id AND x.role = 'manage'))
+          ORDER BY collection_id, created_at
+        ) first
+        WHERE m.collection_id = first.collection_id AND m.user_id = first.user_id
+        "#,
+    )
+    .bind(team_id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query(
         r#"
         DELETE FROM share_access

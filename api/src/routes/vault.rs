@@ -1,7 +1,8 @@
 //! 2.0 vault sync: one encrypted record per item, pulled incrementally by a
 //! global revision number. The server never sees plaintext — `record` is the
 //! client's `{ v, key, data }` ciphertext envelope (see extension/vaultCrypto.js),
-//! stored as-is. Personal items only for now; team collections come later.
+//! stored as-is. These endpoints serve personal items (no collection_id);
+//! team collection items go through routes/collections.rs.
 
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -24,12 +25,12 @@ use crate::{
 
 /// Max size of one serialized record (~64 KB of item JSON once encrypted and
 /// base64-encoded, plus envelope overhead).
-const MAX_RECORD_BYTES: usize = 128 * 1024;
+pub(crate) const MAX_RECORD_BYTES: usize = 128 * 1024;
 const MAX_BATCH: usize = 500;
 /// Request body cap for a batch. Clients split uploads by count (MAX_BATCH)
 /// and by size, so a full vault goes up in several batches.
 const MAX_BATCH_BYTES: usize = 8 * 1024 * 1024;
-const PAGE_SIZE: i64 = 1000;
+pub(crate) const PAGE_SIZE: i64 = 1000;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -42,21 +43,22 @@ pub fn router() -> Router<AppState> {
 }
 
 #[derive(sqlx::FromRow)]
-struct ItemRow {
-    id: Uuid,
-    encrypted_item: String,
-    revision: i64,
-    deleted_at: Option<DateTime<Utc>>,
-    updated_at: DateTime<Utc>,
+pub(crate) struct ItemRow {
+    pub(crate) id: Uuid,
+    pub(crate) encrypted_item: String,
+    pub(crate) revision: i64,
+    pub(crate) deleted_at: Option<DateTime<Utc>>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[derive(sqlx::FromRow)]
 struct LockedRow {
     owner_id: Uuid,
+    collection_id: Option<Uuid>,
     revision: i64,
 }
 
-fn item_json(r: &ItemRow) -> Value {
+pub(crate) fn item_json(r: &ItemRow) -> Value {
     json!({
         "id": r.id,
         "record": if r.deleted_at.is_some() { Value::Null } else {
@@ -70,7 +72,7 @@ fn item_json(r: &ItemRow) -> Value {
 
 /// Checks the envelope shape and size without looking inside the ciphertext.
 /// Returns the record serialized for storage.
-fn validate_record(record: &Value) -> Result<String> {
+pub(crate) fn validate_record(record: &Value) -> Result<String> {
     let ok_box = |b: &Value| {
         b.get("iv").and_then(Value::as_str).is_some()
             && b.get("ct").and_then(Value::as_str).is_some()
@@ -90,7 +92,7 @@ fn validate_record(record: &Value) -> Result<String> {
     Ok(s)
 }
 
-fn conflict(current: Option<&ItemRow>) -> Response {
+pub(crate) fn conflict(current: Option<&ItemRow>) -> Response {
     (
         StatusCode::CONFLICT,
         Json(json!({ "error": "revision conflict", "item": current.map(item_json) })),
@@ -148,7 +150,7 @@ async fn list_items(
     require_cloud_plan(&state, auth.id).await?;
     let mut rows = sqlx::query_as::<_, ItemRow>(
         "SELECT id, encrypted_item, revision, deleted_at, updated_at FROM vault_items
-         WHERE owner_id = $1 AND revision > $2 ORDER BY revision LIMIT $3",
+         WHERE owner_id = $1 AND collection_id IS NULL AND revision > $2 ORDER BY revision LIMIT $3",
     )
     .bind(auth.id)
     .bind(params.since)
@@ -193,15 +195,18 @@ async fn put_item(
 
     let mut tx = begin_owner_tx(&state, auth.id).await?;
     let existing = sqlx::query_as::<_, LockedRow>(
-        "SELECT owner_id, revision FROM vault_items WHERE id = $1 FOR UPDATE",
+        "SELECT owner_id, collection_id, revision FROM vault_items WHERE id = $1 FOR UPDATE",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
 
     let revision: Option<i64> = match existing {
-        // Another user's id: answer as if it didn't exist, without touching it.
-        Some(row) if row.owner_id != auth.id => return Err(ApiError::NotFound),
+        // Another user's id, or a collection item: answer as if it didn't
+        // exist, without touching it.
+        Some(row) if row.owner_id != auth.id || row.collection_id.is_some() => {
+            return Err(ApiError::NotFound)
+        }
         Some(row) => {
             if body.base_revision != Some(row.revision) {
                 let current = current_row(&mut tx, id).await?;
@@ -238,7 +243,7 @@ async fn put_item(
         tx.rollback().await?;
         let current = sqlx::query_as::<_, ItemRow>(
             "SELECT id, encrypted_item, revision, deleted_at, updated_at FROM vault_items
-             WHERE id = $1 AND owner_id = $2",
+             WHERE id = $1 AND owner_id = $2 AND collection_id IS NULL",
         )
         .bind(id)
         .bind(auth.id)
@@ -282,13 +287,13 @@ async fn delete_item(
     require_cloud_plan(&state, auth.id).await?;
     let mut tx = begin_owner_tx(&state, auth.id).await?;
     let existing = sqlx::query_as::<_, LockedRow>(
-        "SELECT owner_id, revision FROM vault_items WHERE id = $1 FOR UPDATE",
+        "SELECT owner_id, collection_id, revision FROM vault_items WHERE id = $1 FOR UPDATE",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
     match existing {
-        Some(row) if row.owner_id == auth.id => {
+        Some(row) if row.owner_id == auth.id && row.collection_id.is_none() => {
             if row.revision != params.base_revision {
                 let current = current_row(&mut tx, id).await?;
                 return Ok(conflict(current.as_ref()));
