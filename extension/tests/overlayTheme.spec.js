@@ -131,19 +131,28 @@ test('the sign-in fill overlay follows the theme', async ({ context, extensionId
 });
 
 test('opening the popup applies the stored theme without writing it back', async ({ context, extensionId }) => {
+  const seed = await context.newPage();
+  await seed.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(seed, { accounts: [], theme: 'daylight' });
+  // A spy on storage writes, in place before the popup's own scripts run.
+  await context.addInitScript(() => {
+    if (!location.pathname.endsWith('/popup.html') || !globalThis.chrome?.storage) return;
+    window.themeWrites = [];
+    const set = chrome.storage.local.set.bind(chrome.storage.local);
+    chrome.storage.local.set = (items, ...rest) => {
+      if (items && 'theme' in items) window.themeWrites.push(items.theme);
+      return set(items, ...rest);
+    };
+  });
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
-  await seedUnlocked(popup, { accounts: [], theme: 'daylight' });
-  await popup.reload();
-  // The startup path (no user choice) never writes storage: a theme changed
-  // elsewhere right after the popup read it would be overwritten otherwise.
-  const writes = await popup.evaluate(async () => {
-    const seen = [];
-    const real = chrome.storage.local.set.bind(chrome.storage.local);
-    chrome.storage.local.set = (items, ...rest) => { if ('theme' in items) seen.push(items.theme); return real(items, ...rest); };
-    applyTheme('vault');
-    await new Promise(r => setTimeout(r, 100));
-    return { seen, stored: (await chrome.storage.local.get('theme')).theme, shown: document.body.dataset.theme };
-  });
-  expect(writes).toEqual({ seen: [], stored: 'daylight', shown: 'vault' });
+  await expect(popup.locator('body')).toHaveAttribute('data-theme', 'daylight');
+  await popup.waitForTimeout(500);
+  // Startup applied it without writing (a theme changed elsewhere right after
+  // the popup read it would otherwise be overwritten with the old value).
+  expect(await popup.evaluate(() => window.themeWrites)).toEqual([]);
+  // Picking one in Settings does write it.
+  await popup.click('#nav-config');
+  await popup.locator('.theme-row', { hasText: 'Vault' }).click();
+  expect(await popup.evaluate(() => window.themeWrites)).toEqual(['vault']);
 });
