@@ -178,7 +178,7 @@ async function resolvePendingLogin(sender, id, choice) {
   if (choice !== 'save') { await dropPendingLogin(key, id); return { ok: true }; }
 
   if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
-  return navigator.locks.request('otpilot-login-save', async () => {
+  return navigator.locks.request('otpilot-item-limit', async () => {
     const plan = await planPendingLogin(pending);
     if (plan.limit) return { ok: false, limit: true };
     const vk = await VaultKeys.getKey();
