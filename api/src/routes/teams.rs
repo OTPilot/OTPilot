@@ -248,7 +248,11 @@ async fn require_owner(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Resul
 /// reconstruct K even with a cached cid), and downgrades their plan — all in one
 /// transaction so a partial failure can't leave them on `team_lite` with no team.
 /// Returns the number of membership rows deleted (0 if they weren't a member).
-async fn remove_member_atomic(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Result<u64> {
+pub(crate) async fn remove_member_atomic(
+    db: &sqlx::PgPool,
+    team_id: Uuid,
+    user_id: Uuid,
+) -> Result<u64> {
     let mut tx = db.begin().await?;
     // Same lock as collection membership changes: nobody can be added to a
     // collection of this team between this removal and its cleanup.

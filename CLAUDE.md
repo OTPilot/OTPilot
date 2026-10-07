@@ -140,7 +140,8 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | Method | Path | Description |
 |---|---|---|
 | POST | `/auth/sync-user` | Upsert user row, register device, return plan + stats |
-| DELETE | `/users/me` | Hard-delete account (sets `pending_deletion_at` as a rollback guard, then deletes the Supabase auth user and the DB row in the same request) |
+| DELETE | `/users/me` | Hard-delete account, in order: cancel every subscription the user pays for now in Stripe (Personal + the team's they own; a Stripe failure aborts with nothing changed), dissolve the team they own, leave the team they're in, then set `pending_deletion_at` (rollback guard) and delete the Supabase auth user and the DB row. Cascades (migration 0019) take invites they sent, codes they shared and shares to them; `teams.owner_id` has no ON DELETE on purpose (teams are dissolved explicitly first) |
+| GET | `/users/me/deletion` | What deleting would do (subscriptions cancelled, owned team + member count, team left), for the dashboard's confirmation |
 | GET | `/accounts` | Return encrypted blob + `updated_at` |
 | PUT | `/accounts` | Upload encrypted blob |
 | POST | `/billing/checkout` | Create Stripe Checkout session |

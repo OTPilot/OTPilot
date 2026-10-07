@@ -42,13 +42,44 @@ async fn customer_params<'a>(
     })
 }
 
+/// Cancels a subscription right away, without a refund. Ok when Stripe
+/// confirms it or no longer has it (already cancelled), and when Stripe isn't
+/// configured (development). Used by account deletion, which must not leave
+/// a subscription charging a deleted account.
+pub(crate) async fn cancel_subscription_now(state: &AppState, sub_id: &str) -> Result<()> {
+    if state.stripe_secret_key.is_empty() || sub_id.is_empty() {
+        return Ok(());
+    }
+    let res = reqwest::Client::new()
+        .delete(format!(
+            "{}/v1/subscriptions/{sub_id}",
+            state.stripe_api_base
+        ))
+        .basic_auth(&state.stripe_secret_key, Some(""))
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("Stripe: {e}")))?;
+    match res.status() {
+        s if s.is_success() || s == reqwest::StatusCode::NOT_FOUND => {
+            tracing::info!("canceled subscription {sub_id}");
+            Ok(())
+        }
+        s => Err(ApiError::Internal(anyhow::anyhow!(
+            "Stripe cancel {sub_id}: {s}"
+        ))),
+    }
+}
+
 /// Cancels a subscription right away (best effort: logged on failure).
 async fn cancel_subscription(state: &AppState, sub_id: &str) {
     if state.stripe_secret_key.is_empty() || sub_id.is_empty() {
         return;
     }
     let res = reqwest::Client::new()
-        .delete(format!("https://api.stripe.com/v1/subscriptions/{sub_id}"))
+        .delete(format!(
+            "{}/v1/subscriptions/{sub_id}",
+            state.stripe_api_base
+        ))
         .basic_auth(&state.stripe_secret_key, Some(""))
         .send()
         .await;

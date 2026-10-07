@@ -1,7 +1,7 @@
 use axum::{
     extract::State,
     http::StatusCode,
-    routing::{delete, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use chrono::Utc;
@@ -13,6 +13,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/sync-user", post(sync_user))
         .route("/users/me", delete(delete_user))
+        .route("/users/me/deletion", get(deletion_preview))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -204,7 +205,96 @@ async fn sync_user(
     Ok(Json(user))
 }
 
+#[derive(sqlx::FromRow)]
+struct TeamRef {
+    id: uuid::Uuid,
+    name: String,
+    stripe_subscription_id: Option<String>,
+    members: i64,
+}
+
+/// What deleting the caller's account would do, for the confirmation
+/// dialog: subscriptions cancelled now, the team they own dissolved (with how
+/// many members), the team they'd leave.
+async fn deletion_preview(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>> {
+    let personal: Option<String> =
+        sqlx::query_scalar("SELECT personal_subscription_id FROM users WHERE id = $1")
+            .bind(auth.id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
+    let owned = owned_teams(&state.db, auth.id).await?;
+    let member_of: Option<String> = sqlx::query_scalar(
+        "SELECT t.name FROM teams t JOIN team_members m ON m.team_id = t.id
+         WHERE m.user_id = $1 AND t.owner_id <> $1 LIMIT 1",
+    )
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?;
+    Ok(Json(serde_json::json!({
+        "personal_subscription": personal.is_some(),
+        "owned_teams": owned.iter().map(|t| serde_json::json!({
+            "name": t.name, "members": t.members, "subscription": t.stripe_subscription_id.is_some(),
+        })).collect::<Vec<_>>(),
+        "member_of": member_of,
+    })))
+}
+
+async fn owned_teams(db: &sqlx::PgPool, user: uuid::Uuid) -> Result<Vec<TeamRef>> {
+    Ok(sqlx::query_as::<_, TeamRef>(
+        "SELECT t.id, t.name, t.stripe_subscription_id,
+                (SELECT COUNT(*) FROM team_members m WHERE m.team_id = t.id) AS members
+         FROM teams t WHERE t.owner_id = $1",
+    )
+    .bind(user)
+    .fetch_all(db)
+    .await?)
+}
+
+/// Deletes the caller's account, in an order that never leaves anything
+/// half-done:
+/// 1. every subscription they pay for is cancelled now in Stripe (Personal,
+///    and the team's if they own one) — if Stripe fails, nothing else
+///    happens and they can retry;
+/// 2. a team they own is dissolved (members go back to Personal/Free and
+///    lose its shared items; their own vaults are untouched);
+/// 3. a team they belong to is left;
+/// 4. the Supabase user and the database row are deleted (cascades take
+///    their vault, devices, invites and shares — migration 0019).
 async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<StatusCode> {
+    let personal: Option<String> =
+        sqlx::query_scalar("SELECT personal_subscription_id FROM users WHERE id = $1")
+            .bind(auth.id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
+    let owned = owned_teams(&state.db, auth.id).await?;
+    for sub in personal.iter().chain(
+        owned
+            .iter()
+            .filter_map(|t| t.stripe_subscription_id.as_ref()),
+    ) {
+        crate::routes::billing::cancel_subscription_now(&state, sub).await?;
+    }
+    for team in &owned {
+        crate::routes::teams::dissolve_team(&state.db, team.id).await?;
+        tracing::info!(
+            "team {} dissolved: its owner deleted their account",
+            team.id
+        );
+    }
+    let memberships: Vec<uuid::Uuid> =
+        sqlx::query_scalar("SELECT team_id FROM team_members WHERE user_id = $1")
+            .bind(auth.id)
+            .fetch_all(&state.db)
+            .await?;
+    for team_id in memberships {
+        crate::routes::teams::remove_member_atomic(&state.db, team_id, auth.id).await?;
+    }
+
     // Mark for deletion first. If the DELETE below fails after Supabase succeeds,
     // the flag survives and the startup cleanup in main() finishes the job.
     sqlx::query("UPDATE users SET pending_deletion_at = NOW() WHERE id = $1")
@@ -212,7 +302,10 @@ async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<St
         .execute(&state.db)
         .await?;
 
-    let url = format!("{}/auth/v1/admin/users/{}", state.supabase_url, auth.id);
+    let url = format!(
+        "{}/auth/v1/admin/users/{}",
+        state.supabase_admin_base, auth.id
+    );
     let sb_res = reqwest::Client::new()
         .delete(&url)
         .header("apikey", &state.supabase_service_key)
@@ -232,11 +325,212 @@ async fn delete_user(State(state): State<AppState>, auth: AuthUser) -> Result<St
     }
 
     // Supabase user is gone — remove DB row (CASCADE handles the rest).
-    // Fire-and-forget: if this fails the startup cleanup will finish it.
-    let _ = sqlx::query("DELETE FROM users WHERE id = $1")
+    // If this fails the startup cleanup will finish it.
+    if let Err(e) = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(auth.id)
         .execute(&state.db)
-        .await;
+        .await
+    {
+        tracing::error!("deleting user row {}: {e}", auth.id);
+    }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(all(test, feature = "db-tests"))]
+mod db_tests {
+    use super::*;
+    use crate::test_support::{call, create_user, test_db, test_state, TestDb};
+    use axum::http::Method;
+    use std::sync::{Arc, Mutex};
+    use uuid::Uuid;
+
+    /// A local stand-in for Stripe (DELETE /v1/subscriptions/:id; ids
+    /// starting with `sub_fail` answer 500) and Supabase's admin API
+    /// (DELETE /auth/v1/admin/users/:id). Returns its base URL and the
+    /// requests it received.
+    async fn stand_in() -> (String, Arc<Mutex<Vec<String>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let app = Router::new().fallback(move |req: axum::extract::Request| {
+            let log = log.clone();
+            async move {
+                let path = req.uri().path().to_string();
+                log.lock()
+                    .unwrap()
+                    .push(format!("{} {}", req.method(), path));
+                if path.contains("/sub_fail") {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                } else {
+                    StatusCode::OK
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (base, seen)
+    }
+
+    async fn app() -> (Router, sqlx::PgPool, TestDb, Arc<Mutex<Vec<String>>>) {
+        let db = test_db().await;
+        let pool = db.pool.clone();
+        let (base, seen) = stand_in().await;
+        let mut state = test_state(pool.clone());
+        state.stripe_secret_key = "sk_test".into();
+        state.stripe_api_base = base.clone();
+        state.supabase_admin_base = base;
+        (router().with_state(state), pool, db, seen)
+    }
+
+    async fn exists(db: &sqlx::PgPool, sql: &str, id: Uuid) -> bool {
+        sqlx::query_scalar::<_, bool>(&format!("SELECT EXISTS({sql})"))
+            .bind(id)
+            .fetch_one(db)
+            .await
+            .unwrap()
+    }
+
+    /// A team owned by `owner` (subscription `sub`) with `member`; the owner
+    /// shared a code with the member and invited someone.
+    async fn team(db: &sqlx::PgPool, owner: Uuid, member: Uuid, sub: &str) -> Uuid {
+        let t: Uuid = sqlx::query_scalar(
+            "INSERT INTO teams (name, owner_id, stripe_subscription_id) VALUES ('Acme', $1, $2) RETURNING id",
+        )
+        .bind(owner)
+        .bind(sub)
+        .fetch_one(db)
+        .await
+        .unwrap();
+        for (u, role) in [(owner, "owner"), (member, "member")] {
+            sqlx::query("INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3)")
+                .bind(t)
+                .bind(u)
+                .bind(role)
+                .execute(db)
+                .await
+                .unwrap();
+        }
+        let code: Uuid = sqlx::query_scalar(
+            "INSERT INTO shared_codes (owner_id, team_id, account_name, encrypted_secret, sharing_key_iv)
+             VALUES ($1, $2, 'GitHub', 'x', 'y') RETURNING id",
+        )
+        .bind(owner).bind(t).fetch_one(db).await.unwrap();
+        sqlx::query("INSERT INTO share_access (shared_code_id, user_id) VALUES ($1, $2)")
+            .bind(code)
+            .bind(member)
+            .execute(db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO pending_invites (email, team_id, invited_by, token) VALUES ('new@x.com', $1, $2, $3)")
+            .bind(t).bind(owner).bind(Uuid::new_v4().to_string()).execute(db).await.unwrap();
+        t
+    }
+
+    #[tokio::test]
+    async fn the_owner_deleting_their_account_cancels_billing_and_dissolves_the_team() {
+        let (app, db, _g, seen) = app().await;
+        let (owner, member) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        sqlx::query("UPDATE users SET has_personal_cloud = true, personal_subscription_id = 'sub_personal' WHERE id = $1")
+            .bind(owner).execute(&db).await.unwrap();
+        let t = team(&db, owner, member, "sub_team").await;
+
+        let (_, preview) = call(&app, owner, Method::GET, "/users/me/deletion", None).await;
+        assert_eq!(preview["personal_subscription"], true);
+        assert_eq!(preview["owned_teams"][0]["name"], "Acme");
+        assert_eq!(preview["owned_teams"][0]["members"], 2);
+
+        let (s, _) = call(&app, owner, Method::DELETE, "/users/me", None).await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+        let calls = seen.lock().unwrap().clone();
+        assert!(
+            calls.contains(&"DELETE /v1/subscriptions/sub_personal".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            calls.contains(&"DELETE /v1/subscriptions/sub_team".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            calls.contains(&format!("DELETE /auth/v1/admin/users/{owner}")),
+            "{calls:?}"
+        );
+
+        assert!(!exists(&db, "SELECT 1 FROM users WHERE id = $1", owner).await);
+        assert!(!exists(&db, "SELECT 1 FROM teams WHERE id = $1", t).await);
+        let plan: String = sqlx::query_scalar("SELECT plan FROM users WHERE id = $1")
+            .bind(member)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(plan, "free");
+        assert!(!exists(&db, "SELECT 1 FROM share_access WHERE user_id = $1", member).await);
+    }
+
+    #[tokio::test]
+    async fn a_member_deleting_their_account_leaves_the_team_which_carries_on() {
+        let (app, db, _g, seen) = app().await;
+        let (owner, member) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        let t = team(&db, owner, member, "sub_team").await;
+        // The member shared a code of their own with the owner.
+        let theirs: Uuid = sqlx::query_scalar(
+            "INSERT INTO shared_codes (owner_id, team_id, account_name, encrypted_secret, sharing_key_iv)
+             VALUES ($1, $2, 'AWS', 'x', 'y') RETURNING id",
+        )
+        .bind(member)
+        .bind(t)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO share_access (shared_code_id, user_id) VALUES ($1, $2)")
+            .bind(theirs)
+            .bind(owner)
+            .execute(&db)
+            .await
+            .unwrap();
+        let (s, _) = call(&app, member, Method::DELETE, "/users/me", None).await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+        assert!(!seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.contains("/v1/subscriptions/")));
+        assert!(!exists(&db, "SELECT 1 FROM users WHERE id = $1", member).await);
+        assert!(exists(&db, "SELECT 1 FROM teams WHERE id = $1", t).await);
+        assert!(exists(&db, "SELECT 1 FROM shared_codes WHERE team_id = $1", t).await);
+        // The code they shared went with them (and the owner's access to it).
+        assert!(!exists(&db, "SELECT 1 FROM shared_codes WHERE id = $1", theirs).await);
+    }
+
+    #[tokio::test]
+    async fn if_stripe_cannot_cancel_nothing_is_deleted() {
+        let (app, db, _g, seen) = app().await;
+        let (owner, member) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        let t = team(&db, owner, member, "sub_fail_team").await;
+        let (s, _) = call(&app, owner, Method::DELETE, "/users/me", None).await;
+        assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.contains("/auth/v1/admin/users/")));
+        assert!(
+            exists(
+                &db,
+                "SELECT 1 FROM users WHERE id = $1 AND pending_deletion_at IS NULL",
+                owner
+            )
+            .await
+        );
+        assert!(exists(&db, "SELECT 1 FROM teams WHERE id = $1", t).await);
+    }
 }
