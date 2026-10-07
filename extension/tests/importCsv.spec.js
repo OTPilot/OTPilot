@@ -306,3 +306,16 @@ test('secure notes are imported as note items, and a note already saved is not d
   await page.setInputFiles('#csv-import-file', file);
   await expect(page.locator('#csv-import-list .export-acc-row', { hasText: 'Wifi' })).toContainText('already in vault');
 });
+
+test('the same note twice in one file is imported once', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, []);
+  await page.setInputFiles('#csv-import-file', csvFile([
+    'folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp',
+    ',,note,Wifi,SSID Home,,0,,,,',
+    ',,note,Wifi,SSID Home,,0,,,,',
+  ].join('\n')));
+  await expect(page.locator('#csv-import-list .export-acc-row')).toHaveCount(2);
+  await page.click('#csv-import-confirm');
+  await expect(page.locator('#csv-import-status')).toContainText('Imported 0 logins and 1 secure note.');
+  expect(await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.length)).toBe(1);
+});

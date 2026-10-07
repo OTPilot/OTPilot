@@ -153,3 +153,33 @@ test('an item changed by a sync while the editor is open, but untouched here, ke
   await page.click('#btn-save-all');
   await expect.poll(async () => (await stored(page)).map(i => [i.title, i.notes])).toEqual([['Mine', 'b'], ['Shared', 'v2 from elsewhere']]);
 });
+
+// ── Review hardening ─────────────────────────────────────────────────────────
+
+test('a tag-only edit of a login is a change (new updatedAt), so a sync never prefers an older edit', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{ name: 'GitHub', email: '', secret: TEST_SECRET, urls: '', category: 'Work', _updatedAt: '2020-01-01T00:00:00.000Z' }] });
+  await page.locator('.acc-head', { hasText: 'GitHub' }).click();
+  await page.fill('#acc-detail .acc-more-tags', 'oss');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await stored(page))[0].tags).toEqual(['Work', 'oss']);
+  expect((await stored(page))[0].updatedAt > '2020-01-01T00:00:00.000Z').toBe(true);
+});
+
+test('opening and saving an item never rewrites fields the user did not touch', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { items: [['api', { title: 'Legacy' }, { apiKey: 'k1', expires: '07/10/2026' }]] });
+  // A field of a kind this version doesn't know (from a newer one), multi-line.
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const item = (await VaultStore.readAll(key)).items[0];
+    item.fields.push({ id: 'cert', label: 'Certificate', kind: 'pem', value: 'line1\nline2' });
+    await VaultStore.save(item, key);
+  });
+  await page.reload();
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Legacy' }).click();
+  await page.fill('#acc-detail .item-field[data-id="apiKey"]', 'k2');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await stored(page))[0].fields).toEqual({
+    clientId: '', clientSecret: '', apiKey: 'k2', environment: '', expires: '07/10/2026', cert: 'line1\nline2',
+  });
+});

@@ -790,7 +790,9 @@ function syncOpenAccToDraft() {
   entry.moreTags = parseTags(body.querySelector('.acc-more-tags')?.value).filter(t => t !== entry.category);
   if (isItemEntry(entry)) {
     entry.name = body.querySelector('.item-title').value.trim();
-    body.querySelectorAll('.item-field').forEach(inp => {
+    // Only fields the user changed: an input can't always hold a stored
+    // value exactly (a date in another format, a newer version's kind).
+    body.querySelectorAll('.item-field[data-dirty]').forEach(inp => {
       const field = Vault.getField(entry.item, inp.dataset.id);
       if (field) field.value = inp.value;
     });
@@ -1084,7 +1086,8 @@ function renderItemDetail(container, entry) {
     const val = esc(String(f.value ?? ''));
     const secret = Vault.SECRET_KINDS.includes(f.kind);
     let input;
-    if (f.kind === 'multiline') input = `<textarea class="item-field" data-id="${id}">${val}</textarea>`;
+    const known = Vault.FIELD_KINDS.includes(f.kind);
+    if (f.kind === 'multiline' || !known) input = `<textarea class="item-field" data-id="${id}">${val}</textarea>`;
     else if (f.kind === 'date') input = `<input class="item-field" data-id="${id}" type="date" value="${val}">`;
     else input = `<input class="item-field" data-id="${id}" type="${secret ? 'password' : 'text'}" value="${val}" autocomplete="off">`;
     return `<div class="acc-field">
@@ -1117,6 +1120,7 @@ function renderItemDetail(container, entry) {
     </div>
     ${tagFieldsHTML(entry)}`;
 
+  body.querySelectorAll('.item-field').forEach(inp => inp.addEventListener('input', () => { inp.dataset.dirty = '1'; }));
   body.querySelector('.btn-del').addEventListener('click', () => {
     syncOpenAccToDraft();
     const name = draft[idx].name || `this ${typeLabel(entry.type).toLowerCase()}`;
@@ -1140,6 +1144,7 @@ function renderItemDetail(container, entry) {
     const inp = b.parentElement.querySelector('.item-field');
     const { generatorOptions } = await chrome.storage.local.get('generatorOptions');
     inp.value = Generator.generate({ ...generatorOptions, mode: 'password' });
+    inp.dataset.dirty = '1';
     inp.type = 'text';
   }));
   body.querySelectorAll('.btn-copy-field').forEach(b => b.addEventListener('click', async () => {
@@ -1305,7 +1310,8 @@ async function saveAccounts(intended) {
       old.secret !== acc.secret || old.urls !== acc.urls ||
       old.email !== acc.email || old.autofill !== acc.autofill ||
       (old.password || '') !== (acc.password || '') ||
-      (old.category || '') !== (acc.category || '');
+      (old.category || '') !== (acc.category || '') ||
+      JSON.stringify(old.moreTags || []) !== JSON.stringify(acc.moreTags || []);
     acc._updatedAt = changed ? now : (old._updatedAt ?? now);
   }
 

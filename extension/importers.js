@@ -175,11 +175,16 @@ const Importers = (() => {
   function plan(entries, items) {
     const logins = items.filter(i => i.type === 'login');
     const taken = new Set();
+    const notesPlanned = new Set(); // a note repeated in the same file is added once
     return entries.map(entry => {
       if (entry.type === 'note') {
         // The same note (title and text) already saved: nothing to add.
         const same = items.find(i => i.type === 'note' && i.title === entry.title && (i.notes || '') === entry.notes);
-        return same ? { action: 'exists', target: same.id } : { action: 'new' };
+        if (same) return { action: 'exists', target: same.id };
+        const key = `${entry.title}\u0000${entry.notes}`;
+        if (notesPlanned.has(key)) return { action: 'exists' };
+        notesPlanned.add(key);
+        return { action: 'new' };
       }
       const onSite = logins.filter(i => hostsOverlap(i, entry));
       const userOf = i => Vault.getValue(i, 'username').trim();
