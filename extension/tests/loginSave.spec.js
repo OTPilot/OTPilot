@@ -296,3 +296,24 @@ test('signing in with a login a team collection already has offers no personal c
   await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
   expect(await logins(popup)).toEqual([]);
 });
+
+test('an ambiguous shared match (two usernames differing only by case) still offers to save', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const popup = context.pages().find(p => p.url().includes('popup.html'));
+  await popup.evaluate(async () => {
+    const cid = crypto.randomUUID();
+    const ck = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const sets = {};
+    for (const user of ['Alice@x.com', 'ALICE@x.com']) {
+      const item = Vault.newItem('login', { title: user, urls: ['localhost'] });
+      Vault.getField(item, 'username').value = user;
+      Vault.getField(item, 'password').value = 'pw';
+      sets[`cr:${cid}:${item.id}`] = await VaultCrypto.encryptItem(item, ck);
+    }
+    await chrome.storage.local.set(sets);
+    await chrome.storage.session.set({ collectionKeys: { [cid]: ck } });
+  });
+  const site = await context.newPage();
+  await signIn(site, 'alice@x.com', 'mine');
+  await expect(site.locator('#otpilot-login-save')).toContainText('Save this login for localhost?');
+});

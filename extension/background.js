@@ -57,6 +57,22 @@ async function sharedLogins() {
   return out;
 }
 
+// One shared login by id: only that record is decrypted (a direct lookup in
+// each unlocked collection), not every record.
+async function sharedLogin(id) {
+  const keys = (await chrome.storage.session.get('collectionKeys')).collectionKeys || {};
+  for (const [cid, key] of Object.entries(keys)) {
+    const k = `cr:${cid}:${id}`;
+    const rec = (await chrome.storage.local.get(k))[k];
+    if (!rec) continue;
+    try {
+      const item = await VaultCrypto.decryptItem(rec, key);
+      return item.type === 'login' ? item : null;
+    } catch { return null; }
+  }
+  return null;
+}
+
 async function loginsForPage(sender) {
   const host = senderHost(sender);
   const state = await VaultLock.state();
@@ -79,7 +95,7 @@ async function fillLogin(sender, id) {
   const host = senderHost(sender);
   if (!host || typeof id !== 'string' || (await VaultLock.state()) !== 'unlocked') return { ok: false };
   const item = (await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null))
-    || (await sharedLogins()).find(i => i.id === id) || null;
+    || (await sharedLogin(id));
   const password = item && Vault.getValue(item, 'password');
   if (!item || item.type !== 'login' || !password || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
   await VaultLock.touch();
@@ -161,9 +177,12 @@ async function planPendingLogin({ host, username, password }) {
   // A team collection already has this login: never offer a personal copy.
   // (A changed password there is updated from the popup, which writes to the
   // collection; the background doesn't.)
-  if (!match && (await sharedLogins()).some(i => Vault.loginCoversHost(i.urls, host)
-    && Vault.getValue(i, 'username').trim().toLowerCase() === username.toLowerCase())) {
-    return { kind: 'none' };
+  if (!match) {
+    // Same username rule as above: exact, or ignoring case when it's the
+    // only one.
+    const shared = (await sharedLogins()).filter(i => Vault.loginCoversHost(i.urls, host));
+    const sharedLoose = shared.filter(i => userOf(i).toLowerCase() === username.toLowerCase());
+    if (shared.some(i => userOf(i) === username) || sharedLoose.length === 1) return { kind: 'none' };
   }
   if (match) {
     if (Vault.getValue(match, 'password') === password) return { kind: 'none' };
