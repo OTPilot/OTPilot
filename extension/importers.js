@@ -9,6 +9,36 @@
 // Secure notes (Bitwarden type "note", LastPass "http://sn") become note
 // items.
 const Importers = (() => {
+  // Tags in OTPilot's `folder` column: ';' separates, '\;' and '\\' escape.
+  const joinTags = tags => tags.map(t => String(t).replace(/\\/g, '\\\\').replace(/;/g, '\\;')).join(';');
+  function splitTags(text) {
+    const out = [];
+    let cur = '';
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '\\' && i + 1 < text.length) { cur += text[++i]; continue; }
+      if (text[i] === ';') { out.push(cur); cur = ''; continue; }
+      cur += text[i];
+    }
+    out.push(cur);
+    return out;
+  }
+
+  // OTPilot reads a secret of hex digits (even length) as hex (totp.js
+  // decodeSecret); an otpauth URI needs base32.
+  const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  function otpauthSecret(secret) {
+    const s = String(secret).replace(/\s/g, '');
+    if (!/^[0-9a-fA-F]+$/.test(s) || s.length % 2) return s.toUpperCase();
+    let bits = 0, val = 0, out = '';
+    for (let i = 0; i < s.length; i += 2) {
+      val = (val << 8) | parseInt(s.slice(i, i + 2), 16);
+      bits += 8;
+      while (bits >= 5) { out += B32[(val >>> (bits - 5)) & 31]; bits -= 5; }
+    }
+    if (bits > 0) out += B32[(val << (5 - bits)) & 31];
+    return out;
+  }
+
   const uniqueTags = tags => [...new Set(tags.map(t => String(t || '').trim()).filter(Boolean))];
 
   // RFC 4180: quoted fields, "" escapes, newlines inside quotes, CRLF or LF.
@@ -127,14 +157,20 @@ const Importers = (() => {
   //       password, notes, totp, tag }], invalid, unsupportedTotp }
   function parse(text) {
     const rows = parseCsv(text);
-    if (rows.length < 2) return { source: 'CSV', entries: [], invalid: 0, unsupportedTotp: 0 };
+    if (rows.length < 2) return { source: 'CSV', entries: [], invalid: 0, unsupportedTotp: 0, otherTypes: 0 };
     const { col, source } = columns(rows[0]);
     if (col.password === undefined && col.totp === undefined) throw new Error('No password column found');
     const get = (row, key) => (col[key] !== undefined ? String(row[col[key]] ?? '').trim() : '');
-    // OTPilot's own export lists every tag in `folder` (a;b;c); other
-    // managers have one folder, possibly a path (Root/Email → Email).
-    const tagsOf = row => (source === 'OTPilot'
-      ? uniqueTags(get(row, 'folder').split(';'))
+    // OTPilot's own export round-trips exactly: notes untrimmed, URL
+    // patterns as saved (one per line), logins without a password kept.
+    const own = source === 'OTPilot';
+    const raw = (row, key) => (col[key] !== undefined ? String(row[col[key]] ?? '') : '');
+    const notesOf = row => (own ? raw(row, 'notes') : get(row, 'notes'));
+    // OTPilot's own export lists every tag in `folder` (a;b;c, with \; and
+    // \\ escaping); other managers have one folder, possibly a path
+    // (Root/Email → Email).
+    const tagsOf = row => (own
+      ? uniqueTags(splitTags(raw(row, 'folder')))
       : [folderTag(get(row, 'folder'))].filter(Boolean));
     const withTags = (entry, row) => {
       const [tag = '', ...more] = tagsOf(row);
@@ -143,15 +179,18 @@ const Importers = (() => {
       return entry;
     };
     const entries = [];
-    let invalid = 0, unsupportedTotp = 0;
+    let invalid = 0, unsupportedTotp = 0, otherTypes = 0;
     for (const row of rows.slice(1)) {
       const rawUrl = get(row, 'url');
+      // OTPilot's export also lists servers, API credentials…: not rebuilt
+      // from CSV yet, reported instead of turned into logins.
+      if (own && !['login', 'note'].includes(get(row, 'type').toLowerCase())) { otherTypes++; continue; }
       if (get(row, 'type').toLowerCase() === 'note' || rawUrl === 'http://sn') {
-        const note = withTags({ type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: get(row, 'notes'), totp: '', tag: '' }, row);
+        const note = withTags({ type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: notesOf(row), totp: '', tag: '' }, row);
         if (note.notes || get(row, 'title')) entries.push(note); else invalid++;
         continue;
       }
-      const urls = urlsOf(rawUrl, source);
+      const urls = own ? raw(row, 'url').split('\n').map(u => u.trim()).filter(Boolean) : urlsOf(rawUrl, source);
       const totp = parseTotp(get(row, 'totp'));
       if (totp.unsupported) unsupportedTotp++;
       const entry = {
@@ -160,16 +199,16 @@ const Importers = (() => {
         urls,
         username: get(row, 'username'),
         password: col.password !== undefined ? String(row[col.password] ?? '') : '',
-        notes: get(row, 'notes'),
+        notes: notesOf(row),
         totp: totp.secret || '',
         tag: '',
       };
       withTags(entry, row);
-      if (!entry.password && !entry.totp) { invalid++; continue; }
+      if (!own && !entry.password && !entry.totp) { invalid++; continue; }
       if (!entry.title) entry.title = entry.username || 'Imported login';
       entries.push(entry);
     }
-    return { source, entries, invalid, unsupportedTotp };
+    return { source, entries, invalid, unsupportedTotp, otherTypes };
   }
 
   const hostsOverlap = (item, entry) => entry.urls.some(h => Vault.loginCoversHost(item.urls, h))
@@ -282,9 +321,9 @@ const Importers = (() => {
           (item.urls || []).join('\n'),
           item.type === 'login' ? value('username') : '',
           item.type === 'login' ? value('password') : '',
-          item.totp?.secret ? `otpauth://totp/${encodeURIComponent(item.title || 'OTPilot')}?secret=${item.totp.secret}` : '',
+          item.totp?.secret ? `otpauth://totp/${encodeURIComponent(item.title || 'OTPilot')}?secret=${otpauthSecret(item.totp.secret)}` : '',
           item.notes || '',
-          (item.tags || []).join(';'),
+          joinTags(item.tags || []),
           extra.join('\n'),
         ];
       });
