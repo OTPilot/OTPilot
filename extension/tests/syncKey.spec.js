@@ -171,3 +171,15 @@ test('a removal racing a key change is not undone', async ({ context, extensionI
   });
   expect(remaining).toBe(false);
 });
+
+test('turning sync off clears per-item sync progress even where vaultSync.js is not loaded', async ({ context, extensionId }) => {
+  // This page loads cloudSync.js without vaultSync.js, like the background worker.
+  const page = await syncPage(context, extensionId);
+  const left = await page.evaluate(async () => {
+    await CloudSync.generateSyncKey();
+    await chrome.storage.local.set({ vaultSyncState: { cursor: 9, synced: { a: { rev: 9, fp: 'x' } } } });
+    await CloudSync.deleteSyncKey();
+    return (await chrome.storage.local.get('vaultSyncState')).vaultSyncState;
+  });
+  expect(left).toBeUndefined();
+});

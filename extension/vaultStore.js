@@ -122,5 +122,23 @@ const VaultStore = (() => {
     return writes;
   }
 
-  return { listRecords, listTombstones, get: get1, readAll, save, remove, clear, prepareRekey };
+  // Runs `fn(tx)` under the vault lock, so nothing else saves or removes
+  // records between what `fn` reads and what it writes (sync uses this to
+  // read, decide and apply remote changes as one step). `tx` writes raw
+  // records (already encrypted) and removes without leaving a tombstone.
+  function transaction(fn) {
+    return exclusive(() => fn({
+      listRecords,
+      listTombstones,
+      put: (id, rec) => set({ [RECORD + id]: rec }).then(() => del(TOMB + id)),
+      drop: id => del([RECORD + id, TOMB + id]),
+      dropTombstone: id => del(TOMB + id),
+    }));
+  }
+
+  function dropTombstones(ids) {
+    return exclusive(() => del(ids.map(id => TOMB + id)));
+  }
+
+  return { listRecords, listTombstones, get: get1, readAll, save, remove, clear, prepareRekey, transaction, dropTombstones };
 })();

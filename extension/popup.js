@@ -705,6 +705,7 @@ function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {})
   const withOrigin = accounts.map((a, i) => ({ acc: { ...a }, origIdx: i }));
   withOrigin.sort((x, y) => (x.acc.name || '').localeCompare(y.acc.name || ''));
   draft = withOrigin.map(w => w.acc);
+  _draftBase = structuredClone(draft);
   openAccIdx = openTargetIdx >= 0 ? withOrigin.findIndex(w => w.origIdx === openTargetIdx) : -1;
   if (!preserveSearch) document.getElementById('acc-search').value = '';
   // A leftover category filter from a previous Accounts-view visit could hide
@@ -1004,6 +1005,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   syncOpenAccToDraft();
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
+  draft = mergeDraftWithCurrent();
 
   // Diff old accounts vs draft: stamp _updatedAt on new/changed, tombstone deleted
   const now      = new Date().toISOString();
@@ -1047,6 +1049,55 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
 });
 
 // ── View switching ────────────────────────────────────────────────────────────
+
+// Redraws whatever shows the account list: Home always, and the Accounts view
+// if it's open (keeping its search). Used after the list changes underneath
+// the UI (first load, a sync).
+// Never rebuilds an editor with unsaved changes or an open form: a sync
+// finishing mid-edit would otherwise discard what the user typed. Saving
+// merges the edits with whatever changed meanwhile (mergeDraftWithCurrent).
+let _draftBase = [];
+function accountsEditorBusy() {
+  if (document.getElementById('settings-panel').style.display === 'none') return false;
+  syncOpenAccToDraft();
+  return openAccIdx >= 0 || JSON.stringify(draft) !== JSON.stringify(_draftBase);
+}
+
+function refreshAccountsUI() {
+  renderAccountBar();
+  if (document.getElementById('settings-panel').style.display === 'none') return;
+  if (accountsEditorBusy()) {
+    setStatus('Synced — other changes appear after you save or cancel');
+    return;
+  }
+  renderAccountsList(-1, { preserveSearch: true });
+}
+
+// Three-way merge for Save, against the list the editor started from
+// (_draftBase): accounts the user didn't touch take their current version
+// (a sync may have changed or deleted them), edited and new ones are the
+// user's, and accounts that arrived meanwhile are kept.
+// Item ids a sync replaced while the popup was open (a login migrated on two
+// devices kept under the server's id): the editor's copies follow them.
+const _idRemaps = {};
+const remapId = a => (a._id && _idRemaps[a._id] ? { ...a, _id: _idRemaps[a._id] } : a);
+
+function mergeDraftWithCurrent() {
+  const base = new Map(_draftBase.filter(a => a._id).map(remapId).map(a => [a._id, JSON.stringify(a)]));
+  const current = new Map(accounts.filter(a => a._id).map(a => [a._id, a]));
+  const merged = [];
+  for (const d0 of draft) {
+    const d = remapId(d0);
+    const untouched = d._id && base.get(d._id) === JSON.stringify(d);
+    if (!untouched) merged.push(d);
+    else if (current.has(d._id)) merged.push({ ...current.get(d._id) });
+    // untouched here and gone from the vault: deleted elsewhere, stays deleted
+  }
+  for (const a of accounts) {
+    if (a._id && !base.has(a._id)) merged.push({ ...a }); // arrived while editing
+  }
+  return merged;
+}
 
 function showView(view, opts = {}) {
   if (view !== 'settings') clearRevealedKey();
@@ -2059,48 +2110,94 @@ async function renderSyncPanel() {
 }
 
 let _syncInProgress = false;
+// After a sync changed the vault: reload the list, rebuild the locked-vault
+// index (pulled URLs/names/deletions), and redraw.
+async function reloadFromVault(key) {
+  accounts = await VaultAccounts.load(key);
+  _loadedIds = new Set(accounts.map(a => a._id));
+  activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
+  await VaultAccounts.writeIndex((await VaultStore.readAll(key)).items);
+  refreshAccountsUI();
+  requestIcons();
+  startTimer();
+}
+
+// The v1 view of the vault for 1.x devices: written when it no longer matches
+// what this device last exported (or a 1.x device just changed it). Accounts
+// that left the vault since the last export get v1 tombstones (keyed by name),
+// or a 1.x device would push them back.
+const v1Fields = a => ({ name: a.name, email: a.email || '', secret: a.secret, urls: a.urls || '', autofill: a.autofill !== false, category: a.category || '', domain: a.domain || '' });
+// SHA-256 of the v1 view: what's compared with the last export. Only the hash
+// is stored (the view contains secrets); names are kept for the tombstones
+// and are already in the plaintext vaultIndex.
+async function v1Snapshot(list) {
+  const bytes = new TextEncoder().encode(JSON.stringify(list.map(v1Fields)));
+  return VaultCrypto.b64e(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
+}
+// Returns false when the server kept a newer blob instead (written meanwhile
+// by another device): nothing is recorded, so the caller merges it and retries.
+async function exportV1Blob(serverMeta, fromV1Device) {
+  const { v1Export } = await chrome.storage.local.get('v1Export');
+  const snapshot = await v1Snapshot(accounts);
+  // The server keeps the blob with the newest timestamp: stamp the export
+  // after the one it holds, so a clock behind another device's still wins.
+  const serverMs = serverMeta?.updatedAt ? Date.parse(serverMeta.updatedAt) : NaN;
+  const now = new Date(Math.max(Date.now(), Number.isNaN(serverMs) ? 0 : serverMs + 1)).toISOString();
+  if (!fromV1Device && serverMeta && v1Export?.snapshot === snapshot) {
+    // Up to date (possibly written by another 2.0 device): nothing to upload.
+    if (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt) await writeLastSyncedAt(serverMeta.updatedAt);
+    return true;
+  }
+  const current = new Set(accounts.map(a => a.name));
+  for (const name of v1Export?.names || []) {
+    if (!current.has(name)) tombstones[name] = now;
+  }
+  for (const name of current) delete tombstones[name];
+  await saveTombstones();
+  const res = await CloudSync.push(accounts, tombstones, now, 'v2');
+  if (res?.conflict) return false;
+  await chrome.storage.local.set({ v1Export: { snapshot, names: [...current] } });
+  await writeLastSyncedAt(now);
+  return true;
+}
+
+// One pass of the v1 transition: merge a blob from a 1.x device, then export.
+async function syncV1Blob(key) {
+  const serverMeta = await CloudSync.getServerMeta();
+  const fromV1Device = !!serverMeta && serverMeta.writer !== 'v2' &&
+    (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt);
+  if (fromV1Device) {
+    const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
+      accounts, tombstones, serverMeta.accounts, serverMeta.tombstones, lastSyncedAt
+    );
+    accounts   = merged;
+    tombstones = mergedTombs;
+    await saveState();
+    await saveTombstones();
+    Object.assign(_idRemaps, (await VaultSync.sync(key)).remapped); // so the 1.x edits reach other 2.0 devices too
+    await reloadFromVault(key);
+  }
+  return { serverMeta, exported: await exportV1Blob(serverMeta, fromV1Device) };
+}
+
 async function doSync() {
   if (_syncInProgress) return;
   _syncInProgress = true;
   syncSetStatus('syncing', 'Syncing…');
   try {
-    const serverMeta = await CloudSync.getServerMeta();
+    // 2.0: the vault syncs item by item (/vault/items); the v1 blob only keeps
+    // 1.x devices in step during the transition. Blobs written by 2.0 devices
+    // carry writer 'v2' and are ignored here (their items already arrived);
+    // only a blob from a 1.x device is merged in.
+    const key = await VaultKeys.getKey();
+    if (!key) throw new Error('vault is locked');
+    Object.assign(_idRemaps, (await VaultSync.sync(key)).remapped);
+    await reloadFromVault(key);
 
-    const serverNewer = serverMeta !== null &&
-      (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt);
-    const localNewer  = localChangedAt !== null &&
-      (lastSyncedAt === null || localChangedAt > lastSyncedAt);
-
-    if (serverNewer && !localNewer) {
-      accounts   = serverMeta.accounts;
-      tombstones = serverMeta.tombstones;
-      await saveState();
-      await saveTombstones();
-      renderAccountBar();
-      requestIcons(); // pick up icons for accounts pulled in from another device
-      startTimer();
-      await writeLastSyncedAt(serverMeta.updatedAt);
-    } else if (!serverNewer && localNewer) {
-      await CloudSync.push(accounts, tombstones, localChangedAt);
-      await writeLastSyncedAt(localChangedAt);
-    } else if (serverNewer && localNewer) {
-      const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
-        accounts, tombstones, serverMeta.accounts, serverMeta.tombstones, lastSyncedAt
-      );
-      accounts   = merged;
-      tombstones = mergedTombs;
-      const now = new Date().toISOString();
-      await saveState();
-      await saveTombstones();
-      renderAccountBar();
-      requestIcons(); // pick up icons for accounts merged in from another device
-      startTimer();
-      await CloudSync.push(merged, mergedTombs, now);
-      await writeLastSyncedAt(now);
-    } else if (!serverMeta && localChangedAt) {
-      await CloudSync.push(accounts, tombstones, localChangedAt);
-      await writeLastSyncedAt(localChangedAt);
-    }
+    let { serverMeta, exported } = await syncV1Blob(key);
+    // Refused: a blob written meanwhile by another device. Merge it and export
+    // again, once; past that the next sync picks it up.
+    if (!exported) ({ serverMeta } = await syncV1Blob(key));
 
     if (serverMeta?.command) {
       await CloudSync.executeCommand(serverMeta.command);
@@ -2176,10 +2273,15 @@ document.getElementById('btn-confirm-newkey').addEventListener('click', async ()
       // Overwrite the server blob with the new key directly — do NOT read/merge
       // the existing blob (it was encrypted with a different key and can't be
       // decrypted, which would otherwise fail the whole sync).
+      // Same for the per-item vault: its items may be encrypted with the lost
+      // key, so they're deleted and this device's vault is uploaded instead.
       _startFresh = false;
       const now = new Date().toISOString();
-      await CloudSync.push(accounts, tombstones, now);
+      await CloudSync.push(accounts, tombstones, now, 'v2');
+      await chrome.storage.local.set({ v1Export: { snapshot: await v1Snapshot(accounts), names: accounts.map(a => a.name) } });
       await writeLastSyncedAt(now);
+      await VaultSync.wipeServer();
+      await VaultSync.sync(await VaultKeys.getKey());
       syncSetStatus('ok', 'Synced');
     } else {
       await stampLocalChange(); // force initial push so other devices can detect existing sync
@@ -2293,7 +2395,7 @@ let _stopSyncMode = 'free';
 document.getElementById('btn-free-signout').addEventListener('click', async () => {
   try { await CloudSync.leaveDevice() } catch (e) { console.error('leaveDevice:', e) }
   await SupabaseAuth.signOut();
-  await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r));
+  await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'v1Export'], r));
   localChangedAt = null;
   lastSyncedAt   = null;
   tombstones     = {};
@@ -2317,7 +2419,7 @@ document.getElementById('btn-confirm-stop-sync').addEventListener('click', async
   await SupabaseAuth.signOut();
   if (_stopSyncMode === 'active') await CloudSync.deleteSyncKey();
   await new Promise(r => chrome.storage.local.remove(
-    ['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r
+    ['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'v1Export'], r
   ));
   localChangedAt = null;
   lastSyncedAt   = null;
@@ -2370,7 +2472,8 @@ async function silentPullSync() {
   const justAuthenticated = await initLock();
   await loadState();
   await syncActiveIndexToUrl();
-  renderAccountBar();
+  // The user may have opened Accounts while the vault was still loading.
+  refreshAccountsUI();
   requestIcons(); // resolve+cache site favicons, then re-render when ready
   startTimer();
   if (justAuthenticated) tryAutoFillCurrentTab();
@@ -2412,6 +2515,7 @@ function refreshSharedBadges() {
   renderAccountBar();
   if (document.getElementById('settings-panel')?.style.display !== 'none') {
     rebuildAccountsDOM();
+    applyVaultSearch(); // fresh rows start visible: re-apply the search/category filter
   }
 }
 
