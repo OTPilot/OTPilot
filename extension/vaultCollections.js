@@ -40,13 +40,24 @@ const VaultCollections = (() => {
     return (await session.get(KEYS))[KEYS] || {};
   }
 
+  // Caches a collection key for the session — under the vault lock, and only
+  // while the vault is still unlocked: a lock that happened meanwhile
+  // (VaultKeys.lock clears this cache in the same lock) must not be undone.
+  // Throws when locked.
+  function cacheKey(cid, key) {
+    return navigator.locks.request('otpilot-vault', async () => {
+      if (!(await session.get('vaultKeyUnlocked')).vaultKeyUnlocked) throw new Error('vault is locked');
+      await session.set({ [KEYS]: { ...(await cachedKeys()), [cid]: key } });
+    });
+  }
+
   // The collection key (base64) for `c` (a row of GET /collections), unwrapped
   // with this user's team private key and cached for the session.
   async function keyFor(c) {
     const cached = await cachedKeys();
     if (cached[c.id]) return cached[c.id];
     const ck = VaultCrypto.b64e(await TeamKeys.unwrapUserShare(c.wrapped_key));
-    await session.set({ [KEYS]: { ...(await cachedKeys()), [c.id]: ck } });
+    await cacheKey(c.id, ck);
     return ck;
   }
 
@@ -87,7 +98,7 @@ const VaultCollections = (() => {
         wrapped_key: await TeamKeys.wrapUserShare(raw, await TeamKeys.getPublicKeyB64()),
       }),
     });
-    await session.set({ [KEYS]: { ...(await cachedKeys()), [id]: key } });
+    await cacheKey(id, key);
     return { id, teamId, name, role: 'manage', members: 1, key };
   }
 
@@ -124,6 +135,11 @@ const VaultCollections = (() => {
   }
 
   // ── Items ─────────────────────────────────────────────────────────────────
+  // Everything that reads or writes a collection's local records or sync
+  // state — pulls, saves, deletes, including their server requests — runs
+  // one at a time per collection, so a pull can't store an older revision
+  // over a save, or a write lose another's remembered revision.
+  const serial = (cid, fn) => navigator.locks.request(`otpilot-collection:${cid}`, fn);
 
   async function loadState(cid) {
     const s = (await local.get(STATE(cid)))[STATE(cid)];
@@ -132,7 +148,11 @@ const VaultCollections = (() => {
 
   // Pulls what changed since the last pull (all pages) into local storage.
   // Records this device can't decrypt are skipped (counted in `unreadable`).
-  async function pull(c) {
+  function pull(c) {
+    return serial(c.id, () => pullNow(c));
+  }
+
+  async function pullNow(c) {
     const state = await loadState(c.id);
     let pulled = 0, deleted = 0, unreadable = 0;
     for (let more = true; more;) {
@@ -173,7 +193,11 @@ const VaultCollections = (() => {
   // Saves one item to the collection (create, or update from the revision
   // this device last pulled). Returns { ok: true } or, when someone else
   // changed it meanwhile, { conflict: true } after pulling their version.
-  async function save(c, item) {
+  function save(c, item) {
+    return serial(c.id, () => saveNow(c, item));
+  }
+
+  async function saveNow(c, item) {
     const state = await loadState(c.id);
     const record = await VaultCrypto.encryptItem({ ...item, updatedAt: new Date().toISOString() }, c.key);
     const base = state.revs[item.id];
@@ -181,20 +205,23 @@ const VaultCollections = (() => {
       method: 'PUT',
       body: JSON.stringify({ record, ...(base !== undefined ? { base_revision: base } : {}) }),
     });
-    if (status === 409) { await pull(c); return { conflict: true }; }
+    if (status === 409) { await pullNow(c); return { conflict: true }; }
     if (status !== 200) throw Object.assign(new Error(body?.error || `collection item ${status}`), { status });
-    const fresh = await loadState(c.id);
-    fresh.revs[item.id] = body.revision;
-    await local.set({ [RECORD(c.id) + item.id]: record, [STATE(c.id)]: fresh });
+    state.revs[item.id] = body.revision;
+    await local.set({ [RECORD(c.id) + item.id]: record, [STATE(c.id)]: state });
     return { ok: true };
   }
 
-  async function deleteItem(c, id) {
+  function deleteItem(c, id) {
+    return serial(c.id, () => deleteNow(c, id));
+  }
+
+  async function deleteNow(c, id) {
     const state = await loadState(c.id);
     const base = state.revs[id];
     if (base === undefined) return { ok: false };
     const { status } = await api(`/collections/${c.id}/items/${id}?base_revision=${base}`, { method: 'DELETE' });
-    if (status === 409) { await pull(c); return { conflict: true }; }
+    if (status === 409) { await pullNow(c); return { conflict: true }; }
     if (status !== 200 && status !== 404) throw Object.assign(new Error(`collection delete ${status}`), { status });
     delete state.revs[id];
     await local.remove(RECORD(c.id) + id);
@@ -210,16 +237,23 @@ const VaultCollections = (() => {
 
   // ── Local cleanup ─────────────────────────────────────────────────────────
 
-  async function forget(cid) {
+  function forget(cid) {
+    return serial(cid, () => forgetNow(cid));
+  }
+
+  async function forgetNow(cid) {
     const all = await local.get(null);
     await local.remove(Object.keys(all).filter(k => k.startsWith(RECORD(cid)) || k === STATE(cid)));
     const keys = await cachedKeys();
     if (keys[cid]) { delete keys[cid]; await session.set({ [KEYS]: keys }); }
   }
 
+  // Collections known locally — by stored records/state or by a cached key
+  // (one created or listed but never pulled has only the key) — that the
+  // server no longer lists for this user.
   async function forgetOthers(keep) {
     const all = await local.get(null);
-    const stale = new Set();
+    const stale = new Set(Object.keys(await cachedKeys()).filter(cid => !keep.has(cid)));
     for (const k of Object.keys(all)) {
       const m = /^c[rs]:([0-9a-f-]{36})/.exec(k);
       if (m && !keep.has(m[1])) stale.add(m[1]);

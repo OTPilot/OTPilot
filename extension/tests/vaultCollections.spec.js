@@ -176,3 +176,55 @@ test('a collection no longer listed (removed from it, or deleted) leaves nothing
   });
   expect(r).toEqual({ keysBefore: 2, listed: 0, keysAfter: 0, cached: false });
 });
+
+// ── Review hardening ─────────────────────────────────────────────────────────
+
+test('a key unwrapped while the vault locks is not cached after the lock', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Shared');
+    await chrome.storage.session.remove('collectionKeys');
+    // The unwrap is slow; the vault locks meanwhile.
+    const unwrap = TeamKeys.unwrapUserShare;
+    TeamKeys.unwrapUserShare = async (...a) => { const k = await unwrap(...a); await VaultLock.lock(); return k; };
+    let listed;
+    try { listed = await VaultCollections.list(); } catch (e) { listed = e.message; }
+    TeamKeys.unwrapUserShare = unwrap;
+    return { cached: (await chrome.storage.session.get('collectionKeys')).collectionKeys?.[c.id] ?? null, key: listed?.[0]?.key ?? null };
+  });
+  expect(r).toEqual({ cached: null, key: null });
+});
+
+test('a pull overlapping a save never stores the older revision over the saved one', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Shared');
+    const item = Vault.newItem('note', { title: 'Doc', notes: 'v1' });
+    await VaultCollections.save(c, item);
+    await VaultCollections.forget(c.id); // nothing local: the pull below brings v1
+    const [again] = await VaultCollections.list();
+    // A slow pull (fetches v1, pauses decrypting) and a save of v2 at the same time.
+    const decrypt = VaultCrypto.decryptItem;
+    VaultCrypto.decryptItem = async (...a) => { await new Promise(r => setTimeout(r, 300)); return decrypt(...a); };
+    const pulling = VaultCollections.pull(again);
+    await new Promise(r => setTimeout(r, 50));
+    const saving = VaultCollections.save(again, { ...item, notes: 'v2' });
+    await Promise.all([pulling, saving]);
+    VaultCrypto.decryptItem = decrypt;
+    const state = (await chrome.storage.local.get(`cs:${again.id}`))[`cs:${again.id}`];
+    return { notes: (await VaultCollections.items(again))[0].notes, rev: state.revs[item.id], server: fake.items.get(item.id).revision };
+  });
+  expect(r.notes).toBe('v2');
+  expect(r.rev).toBe(r.server);
+});
+
+test('a collection created here and removed before any item was saved leaves no cached key', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Empty');
+    fake.collections.get(c.id).members.delete('user-me');
+    await VaultCollections.list();
+    return c.id in ((await chrome.storage.session.get('collectionKeys')).collectionKeys || {});
+  });
+  expect(r).toBe(false);
+});
