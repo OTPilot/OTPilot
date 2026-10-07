@@ -216,3 +216,15 @@ test('secrets that look like hex keep their bytes through export and import', as
   // secrets as hex) generates the same codes as an authenticator app.
   expect(r.otherStored).toBe(r.otherBytes);
 });
+
+test('importing the same file twice finds the hex-looking base32 secret already there', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  const plans = await page.evaluate(() => {
+    const csv = 'name,url,username,password,totp\nX,x.com,u,,ABCDEF234567ABCD\n';
+    const first = Importers.parse(csv);
+    const saved = Importers.toItems(first.entries, Importers.plan(first.entries, []), []);
+    const again = Importers.parse(csv);
+    return Importers.plan(again.entries, saved).map(p => p.action);
+  });
+  expect(plans).toEqual(['exists']);
+});

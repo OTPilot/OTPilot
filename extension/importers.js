@@ -236,8 +236,11 @@ const Importers = (() => {
     .split(/[/?#]/)[0].replace(/:\d+$/, '').replace(/^\*\./, '').toLowerCase();
   const hostsOverlap = (item, entry) => entry.urls.some(u => Vault.loginCoversHost(item.urls, hostOf(u)))
     || (item.urls || []).some(u => Vault.loginCoversHost(entry.urls, hostOf(u)));
-  // The same 2FA secret written as hex or base32 (with spaces, lowercase…).
-  const sameSecret = (a, b) => !!a && !!b && otpauthSecret(a).replace(/=+$/, '') === otpauthSecret(b).replace(/=+$/, '');
+  // Whether a saved secret (`stored`: base32, or hex the way OTPilot reads it)
+  // is the imported one (`incoming`: always base32 here — parseTotp — so it is
+  // never read as hex, even when it looks like it).
+  const sameSecret = (stored, incoming) => !!stored && !!incoming
+    && otpauthSecret(stored).replace(/=+$/, '') === String(incoming).replace(/[\s=]/g, '').toUpperCase();
 
   // What importing each entry does against the vault's current `items`:
   //   exists — a login for that site + username already holds everything the
