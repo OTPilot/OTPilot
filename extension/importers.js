@@ -211,8 +211,14 @@ const Importers = (() => {
     return { source, entries, invalid, unsupportedTotp, otherTypes };
   }
 
-  const hostsOverlap = (item, entry) => entry.urls.some(h => Vault.loginCoversHost(item.urls, h))
-    || (item.urls || []).some(h => Vault.loginCoversHost(entry.urls, h));
+  // Saved URL patterns can carry a scheme, path or port (and OTPilot's own
+  // export keeps them as saved): compare by their host part.
+  const hostOf = pattern => String(pattern).trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .split(/[/?#]/)[0].replace(/:\d+$/, '').replace(/^\*\./, '').toLowerCase();
+  const hostsOverlap = (item, entry) => entry.urls.some(u => Vault.loginCoversHost(item.urls, hostOf(u)))
+    || (item.urls || []).some(u => Vault.loginCoversHost(entry.urls, hostOf(u)));
+  // The same 2FA secret written as hex or base32 (with spaces, lowercase…).
+  const sameSecret = (a, b) => !!a && !!b && otpauthSecret(a).replace(/=+$/, '') === otpauthSecret(b).replace(/=+$/, '');
 
   // What importing each entry does against the vault's current `items`:
   //   exists — a login for that site + username already holds everything the
@@ -246,9 +252,9 @@ const Importers = (() => {
       const loose = onSite.filter(i => userOf(i).toLowerCase() === entry.username.trim().toLowerCase());
       const matches = exact.length ? exact : (loose.length === 1 ? loose : []);
       const pwOk = i => !entry.password || [entry.password, ''].includes(Vault.getValue(i, 'password'));
-      const totpOk = i => !entry.totp || !i.totp?.secret || i.totp.secret === entry.totp;
+      const totpOk = i => !entry.totp || !i.totp?.secret || sameSecret(i.totp.secret, entry.totp);
       const holdsAll = i => (!entry.password || Vault.getValue(i, 'password') === entry.password)
-        && (!entry.totp || i.totp?.secret === entry.totp);
+        && (!entry.totp || sameSecret(i.totp?.secret, entry.totp));
       const same = matches.find(holdsAll);
       if (same) return { action: 'exists', target: same.id };
       const target = matches.find(i => !taken.has(i.id) && pwOk(i) && totpOk(i));

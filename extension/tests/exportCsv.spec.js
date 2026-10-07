@@ -164,3 +164,18 @@ test('a double click exports once; an unreadable vault says so', async ({ contex
   await page.click('#csv-export-confirm');
   await expect(page.locator('#status-msg')).toHaveText('Could not export: 1 unreadable item');
 });
+
+test('re-importing an export into the same vault finds every login (hex secrets, URLs with path/port)', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  const plans = await page.evaluate(() => {
+    const hex = Vault.newItem('login', { title: 'Hex', urls: ['https://example.com/login'], totp: { secret: '3132333435363738393031323334353637383930' } });
+    Vault.getField(hex, 'username').value = 'me';
+    const port = Vault.newItem('login', { title: 'Admin', urls: ['example.org:8080'] });
+    Vault.getField(port, 'username').value = 'root';
+    Vault.getField(port, 'password').value = 'pw';
+    const items = [hex, port];
+    const parsed = Importers.parse(Importers.toCsv(items));
+    return Importers.plan(parsed.entries, items).map(p => p.action);
+  });
+  expect(plans).toEqual(['exists', 'exists']);
+});
