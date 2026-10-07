@@ -820,6 +820,7 @@ function syncOpenAccToDraft() {
   const body = document.querySelector('#acc-detail .acc-body');
   if (!body) return;
   const entry = draft[openAccIdx];
+  if (isSharedEntry(entry) && entry.role === 'view') return; // read-only: nothing to read back
   entry.category = (body.querySelector('.cat-choose')?.dataset.value || '').trim();
   entry.moreTags = parseTags(body.querySelector('.acc-more-tags')?.value).filter(t => t !== entry.category);
   if (entry._kind) {
@@ -1003,7 +1004,8 @@ function renderAccDetail() {
     </div>
     <div class="acc-field">
       <label>URLs (one per line, * wildcard ok)</label>
-      <textarea class="acc-urls" placeholder="*.example.com&#10;staging.myapp.io">${esc(acc.urls || '')}</textarea>
+      <textarea class="acc-urls" placeholder="*.example.com&#10;staging.myapp.io">
+${esc(acc.urls || '')}</textarea>
     </div>
     <label class="toggle">
       <input type="checkbox" class="acc-autofill" ${acc.autofill !== false ? 'checked' : ''}>
@@ -1129,7 +1131,8 @@ function renderItemDetail(container, entry) {
     const secret = Vault.SECRET_KINDS.includes(f.kind);
     let input;
     const known = Vault.FIELD_KINDS.includes(f.kind);
-    if (f.kind === 'multiline' || !known) input = `<textarea class="item-field" data-id="${id}">${val}</textarea>`;
+    if (f.kind === 'multiline' || !known) input = `<textarea class="item-field" data-id="${id}">
+${val}</textarea>`;
     else if (f.kind === 'date') input = `<input class="item-field" data-id="${id}" type="date" value="${val}">`;
     else input = `<input class="item-field" data-id="${id}" type="${secret ? 'password' : 'text'}" value="${val}" autocomplete="off">`;
     return `<div class="acc-field">
@@ -1166,11 +1169,13 @@ function renderItemDetail(container, entry) {
     </div>
     <div class="acc-field">
       <label>URLs (one per line, * wildcard ok)</label>
-      <textarea class="item-urls">${esc((item.urls || []).join('\n'))}</textarea>
+      <textarea class="item-urls">
+${esc((item.urls || []).join('\n'))}</textarea>
     </div>` : ''}
     <div class="acc-field">
       <label>Notes</label>
-      <textarea class="item-notes" placeholder="${entry.type === 'note' ? 'Write your note' : 'Anything else worth keeping'}">${esc(item.notes || '')}</textarea>
+      <textarea class="item-notes" placeholder="${entry.type === 'note' ? 'Write your note' : 'Anything else worth keeping'}">
+${esc(item.notes || '')}</textarea>
     </div>
     ${tagFieldsHTML(entry)}
     ${collectionControlsHTML(entry)}`;
@@ -1358,7 +1363,13 @@ async function moveNow(entry, cid) {
   _loadedIds = new Set(accounts.map(a => a._id));
   otherItems = await VaultAccounts.loadOthers(key);
   sharedItems = await sharedItemsFromLocal();
-  patchEntries(removed ? [entry._id] : [], sharedItems.filter(s => !before.has(s.item.id)).map(sharedEntryOf));
+  const added = sharedItems.filter(s => !before.has(s.item.id)).map(sharedEntryOf);
+  if (removed) patchEntries([entry._id], added);
+  else {
+    // Kept: show (and base later saves on) the updated version, not the copy.
+    const kept = [...accounts, ...otherItems.map(entryOf)].find(e => e._id === entry._id);
+    patchEntries([entry._id], [...(kept ? [{ ...structuredClone(kept) }] : []), ...added]);
+  }
   renderAccountBar();
   if (removed) setStatus(`Moved to ${c.name}`);
 }

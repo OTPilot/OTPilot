@@ -307,3 +307,47 @@ test('the main Save refuses to drop unsaved edits to a shared item', async ({ co
   await expect(page.locator('#status-msg')).toContainText('use "Save to Infra" first');
   expect(await page.evaluate(() => draft.find(e => e.name === 'Shared note').item.notes)).toBe('v2 not saved yet');
 });
+
+test('reading a shared note that starts with a newline is not an edit; viewers never block Save', async ({ context, extensionId }) => {
+  const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: '', secret: TEST_SECRET, urls: '' }]);
+  await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Infra');
+    await VaultCollections.save(c, Vault.newItem('note', { title: 'Readme', notes: '\nfirst line after a blank one' }));
+    fake.collections.get(c.id).members.get('user-me').role = 'view';
+    await refreshSharedItems();
+  });
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Readme' }).click();
+  await expect(page.locator('#acc-detail .item-notes')).toHaveValue('\nfirst line after a blank one');
+  await page.locator('.acc-head', { hasText: 'Mine' }).click();
+  await page.fill('#acc-detail .acc-email', 'me@x.com');
+  await page.click('#btn-save-all');
+  await expect(page.locator('#status-msg')).toHaveText('Saved');
+});
+
+test('after a move kept the updated personal login, a later Save keeps its new password', async ({ context, extensionId }) => {
+  const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: 'me@x.com', secret: '', urls: 'example.com', password: 'old' }]);
+  await page.evaluate(async () => {
+    await VaultCollections.create('team-1', 'Infra');
+    await refreshSharedItems();
+    const real = VaultCollections.moveIn;
+    VaultCollections.moveIn = async (...a) => {
+      const key = await VaultKeys.getKey();
+      const mine = (await VaultStore.readAll(key)).items.find(i => i.title === 'Mine');
+      Vault.getField(mine, 'password').value = 'new';
+      await VaultStore.save(mine, key);
+      return real(...a);
+    };
+  });
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Mine' }).click();
+  page.on('dialog', d => d.accept());
+  await page.click('#acc-detail .btn-move-collection');
+  await expect(page.locator('#status-msg')).toContainText('It changed while moving');
+  await page.locator('.acc-head', { hasText: 'Mine' }).first().click();
+  await expect(page.locator('#acc-detail .acc-password')).toHaveValue('new');
+  await page.fill('#acc-detail .acc-name', 'Mine renamed');
+  await page.click('#btn-save-all');
+  await expect.poll(() => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
+    .map(i => [i.title, Vault.getValue(i, 'password')]))).toEqual([['Mine renamed', 'new']]);
+});
