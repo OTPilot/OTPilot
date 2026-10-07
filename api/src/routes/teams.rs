@@ -250,6 +250,9 @@ async fn require_owner(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Resul
 /// Returns the number of membership rows deleted (0 if they weren't a member).
 async fn remove_member_atomic(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -> Result<u64> {
     let mut tx = db.begin().await?;
+    // Same lock as collection membership changes: nobody can be added to a
+    // collection of this team between this removal and its cleanup.
+    crate::routes::collections::lock_team(&mut tx, team_id).await?;
     let deleted = sqlx::query("DELETE FROM team_members WHERE team_id = $1 AND user_id = $2")
         .bind(team_id)
         .bind(user_id)
@@ -259,6 +262,17 @@ async fn remove_member_atomic(db: &sqlx::PgPool, team_id: Uuid, user_id: Uuid) -
     if deleted == 0 {
         return Ok(0); // tx dropped without commit → nothing changed
     }
+    // Their team collections go too (only the shared items; their own vault
+    // stays). The collection_member_removed trigger deletes collections left
+    // without members and promotes a member where no manager is left.
+    sqlx::query(
+        "DELETE FROM collection_members WHERE user_id = $1
+         AND collection_id IN (SELECT id FROM collections WHERE team_id = $2)",
+    )
+    .bind(user_id)
+    .bind(team_id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query(
         r#"
         DELETE FROM share_access
