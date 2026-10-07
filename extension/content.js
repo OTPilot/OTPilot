@@ -129,19 +129,91 @@ function findOTPInput() {
   return null;
 }
 
+// ── Theme ───────────────────────────────────────────────────────────────────
+// In-page UI follows the user's theme (Settings → Appearance). Colors below
+// are written as var(--token, <default theme's value>); the active theme's
+// tokens (from theme.css, via the background) are set on each OTPilot root
+// element, so it renders in the default colors until they arrive.
+// The default theme's tokens (theme.css :root — tests/overlayTheme.spec.js
+// keeps this copy equal to it). Set on every root right away, so variables
+// the host page defines (--surface, --bg…) never show through while the
+// chosen theme loads, or if it can't be loaded.
+const DEFAULT_THEME_VARS = {
+  '--bg': '#0f172a', '--surface': '#1e293b', '--surface-2': '#334155', '--border': '#1e3a5f',
+  '--ink-0': '#f1f5f9', '--ink-1': '#e2e8f0', '--ink-2': '#cbd5e1',
+  '--ink-3': '#94a3b8', '--ink-4': '#64748b', '--ink-5': '#475569',
+  '--accent': '#0ea5e9', '--accent-2': '#38bdf8', '--on-accent': '#ffffff',
+  '--danger': '#f87171', '--warning': '#f59e0b', '--success': '#4ade80',
+  '--font-ui': "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+};
+
+let _themeVars = null;
+let _themeLoad = null;
+let _themeStale = false; // the theme changed and the new one hasn't loaded yet
+
+function loadThemeVars() {
+  _themeLoad ??= new Promise(resolve => {
+    const failed = () => { _themeLoad = null; resolve(null); }; // retried by the next caller
+    try {
+      chrome.runtime.sendMessage({ action: 'themeVars' }, vars => {
+        if (chrome.runtime.lastError || !vars || !Object.keys(vars).length) { failed(); return; }
+        _themeVars = vars;
+        _themeStale = false;
+        resolve(vars);
+      });
+    } catch { failed(); }
+  });
+  return _themeLoad;
+}
+
+function applyThemeVars(el) {
+  for (const [name, value] of Object.entries({ ...DEFAULT_THEME_VARS, ...(_themeVars || {}) })) el.style.setProperty(name, value, 'important');
+}
+
+// Inside OTPilot UI every token is inherited from its root, even where a
+// page rule (`* { --surface: … }`) matches the inner elements directly. A
+// page could still out-specify this; hosting the UI in a shadow root or an
+// extension iframe would close that, as for the outside-click issue below.
+function guardThemeTokens() {
+  if (document.getElementById('otpilot-theme-guard')) return;
+  const style = document.createElement('style');
+  style.id = 'otpilot-theme-guard';
+  style.textContent = `[data-otpilot-ui] * { ${Object.keys(DEFAULT_THEME_VARS).map(n => `${n}: inherit !important;`).join(' ')} }`;
+  (document.head || document.documentElement).appendChild(style);
+}
+
+// Marks `el` as an OTPilot root and gives it the theme: the default tokens
+// now, the chosen theme's once loaded.
+function themeUi(el) {
+  guardThemeTokens();
+  el.dataset.otpilotUi = '';
+  applyThemeVars(el);
+  if (!_themeVars || _themeStale) loadThemeVars().then(vars => { if (vars) applyThemeVars(el); });
+  return el;
+}
+
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.theme || !chrome.runtime?.id) return;
+    _themeLoad = null;
+    _themeStale = true; // until it loads, the next overlay retries
+    loadThemeVars().then(vars => { if (vars) document.querySelectorAll('[data-otpilot-ui]').forEach(applyThemeVars); });
+  });
+} catch { /* extension context gone */ }
+
 function showToast(text, ok = true) {
   const el = document.createElement('div');
   Object.assign(el.style, {
     position: 'fixed', top: '20px', right: '20px', zIndex: '2147483647',
     display: 'flex', alignItems: 'center', gap: '10px',
     padding: '10px 14px',
-    background: '#1e293b',
-    border: '1px solid #334155',
-    borderLeft: `3px solid ${ok ? '#22c55e' : '#ef4444'}`,
+    background: 'var(--surface, #1e293b)',
+    border: '1px solid var(--surface-2, #334155)',
+    borderLeft: `3px solid ${ok ? 'var(--success, #22c55e)' : 'var(--danger, #ef4444)'}`,
     borderRadius: '8px',
     boxShadow: '0 4px 20px rgba(0,0,0,.4)',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    fontSize: '13px', color: '#e2e8f0',
+    fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif)',
+    fontSize: '13px', color: 'var(--ink-1, #e2e8f0)',
     pointerEvents: 'none',
     maxWidth: '280px',
     transform: 'translateX(120%)',
@@ -151,7 +223,7 @@ function showToast(text, ok = true) {
   const icon = document.createElement('span');
   icon.textContent = ok ? '✓' : '✕';
   Object.assign(icon.style, {
-    color: ok ? '#22c55e' : '#ef4444',
+    color: ok ? 'var(--success, #22c55e)' : 'var(--danger, #ef4444)',
     fontWeight: '700', fontSize: '14px', flexShrink: '0',
   });
 
@@ -160,6 +232,7 @@ function showToast(text, ok = true) {
 
   el.appendChild(icon);
   el.appendChild(msg);
+  themeUi(el);
   document.body.appendChild(el);
 
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -252,17 +325,18 @@ function showEmailOtpBanner(code, input, onClose) {
 
   const banner = document.createElement('div');
   banner.id = 'otpilot-email-banner';
+  themeUi(banner);
   Object.assign(banner.style, {
     position: 'fixed', top: '20px', left: '50%', transform: 'translateX(-50%)',
     zIndex: '2147483647', display: 'flex', alignItems: 'center', gap: '10px',
     padding: '10px 14px',
-    background: '#1e293b',
-    border: '1px solid #334155',
-    borderLeft: '3px solid #38bdf8',
+    background: 'var(--surface, #1e293b)',
+    border: '1px solid var(--surface-2, #334155)',
+    borderLeft: '3px solid var(--accent-2, #38bdf8)',
     borderRadius: '8px',
     boxShadow: '0 4px 20px rgba(0,0,0,.4)',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    fontSize: '13px', color: '#e2e8f0',
+    fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif)',
+    fontSize: '13px', color: 'var(--ink-1, #e2e8f0)',
     maxWidth: '320px',
   });
 
@@ -272,7 +346,7 @@ function showEmailOtpBanner(code, input, onClose) {
   const btn = document.createElement('button');
   btn.textContent = 'Fill';
   Object.assign(btn.style, {
-    padding: '4px 10px', background: '#38bdf8', color: '#0f172a',
+    padding: '4px 10px', background: 'var(--accent-2, #38bdf8)', color: 'var(--bg, #0f172a)',
     border: 'none', borderRadius: '5px', fontSize: '12px',
     fontWeight: '700', cursor: 'pointer', flexShrink: '0',
   });
@@ -285,7 +359,7 @@ function showEmailOtpBanner(code, input, onClose) {
   const close = document.createElement('button');
   close.textContent = '✕';
   Object.assign(close.style, {
-    background: 'none', border: 'none', color: '#64748b',
+    background: 'none', border: 'none', color: 'var(--ink-4, #64748b)',
     fontSize: '13px', cursor: 'pointer', padding: '0 2px', flexShrink: '0',
   });
   close.addEventListener('click', () => { dismiss(); banner.remove(); });
@@ -474,11 +548,12 @@ function showLockOverlay(accountName, onUnlock, onDismiss) {
 
   const el = document.createElement('div');
   el.id = 'otpilot-lock';
+  themeUi(el);
   Object.assign(el.style, {
     position: 'fixed', top: '16px', right: '16px', zIndex: '2147483647',
-    width: '260px', background: '#1e293b', border: '1px solid #1e3a5f',
+    width: '260px', background: 'var(--surface, #1e293b)', border: '1px solid var(--border, #1e3a5f)',
     borderRadius: '10px', boxShadow: '0 4px 20px rgba(0,0,0,.5)',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif)',
     overflow: 'hidden',
   });
 
@@ -762,27 +837,28 @@ function parseOtpAuthUri(uri) {
 }
 
 const OVERLAY_HEADER = `
-  <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#0f172a;border-bottom:1px solid #1e3a5f;">
+  <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg, #0f172a);border-bottom:1px solid var(--border, #1e3a5f);">
     <svg width="16" height="16" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
-      <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" fill="#1e3a5f"/>
-      <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" fill="none" stroke="#38bdf8" stroke-width="4.5" stroke-linejoin="round"/>
-      <circle cx="64" cy="68" r="20" fill="#0f172a" stroke="#38bdf8" stroke-width="4"/>
-      <line x1="64" y1="68" x2="57" y2="54" stroke="#38bdf8" stroke-width="4" stroke-linecap="round"/>
-      <line x1="64" y1="68" x2="78" y2="72" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/>
-      <circle cx="64" cy="68" r="3" fill="#38bdf8"/>
+      <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" style="fill:var(--border, #1e3a5f)"/>
+      <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" style="fill:none;stroke:var(--accent-2, #38bdf8)" stroke-width="4.5" stroke-linejoin="round"/>
+      <circle cx="64" cy="68" r="20" style="fill:var(--bg, #0f172a);stroke:var(--accent-2, #38bdf8)" stroke-width="4"/>
+      <line x1="64" y1="68" x2="57" y2="54" style="stroke:var(--accent-2, #38bdf8)" stroke-width="4" stroke-linecap="round"/>
+      <line x1="64" y1="68" x2="78" y2="72" style="stroke:var(--accent-2, #38bdf8)" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="64" cy="68" r="3" style="fill:var(--accent-2, #38bdf8)"/>
     </svg>
-    <span style="color:#f1f5f9;font-size:13px;font-weight:700;flex:1;">OTPilot</span>
-    <button class="otpilot-overlay-close" style="background:none;border:none;color:#475569;cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button>
+    <span style="color:var(--ink-0, #f1f5f9);font-size:13px;font-weight:700;flex:1;">OTPilot</span>
+    <button class="otpilot-overlay-close" style="background:none;border:none;color:var(--ink-5, #475569);cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button>
   </div>`;
 
 function makeOverlay(id) {
   const el = document.createElement('div');
   el.id = id;
+  themeUi(el);
   Object.assign(el.style, {
     position: 'fixed', top: '16px', right: '16px', zIndex: '2147483647',
-    width: '260px', background: '#1e293b', border: '1px solid #1e3a5f',
+    width: '260px', background: 'var(--surface, #1e293b)', border: '1px solid var(--border, #1e3a5f)',
     borderRadius: '10px', boxShadow: '0 4px 20px rgba(0,0,0,.5)',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif)',
     overflow: 'hidden',
   });
   // Isolate the overlay from the host page's global handlers. Many sites close
@@ -833,10 +909,10 @@ function showCodeRevealOverlay(name, code) {
   const formatted = code.slice(0, 3) + ' ' + code.slice(3);
   el.innerHTML = `${OVERLAY_HEADER}
     <div style="padding:12px 14px;">
-      <div style="color:#94a3b8;font-size:11px;margin-bottom:6px;">${safeName} added — copy your code:</div>
+      <div style="color:var(--ink-3, #94a3b8);font-size:11px;margin-bottom:6px;">${safeName} added — copy your code:</div>
       <div style="display:flex;align-items:center;gap:8px;">
-        <span class="otpilot-reveal-code" style="flex:1;font-size:22px;font-weight:700;letter-spacing:3px;color:#f1f5f9;font-family:monospace;">${formatted}</span>
-        <button class="otpilot-copy-code" style="padding:6px 12px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Copy</button>
+        <span class="otpilot-reveal-code" style="flex:1;font-size:22px;font-weight:700;letter-spacing:3px;color:var(--ink-0, #f1f5f9);font-family:monospace;">${formatted}</span>
+        <button class="otpilot-copy-code" style="padding:6px 12px;background:var(--accent, #0ea5e9);border:none;border-radius:6px;color:var(--on-accent, #fff);font-size:12px;font-weight:600;cursor:pointer;">Copy</button>
       </div>
     </div>`;
   document.body.appendChild(el);
@@ -875,12 +951,12 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
 
   el.innerHTML = `${OVERLAY_HEADER}
     <div style="padding:12px 14px;">
-      <div style="color:#cbd5e1;font-size:12px;margin-bottom:10px;">
-        Save <strong style="color:#f1f5f9;">${safeName}</strong> to OTPilot?
+      <div style="color:var(--ink-2, #cbd5e1);font-size:12px;margin-bottom:10px;">
+        Save <strong style="color:var(--ink-0, #f1f5f9);">${safeName}</strong> to OTPilot?
       </div>
       ${locked ? '' : `<div style="display:flex;gap:8px;">
-        <button class="otpilot-primary" style="flex:1;padding:7px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Add account</button>
-        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid #334155;border-radius:6px;color:#64748b;font-size:12px;cursor:pointer;">Not now</button>
+        <button class="otpilot-primary" style="flex:1;padding:7px;background:var(--accent, #0ea5e9);border:none;border-radius:6px;color:var(--on-accent, #fff);font-size:12px;font-weight:600;cursor:pointer;">Add account</button>
+        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid var(--surface-2, #334155);border-radius:6px;color:var(--ink-4, #64748b);font-size:12px;cursor:pointer;">Not now</button>
       </div>`}
     </div>`;
 
@@ -966,12 +1042,12 @@ function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
 
   el.innerHTML = `${OVERLAY_HEADER}
     <div style="padding:12px 14px;">
-      <div style="color:#cbd5e1;font-size:12px;margin-bottom:10px;">
-        Save <strong style="color:#f1f5f9;">${safeHost}</strong> to <strong style="color:#f1f5f9;">${safeName}</strong>? It'll auto-fill here next time.
+      <div style="color:var(--ink-2, #cbd5e1);font-size:12px;margin-bottom:10px;">
+        Save <strong style="color:var(--ink-0, #f1f5f9);">${safeHost}</strong> to <strong style="color:var(--ink-0, #f1f5f9);">${safeName}</strong>? It'll auto-fill here next time.
       </div>
       <div style="display:flex;gap:8px;">
-        <button class="otpilot-primary" style="flex:1;padding:7px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
-        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid #334155;border-radius:6px;color:#64748b;font-size:12px;cursor:pointer;">Not now</button>
+        <button class="otpilot-primary" style="flex:1;padding:7px;background:var(--accent, #0ea5e9);border:none;border-radius:6px;color:var(--on-accent, #fff);font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid var(--surface-2, #334155);border-radius:6px;color:var(--ink-4, #64748b);font-size:12px;cursor:pointer;">Not now</button>
       </div>
     </div>`;
 
@@ -1027,24 +1103,24 @@ function showAccountPickerOverlay(matchingAccounts, onClose) {
     const safeName  = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const safeEmail = (acc.email || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const emailHtml = safeEmail
-      ? `<span style="display:block;color:#64748b;font-size:10px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeEmail}</span>`
+      ? `<span style="display:block;color:var(--ink-4, #64748b);font-size:10px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeEmail}</span>`
       : '';
     return `
       <div class="otpilot-picker-row" style="display:flex;align-items:center;gap:8px;
-           padding:8px 14px;border-bottom:1px solid #1e3a5f;">
+           padding:8px 14px;border-bottom:1px solid var(--border, #1e3a5f);">
         <div style="flex:1;min-width:0;">
-          <span style="display:block;color:#e2e8f0;font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeName}</span>
+          <span style="display:block;color:var(--ink-1, #e2e8f0);font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeName}</span>
           ${emailHtml}
         </div>
-        <button class="otpilot-fill-btn" style="padding:5px 10px;background:#0ea5e9;border:none;
-                border-radius:5px;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">Fill</button>
-        <button class="otpilot-copy-btn" style="padding:5px 10px;background:transparent;border:1px solid #334155;
-                border-radius:5px;color:#94a3b8;font-size:11px;cursor:pointer;">Copy</button>
+        <button class="otpilot-fill-btn" style="padding:5px 10px;background:var(--accent, #0ea5e9);border:none;
+                border-radius:5px;color:var(--on-accent, #fff);font-size:11px;font-weight:600;cursor:pointer;">Fill</button>
+        <button class="otpilot-copy-btn" style="padding:5px 10px;background:transparent;border:1px solid var(--surface-2, #334155);
+                border-radius:5px;color:var(--ink-3, #94a3b8);font-size:11px;cursor:pointer;">Copy</button>
       </div>`;
   }).join('');
 
   el.innerHTML = `${OVERLAY_HEADER}
-    <div style="padding:8px 14px 4px;color:#94a3b8;font-size:11px;">Multiple accounts for this site</div>
+    <div style="padding:8px 14px 4px;color:var(--ink-3, #94a3b8);font-size:11px;">Multiple accounts for this site</div>
     ${rows}`;
 
   document.body.appendChild(el);

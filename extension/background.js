@@ -198,6 +198,22 @@ async function resolvePendingLogin(sender, id, choice) {
 
 chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove(pendingLoginKey(tabId)); });
 
+// The custom properties of the active theme, from theme.css (the single
+// definition of every theme): ":root" is the default, the rest are
+// body[data-theme="x"] blocks that override it.
+let _themeCss = null;
+async function themeVars() {
+  _themeCss ??= await (await fetch(chrome.runtime.getURL('theme.css'))).text();
+  const { theme } = await chrome.storage.local.get('theme');
+  const block = selector => {
+    const at = _themeCss.indexOf(`${selector} {`);
+    if (at === -1) return {};
+    const body = _themeCss.slice(_themeCss.indexOf('{', at) + 1, _themeCss.indexOf('}', at));
+    return Object.fromEntries([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
+  };
+  return { ...block(':root'), ...(theme ? block(`body[data-theme="${theme}"]`) : {}) };
+}
+
 // Latest email OTP detected by email-reader.js (expires after 10 min).
 let _emailOtp = null;
 
@@ -465,6 +481,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.action === 'vaultResolvePendingLogin') {
     resolvePendingLogin(_sender, msg.id, msg.choice).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // The user's theme for in-page UI (content scripts can't load theme.css).
+  if (msg.action === 'themeVars') {
+    themeVars().then(sendResponse).catch(() => sendResponse({}));
     return true;
   }
 
