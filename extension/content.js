@@ -134,29 +134,59 @@ function findOTPInput() {
 // are written as var(--token, <default theme's value>); the active theme's
 // tokens (from theme.css, via the background) are set on each OTPilot root
 // element, so it renders in the default colors until they arrive.
+// The default theme's tokens (theme.css :root — tests/overlayTheme.spec.js
+// keeps this copy equal to it). Set on every root right away, so variables
+// the host page defines (--surface, --bg…) never show through while the
+// chosen theme loads, or if it can't be loaded.
+const DEFAULT_THEME_VARS = {
+  '--bg': '#0f172a', '--surface': '#1e293b', '--surface-2': '#334155', '--border': '#1e3a5f',
+  '--ink-0': '#f1f5f9', '--ink-1': '#e2e8f0', '--ink-2': '#cbd5e1',
+  '--ink-3': '#94a3b8', '--ink-4': '#64748b', '--ink-5': '#475569',
+  '--accent': '#0ea5e9', '--accent-2': '#38bdf8', '--on-accent': '#ffffff',
+  '--danger': '#f87171', '--warning': '#f59e0b', '--success': '#4ade80',
+  '--font-ui': "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+};
+
 let _themeVars = null;
 let _themeLoad = null;
 
 function loadThemeVars() {
   _themeLoad ??= new Promise(resolve => {
+    const failed = () => { _themeLoad = null; resolve(null); }; // retried by the next caller
     try {
       chrome.runtime.sendMessage({ action: 'themeVars' }, vars => {
-        _themeVars = chrome.runtime.lastError ? {} : (vars || {});
-        resolve(_themeVars);
+        if (chrome.runtime.lastError || !vars || !Object.keys(vars).length) { failed(); return; }
+        _themeVars = vars;
+        resolve(vars);
       });
-    } catch { _themeVars = {}; resolve(_themeVars); }
+    } catch { failed(); }
   });
   return _themeLoad;
 }
 
 function applyThemeVars(el) {
-  for (const [name, value] of Object.entries(_themeVars || {})) el.style.setProperty(name, value);
+  for (const [name, value] of Object.entries({ ...DEFAULT_THEME_VARS, ...(_themeVars || {}) })) el.style.setProperty(name, value, 'important');
 }
 
-// Marks `el` as an OTPilot root and gives it the theme (now, or once loaded).
+// Inside OTPilot UI every token is inherited from its root, even where a
+// page rule (`* { --surface: … }`) matches the inner elements directly. A
+// page could still out-specify this; hosting the UI in a shadow root or an
+// extension iframe would close that, as for the outside-click issue below.
+function guardThemeTokens() {
+  if (document.getElementById('otpilot-theme-guard')) return;
+  const style = document.createElement('style');
+  style.id = 'otpilot-theme-guard';
+  style.textContent = `[data-otpilot-ui] * { ${Object.keys(DEFAULT_THEME_VARS).map(n => `${n}: inherit !important;`).join(' ')} }`;
+  (document.head || document.documentElement).appendChild(style);
+}
+
+// Marks `el` as an OTPilot root and gives it the theme: the default tokens
+// now, the chosen theme's once loaded.
 function themeUi(el) {
+  guardThemeTokens();
   el.dataset.otpilotUi = '';
-  if (_themeVars) applyThemeVars(el); else loadThemeVars().then(() => applyThemeVars(el));
+  applyThemeVars(el);
+  if (!_themeVars) loadThemeVars().then(vars => { if (vars) applyThemeVars(el); });
   return el;
 }
 
@@ -164,7 +194,7 @@ try {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !changes.theme || !chrome.runtime?.id) return;
     _themeLoad = null;
-    loadThemeVars().then(() => document.querySelectorAll('[data-otpilot-ui]').forEach(applyThemeVars));
+    loadThemeVars().then(vars => { if (vars) document.querySelectorAll('[data-otpilot-ui]').forEach(applyThemeVars); });
   });
 } catch { /* extension context gone */ }
 
