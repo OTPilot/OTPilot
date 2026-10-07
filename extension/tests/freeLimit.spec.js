@@ -98,3 +98,22 @@ test('a failed limit check saves nothing', async ({ context, extensionId }) => {
   await expect(page.locator('#status-msg')).toContainText('Could not check the Free plan limit');
   expect(await itemCount(page)).toBe(2);
 });
+
+test('a sync that deleted an account above the open one does not misplace the open edit on Save', async ({ context, extensionId }) => {
+  const page = await editorWith(context, extensionId, [
+    { name: 'Alpha', email: '', secret: TEST_SECRET, urls: '' },
+    { name: 'Bravo', email: '', secret: 'GEZDGNBVGY3TQOJQ', urls: '' },
+  ]);
+  await page.locator('.acc-head', { hasText: 'Bravo' }).click();
+  await page.fill('#acc-detail .acc-name', 'Bravo renamed');
+  // Another device deleted Alpha; the sync lands while Bravo is open.
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const alpha = (await VaultStore.readAll(key)).items.find(i => i.title === 'Alpha');
+    await VaultStore.remove([alpha.id]);
+    await reloadFromVault(key);
+  });
+  await page.click('#btn-save-all');
+  await expect.poll(() => page.evaluate(async () =>
+    (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => [i.title, i.totp?.secret]))).toEqual([['Bravo renamed', 'GEZDGNBVGY3TQOJQ']]);
+});
