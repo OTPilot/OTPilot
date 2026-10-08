@@ -281,6 +281,18 @@ test('adopting a key while locked keeps the vault locked', async ({ context, ext
   expect(result).toEqual({ status: 'locked', unlocks: true, adopted: true });
 });
 
+test('locking and unlocking the popup keeps the plan (a paying user is not limited as Free)', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page, { userPlan: 'personal' });
+  await page.reload();
+  await page.click('#btn-logout');
+  await expect(page.locator('#lock-login')).toBeVisible();
+  await page.fill('#lock-password', TEST_PASSWORD);
+  await page.click('#lock-login-btn');
+  await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
+  expect(await page.evaluate(() => chrome.storage.local.get('userPlan'))).toEqual({ userPlan: 'personal' });
+});
+
 test('an "unlocked" message from the frame itself, after the page navigated it, still needs a real unlock', async ({ context, extensionId }) => {
   const page = await popup(context, extensionId);
   await seedLocked(page, { accounts: [{ name: 'TestApp', secret: TEST_SECRET, urls: 'localhost', email: '' }], activeIndex: 0 });
