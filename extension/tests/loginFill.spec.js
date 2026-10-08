@@ -270,3 +270,35 @@ test('locked: the dropdown unlocks in the extension frame, then fills', async ({
   await frame.locator('#unlock').click();
   await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
 });
+
+test('with many logins in a short window the dropdown stays on screen and scrolls', async ({ context, extensionId }) => {
+  const many = Array.from({ length: 10 }, (_, i) => ({ ...github, name: `Login ${i}`, email: `u${i}@example.com` }));
+  await vaultWith(context, extensionId, many);
+  const site = await context.newPage();
+  await site.setViewportSize({ width: 800, height: 320 });
+  await site.goto(`${SITE}/login.html`);
+  await site.focus('input[name="email"]');
+  const drop = site.locator('#otpilot-login-dropdown');
+  await expect(drop).toBeVisible();
+  const box = await drop.boundingBox();
+  expect(box.y + box.height).toBeLessThanOrEqual(320);
+  expect(await drop.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  await drop.locator('.otpilot-login-choice').last().scrollIntoViewIfNeeded();
+  await drop.locator('.otpilot-login-choice').last().click();
+  await expect(site.locator('input[name="email"]')).toHaveValue('u9@example.com');
+});
+
+test('a dropdown closed while its logins were still loading does not appear', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await expect(site.locator('#otpilot-login-fill')).toBeVisible();
+  // Focus and Escape in the same tick: the background hasn't answered yet.
+  await site.evaluate(() => {
+    const f = document.querySelector('input[name="email"]');
+    f.focus();
+    f.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0);
+});

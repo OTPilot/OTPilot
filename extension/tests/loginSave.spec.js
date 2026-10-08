@@ -464,3 +464,20 @@ test('with no username captured and several logins for the site, the user picks 
   await expect.poll(async () => (await logins(popup)).map(l => [l.title, l.password]).sort())
     .toEqual([['Personal', 'p1'], ['Work', 'p2-new']]);
 });
+
+test('a change-password form (no username) on a site with named and unnamed logins offers all of them', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [
+    { name: 'Unnamed', email: '', secret: '', urls: 'localhost', password: 'u1' },
+    { name: 'Work', email: 'work@example.com', secret: '', urls: 'localhost', password: 'w1' },
+  ]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/change-password.html`);
+  await site.fill('input[name="current"]', 'w1');
+  await site.fill('input[name="next"]', 'w2');
+  await site.click('button');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update a login for localhost?');
+  await expect(offer.locator('.otpilot-save-target')).toBeVisible();
+  const options = await offer.locator('.otpilot-save-target option').allTextContents();
+  expect(options.map(o => o.split(' ')[0]).sort()).toEqual(['Unnamed', 'Work']);
+});

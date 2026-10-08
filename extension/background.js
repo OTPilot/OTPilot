@@ -228,8 +228,10 @@ async function planPendingLogin({ host, username, password }) {
 
   // The exact username first. Usernames can be case-sensitive: a match
   // ignoring case is used only when it is the only one.
-  const loose = covering.filter(i => userOf(i).toLowerCase() === username.toLowerCase());
-  const match = covering.find(i => userOf(i) === username) || (loose.length === 1 ? loose[0] : null);
+  // With no username captured, nothing is matched by it: the site's logins
+  // are all candidates (below).
+  const loose = username ? covering.filter(i => userOf(i).toLowerCase() === username.toLowerCase()) : [];
+  const match = username ? (covering.find(i => userOf(i) === username) || (loose.length === 1 ? loose[0] : null)) : null;
   if (match && Vault.getValue(match, 'password') === password) return { kind: 'none' };
 
   // A team collection already has this login: never offer a personal copy.

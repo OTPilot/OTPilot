@@ -291,7 +291,7 @@
       showToast(res?.ok ? (updated ? 'Login updated in OTPilot' : 'Login saved to OTPilot') : 'OTPilot could not save this login', !!res?.ok);
       // Its site icon, from this page's own <link rel=icon> (content.js), as
       // a 2FA account added from a page gets.
-      if (res?.ok) requestSiteIcon(location.hostname);
+      if (res?.ok) requestSiteIcon(offer.host); // the saved login's host (its URL)
     };
 
     const row = document.createElement('div');
@@ -415,15 +415,22 @@
     return el;
   }
 
-  // Under the field (above it when there's no room below), within the viewport.
+  // Under the field, or above it when there's more room there; never taller
+  // than that room (it scrolls instead), so every choice stays reachable.
   function placeUnder(el, field) {
     const r = field.getBoundingClientRect();
     const w = Math.min(Math.max(r.width, 240), 320, window.innerWidth - 16);
     el.style.width = `${w}px`;
     el.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
-    const h = el.offsetHeight || 160;
-    const below = r.bottom + 6;
-    el.style.top = `${below + h > window.innerHeight && r.top - h - 6 > 0 ? r.top - h - 6 : below}px`;
+    const roomBelow = window.innerHeight - r.bottom - 6 - 8;
+    const roomAbove = r.top - 6 - 8;
+    el.style.maxHeight = 'none';
+    const h = el.scrollHeight || 160;
+    const above = h > roomBelow && roomAbove > roomBelow;
+    const room = Math.max(80, above ? roomAbove : roomBelow);
+    el.style.maxHeight = `${room}px`;
+    el.style.overflowY = h > room ? 'auto' : 'hidden';
+    el.style.top = `${above ? r.top - 6 - Math.min(h, room) : r.bottom + 6}px`;
   }
 
   function showAnchored(el, field) {
@@ -433,14 +440,25 @@
     placeUnder(el, field);
   }
 
+  // Closing also cancels an open still waiting for the background's answer
+  // (typed, Escape, clicked elsewhere meanwhile): its reply is then ignored.
+  let _openSeq = 0;
+  let _pendingField = null;
   function closeDropdown() {
+    _openSeq++;
+    _pendingField = null;
     _anchor?.el.remove();
     _anchor = null;
   }
 
   async function openLogins(field) {
     if (!chrome.runtime?.id) return;
+    closeDropdown();
+    const seq = _openSeq;
+    _pendingField = field;
     const res = await loginsForPage();
+    if (seq !== _openSeq) return; // closed or superseded meanwhile
+    _pendingField = null;
     _pageLogins = res.state === 'setup' ? null : res;
     if (!_pageLogins?.logins.length || !field.isConnected) return;
     const el = makeAnchored(DROP_ID, field);
@@ -528,15 +546,17 @@
   // A click elsewhere (not on the field, its badge or the dropdown) or Escape
   // closes the dropdown.
   document.addEventListener('pointerdown', e => {
-    if (!_anchor) return;
+    if (!_anchor && !_pendingField) return;
     const t = e.target;
-    if (t === _anchor.field || _anchor.el.contains(t) || t.closest?.(`.${BADGE_CLASS}`)) return;
+    if (t === (_anchor?.field ?? _pendingField) || _anchor?.el.contains(t) || t.closest?.(`.${BADGE_CLASS}`)) return;
     closeDropdown();
   }, true);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDropdown(); }, true);
   // Typing in the field: the user isn't picking from the dropdown (it would
   // also cover the fields below).
-  document.addEventListener('input', e => { if (e.isTrusted && _anchor?.field === e.target) closeDropdown(); }, true);
+  document.addEventListener('input', e => {
+    if (e.isTrusted && (_anchor?.field === e.target || _pendingField === e.target)) closeDropdown();
+  }, true);
 
   document.addEventListener('focusin', e => {
     const f = e.target;
