@@ -373,3 +373,20 @@ test('a background sync whose upload fails still updates the locked-vault index 
   });
   expect(names).toEqual(['From another device', 'Local only']);
 });
+
+test('a background sync interrupted by a recovery-key change leaves the locked-vault index as it was', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ name: 'Local only', email: '', secret: TEST_SECRET, urls: 'local.example' }], { syncEnabled: true, userPlan: 'personal' });
+  await popup.close();
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  const names = await worker.evaluate(async password => {
+    SupabaseAuth.getSession = async () => ({ user: { id: 'u1' } });
+    // While the pull is pending, another recovery key is restored.
+    CloudSync.api = async () => {
+      await VaultKeys.adoptKey(VaultCrypto.b64e(VaultCrypto.generateKey()), password);
+      return new Response(JSON.stringify({ items: [], revision: 0, more: false }), { status: 200 });
+    };
+    await queueVaultSync();
+    return (await VaultAccounts.readIndex()).map(e => e.name);
+  }, TEST_PASSWORD);
+  expect(names).toEqual(['Local only']);
+});

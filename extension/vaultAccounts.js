@@ -90,9 +90,15 @@ const VaultAccounts = (() => {
   // Rebuilds the index from what's stored now, under the vault lock, so two
   // writers that each saved an item can't overwrite each other's entry with
   // the list they read before saving.
+  // Only with the current vault key: with a replaced one (a recovery key
+  // restored while a caller was busy) every record would fail to decrypt and
+  // the index would come out empty. Skipped then, and while locked (unlocking
+  // writes it again).
   function rebuildIndex(key) {
-    return navigator.locks.request('otpilot-vault', async () =>
-      writeIndex((await VaultStore.readAll(key)).items));
+    return navigator.locks.request('otpilot-vault', async () => {
+      if ((await VaultKeys.getKey()) !== key) return;
+      await writeIndex((await VaultStore.readAll(key)).items);
+    });
   }
 
   async function readIndex() {
