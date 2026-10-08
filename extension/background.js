@@ -30,10 +30,17 @@ function queueVaultSync() {
         if (!(await vaultSyncReady())) return;
         const key = await VaultKeys.getKey();
         if (!key) return;
-        const stats = await VaultSync.sync(key);
+        let stats;
+        try {
+          stats = await VaultSync.sync(key);
+        } finally {
+          // The locked-vault index follows what the pull stored, even when
+          // the upload after it failed (the pull's progress is saved, so a
+          // retry wouldn't report those changes again).
+          await VaultAccounts.rebuildIndex(key).catch(() => {});
+        }
         // Something came in: an open popup redraws (its sync reloads the list).
         if (stats.pulled || stats.deleted || Object.keys(stats.remapped).length) {
-          await VaultAccounts.rebuildIndex(key);
           chrome.runtime.sendMessage({ action: 'serverDataChanged', remapped: stats.remapped }).catch(() => {});
         }
       } catch { /* offline or signed out: the next save, alarm or popup retries */ }

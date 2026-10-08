@@ -353,3 +353,40 @@ test("the background's twin remaps reach an open popup with its sync notice", as
   });
   await expect.poll(() => popup.evaluate(() => _idRemaps['old-id'] ?? null)).toBe('server-id');
 });
+
+test('a background sync whose upload fails still updates the locked-vault index with what it pulled', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ name: 'Local only', email: '', secret: TEST_SECRET, urls: 'local.example' }], { syncEnabled: true, userPlan: 'personal' });
+  await popup.close();
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  const names = await worker.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const pulled = Vault.newItem('login', { title: 'From another device', urls: ['pulled.example'] });
+    const record = await VaultCrypto.encryptItem(pulled, key);
+    SupabaseAuth.getSession = async () => ({ user: { id: 'u1' } });
+    const reply = (status, body) => new Response(JSON.stringify(body), { status });
+    CloudSync.api = async (path, opts = {}) => {
+      if ((opts.method || 'GET') === 'GET') return reply(200, { items: [{ id: pulled.id, record, revision: 1, deleted: false }], revision: 1, more: false });
+      return reply(500, {}); // the upload of "Local only" fails
+    };
+    await queueVaultSync();
+    return (await VaultAccounts.readIndex()).map(e => e.name).sort();
+  });
+  expect(names).toEqual(['From another device', 'Local only']);
+});
+
+test('a background sync interrupted by a recovery-key change leaves the locked-vault index as it was', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ name: 'Local only', email: '', secret: TEST_SECRET, urls: 'local.example' }], { syncEnabled: true, userPlan: 'personal' });
+  await popup.close();
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  const names = await worker.evaluate(async password => {
+    SupabaseAuth.getSession = async () => ({ user: { id: 'u1' } });
+    // While the pull is pending, another recovery key is restored.
+    CloudSync.api = async () => {
+      await VaultKeys.adoptKey(VaultCrypto.b64e(VaultCrypto.generateKey()), password);
+      return new Response(JSON.stringify({ items: [], revision: 0, more: false }), { status: 200 });
+    };
+    await queueVaultSync();
+    return (await VaultAccounts.readIndex()).map(e => e.name);
+  }, TEST_PASSWORD);
+  expect(names).toEqual(['Local only']);
+});
