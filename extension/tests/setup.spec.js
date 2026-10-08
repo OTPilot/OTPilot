@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, TEST_SECRET } from './fixtures.js';
+import { test, expect, seedUnlocked, readAccounts, writeAccounts, waitForVault, TEST_SECRET, TEST_PASSWORD } from './fixtures.js';
 
 async function seedStorage(popupPage, overrides = {}) {
   await seedUnlocked(popupPage);
@@ -228,4 +228,53 @@ test('does not auto-fill the token field on enrollment page', async ({ context, 
   // Token confirmation field must remain empty — enrollment guard blocked auto-fill
   const tokenInput = page.locator('input[name="authenticator_token"]');
   await expect(tokenInput).toHaveValue('');
+});
+
+// ── A 2FA code for a site that already has a login ───────────────────────────
+
+
+async function withLogins(context, extensionId, logins) {
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedStorage(popup);
+  await popup.reload();
+  await waitForVault(popup);
+  await writeAccounts(popup, logins);
+  return popup;
+}
+
+test('a code set up on a subdomain is offered to the login saved for the parent domain, not a second account', async ({ context, extensionId }) => {
+  const popup = await withLogins(context, extensionId, [{ name: 'DigitalOcean', email: 'me@example.com', secret: '', urls: 'localhost', password: 'pw' }]);
+  const page = await context.newPage();
+  await page.goto('http://cloud.localhost:8765/test/qr-anchor.html');
+  const overlay = page.locator('#otpilot-suggestion');
+  await expect(overlay).toContainText('Add this 2FA code to DigitalOcean — me@example.com?');
+  await overlay.locator('.otpilot-attach').click();
+  await expect.poll(async () => (await readAccounts(popup)).map(a => [a.name, a.email, a.password, a.secret]))
+    .toEqual([['DigitalOcean', 'me@example.com', 'pw', TEST_SECRET]]);
+});
+
+test('"Save as new" still creates a separate account', async ({ context, extensionId }) => {
+  const popup = await withLogins(context, extensionId, [{ name: 'DigitalOcean', email: 'me@example.com', secret: '', urls: 'localhost', password: 'pw' }]);
+  const page = await context.newPage();
+  await page.goto('http://localhost:8765/test/qr-anchor.html');
+  const overlay = page.locator('#otpilot-suggestion');
+  await overlay.locator('.otpilot-save-new').click();
+  await expect.poll(async () => (await readAccounts(popup)).map(a => [a.name, a.secret]).sort())
+    .toEqual([['DigitalOcean', ''], ['TestApp', TEST_SECRET]]);
+});
+
+test('locked: after unlocking, the code is offered to the existing login', async ({ context, extensionId }) => {
+  const popup = await withLogins(context, extensionId, [{ name: 'DigitalOcean', email: '', secret: '', urls: 'localhost', password: 'pw' }]);
+  await popup.evaluate(() => VaultLock.lock());
+  const page = await context.newPage();
+  await page.goto('http://localhost:8765/test/qr-anchor.html');
+  const frame = page.frameLocator('#otpilot-suggestion iframe');
+  await frame.locator('#pw').fill(TEST_PASSWORD);
+  await frame.locator('#unlock').click();
+  const overlay = page.locator('#otpilot-suggestion');
+  await expect(overlay).toContainText('Add this 2FA code to DigitalOcean?');
+  await overlay.locator('.otpilot-attach').click();
+  await expect.poll(async () => (await readAccounts(popup)).map(a => [a.name, a.email, a.secret]))
+    .toEqual([['DigitalOcean', 'demo@example.com', TEST_SECRET]]);
 });
