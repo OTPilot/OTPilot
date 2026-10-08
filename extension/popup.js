@@ -1136,23 +1136,30 @@ const MERGE_FIELDS = [
   { key: 'autofill', label: 'Auto-fill' },
 ];
 
+// Empty: nothing at all for a password (spaces can be part of one), blank
+// for the rest.
+const mergeEmpty = (key, v) => (key === 'password' ? (v ?? '') === '' : String(v ?? '').trim() === '');
+
 function mergeConflicts(a, b) {
   return MERGE_FIELDS.filter(f => {
     const x = a[f.key], y = b[f.key];
     if (f.key === 'autofill') return (x !== false) !== (y !== false);
-    return String(x ?? '').trim() !== '' && String(y ?? '').trim() !== '' && String(x) !== String(y);
+    return !mergeEmpty(f.key, x) && !mergeEmpty(f.key, y) && String(x) !== String(y);
   });
 }
 
 // `b` merged into `a` (which keeps its id): `choice[key]` is 'a', 'b' or —
 // for notes — 'both' where they disagree. URLs, tags and custom fields are
-// joined; a password left behind goes to the history.
-function mergeLogins(a, b, choice = {}) {
+// joined. Every password left behind — either login's current one, ones a
+// previous merge already set aside, the other login's history — goes to
+// this one's history, except `stored` (`a`'s saved password, which Save
+// moves to the history itself when it changes).
+function mergeLogins(a, b, choice = {}, { stored } = {}) {
   const pick = key => {
     const x = a[key], y = b[key];
     if (key === 'autofill') return (choice[key] === 'b' ? y : x) !== false;
-    if (String(x ?? '').trim() === '') return y ?? '';
-    if (String(y ?? '').trim() === '') return x;
+    if (mergeEmpty(key, x)) return y ?? '';
+    if (mergeEmpty(key, y)) return x;
     if (String(x) === String(y)) return x;
     if (key === 'notes' && (choice.notes ?? 'both') === 'both') return `${x}\n\n${y}`;
     return choice[key] === 'b' ? y : x;
@@ -1167,13 +1174,14 @@ function mergeLogins(a, b, choice = {}) {
     if (!custom.some(c => c.label === f.label && c.value === f.value)) custom.push({ ...f, id: undefined });
   }
   const password = pick('password');
-  const left = [a.password, b.password].filter(p => p && p !== password && p !== a.password);
+  const left = [...new Set([a.password, b.password, ...(a.extraPasswordHistory || []), ...(b.extraPasswordHistory || []), ...(b._history || [])])]
+    .filter(p => p && p !== password && p !== stored && !(a._history || []).includes(p));
   return {
     ...a,
     name: pick('name'), email: pick('email'), password, secret: pick('secret'), notes: pick('notes'),
     autofill: pick('autofill'), urls: urls.join('\n'), category, moreTags: tags.filter(t => t !== category),
     customFields: custom, domain: a.domain || b.domain,
-    extraPasswordHistory: [...(a.extraPasswordHistory || []), ...left],
+    extraPasswordHistory: left,
   };
 }
 
@@ -1199,7 +1207,10 @@ function openMergePanel(body, idx) {
     </div>`;
   body.querySelector('.acc-body-head').after(panel);
   const target = () => others.find(o => o._id === panel.querySelector('.merge-target').value);
-  const show = (f, v) => (f.secret ? (v ? '•'.repeat(Math.min(String(v).length, 12)) : '') : f.key === 'autofill' ? (v !== false ? 'On' : 'Off') : String(v ?? ''));
+  const show = (f, v) => (f.key === 'autofill' ? (v !== false ? 'On' : 'Off') : String(v ?? ''));
+  const cell = (f, v) => (f.secret
+    ? `<span class="merge-secret" data-value="${esc(show(f, v))}">${'•'.repeat(10)}</span>`
+    : `<span>${esc(show(f, v))}</span>`);
   const renderConflicts = () => {
     syncOpenAccToDraft();
     const b = target();
@@ -1208,12 +1219,18 @@ function openMergePanel(body, idx) {
     box.innerHTML = list.length
       ? '<div class="merge-hint">These differ — choose what stays. Everything else (URLs, tags, custom fields, empty fields) is combined.</div>' + list.map(f => `
         <div class="merge-row" data-key="${f.key}">
-          <div class="merge-label">${esc(f.label)}</div>
-          <label><input type="radio" name="m-${f.key}" value="a" ${f.both ? '' : 'checked'}> <span>${esc(show(f, draft[idx][f.key]))}</span> <em>this one</em></label>
-          <label><input type="radio" name="m-${f.key}" value="b"> <span>${esc(show(f, b[f.key]))}</span> <em>${esc(b.name || 'other')}</em></label>
+          <div class="merge-label">${esc(f.label)}${f.secret ? ` <button type="button" class="coll-link merge-reveal">Show</button>` : ''}</div>
+          <label><input type="radio" name="m-${f.key}" value="a" ${f.both ? '' : 'checked'}> ${cell(f, draft[idx][f.key])} <em>this one</em></label>
+          <label><input type="radio" name="m-${f.key}" value="b"> ${cell(f, b[f.key])} <em>${esc(b.name || 'other')}</em></label>
           ${f.both ? '<label><input type="radio" name="m-' + f.key + '" value="both" checked> <span>Keep both</span></label>' : ''}
         </div>`).join('')
       : '<div class="merge-hint">Nothing conflicts: the other login\'s details are added to this one.</div>';
+    // Show / hide both values of a password or 2FA row, to tell them apart.
+    box.querySelectorAll('.merge-reveal').forEach(btn => btn.addEventListener('click', () => {
+      const shown = btn.textContent === 'Hide';
+      btn.textContent = shown ? 'Show' : 'Hide';
+      btn.closest('.merge-row').querySelectorAll('.merge-secret').forEach(s => { s.textContent = shown ? '•'.repeat(10) : s.dataset.value; });
+    }));
   };
   panel.querySelector('.merge-target').addEventListener('change', renderConflicts);
   panel.querySelector('.merge-cancel').addEventListener('click', () => panel.remove());
@@ -1221,7 +1238,7 @@ function openMergePanel(body, idx) {
     syncOpenAccToDraft();
     const b = target();
     const choice = Object.fromEntries([...panel.querySelectorAll('.merge-row')].map(r => [r.dataset.key, r.querySelector('input:checked')?.value || 'a']));
-    const merged = mergeLogins(draft[idx], b, choice);
+    const merged = mergeLogins(draft[idx], b, choice, { stored: _draftBase.find(x => x._id === draft[idx]._id)?.password });
     const bIdx = draft.indexOf(b);
     draft[idx] = merged;
     draft.splice(bIdx, 1);

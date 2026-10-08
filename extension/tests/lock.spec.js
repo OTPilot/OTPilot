@@ -401,8 +401,14 @@ test("content scripts never receive a login's notes or custom fields", async ({ 
   await seedUnlocked(page);
   await page.reload();
   await writeAccounts(page, [{ name: 'TestApp', email: '', secret: TEST_SECRET, urls: 'localhost', notes: 'n0tes', customFields: [{ label: 'PIN', value: 'p1n-secret', kind: 'password' }] }]);
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const [i] = (await VaultStore.readAll(key)).items;
+    await VaultStore.save({ ...i, passwordHistory: [{ value: 'old-pa55', changedAt: '2026-01-01T00:00:00.000Z' }] }, key);
+  });
   const [worker] = context.serviceWorkers();
   const sent = await worker.evaluate(async () => JSON.stringify(await accountsForContent()));
+  expect(sent).not.toContain('old-pa55');
   expect(sent).not.toContain('n0tes');
   expect(sent).not.toContain('p1n-secret');
 });

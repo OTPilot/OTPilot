@@ -433,3 +433,56 @@ test('keeping this login\'s password still keeps the other one in the history', 
   await page.click('#btn-save-all');
   await expect.poll(async () => (await items(page)).map(i => [i.title, i.password, i.history])).toEqual([['A', 'keep', ['drop']]]);
 });
+
+test('two merges before Save keep every password left behind, and the other login\'s history', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'A', email: 'u', secret: '', urls: 'a.example', password: 'pa' },
+    { name: 'B', email: 'u', secret: '', urls: 'a.example', password: 'pb' },
+    { name: 'C', email: 'u', secret: '', urls: 'a.example', password: 'pc' },
+  ] });
+  // B already had an older password.
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const b = (await VaultStore.readAll(key)).items.find(i => i.title === 'B');
+    b.passwordHistory = [{ value: 'pb-old', changedAt: '2026-01-01T00:00:00.000Z' }];
+    await VaultStore.save(b, key);
+  });
+  await page.reload();
+  await page.click('#nav-settings');
+  await page.locator('.acc-head').first().click(); // A
+  for (const other of ['B', 'C']) {
+    await page.click('#acc-detail .btn-merge');
+    await page.locator('#acc-detail .merge-target').selectOption({ label: `${other} — u` });
+    await page.locator('#acc-detail .merge-row', { hasText: 'Password' }).locator('input[value="b"]').check();
+    await page.click('#acc-detail .merge-apply');
+  }
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await items(page)).map(i => [i.title, i.password, [...i.history].sort()]))
+    .toEqual([['A', 'pc', ['pa', 'pb', 'pb-old']]]);
+});
+
+test('a password of only spaces is a password: merging with a login without one keeps it', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'A', email: 'u', secret: '', urls: 'a.example', password: '   ' },
+    { name: 'B', email: 'u', secret: TEST_SECRET, urls: 'a.example', password: '' },
+  ] });
+  await page.locator('.acc-head').first().click();
+  await page.click('#acc-detail .btn-merge');
+  await expect(page.locator('#acc-detail .merge-row', { hasText: 'Password' })).toHaveCount(0);
+  await page.click('#acc-detail .merge-apply');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await items(page)).map(i => [i.password, i.secret])).toEqual([['   ', TEST_SECRET]]);
+});
+
+test('the merge panel can show the passwords it asks to choose between', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'A', email: 'u', secret: '', urls: 'a.example', password: 'same-len-1' },
+    { name: 'B', email: 'u', secret: '', urls: 'a.example', password: 'same-len-2' },
+  ] });
+  await page.locator('.acc-head').first().click();
+  await page.click('#acc-detail .btn-merge');
+  const row = page.locator('#acc-detail .merge-row', { hasText: 'Password' });
+  await expect(row.locator('.merge-secret')).toHaveText(['••••••••••', '••••••••••']);
+  await row.locator('.merge-reveal').click();
+  await expect(row.locator('.merge-secret')).toHaveText(['same-len-1', 'same-len-2']);
+});

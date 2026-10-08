@@ -34,6 +34,9 @@ const VaultAccounts = (() => {
       password: Vault.getValue(item, 'password'),
       notes: item.notes || '',
       customFields: customFieldsOf(item),
+      // Earlier passwords (newest first), read-only here: a merge keeps the
+      // other login's in this one's history.
+      _history: (item.passwordHistory || []).map(h => h.value).filter(Boolean),
       _updatedAt: item.updatedAt,
     };
     if (item.iconDomain) acc.domain = item.iconDomain;
