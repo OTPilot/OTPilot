@@ -103,7 +103,7 @@ const VaultStore = (() => {
   // throws, so the key change is abandoned rather than stranding records.
   // Callers must hold the 'otpilot-vault' lock (VaultKeys.adoptKey does).
   // Other records encrypted the same way that also follow the key.
-  const EXTRA_RECORDS = ['accountsV1Backup'];
+  const EXTRA_RECORDS = ['accountsV1Backup', 'teamPrivWrapped'];
 
   async function prepareRekey(oldKey, newKey) {
     const writes = {};

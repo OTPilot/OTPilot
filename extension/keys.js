@@ -7,35 +7,77 @@
 // shares stay readable after switching device/profile. The server only ever sees
 // the public key + the opaque encrypted blob — never the private key in clear.
 // Web Crypto native (no external dependency).
+//
+// On this device the private key is stored encrypted under the vault key (as
+// an item record, `teamPrivWrapped`, so a vault key change re-wraps it with
+// the vault — VaultStore's EXTRA_RECORDS): someone who can read a locked
+// browser profile can't use it to unwrap the cached collection keys and read
+// shared items. Private-key operations need the vault unlocked. The public
+// key is kept in clear (`teamPubB64`) so it can be uploaded while locked.
 const TeamKeys = (() => {
-  const PRIV = 'teamPrivJwk';
+  const LEGACY = 'teamPrivJwk'; // plaintext, before; encrypted on first unlocked use
+  const WRAPPED = 'teamPrivWrapped';
+  const PUB = 'teamPubB64';
+  const RECORD_ID = 'team-private-key';
+  const local = chrome.storage.local;
 
   const b64e = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
   const b64d = str => Uint8Array.from(atob(str), c => c.charCodeAt(0));
 
-  async function getStoredJwk() {
-    const d = await new Promise(r => chrome.storage.local.get(PRIV, r));
-    return d[PRIV] ?? null;
-  }
-
-  // Generates the keypair on first use (if none stored). Returns the JWK.
-  async function ensureJwk() {
-    let jwk = await getStoredJwk();
-    if (jwk) return jwk;
-    const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
-    jwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
-    await new Promise(r => chrome.storage.local.set({ [PRIV]: jwk }, r));
-    return jwk;
+  // Runs `fn(vaultKey)` under the vault lock (which a vault key change also
+  // takes), so the key can't be replaced between reading and writing.
+  function withVault(fn) {
+    return navigator.locks.request('otpilot-vault', async () => {
+      const key = await VaultKeys.getKey();
+      if (!key) throw new Error('the vault is locked');
+      return fn(key);
+    });
   }
 
   // Public key (raw point, base64) derived from the private JWK's x/y coords.
-  async function getPublicKeyB64() {
-    const jwk = await ensureJwk();
+  async function pubOf(jwk) {
     const pub = await crypto.subtle.importKey(
       'jwk', { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y },
       { name: 'ECDH', namedCurve: 'P-256' }, true, []
     );
     return b64e(await crypto.subtle.exportKey('raw', pub));
+  }
+
+  async function store(jwk, key) {
+    await local.set({
+      [WRAPPED]: await VaultCrypto.encryptItem({ id: RECORD_ID, jwk }, key),
+      [PUB]: await pubOf(jwk),
+    });
+    await local.remove(LEGACY);
+  }
+
+  // The private JWK (null if none), with the vault key. A plaintext one from
+  // an earlier version is encrypted now.
+  async function read(key) {
+    const d = await local.get([LEGACY, WRAPPED]);
+    if (d[WRAPPED]) return (await VaultCrypto.decryptItem(d[WRAPPED], key)).jwk;
+    if (d[LEGACY]) { await store(d[LEGACY], key); return d[LEGACY]; }
+    return null;
+  }
+
+  // Generates the keypair on first use (if none stored). Returns the JWK.
+  function ensureJwk() {
+    return withVault(async key => {
+      let jwk = await read(key);
+      if (jwk) return jwk;
+      const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
+      jwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
+      await store(jwk, key);
+      return jwk;
+    });
+  }
+
+  // Works while locked once the keypair exists.
+  async function getPublicKeyB64() {
+    const d = await local.get([PUB, LEGACY]);
+    if (d[PUB]) return d[PUB];
+    if (d[LEGACY]) return pubOf(d[LEGACY]);
+    return pubOf(await ensureJwk());
   }
 
   async function getPrivateKey() {
@@ -44,8 +86,8 @@ const TeamKeys = (() => {
   }
 
   // For cloudSync: the private JWK to store in the synced vault (or null).
-  async function exportPrivJwk() {
-    return getStoredJwk();
+  function exportPrivJwk() {
+    return withVault(read);
   }
 
   // For cloudSync: adopt the keypair restored from the synced vault, so every
@@ -53,13 +95,15 @@ const TeamKeys = (() => {
   // Returns true if the stored key actually changed.
   async function adoptPrivJwk(jwk) {
     if (!jwk || jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.d) return false;
-    const current = await getStoredJwk();
-    if (current && current.d === jwk.d) return false; // already the same key
     try {
       await crypto.subtle.importKey('jwk', jwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey']);
     } catch { return false; }
-    await new Promise(r => chrome.storage.local.set({ [PRIV]: jwk }, r));
-    return true;
+    return withVault(async key => {
+      const current = await read(key);
+      if (current && current.d === jwk.d) return false; // already the same key
+      await store(jwk, key);
+      return true;
+    });
   }
 
   // Unwraps an encrypted_user_share blob (JSON { epk, iv, ct }, all base64) → K1
