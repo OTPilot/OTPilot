@@ -1,7 +1,7 @@
 'use strict';
 
 // 2.0 per-item sync with the API's /vault/items (needs vault.js, vaultCrypto.js,
-// vaultStore.js, cloudSync.js).
+// vaultKeys.js, vaultStore.js, cloudSync.js).
 //
 // The server stores each item's encrypted record as-is. Every device of the
 // user shares the vault key, so a pulled record is written locally unchanged
@@ -32,6 +32,21 @@ const VaultSync = (() => {
     return chrome.storage.local.set({ [STATE]: state });
   }
 
+  // A sync runs with the key it started with. Every write it makes checks,
+  // under the vault lock (which a device reset, a lock and a key change also
+  // take), that this is still the vault key: a reply arriving after the
+  // device was wiped or re-keyed must not write records or progress back.
+  async function checkKey(key) {
+    if ((await VaultKeys.getKey()) !== key) throw new Error('the vault was locked, reset or re-keyed during sync');
+  }
+
+  function saveStateFor(state, key) {
+    return navigator.locks.request('otpilot-vault', async () => {
+      await checkKey(key);
+      await saveState(state);
+    });
+  }
+
   async function api(path, opts) {
     const res = await CloudSync.api(path, opts);
     const body = await res.json().catch(() => null);
@@ -54,10 +69,13 @@ const VaultSync = (() => {
     for (let more = true; more;) {
       const { status, body } = await api(`/vault/items?since=${state.cursor}`);
       if (status !== 200) throw new Error(`vault pull ${status}`);
-      await VaultStore.transaction(tx => applyPulled(tx, body.items || [], state, key, stats));
-      state.cursor = body.revision ?? state.cursor;
+      await VaultStore.transaction(async tx => {
+        await checkKey(key);
+        await applyPulled(tx, body.items || [], state, key, stats);
+        state.cursor = body.revision ?? state.cursor;
+        await saveState(state); // a later failure doesn't re-pull this page
+      });
       more = !!body.more;
-      await saveState(state); // a later failure doesn't re-pull this page
     }
   }
 
@@ -182,7 +200,7 @@ const VaultSync = (() => {
       if (status === 200) {
         state.synced[id] = { rev: body.revision, fp: fp(rec) };
         stats.pushed++;
-        await saveState(state);
+        await saveStateFor(state, key);
       } else if (status !== 409) {
         throw new Error(`vault push ${status}`);
       } // 409: the server moved on; the next pull brings it in and settles it
@@ -202,7 +220,7 @@ const VaultSync = (() => {
         state.synced[c.id] = { rev: c.revision, fp: fp(byId[c.id]) };
         stats.pushed++;
       }
-      await saveState(state);
+      await saveStateFor(state, key);
       // `conflicts`: the id already exists on the server; the next pull brings
       // that version and the newer edit wins.
       batch = [];
@@ -227,7 +245,7 @@ const VaultSync = (() => {
         delete state.synced[id];
         done.push(id);
         stats.deleted++;
-        await saveState(state);
+        await saveStateFor(state, key);
       } else if (status !== 409) {
         throw new Error(`vault delete ${status}`);
       }
@@ -242,7 +260,7 @@ const VaultSync = (() => {
       const state = await loadState();
       await pull(state, key, stats);
       await push(state, key, stats);
-      await saveState(state);
+      await saveStateFor(state, key);
       return stats;
     });
   }

@@ -416,3 +416,21 @@ test('an edit open while the first sync pairs that login with its server twin la
   await page.click('#btn-save-all');
   await expect.poll(async () => (await readAccounts(page)).map(a => [a._id, a.email])).toEqual([[twinId, 'typed@example.com']]);
 });
+
+test('a pull answered after the device was reset writes nothing back', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    await fakeServer.remoteSave(Vault.newItem('note', { title: 'From elsewhere' }));
+    const key = await VaultKeys.getKey();
+    // The reply is slow; the user resets this device meanwhile.
+    const api = CloudSync.api;
+    CloudSync.api = async (...a) => { await VaultLock.resetDevice(); return api(...a); };
+    let error = null;
+    try { await VaultSync.sync(key); } catch (e) { error = e.message; }
+    CloudSync.api = api;
+    const left = Object.keys(await chrome.storage.local.get(null));
+    return { error, left };
+  });
+  expect(r.error).toContain('during sync');
+  expect(r.left).toEqual([]);
+});
