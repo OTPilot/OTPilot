@@ -41,19 +41,27 @@ the others can edit.
 
 ## Server (API)
 
-- `shares`: `id` (client uuid), `owner_id`, `item_id`, `whole` (bool: a
-  whole-item share), `encrypted_item` (the copy under SK), `revision` (global
-  sequence, like `vault_items`), `deleted_at`, `updated_at`.
+- `shares`: `id` (client uuid), `team_id`, `owner_id`, `item_id`, `whole`
+  (bool: a whole-item share), `encrypted_item` (the copy under SK),
+  `revision` (global sequence, like `vault_items`), `updated_at`. Deleted
+  outright (no tombstones): grantees notice a share is gone because it's no
+  longer in their list. A trigger deletes a share when its last grant goes,
+  whatever removed it.
 - `share_grants`: `share_id`, either `user_id` or `collection_id`, `role`
   (`view`/`edit`; `edit` requires `whole`), `wrapped_key` (SK for that
   grantee), `granted_by`, `created_at`. A user grant needs a teammate with a
   public key; a collection grant needs the owner to be a collection member
   who can edit it, and the collection to be in the owner's team.
 - Endpoints (owner): create / update / delete a share, add / change / remove
-  its grants, list my shares since a revision (to apply editors' changes).
-  (Grantees): list shares I can open since a revision — directly or through a
-  collection — with the key material for each; update a share I can edit
-  (`base_revision`, 409 on conflict).
+  its grants, list my shares (to apply editors' changes). (Grantees): list
+  the shares I can open — directly or through a collection — with the key
+  material for each; update a share I can edit (`base_revision`, 409 on
+  conflict); leave a direct grant. Both lists come back **whole** on every
+  call, each share with its revision (no `since` cursor: the with-me list
+  spans owners, so a cursor could skip a late commit); clients download the
+  copies whose revision changed.
+- Locks: share writes take the team lock, then the share row — the same
+  order as team departures and collection deletion.
 - Team departures / account deletion: grants to the person are removed, and
   their shares (as owner) are deleted, in the same step as today's cleanup.
 

@@ -39,3 +39,18 @@ CREATE UNIQUE INDEX share_grants_share_user ON share_grants (share_id, user_id) 
 CREATE UNIQUE INDEX share_grants_share_collection ON share_grants (share_id, collection_id) WHERE collection_id IS NOT NULL;
 CREATE INDEX share_grants_user ON share_grants (user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX share_grants_collection ON share_grants (collection_id) WHERE collection_id IS NOT NULL;
+
+-- A share without grants has no one to share with: whichever way its last
+-- grant goes (removed, the grantee left the team or deleted their account,
+-- the collection was deleted), the share goes too.
+CREATE FUNCTION share_grant_removed() RETURNS trigger AS $$
+BEGIN
+  DELETE FROM shares s
+  WHERE s.id = OLD.share_id
+    AND NOT EXISTS (SELECT 1 FROM share_grants g WHERE g.share_id = OLD.share_id);
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER share_grant_removed AFTER DELETE ON share_grants
+  FOR EACH ROW EXECUTE FUNCTION share_grant_removed();

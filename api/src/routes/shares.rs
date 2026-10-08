@@ -98,6 +98,41 @@ async fn team_of_user(
         .ok_or(ApiError::Forbidden)
 }
 
+async fn still_member(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    team_id: Uuid,
+    user: Uuid,
+) -> Result<()> {
+    let ok: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM team_members WHERE team_id = $1 AND user_id = $2)",
+    )
+    .bind(team_id)
+    .bind(user)
+    .fetch_one(&mut **tx)
+    .await?;
+    if ok {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// The team lock, then the share row (FOR UPDATE): the order every share
+/// write and team departure takes them in, so they wait instead of
+/// deadlocking.
+async fn lock_team_then_share(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: Uuid,
+) -> Result<LockedShare> {
+    let team_id: Uuid = sqlx::query_scalar("SELECT team_id FROM shares WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    lock_team(tx, team_id).await?;
+    lock_share(tx, id).await
+}
+
 /// A grantee has to be in the owner's team: another member (not the owner),
 /// or a collection of the team the owner can write to.
 async fn check_grantee(
@@ -144,20 +179,19 @@ async fn insert_grant(
     by: Uuid,
     g: &GrantRequest,
 ) -> Result<()> {
-    // Replaces the grantee's grant if there is one (new role / new key).
-    sqlx::query(
-        "DELETE FROM share_grants WHERE share_id = $1
-           AND (user_id = $2 OR collection_id = $3)",
-    )
-    .bind(share_id)
-    .bind(g.user_id)
-    .bind(g.collection_id)
-    .execute(&mut **tx)
-    .await?;
-    sqlx::query(
+    // Replaces the grantee's grant if there is one (new role / new key) in
+    // place: deleting it first would let the last-grant trigger drop the share.
+    let conflict = if g.user_id.is_some() {
+        "ON CONFLICT (share_id, user_id) WHERE user_id IS NOT NULL"
+    } else {
+        "ON CONFLICT (share_id, collection_id) WHERE collection_id IS NOT NULL"
+    };
+    sqlx::query(&format!(
         "INSERT INTO share_grants (share_id, user_id, collection_id, role, wrapped_key, granted_by)
-         VALUES ($1, $2, $3, $4, $5, $6)",
-    )
+         VALUES ($1, $2, $3, $4, $5, $6)
+         {conflict} DO UPDATE SET role = EXCLUDED.role, wrapped_key = EXCLUDED.wrapped_key,
+           granted_by = EXCLUDED.granted_by"
+    ))
     .bind(share_id)
     .bind(g.user_id)
     .bind(g.collection_id)
@@ -285,15 +319,17 @@ async fn create_share(
     let mut tx = state.db.begin().await?;
     let team_id = team_of_user(&mut tx, auth.id).await?;
     lock_team(&mut tx, team_id).await?;
-    let owns: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM vault_items
-           WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL)",
-    )
-    .bind(body.item_id)
-    .bind(auth.id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if !owns {
+    // Still in that team now that departures wait for us (one may have
+    // committed between the read above and the lock).
+    still_member(&mut tx, team_id, auth.id).await?;
+    // The live item stays locked until the share commits: deleting it (which
+    // deletes its shares) either happened before — not found — or waits.
+    let owns = sqlx::query("SELECT 1 FROM vault_items WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL FOR UPDATE")
+        .bind(body.item_id)
+        .bind(auth.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if owns.is_none() {
         return Err(ApiError::NotFound);
     }
     for g in &body.grants {
@@ -337,7 +373,7 @@ async fn update_share(
 ) -> Result<Response> {
     let record = validate_record(&body.record)?;
     let mut tx = state.db.begin().await?;
-    let share = lock_share(&mut tx, id).await?;
+    let share = lock_team_then_share(&mut tx, id).await?;
     if share.owner_id != auth.id && !(share.whole && can_edit(&mut tx, id, auth.id).await?) {
         // Someone who can only view it: forbidden; anyone else: not found.
         return Err(if can_open(&mut tx, id, auth.id).await? {
@@ -385,7 +421,7 @@ async fn delete_share(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>> {
     let mut tx = state.db.begin().await?;
-    let share = lock_share(&mut tx, id).await?;
+    let share = lock_team_then_share(&mut tx, id).await?;
     if share.owner_id != auth.id {
         return Err(ApiError::NotFound);
     }
@@ -407,23 +443,22 @@ async fn put_grant(
     Json(g): Json<GrantRequest>,
 ) -> Result<Json<Value>> {
     let mut tx = state.db.begin().await?;
-    let team_id: Uuid = sqlx::query_scalar("SELECT team_id FROM shares WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    // Team lock before the share row: the same order as create_share.
-    lock_team(&mut tx, team_id).await?;
-    let share = lock_share(&mut tx, id).await?;
+    let share = lock_team_then_share(&mut tx, id).await?;
     if share.owner_id != auth.id {
         return Err(ApiError::NotFound);
     }
     check_grant_shape(&g, share.whole)?;
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM share_grants WHERE share_id = $1")
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
-    if count as usize >= MAX_GRANTS {
+    // The cap counts new grantees only: changing an existing grant is fine.
+    let (count, exists): (i64, bool) = sqlx::query_as(
+        "SELECT COUNT(*), COALESCE(bool_or(user_id = $2 OR collection_id = $3), false)
+         FROM share_grants WHERE share_id = $1",
+    )
+    .bind(id)
+    .bind(g.user_id)
+    .bind(g.collection_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !exists && count as usize >= MAX_GRANTS {
         return Err(ApiError::BadRequest(format!(
             "a share has at most {MAX_GRANTS} grants"
         )));
@@ -454,7 +489,7 @@ async fn remove_grant(
         return Err(ApiError::BadRequest("user_id or collection_id".into()));
     }
     let mut tx = state.db.begin().await?;
-    let share = lock_share(&mut tx, id).await?;
+    let share = lock_team_then_share(&mut tx, id).await?;
     let leaving = t.user_id == Some(auth.id);
     if share.owner_id != auth.id && !leaving {
         return Err(ApiError::NotFound);
@@ -471,18 +506,13 @@ async fn remove_grant(
     if removed == 0 {
         return Err(ApiError::NotFound);
     }
-    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM share_grants WHERE share_id = $1")
+    // The share_grant_removed trigger deleted the share if that was its last grant.
+    let deleted: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM shares WHERE id = $1)")
         .bind(id)
         .fetch_one(&mut *tx)
         .await?;
-    if left == 0 {
-        sqlx::query("DELETE FROM shares WHERE id = $1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
     tx.commit().await?;
-    Ok(Json(json!({ "ok": true, "share_deleted": left == 0 })))
+    Ok(Json(json!({ "ok": true, "share_deleted": deleted })))
 }
 
 // ── Lists ──────────────────────────────────────────────────────────────────
@@ -994,5 +1024,212 @@ mod db_tests {
             .await
             .unwrap();
         assert_eq!(left, 0);
+    }
+    #[tokio::test]
+    async fn a_share_left_without_grants_goes_whatever_removed_them_but_a_role_change_keeps_it() {
+        let (app, db, _g) = app().await;
+        let (owner, ceci, juan) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        let t = team(&db, owner, &[ceci, juan]).await;
+        // Changing the only grant's role keeps the share.
+        let a = item(&db, owner).await;
+        let (_, _, sid) = share(
+            &app,
+            owner,
+            a,
+            true,
+            json!([{ "user_id": ceci, "role": "view", "wrapped_key": "k" }]),
+        )
+        .await;
+        let (s, _) = call(
+            &app,
+            owner,
+            Method::PUT,
+            &format!("/shares/{sid}/grants"),
+            Some(json!({ "user_id": ceci, "role": "edit", "wrapped_key": "k2" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(with_me(&app, ceci).await[0]["role"], "edit");
+        // Its only grantee leaves the team: the share goes.
+        crate::routes::teams::remove_member_atomic(&db, t, ceci)
+            .await
+            .unwrap();
+        let (_, mine) = call(&app, owner, Method::GET, "/shares/mine", None).await;
+        assert_eq!(mine["shares"], json!([]));
+        // Shared only with a collection that is then deleted: it goes too.
+        let cid = Uuid::new_v4();
+        sqlx::query("INSERT INTO collections (id, team_id, encrypted_name) VALUES ($1, $2, 'n')")
+            .bind(cid)
+            .bind(t)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO collection_members (collection_id, user_id, role, wrapped_key) VALUES ($1, $2, 'manage', 'ck')")
+            .bind(cid).bind(owner).execute(&db).await.unwrap();
+        let b = item(&db, owner).await;
+        let (s, _, _) = share(
+            &app,
+            owner,
+            b,
+            true,
+            json!([{ "collection_id": cid, "role": "view", "wrapped_key": "k" }]),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _) = call(
+            &app,
+            owner,
+            Method::DELETE,
+            &format!("/collections/{cid}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, mine) = call(&app, owner, Method::GET, "/shares/mine", None).await;
+        assert_eq!(mine["shares"], json!([]));
+        let _ = juan;
+    }
+
+    #[tokio::test]
+    async fn a_share_created_while_the_owner_is_removed_from_the_team_is_refused() {
+        let (app, db, _g) = app().await;
+        let (owner, ceci, juan) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        let t = team(&db, owner, &[ceci, juan]).await;
+        let it = item(&db, ceci).await;
+        // Ceci's removal is in progress (holds the team lock).
+        let mut removal = db.begin().await.unwrap();
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtext('team_membership'), hashtext($1::text))",
+        )
+        .bind(t)
+        .execute(&mut *removal)
+        .await
+        .unwrap();
+        let creating = tokio::spawn({
+            let app = app.clone();
+            async move {
+                share(
+                    &app,
+                    ceci,
+                    it,
+                    true,
+                    json!([{ "user_id": juan, "role": "view", "wrapped_key": "k" }]),
+                )
+                .await
+                .0
+            }
+        });
+        crate::test_support::wait_for_lock_waits(&db, 1).await;
+        sqlx::query("DELETE FROM team_members WHERE team_id = $1 AND user_id = $2")
+            .bind(t)
+            .bind(ceci)
+            .execute(&mut *removal)
+            .await
+            .unwrap();
+        removal.commit().await.unwrap();
+        assert_eq!(creating.await.unwrap(), StatusCode::FORBIDDEN);
+        assert!(with_me(&app, juan).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_share_created_while_its_item_is_deleted_is_not_left_behind() {
+        let (app, db, _g) = app().await;
+        let (owner, ceci) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        team(&db, owner, &[ceci]).await;
+        let it = item(&db, owner).await;
+        // The item's deletion is in progress (row locked, not committed).
+        let mut deleting = db.begin().await.unwrap();
+        sqlx::query("UPDATE vault_items SET deleted_at = NOW(), encrypted_item = '' WHERE id = $1")
+            .bind(it)
+            .execute(&mut *deleting)
+            .await
+            .unwrap();
+        let creating = tokio::spawn({
+            let app = app.clone();
+            async move {
+                share(
+                    &app,
+                    owner,
+                    it,
+                    true,
+                    json!([{ "user_id": ceci, "role": "view", "wrapped_key": "k" }]),
+                )
+                .await
+                .0
+            }
+        });
+        crate::test_support::wait_for_lock_waits(&db, 1).await;
+        deleting.commit().await.unwrap();
+        assert_eq!(creating.await.unwrap(), StatusCode::NOT_FOUND);
+        assert!(with_me(&app, ceci).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_edit_and_the_editors_team_departure_do_not_deadlock() {
+        let (app, db, _g) = app().await;
+        let (owner, ceci) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        let t = team(&db, owner, &[ceci]).await;
+        let it = item(&db, owner).await;
+        let (_, created, sid) = share(
+            &app,
+            owner,
+            it,
+            true,
+            json!([{ "user_id": ceci, "role": "edit", "wrapped_key": "k" }]),
+        )
+        .await;
+        let rev = created["revision"].as_i64().unwrap();
+        let mut hold = db.begin().await.unwrap();
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtext('team_membership'), hashtext($1::text))",
+        )
+        .bind(t)
+        .execute(&mut *hold)
+        .await
+        .unwrap();
+        // Ceci's edit and the owner's departure both queue on the team lock.
+        let edit = tokio::spawn({
+            let app = app.clone();
+            async move {
+                call(
+                    &app,
+                    ceci,
+                    Method::PUT,
+                    &format!("/shares/{sid}"),
+                    Some(json!({ "record": record("x"), "base_revision": rev })),
+                )
+                .await
+                .0
+            }
+        });
+        let departure = tokio::spawn({
+            let db = db.clone();
+            async move { crate::routes::teams::remove_member_atomic(&db, t, owner).await }
+        });
+        crate::test_support::wait_for_lock_waits(&db, 2).await;
+        hold.commit().await.unwrap();
+        let e = edit.await.unwrap();
+        assert!(
+            e == StatusCode::OK || e == StatusCode::NOT_FOUND,
+            "edit: {e}"
+        );
+        departure
+            .await
+            .unwrap()
+            .expect("departure failed (deadlock?)");
     }
 }
