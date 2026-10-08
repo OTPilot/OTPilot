@@ -3,23 +3,31 @@ import { useState } from 'react'
 const faqs = [
   {
     q: 'Does OTPilot work without an account?',
-    a: 'Yes. The extension is fully functional without creating an account. All your codes are stored locally in your browser. Cloud sync is an optional paid feature.',
+    a: 'Yes. The extension is fully functional without creating an account: passwords, notes, 2FA codes and auto-fill all work locally in your browser. Cloud sync is an optional paid feature.',
   },
   {
-    q: 'Can OTPilot read my TOTP secrets?',
-    a: 'No. Your secrets are encrypted with your master password before leaving your device. We never see them in plain text, not even for cloud sync. The encryption key exists only on your device.',
+    q: 'Can OTPilot read my passwords or 2FA secrets?',
+    a: 'No. Every item in your vault is encrypted on your device, each with its own key, protected by your master password. Synced items reach our servers only as ciphertext; the key to read them never leaves your devices. Your master password is never sent anywhere.',
   },
   {
-    q: 'What does "locked in" mean for Early Adopters?',
-    a: 'It means your $15 is your price forever, no renewals, no future charges, no price increases for you. The pricing model may change for new customers down the road, but everyone who buys now keeps their access under the same terms. If the cloud service is ever discontinued, we\'ll give 90 days advance notice and your local extension keeps working regardless.',
+    q: 'What does the free plan include?',
+    a: 'Unlimited 2FA codes, plus up to 50 other items (passwords, secure notes, servers, API credentials) on one browser, with auto-fill, the password generator and imports from other password managers. A login that only holds a 2FA code (and its username) never counts toward the 50. Personal removes the limit and syncs everything across your devices.',
   },
   {
-    q: 'What happens if I cancel my Team plan?',
-    a: 'Your extension reverts to local-only mode. Cloud sync stops immediately — the Personal Cloud plan and the Team plan are independent, so cancelling Team does not grant Personal sync. All locally stored accounts remain intact. Shared codes that teammates accessed via your team become inaccessible to them, but their own local accounts are unaffected.',
+    q: 'How does billing work? Can I cancel?',
+    a: 'Personal is $3/month or $30/year; Team Lite is $8/month or $80/year per workspace. Plans renew automatically and you can cancel anytime from the billing page; you keep the plan until the end of the period you paid for. After that your vault stays on your devices, on the free plan: if you have more than 50 items you keep all of them, you just can\'t add new ones until you\'re back under the limit or upgrade again.',
   },
   {
-    q: 'How secure is sharing a code with my team?',
-    a: 'Shared codes use a two-of-two key split: the secret is encrypted with a key whose two halves live separately — one on the recipient\'s device, one on our server — so neither can decrypt it alone. The server only briefly combines them in memory to produce the live 6-digit code; the secret is never stored in clear. Revoking a teammate deletes the server\'s half, making their half useless instantly. (Your personal vault stays fully end-to-end encrypted — this split applies only to codes you choose to share.)',
+    q: 'Can I import from another password manager?',
+    a: 'Yes. Export a CSV from Chrome, Edge, Brave, Firefox, Bitwarden, 1Password, LastPass, Dashlane or KeePass and import it in the extension\'s Settings. If you already have a site\'s 2FA code in OTPilot, the imported password is added to that same login. You can also export your whole vault as CSV at any time.',
+  },
+  {
+    q: 'How does sharing with my team work?',
+    a: 'Two ways. Collections share everything (passwords, notes, 2FA) with the teammates you choose, end-to-end encrypted: each member gets the collection key wrapped to their own device key, so our servers never see the content. Members can view, edit or manage a collection. Or share just a live 2FA code: the secret is split in two halves, one on the teammate\'s device and one on our server, and the teammate only ever sees the current 6-digit code, never the secret.',
+  },
+  {
+    q: 'What happens if I leave a team, or the team plan is cancelled?',
+    a: 'You lose access to what was shared with you: the team\'s collections and shared codes. Your own vault is never touched. If you also pay for Personal you go back to it; otherwise you go back to the free plan, keeping all your items.',
   },
   {
     q: 'Is OTPilot open source?',
@@ -27,7 +35,7 @@ const faqs = [
   },
   {
     q: 'Can I get a refund?',
-    a: 'Yes, within 14 days of purchase, if the service didn\'t work as documented or there was a billing error. We don\'t offer refunds for "changed my mind", but you can always stay on the free plan before committing.',
+    a: 'Yes, within 14 days of a payment (for yearly plans, of the first purchase; renewals are not refunded), if the service didn\'t work as documented or there was a billing error. We don\'t offer refunds for "changed my mind", but you can cancel anytime and the free plan lets you try everything first.',
   },
   {
     q: 'Which browsers does OTPilot support?',
@@ -35,7 +43,7 @@ const faqs = [
   },
   {
     q: 'Can I use OTPilot on multiple devices without paying?',
-    a: 'Yes. On the free plan you can move your accounts between devices manually using the encrypted export/import feature, just export from one browser and import on another. Cloud sync (automatic, real-time) is available on the Personal plan.',
+    a: 'Yes. On the free plan you can move your vault between devices manually with the encrypted backup (export on one browser, import on another). Automatic, real-time sync is part of the Personal plan.',
   },
   {
     q: "I'm currently using Google Authenticator, can I switch?",

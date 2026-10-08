@@ -20,13 +20,15 @@ export default function Security() {
                   <li>Your email (via Supabase)</li>
                   <li>Your plan</li>
                   <li>Device metadata & last sync</li>
-                  <li>An opaque encrypted blob</li>
+                  <li>Encrypted vault items it cannot read</li>
+                  <li>Team collections: membership & roles</li>
                 </ul>
               </div>
               <div className="rounded-lg border border-white/8 p-4">
                 <p className="text-zinc-300 font-medium mb-2">We never see</p>
                 <ul className="space-y-1">
-                  <li>Your TOTP secrets</li>
+                  <li>Your passwords, notes & 2FA secrets</li>
+                  <li>What's inside a team collection</li>
                   <li>Your recovery key</li>
                   <li>The codes you share</li>
                   <li>Your master password</li>
@@ -37,12 +39,17 @@ export default function Security() {
 
           <section>
             <h2 className="text-white font-semibold text-lg mb-3">Personal sync — zero-knowledge</h2>
-            <p>Your accounts are encrypted on your device with AES-256-GCM before they leave it. The encryption key is your recovery key — generated locally, it never leaves your extension. The server only ever holds a blob it cannot read. If our database were stolen, your data would be unreadable.</p>
+            <p>Every item in your vault is encrypted on your device with AES-256-GCM, each with its own key, before it leaves it. Those keys are protected by your vault key (your recovery key) — generated locally, it never leaves your devices, and on each device it is itself locked by your master password. The server only ever holds ciphertext it cannot read. If our database were stolen, your data would be unreadable.</p>
+          </section>
+
+          <section>
+            <h2 className="text-white font-semibold text-lg mb-3">Team collections — end-to-end encrypted</h2>
+            <p>A collection's items are encrypted with a collection key that only its members hold: each member receives it wrapped to their own device key, and the server stores only those wrapped copies, the encrypted items and the encrypted name. Removing someone stops their access to future changes; anything they could already see may have been copied, so OTPilot suggests changing those passwords.</p>
           </section>
 
           <section>
             <h2 className="text-white font-semibold text-lg mb-3">Shared codes — 2-of-2 key split</h2>
-            <p>When you share a code with a teammate, it's protected by a two-halves system: one half lives in your teammate's extension, the other on our server. <strong className="text-zinc-300">Neither half can decrypt the secret alone</strong> — both are needed, momentarily, only to generate the live 6-digit code. Revoking a teammate deletes the server's half, making their half useless instantly.</p>
+            <p>When you share just a 2FA code (not a collection) with a teammate, it's protected by a two-halves system: one half lives in your teammate's extension, the other on our server. <strong className="text-zinc-300">Neither half can decrypt the secret alone</strong> — both are needed, momentarily, only to generate the live 6-digit code. Revoking a teammate deletes the server's half, making their half useless instantly.</p>
           </section>
 
           <section>
