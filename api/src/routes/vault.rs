@@ -310,6 +310,12 @@ async fn delete_item(
     .bind(id)
     .fetch_one(&mut *tx)
     .await?;
+    // Its shared copies go with it (docs/sharing.md).
+    sqlx::query("DELETE FROM shares WHERE owner_id = $1 AND item_id = $2")
+        .bind(auth.id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(Json(json!({ "id": id, "revision": revision })).into_response())
 }
