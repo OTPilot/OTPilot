@@ -1,13 +1,32 @@
 # Changelog
 
 
-## v2.0.0 (unreleased)
+## v2.0.0
 
-Built on `release/2.0.0`; every 2.0 PR targets that branch, and it merges to `main` once the whole release is ready.
+OTPilot becomes a **password manager with built-in 2FA**: one encrypted vault for logins, secure notes, servers and API credentials, with password and 2FA autofill on any site, import/export, team collections, and Personal as a subscription.
 
 ### Extension
 
-- **Version bump to 2.0.0** — OTPilot becomes a password manager with built-in 2FA: a unified vault (logins, secure notes, servers, API credentials), per-item encryption, password autofill, import/export, and team collections. Entries for each feature land here as their PRs merge.
+- **Encrypted vault, item by item** — every item is encrypted on the device with its own key (AES-256-GCM, the item id as associated data); item keys are wrapped by the vault key (the recovery key), itself wrapped by the master password (PBKDF2-SHA256, 600k iterations). Existing 2FA accounts are migrated automatically on the first unlock (an encrypted v1 backup is kept).
+- **Master password is mandatory; auto-lock** — lock on browser close, or after 15/60/240/480 minutes of inactivity. The master password is typed in an extension-origin frame on pages (the page can't read it).
+- **Recovery** — recovery key + printable Emergency Kit; restore a forgotten master password with the recovery key, or reset the device.
+- **Per-item sync** — the vault syncs item by item (`/vault/items`, revisions, conflicts resolved by the newest edit, deletions as tombstones). Devices still on 1.x keep working: 2.0 keeps exporting and merging the old sync blob during the transition.
+- **Passwords on web pages** — fill a sign-in form with a click (never automatically), offer to save or update a password after signing in, and suggest a strong password on sign-up forms. A locked vault offers "Unlock & fill" only where a login matches.
+- **Item types and tags** — logins, secure notes, servers and API credentials (more types shown as "Soon"); a "2FA code" entry for adding just a code; a category plus any number of tags, with type and tag filters.
+- **Password generator** — passwords and PINs, configurable, with a session history of copied values.
+- **Import / export** — import CSV exports from Chrome, Edge, Brave, Firefox, Bitwarden, 1Password, LastPass, Dashlane and KeePass (a password for a site you already have a 2FA code for is added to that login); export the whole vault as CSV (master password required).
+- **Team collections** — share passwords, notes and 2FA end-to-end encrypted with chosen teammates (view / edit / manage); shared logins fill on pages too; removing someone suggests which passwords to change. Sharing a single 2FA code without revealing its secret still works as before.
+- **Free plan: up to 50 items** — 2FA codes stay unlimited (a login holding only a 2FA code doesn't count).
+- **Themes everywhere** — in-page overlays, toasts and banners follow the chosen theme.
+
+### API
+
+- `/vault/items` (per-item sync), `/collections` (team collections), Personal subscription checkout and webhooks, `GET /users/me/deletion` and a safer `DELETE /users/me` (cancels the user's subscriptions and dissolves their team first). Migrations 0016–0019.
+- Fix: deleting the account of anyone who had acted in a team (audit log, shared codes, invites) used to fail.
+
+### Web
+
+- Personal is now a subscription — **$3/month or $30/year** (Team Lite unchanged); the dashboard's Billing page and the delete-account dialog (which lists what will be cancelled and dissolved) are updated.
 
 ## v1.4.0
 
