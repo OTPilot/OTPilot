@@ -343,3 +343,13 @@ test('a login saved from a page is uploaded by the background, with the popup cl
   await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
   await expect.poll(() => worker.evaluate(() => uploaded.length)).toBe(1);
 });
+
+test("the background's twin remaps reach an open popup with its sync notice", async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  await worker.evaluate(() => {
+    SupabaseAuth.getSession = async () => null; // the popup's own sync stays out of it
+    chrome.runtime.sendMessage({ action: 'serverDataChanged', remapped: { 'old-id': 'server-id' } });
+  });
+  await expect.poll(() => popup.evaluate(() => _idRemaps['old-id'] ?? null)).toBe('server-id');
+});

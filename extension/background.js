@@ -34,7 +34,7 @@ function queueVaultSync() {
         // Something came in: an open popup redraws (its sync reloads the list).
         if (stats.pulled || stats.deleted || Object.keys(stats.remapped).length) {
           await VaultAccounts.rebuildIndex(key);
-          chrome.runtime.sendMessage({ action: 'serverDataChanged' }).catch(() => {});
+          chrome.runtime.sendMessage({ action: 'serverDataChanged', remapped: stats.remapped }).catch(() => {});
         }
       } catch { /* offline or signed out: the next save, alarm or popup retries */ }
     } while (_vaultSyncAgain);

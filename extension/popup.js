@@ -3162,13 +3162,17 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     // On reconnect the server is the source of truth.
     // Add any local-only accounts not present or deleted on the server,
     // but discard local tombstones — offline deletions must not override synced data.
-    const remoteNames   = new Set(remoteAccounts.map(a => a.name));
+    // Password-only logins aren't part of the v1 blob (v1Exportable): they're
+    // kept as they are, whatever the blob's names or tombstones say.
+    const passwordOnly  = accounts.filter(a => !a.secret);
+    const remote        = v1Exportable(remoteAccounts);
+    const remoteNames   = new Set(remote.map(a => a.name));
     const remoteDeleted = new Set(Object.keys(remoteTombs));
-    const localOnly     = accounts.filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
-    const merged        = [...remoteAccounts, ...localOnly];
+    const localOnly     = v1Exportable(accounts).filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
+    const merged        = [...remote, ...localOnly];
     const mergedTombs   = remoteTombs;
 
-    accounts   = merged;
+    accounts   = [...merged, ...passwordOnly];
     tombstones = mergedTombs;
     await saveState();
     await saveTombstones();
@@ -3322,7 +3326,12 @@ async function silentPullSync() {
   })();
 
   chrome.runtime.onMessage.addListener(msg => {
-    if (msg.action === 'serverDataChanged') silentPullSync();
+    if (msg.action === 'serverDataChanged') {
+      // Logins the background's sync paired with their server twins: an open
+      // editor's draft follows them (the old ids are already gone).
+      if (msg.remapped) Object.assign(_idRemaps, msg.remapped);
+      silentPullSync();
+    }
   });
 })();
 

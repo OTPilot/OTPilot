@@ -428,7 +428,9 @@ test('a pull answered after the device was reset writes nothing back', async ({ 
     let error = null;
     try { await VaultSync.sync(key); } catch (e) { error = e.message; }
     CloudSync.api = api;
-    const left = Object.keys(await chrome.storage.local.get(null));
+    // What sync would write back: records, tombstones, its progress.
+    const left = Object.keys(await chrome.storage.local.get(null))
+      .filter(k => k.startsWith('vi:') || k.startsWith('vt:') || k === 'vaultSyncState');
     return { error, left };
   });
   expect(r.error).toContain('during sync');
