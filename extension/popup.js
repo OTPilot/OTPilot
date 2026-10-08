@@ -2510,12 +2510,14 @@ async function showCsvReview(file) {
 
   const skipped = [
     parsed.invalid ? `${parsed.invalid} row${parsed.invalid === 1 ? '' : 's'} without a password skipped` : '',
-    parsed.otherTypes ? `${parsed.otherTypes} server/API item${parsed.otherTypes === 1 ? '' : 's'} not imported (not supported from CSV yet)` : '',
+    parsed.otherTypes ? `${parsed.otherTypes} item${parsed.otherTypes === 1 ? '' : 's'} of a type this version doesn't know not imported` : '',
     parsed.unsupportedTotp ? `${parsed.unsupportedTotp} 2FA code${parsed.unsupportedTotp === 1 ? '' : 's'} with unsupported settings (HOTP, 8 digits, SHA256…) not imported` : '',
   ].filter(Boolean);
   const nLogins = parsed.entries.filter(e => e.type === 'login').length;
-  const nNotes = parsed.entries.length - nLogins;
-  const found = `${nLogins} login${nLogins === 1 ? '' : 's'}${nNotes ? ` and ${nNotes} secure note${nNotes === 1 ? '' : 's'}` : ''}`;
+  const nNotes = parsed.entries.filter(e => e.type === 'note').length;
+  const nOthers = parsed.entries.length - nLogins - nNotes;
+  const found = [`${nLogins} login${nLogins === 1 ? '' : 's'}`, nNotes && `${nNotes} secure note${nNotes === 1 ? '' : 's'}`, nOthers && `${nOthers} other item${nOthers === 1 ? '' : 's'}`]
+    .filter(Boolean).join(' and ');
   csvImportStatus([`${parsed.source}: ${found} found`, ...skipped].join(' · '));
   if (!parsed.entries.length) return;
 
@@ -2527,7 +2529,7 @@ async function showCsvReview(file) {
     label.className = 'export-acc-row' + (exists ? ' disabled' : '');
     label.innerHTML = `<input type="checkbox" ${exists ? 'disabled' : 'checked'} data-idx="${i}">
       <span class="export-acc-name">${esc(entry.title)}</span>
-      ${entry.type === 'note' ? '<span class="type-tag">Secure note</span>' : ''}
+      ${entry.type !== 'login' ? `<span class="type-tag">${esc(typeLabel(entry.type))}</span>` : ''}
       ${entry.username ? `<span class="export-acc-email">${esc(entry.username)}</span>` : ''}
       ${exists ? '<span class="export-acc-exists">already in vault</span>' : ''}
       ${p.action === 'merge' ? `<span class="export-acc-exists">adds password to ${esc(names.get(p.target) || 'login')}</span>` : ''}`;
