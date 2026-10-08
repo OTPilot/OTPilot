@@ -84,6 +84,11 @@ const VaultAccounts = (() => {
     next.tags = normalizeTags([category, ...others]);
     if (acc.domain) next.iconDomain = acc.domain; else delete next.iconDomain;
     if (typeof acc.notes === 'string') next.notes = acc.notes;
+    // Passwords a merge discarded (another login's), kept in the history.
+    if (Array.isArray(acc.extraPasswordHistory) && acc.extraPasswordHistory.length) {
+      const now = new Date().toISOString();
+      next.passwordHistory = [...acc.extraPasswordHistory.filter(Boolean).map(value => ({ value, changedAt: now })), ...(next.passwordHistory || [])].slice(0, 5);
+    }
     const out = Array.isArray(acc.customFields) ? withCustomFields(next, acc.customFields) : next;
     out.position = position;
     return out;

@@ -587,6 +587,17 @@
       background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
       box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 4px; display: flex; flex-direction: column;
     }
+    .acc-head-actions { display: flex; gap: 6px; }
+    .merge-panel { border: 1px solid var(--accent-2); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: var(--bg); }
+    .merge-title { font-size: 12px; font-weight: 700; color: var(--ink-0); margin-bottom: 6px; }
+    .merge-panel select { width: 100%; margin-bottom: 8px; padding: 6px 8px; border-radius: 6px; font: inherit; font-size: 12px; background: var(--surface); color: var(--ink-0); border: 1px solid var(--border); }
+    .merge-hint { font-size: 11px; color: var(--ink-4); margin-bottom: 6px; }
+    .merge-row { border-top: 1px solid var(--border); padding: 6px 0; font-size: 12px; color: var(--ink-1); }
+    .merge-row label { display: flex; gap: 6px; align-items: center; margin: 2px 0; cursor: pointer; overflow: hidden; }
+    .merge-row label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+    .merge-row em { color: var(--ink-4); font-size: 11px; }
+    .merge-label { font-size: 10px; font-weight: 600; text-transform: uppercase; color: var(--ink-5); }
+    .merge-actions { display: flex; gap: 6px; margin-top: 8px; }
     .cf-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
     .cf-row .cf-label { font-size: 11px; font-weight: 600; }
     .cf-hide { font-size: 12px; opacity: .55; }
