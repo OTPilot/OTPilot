@@ -311,6 +311,23 @@ test('an "unlocked" message from the frame itself, after the page navigated it, 
   await expect(site.locator('input[name="otp_token"]')).toHaveValue('');
 });
 
+test('after unlocking in the popup, a page that navigates its stale unlock frame does not get a fill', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedLocked(page, { accounts: [{ name: 'TestApp', secret: TEST_SECRET, urls: 'localhost', email: '' }], activeIndex: 0 });
+  const site = await context.newPage();
+  await site.goto('http://localhost:8765/test/autofill.html');
+  await expect(site.locator('#otpilot-lock')).toBeVisible();
+  // The user unlocks from the popup instead; the frame stays on the page.
+  expect(await page.evaluate(pw => VaultLock.unlock(pw), TEST_PASSWORD)).toBeTruthy();
+  await site.evaluate(() => {
+    document.querySelector('#otpilot-lock iframe').src =
+      'data:text/html,<script>parent.postMessage({ source: "otpilot-unlock", result: "unlocked" }, "*")</script>';
+  });
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-lock')).toBeVisible(); // not dismissed by the forged message
+  await expect(site.locator('input[name="otp_token"]')).toHaveValue('');
+});
+
 test('a long account name stays on one line in the unlock frame', async ({ context, extensionId }) => {
   const page = await popup(context, extensionId);
   const longName = 'A Very Long Account Name That Would Otherwise Wrap Onto Several Lines';

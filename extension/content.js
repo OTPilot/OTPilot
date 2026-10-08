@@ -918,8 +918,15 @@ function mountUnlockFrame(container, { name, intro, action }, onUnlocked, onDism
   Object.assign(frame.style, { display: 'block', width: '100%', height: '148px', border: '0' });
   container.appendChild(frame);
 
+  // Only the extension's own unlock page counts: the page owns the <iframe>
+  // and can navigate it to its own content (which then is the frame's
+  // contentWindow too), e.g. once the vault was unlocked elsewhere. unlock.js
+  // only says "unlocked" after the user unlocked in it.
+  // (With use_dynamic_url the frame's URL carries a per-session id; its
+  // document's origin is the extension's.)
+  const origins = new Set([new URL(frame.src).origin, `chrome-extension://${chrome.runtime.id}`]);
   const onMessage = async e => {
-    if (e.source !== frame.contentWindow || e.data?.source !== 'otpilot-unlock') return;
+    if (e.source !== frame.contentWindow || !origins.has(e.origin) || e.data?.source !== 'otpilot-unlock') return;
     if (e.data.result === 'dismissed') { stop(); onDismiss(); return; }
     if (e.data.result === 'unlocked' && !(await isSessionLocked())) { stop(); onUnlocked(); }
   };
