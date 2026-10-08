@@ -203,7 +203,7 @@
     document.body.appendChild(el);
   }
 
-  const resolve = (offer, choice) => chrome.runtime.sendMessage({ action: 'vaultResolvePendingLogin', id: offer.id, choice }).catch(() => ({ ok: false }));
+  const resolve = (offer, choice, target) => chrome.runtime.sendMessage({ action: 'vaultResolvePendingLogin', id: offer.id, choice, target }).catch(() => ({ ok: false }));
   const closeSave = () => document.getElementById(SAVE_ID)?.remove();
 
   function saveButton(label, primary) {
@@ -222,9 +222,11 @@
     el.innerHTML = `${OVERLAY_HEADER}<div class="otpilot-save-body" style="padding:10px 12px 12px;color:var(--ink-0, #f1f5f9);font-size:13px;"></div>`;
     el.querySelector('.otpilot-overlay-close').addEventListener('click', trusted(() => { resolve(offer, 'dismiss'); closeSave(); }));
     const body = el.querySelector('.otpilot-save-body');
-    const title = offer.kind === 'update'
-      ? `Update the password for <b>${esc(offer.name || offer.host)}</b>?`
-      : `Save this login for <b>${esc(offer.host)}</b>?`;
+    const first = (offer.candidates || [])[0];
+    const title = offer.kind !== 'update' ? `Save this login for <b>${esc(offer.host)}</b>?`
+      : (offer.candidates || []).length > 1 ? `Update a login for <b>${esc(offer.host)}</b>?`
+      : first && !first.username && offer.username ? `Add this username and password to <b>${esc(offer.name || offer.host)}</b>?`
+      : `Update the password for <b>${esc(offer.name || offer.host)}</b>?`;
 
     if (offer.kind === 'locked') {
       mountUnlockFrame(body, { name: offer.host, action: 'Unlock & save', intro: `Unlock OTPilot to save your ${offer.host} login.` },
@@ -240,27 +242,67 @@
 
     body.innerHTML = `<div class="otpilot-save-title" style="margin-bottom:4px;">${title}</div>`
       + (offer.username ? `<div style="color:var(--ink-3, #94a3b8);font-size:12px;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(offer.username)}</div>` : '<div style="height:6px"></div>');
-    if (offer.limit) {
-      body.insertAdjacentHTML('beforeend', '<div class="otpilot-save-limit" style="color:var(--warning, #fbbf24);font-size:12px;">The Free plan holds 50 items. Upgrade to save more.</div>');
+
+    // An update can apply to several of the site's logins (no username was
+    // captured): the user picks which.
+    const candidates = offer.kind === 'update' ? (offer.candidates || []) : [];
+    let picker = null;
+    if (candidates.length > 1) {
+      picker = document.createElement('select');
+      picker.className = 'otpilot-save-target';
+      Object.assign(picker.style, {
+        width: '100%', margin: '0 0 10px', padding: '6px 8px', borderRadius: '7px', font: 'inherit', fontSize: '12px',
+        background: 'var(--bg, #0f172a)', color: 'var(--ink-0, #f1f5f9)', border: '1px solid var(--border, #1e3a5f)',
+      });
+      for (const c of candidates) {
+        const o = document.createElement('option');
+        o.value = c.id;
+        o.textContent = c.username ? `${c.name || offer.host} — ${c.username}` : (c.name || offer.host);
+        picker.appendChild(o);
+      }
+      body.appendChild(picker);
+    }
+    const chosen = () => candidates.find(c => c.id === picker?.value) || candidates[0];
+    const updateLimited = () => offer.kind === 'update' ? !!chosen()?.limit : !!offer.limit;
+
+    const limitNote = document.createElement('div');
+    limitNote.className = 'otpilot-save-limit';
+    limitNote.textContent = 'The Free plan holds 50 items. Upgrade to save more.';
+    Object.assign(limitNote.style, { color: 'var(--warning, #fbbf24)', fontSize: '12px', margin: '0 0 8px' });
+    // Nothing this offer could do fits the Free plan: just say why.
+    if (offer.limit && (offer.kind === 'new' || offer.newLimit) && !picker) {
+      body.appendChild(limitNote);
       return;
     }
-    const row = document.createElement('div');
-    Object.assign(row.style, { display: 'flex', gap: '6px' });
-    const save = saveButton(offer.kind === 'update' ? 'Update' : 'Save', true);
-    save.className = 'otpilot-save-confirm';
-    save.addEventListener('click', trusted(async () => {
-      save.disabled = true;
-      const res = await resolve(offer, 'save');
+
+    const done = async (choice, target) => {
+      const res = await resolve(offer, choice, target);
       closeSave();
+      const updated = choice === 'save' && offer.kind === 'update';
+      showToast(res?.ok ? (updated ? 'Login updated in OTPilot' : 'Login saved to OTPilot') : 'OTPilot could not save this login', !!res?.ok);
       // Its site icon, from this page's own <link rel=icon> (content.js), as
       // a 2FA account added from a page gets.
       if (res?.ok) requestSiteIcon(location.hostname);
-      showToast(res?.ok ? (offer.kind === 'update' ? 'Password updated in OTPilot' : 'Login saved to OTPilot') : 'OTPilot could not save this login', !!res?.ok);
-    }));
+    };
+
+    const row = document.createElement('div');
+    Object.assign(row.style, { display: 'flex', gap: '6px', flexWrap: 'wrap' });
+    const save = saveButton(offer.kind === 'update' ? 'Update' : 'Save', true);
+    save.className = 'otpilot-save-confirm';
+    save.addEventListener('click', trusted(() => { save.disabled = true; done('save', offer.kind === 'update' ? chosen()?.id : undefined); }));
+    row.append(save);
+    if (offer.kind === 'update') {
+      const asNew = saveButton('Save as new');
+      asNew.className = 'otpilot-save-new';
+      asNew.disabled = !!offer.newLimit;
+      if (offer.newLimit) asNew.title = 'The Free plan holds 50 items';
+      asNew.addEventListener('click', trusted(() => { asNew.disabled = true; done('new'); }));
+      row.append(asNew);
+    }
     const later = saveButton('Not now');
     later.className = 'otpilot-save-later';
     later.addEventListener('click', trusted(() => { resolve(offer, 'dismiss'); closeSave(); }));
-    row.append(save, later);
+    row.append(later);
     if (offer.kind === 'new') {
       const never = saveButton('Never');
       never.className = 'otpilot-save-never';
@@ -268,7 +310,13 @@
       never.addEventListener('click', trusted(() => { resolve(offer, 'never'); closeSave(); }));
       row.append(never);
     }
+    const syncLimit = () => {
+      save.disabled = updateLimited();
+      if (updateLimited()) body.insertBefore(limitNote, row); else limitNote.remove();
+    };
+    picker?.addEventListener('change', syncLimit);
     body.appendChild(row);
+    syncLimit();
   }
 
   // ── Suggesting a password ──────────────────────────────────────────────

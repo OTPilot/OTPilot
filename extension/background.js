@@ -206,40 +206,56 @@ async function readPendingLogin(sender) {
   return relatedHost(pending.host, host) ? { key, pending } : null;
 }
 
-// What saving the pending sign-in would do: a new login, a password update of
-// the saved login with that username, or nothing (already saved as is).
+// What saving the pending sign-in would do:
+// - `update` a saved login of this site: the one with that username; or,
+//   signing in with a username, one saved without a username (e.g. from a
+//   change-password form that had no username field) — it gets the username
+//   too; or, with no username captured, one of the site's logins (the user
+//   picks among `candidates`, the most recently changed first);
+// - a `new` login otherwise;
+// - nothing when it's already saved as is.
+// `limit` / `newLimit`: the Free plan refuses that update / a new login.
 async function planPendingLogin({ host, username, password }) {
   const key = await VaultKeys.getKey();
   const { items } = await VaultStore.readAll(key);
   const covering = items.filter(i => i.type === 'login' && Vault.loginCoversHost(i.urls, host));
   const userOf = i => Vault.getValue(i, 'username').trim();
+  const newest = (x, y) => (y.updatedAt || '').localeCompare(x.updatedAt || '');
+  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+  const candidate = Vault.newItem('login', { urls: [host] });
+  Vault.getField(candidate, 'password').value = password;
+  const newLimit = !Vault.canSaveItem(items, userPlan, candidate);
+
   // The exact username first. Usernames can be case-sensitive: a match
   // ignoring case is used only when it is the only one.
   const loose = covering.filter(i => userOf(i).toLowerCase() === username.toLowerCase());
-  const match = covering.find(i => userOf(i) === username)
-    || (loose.length === 1 ? loose[0] : null)
-    || (!username && covering.length === 1 ? covering[0] : null);
-  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+  const match = covering.find(i => userOf(i) === username) || (loose.length === 1 ? loose[0] : null);
+  if (match && Vault.getValue(match, 'password') === password) return { kind: 'none' };
+
   // A team collection already has this login: never offer a personal copy.
   // (A changed password there is updated from the popup, which writes to the
   // collection; the background doesn't.)
   if (!match) {
-    // Same username rule as above: exact, or ignoring case when it's the
-    // only one.
     const shared = (await sharedLogins()).filter(i => Vault.loginCoversHost(i.urls, host));
     const sharedLoose = shared.filter(i => userOf(i).toLowerCase() === username.toLowerCase());
     if (shared.some(i => userOf(i) === username) || sharedLoose.length === 1) return { kind: 'none' };
   }
-  if (match) {
-    if (Vault.getValue(match, 'password') === password) return { kind: 'none' };
-    // A 2FA-only login that gains a password starts counting toward the limit.
-    const updated = structuredClone(match);
-    Vault.getField(updated, 'password').value = password;
-    return { kind: 'update', item: match, limit: !Vault.canSaveItem(items, userPlan, updated) };
+
+  let candidates;
+  if (match) candidates = [match];
+  else if (username) candidates = covering.filter(i => !userOf(i)).sort(newest);
+  else candidates = covering.filter(i => Vault.getValue(i, 'password') !== password).sort(newest);
+  if (!candidates.length) {
+    if (!username && covering.length) return { kind: 'none' }; // already saved on one of them
+    return { kind: 'new', limit: newLimit, newLimit };
   }
-  const candidate = Vault.newItem('login', { urls: [host] });
-  Vault.getField(candidate, 'password').value = password;
-  return { kind: 'new', limit: !Vault.canSaveItem(items, userPlan, candidate) };
+  const withLimit = candidates.map(item => {
+    // A 2FA-only login that gains a password starts counting toward the limit.
+    const updated = structuredClone(item);
+    Vault.getField(updated, 'password').value = password;
+    return { item, limit: !Vault.canSaveItem(items, userPlan, updated) };
+  });
+  return { kind: 'update', item: withLimit[0].item, limit: withLimit[0].limit, candidates: withLimit, newLimit };
 }
 
 async function pendingLoginOffer(sender) {
@@ -252,13 +268,23 @@ async function pendingLoginOffer(sender) {
   if (state === 'locked') return { ...offer, kind: 'locked' };
   const plan = await planPendingLogin(pending);
   if (plan.kind === 'none') { await dropPendingLogin(key, pending.id); return null; }
-  return { ...offer, kind: plan.kind, name: plan.item?.title || '', limit: !!plan.limit };
+  return {
+    ...offer, kind: plan.kind, name: plan.item?.title || '', limit: !!plan.limit, newLimit: !!plan.newLimit,
+    // What an update could apply to (names and usernames only), so the page
+    // can let the user pick, or save a new login instead.
+    candidates: (plan.candidates || []).map(c => ({
+      id: c.item.id, name: c.item.title || '', username: Vault.getValue(c.item, 'username'), limit: c.limit,
+    })),
+  };
 }
 
 // `id` is the capture the offer showed: a choice never applies to another.
+// `choice`: 'save' (what the offer proposed: the update of `target`, one of
+// its candidates, or a new login), 'new' (a new login even where an update
+// was offered), 'never', or anything else to dismiss.
 // Counting toward the Free limit and writing happen under one lock, so two
 // tabs saving at once can't both pass the check.
-async function resolvePendingLogin(sender, id, choice) {
+async function resolvePendingLogin(sender, id, choice, target) {
   const found = await readPendingLogin(sender);
   if (!found || typeof id !== 'string' || found.pending.id !== id) return { ok: false };
   const { key, pending } = found;
@@ -266,25 +292,35 @@ async function resolvePendingLogin(sender, id, choice) {
     const never = (await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE] || [];
     await chrome.storage.local.set({ [NEVER_SAVE]: [...new Set([...never, pending.host])] });
   }
-  if (choice !== 'save') { await dropPendingLogin(key, id); return { ok: true }; }
+  if (choice !== 'save' && choice !== 'new') { await dropPendingLogin(key, id); return { ok: true }; }
 
   if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
   return navigator.locks.request('otpilot-item-limit', async () => {
     const plan = await planPendingLogin(pending);
-    if (plan.limit) return { ok: false, limit: true };
+    if (plan.kind === 'none') { await dropPendingLogin(key, id); return { ok: true, kind: 'none' }; }
     const vk = await VaultKeys.getKey();
-    if (plan.kind === 'new') {
+    let kind;
+    if (choice === 'new' || plan.kind === 'new') {
+      if (plan.newLimit) return { ok: false, limit: true };
       await VaultAccounts.add({
         name: pending.host.replace(/^www\./, ''), email: pending.username, secret: '',
         urls: pending.host, password: pending.password,
       }, vk);
-    } else if (plan.kind === 'update') {
-      const current = VaultAccounts.toAccount(plan.item);
-      if (!(await VaultAccounts.update(plan.item.id, current, { password: pending.password }, vk))) return { ok: false };
+      kind = 'new';
+    } else {
+      // Only one of the offer's candidates, re-checked now.
+      const chosen = plan.candidates.find(c => c.item.id === (target ?? plan.item.id));
+      if (!chosen) return { ok: false };
+      if (chosen.limit) return { ok: false, limit: true };
+      const current = VaultAccounts.toAccount(chosen.item);
+      // A login saved without a username gets the one signed in with.
+      const patch = { password: pending.password, ...(!current.email && pending.username ? { email: pending.username } : {}) };
+      if (!(await VaultAccounts.update(chosen.item.id, current, patch, vk))) return { ok: false };
+      kind = 'update';
     }
     await dropPendingLogin(key, id);
     vaultChangedByPage();
-    return { ok: true, kind: plan.kind };
+    return { ok: true, kind };
   });
 }
 
@@ -575,7 +611,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.action === 'vaultResolvePendingLogin') {
-    resolvePendingLogin(_sender, msg.id, msg.choice).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    resolvePendingLogin(_sender, msg.id, msg.choice, typeof msg.target === 'string' ? msg.target : undefined).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 
