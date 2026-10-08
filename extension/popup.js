@@ -1171,7 +1171,10 @@ function mergeLogins(a, b, choice = {}, { stored } = {}) {
   const tags = [...new Set([a.category, ...(a.moreTags || []), b.category, ...(b.moreTags || [])].map(t => String(t || '').trim()).filter(Boolean))];
   const custom = [...(a.customFields || [])];
   for (const f of b.customFields || []) {
-    if (!custom.some(c => c.label === f.label && c.value === f.value)) custom.push({ ...f, id: undefined });
+    // The same field on both: one copy, hidden if either side hid it.
+    const same = custom.find(c => c.label === f.label && c.value === f.value);
+    if (!same) custom.push({ ...f, id: undefined });
+    else if (Vault.SECRET_KINDS.includes(f.kind) && !Vault.SECRET_KINDS.includes(same.kind)) custom[custom.indexOf(same)] = { ...same, kind: f.kind };
   }
   const password = pick('password');
   const left = [...new Set([a.password, b.password, ...(a.extraPasswordHistory || []), ...(b.extraPasswordHistory || []), ...(b._history || [])])]
@@ -1211,10 +1214,15 @@ function openMergePanel(body, idx) {
   const cell = (f, v) => (f.secret
     ? `<span class="merge-secret" data-value="${esc(show(f, v))}">${'•'.repeat(10)}</span>`
     : `<span>${esc(show(f, v))}</span>`);
+  // What the choices on screen were made for: Merge re-checks it, since the
+  // editor can change while the panel is open.
+  let shownFor = '';
+  const conflictKey = list => JSON.stringify(list.map(f => [f.key, String(draft[idx][f.key] ?? ''), String(target()[f.key] ?? '')]));
   const renderConflicts = () => {
     syncOpenAccToDraft();
     const b = target();
     const list = mergeConflicts(draft[idx], b);
+    shownFor = conflictKey(list);
     const box = panel.querySelector('.merge-conflicts');
     box.innerHTML = list.length
       ? '<div class="merge-hint">These differ — choose what stays. Everything else (URLs, tags, custom fields, empty fields) is combined.</div>' + list.map(f => `
@@ -1237,6 +1245,12 @@ function openMergePanel(body, idx) {
   panel.querySelector('.merge-apply').addEventListener('click', () => {
     syncOpenAccToDraft();
     const b = target();
+    if (conflictKey(mergeConflicts(draft[idx], b)) !== shownFor) {
+      // Something changed in the editor since the choices were shown.
+      renderConflicts();
+      setStatus('The login changed — review the choices, then Merge', false);
+      return;
+    }
     const choice = Object.fromEntries([...panel.querySelectorAll('.merge-row')].map(r => [r.dataset.key, r.querySelector('input:checked')?.value || 'a']));
     const merged = mergeLogins(draft[idx], b, choice, { stored: _draftBase.find(x => x._id === draft[idx]._id)?.password });
     const bIdx = draft.indexOf(b);
@@ -1838,7 +1852,8 @@ async function saveAccounts(intended) {
       (old.category || '') !== (acc.category || '') ||
       JSON.stringify(old.moreTags || []) !== JSON.stringify(acc.moreTags || []) ||
       (old.notes || '') !== (acc.notes || '') ||
-      JSON.stringify(old.customFields || []) !== JSON.stringify(acc.customFields || []);
+      JSON.stringify(old.customFields || []) !== JSON.stringify(acc.customFields || []) ||
+      (acc.extraPasswordHistory || []).length > 0; // a merge set passwords aside
     acc._updatedAt = changed ? now : (old._updatedAt ?? now);
   }
 
