@@ -18,6 +18,7 @@
 // browser profile, in exchange for not prompting on every OTP page.
 const VaultAccounts = (() => {
   const INDEX = 'vaultIndex';
+  const STALE = 'vaultIndexStale'; // a rebuild was skipped (see rebuildIndex)
   const local = chrome.storage.local;
 
   function toAccount(item) {
@@ -92,13 +93,19 @@ const VaultAccounts = (() => {
   // the list they read before saving.
   // Only with the current vault key: with a replaced one (a recovery key
   // restored while a caller was busy) every record would fail to decrypt and
-  // the index would come out empty. Skipped then, and while locked (unlocking
-  // writes it again).
+  // the index would come out empty. Skipped then, and while locked — but
+  // marked stale (`vaultIndexStale`), so the next unlock rebuilds it
+  // (VaultLock.migrateVault).
   function rebuildIndex(key) {
     return navigator.locks.request('otpilot-vault', async () => {
-      if ((await VaultKeys.getKey()) !== key) return;
+      if ((await VaultKeys.getKey()) !== key) { await local.set({ [STALE]: true }); return; }
       await writeIndex((await VaultStore.readAll(key)).items);
+      await local.remove(STALE);
     });
+  }
+
+  async function indexIsStale() {
+    return !!(await local.get(STALE))[STALE];
   }
 
   async function readIndex() {
@@ -278,5 +285,5 @@ const VaultAccounts = (() => {
     return ok;
   }
 
-  return { load, loadOthers, save, exceedsFreeLimit, add, update, writeIndex, rebuildIndex, readIndex, toAccount, normalizeTags };
+  return { load, loadOthers, save, exceedsFreeLimit, add, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
 })();

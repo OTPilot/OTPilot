@@ -390,3 +390,27 @@ test('a background sync interrupted by a recovery-key change leaves the locked-v
   }, TEST_PASSWORD);
   expect(names).toEqual(['Local only']);
 });
+
+test('a background sync that pulled, then saw the vault lock before its upload, gets its index rebuilt on unlock', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ name: 'Local only', email: '', secret: TEST_SECRET, urls: 'local.example' }], { syncEnabled: true, userPlan: 'personal' });
+  await popup.close();
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  const r = await worker.evaluate(async password => {
+    const key = await VaultKeys.getKey();
+    const pulled = Vault.newItem('login', { title: 'From another device', urls: ['pulled.example'] });
+    const record = await VaultCrypto.encryptItem(pulled, key);
+    SupabaseAuth.getSession = async () => ({ user: { id: 'u1' } });
+    const reply = (status, body) => new Response(JSON.stringify(body), { status });
+    CloudSync.api = async (path, opts = {}) => {
+      if ((opts.method || 'GET') === 'GET') return reply(200, { items: [{ id: pulled.id, record, revision: 1, deleted: false }], revision: 1, more: false });
+      await VaultLock.lock(); // the vault locks while the upload is pending
+      return reply(500, {});
+    };
+    await queueVaultSync();
+    const whileLocked = (await VaultAccounts.readIndex()).map(e => e.name).sort();
+    await VaultLock.unlock(password);
+    return { whileLocked, afterUnlock: (await VaultAccounts.readIndex()).map(e => e.name).sort() };
+  }, TEST_PASSWORD);
+  expect(r.whileLocked).toEqual(['Local only']);
+  expect(r.afterUnlock).toEqual(['From another device', 'Local only']);
+});
