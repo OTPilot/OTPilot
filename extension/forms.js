@@ -564,7 +564,10 @@
     const f = e.target;
     if (_filling || !(f instanceof HTMLInputElement) || !isVisible(f) || f.value) return;
     if (isNewPassword(f)) { suggestPassword(f); return; }
-    if (!_pageLogins?.logins.length || _anchor?.field === f) return;
+    // Not waiting for the page's first check: focusing the field before the
+    // background answered still opens (openLogins asks, and shows only if the
+    // site has logins).
+    if (_anchor?.field === f || _pendingField === f) return;
     const login = findLoginFields();
     if (login && (f === login.username || f === login.password)) openLogins(f);
   }, true);

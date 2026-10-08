@@ -321,3 +321,12 @@ test('locked: a long list after unlocking in the dropdown can still scroll to ev
   await drop.locator('.otpilot-login-choice').last().click();
   await expect(site.locator('input[name="email"]')).toHaveValue('u9@example.com');
 });
+
+test('focusing the field before the page check answered still opens the dropdown', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  // Focus right after load, typically before forms.js's first check returns.
+  await site.goto(`${SITE}/login.html`, { waitUntil: 'load' });
+  await site.locator('input[name="email"]').focus();
+  await expect(site.locator('#otpilot-login-dropdown')).toBeVisible();
+});

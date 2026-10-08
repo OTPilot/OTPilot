@@ -43,8 +43,13 @@ function findAccount(accounts, hostname) {
   return accounts.find(acc => accountMatchesHostname(acc, hostname)) || null;
 }
 
+// Only accounts that hold a 2FA code can fill one: a password-only login of
+// the site is left out. Unlocked accounts carry `secret`; the locked index
+// says `hasTotp` (an index from before it did counts as yes).
+const hasTotpCode = acc => (acc.secret !== undefined ? !!acc.secret : acc.hasTotp !== false);
+
 function findAllMatchingAccounts(accounts, hostname) {
-  return accounts.filter(acc => accountMatchesHostname(acc, hostname));
+  return accounts.filter(acc => hasTotpCode(acc) && accountMatchesHostname(acc, hostname));
 }
 
 // Accounts come from the background worker, which holds the vault key.
@@ -61,7 +66,7 @@ async function getVaultAccounts() {
 async function getActiveAccount(overrideIndex) {
   const { accounts: accs, activeIndex } = await getVaultAccounts();
   // 1. Try URL-based match first
-  const byUrlIdx = accs.findIndex(acc => accountMatchesHostname(acc, location.hostname.toLowerCase()));
+  const byUrlIdx = accs.findIndex(acc => hasTotpCode(acc) && accountMatchesHostname(acc, location.hostname.toLowerCase()));
   if (byUrlIdx !== -1) return { acc: accs[byUrlIdx], idx: byUrlIdx };
   // 2. Fall back to the account selected in the popup (or override from message)
   const idx = overrideIndex ?? activeIndex ?? 0;
