@@ -896,7 +896,7 @@ mod db_tests {
             let app = app.clone();
             async move { send_event(&app, completed(user, "personal", "sub_race")).await }
         });
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        crate::test_support::wait_for_lock_waits(&db, 1).await;
         sqlx::query("INSERT INTO stripe_ended_subscriptions (subscription_id) VALUES ('sub_race')")
             .execute(&mut *cancel)
             .await
@@ -921,7 +921,7 @@ mod db_tests {
             let app = app.clone();
             async move { send_event(&app, completed(user, "team_lite", "sub_t")).await }
         });
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        crate::test_support::wait_for_lock_waits(&db, 1).await;
         // The deletion's first step can't get in before the team exists.
         let mut deletion = db.begin().await.unwrap();
         sqlx::query("SET LOCAL lock_timeout = '200ms'")

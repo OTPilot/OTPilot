@@ -173,3 +173,23 @@ pub async fn call(
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
 }
+
+/// Waits (up to 5 s) until `n` sessions on this test's database are blocked on
+/// a lock: a race test advances the competing transaction only once the
+/// request under test is really waiting, not after a guessed sleep.
+pub async fn wait_for_lock_waits(db: &PgPool, n: i64) {
+    for _ in 0..100 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(db)
+        .await
+        .unwrap();
+        if waiting >= n {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("no session started waiting on a lock");
+}

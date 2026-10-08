@@ -101,6 +101,21 @@ pub(crate) async fn lock_team(
     Ok(())
 }
 
+/// Locks the collection row for a member removal, before the member row is
+/// deleted. The collection_member_removed trigger locks it FOR UPDATE anyway,
+/// but only after the deletion: a writer holding KEY SHARE on the collection
+/// (role_locked) and waiting on that member row would then wait on each other.
+/// Taken first, the removal waits for such a writer instead (or the writer
+/// waits and then finds the member gone).
+async fn lock_for_removal(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, cid: Uuid) -> Result<()> {
+    sqlx::query("SELECT 1 FROM collections WHERE id = $1 FOR UPDATE")
+        .bind(cid)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(())
+}
+
 /// The caller's role, read inside `tx` with a share lock on their member row:
 /// a concurrent role change or removal waits for this transaction (or this
 /// one sees its result). 404 when not a member.
@@ -454,6 +469,7 @@ async fn remove_member(
     let team_id = team_of(&state.db, cid).await?;
     let mut tx = state.db.begin().await?;
     lock_team(&mut tx, team_id).await?;
+    lock_for_removal(&mut tx, cid).await?;
     let role = role_locked(&mut tx, cid, auth.id).await?;
     if uid != auth.id {
         allowed(&role, &["manage"])?;
@@ -1215,7 +1231,7 @@ mod db_tests {
                 .execute(&d)
                 .await
         });
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        crate::test_support::wait_for_lock_waits(&db, 1).await;
         sqlx::query("INSERT INTO vault_items (id, owner_id, collection_id, encrypted_item, counts_for_limit) VALUES ($1, NULL, $2, 'x', false)")
             .bind(Uuid::new_v4()).bind(cid).execute(&mut *write).await.unwrap();
         write.commit().await.unwrap();
@@ -1260,7 +1276,7 @@ mod db_tests {
                 .0
             }
         });
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        crate::test_support::wait_for_lock_waits(&db, 1).await;
         demote.commit().await.unwrap();
         assert_eq!(renaming.await.unwrap(), StatusCode::FORBIDDEN);
         let name: String =
@@ -1270,5 +1286,58 @@ mod db_tests {
                 .await
                 .unwrap();
         assert_eq!(name, "enc-name");
+    }
+    #[tokio::test]
+    async fn removing_a_member_while_they_write_does_not_deadlock() {
+        let (app, db, _g) = app().await;
+        let (owner, bob) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        let t = team(&db, owner, &[bob]).await;
+        let cid = new_collection(&app, owner, t).await;
+        call(
+            &app,
+            owner,
+            Method::PUT,
+            &format!("/collections/{cid}/members/{bob}"),
+            Some(json!({ "role": "manage", "wrapped_key": "k" })),
+        )
+        .await;
+        // Bob's write (a rename, an item write) has taken the collection's
+        // key-share lock and is about to lock his member row...
+        let mut write = db.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM collections WHERE id = $1 FOR KEY SHARE")
+            .bind(cid)
+            .execute(&mut *write)
+            .await
+            .unwrap();
+        // ...when the owner removes him.
+        let removing = tokio::spawn({
+            let app = app.clone();
+            async move {
+                call(
+                    &app,
+                    owner,
+                    Method::DELETE,
+                    &format!("/collections/{cid}/members/{bob}"),
+                    None,
+                )
+                .await
+                .0
+            }
+        });
+        crate::test_support::wait_for_lock_waits(&db, 1).await;
+        let role: Option<String> = sqlx::query_scalar(
+            "SELECT role FROM collection_members WHERE collection_id = $1 AND user_id = $2 FOR SHARE",
+        )
+        .bind(cid)
+        .bind(bob)
+        .fetch_optional(&mut *write)
+        .await
+        .expect("the write deadlocked with the removal");
+        assert_eq!(role.as_deref(), Some("manage"));
+        write.commit().await.unwrap();
+        assert_eq!(removing.await.unwrap(), StatusCode::OK);
     }
 }

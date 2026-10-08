@@ -269,6 +269,16 @@ pub(crate) async fn remove_member_atomic(
     // Their team collections go too (only the shared items; their own vault
     // stays). The collection_member_removed trigger deletes collections left
     // without members and promotes a member where no manager is left.
+    // Those collections are locked first, in id order (see
+    // collections::lock_for_removal).
+    sqlx::query(
+        "SELECT c.id FROM collections c JOIN collection_members m ON m.collection_id = c.id
+         WHERE m.user_id = $1 AND c.team_id = $2 ORDER BY c.id FOR UPDATE OF c",
+    )
+    .bind(user_id)
+    .bind(team_id)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query(
         "DELETE FROM collection_members WHERE user_id = $1
          AND collection_id IN (SELECT id FROM collections WHERE team_id = $2)",
