@@ -262,3 +262,63 @@ test('"2FA code": hex-looking link secrets keep their bytes; malformed links are
   await expect(page.locator('#acc-detail .acc-password')).toHaveValue('pw');
   await expect(page.locator('#acc-detail .acc-password-field')).toBeVisible();
 });
+
+// ── Notes and custom fields ──────────────────────────────────────────────────
+
+test('a login gets notes and custom fields (hidden ones masked), saved on the item', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{ name: 'DigitalOcean', email: 'me@example.com', secret: TEST_SECRET, urls: 'digitalocean.com' }] });
+  await page.locator('.acc-head', { hasText: 'DigitalOcean' }).click();
+  await page.fill('#acc-detail .acc-notes', 'Billing contact: ops@team');
+  await page.click('#acc-detail .cf-add');
+  await page.locator('#acc-detail .cf-row').last().locator('.cf-label').fill('Droplet IP');
+  await page.locator('#acc-detail .cf-row').last().locator('.cf-value').fill('10.0.0.5');
+  await page.click('#acc-detail .cf-add');
+  const token = page.locator('#acc-detail .cf-row').last();
+  await token.locator('.cf-label').fill('API token');
+  await token.locator('.cf-hide').click(); // hidden
+  await page.locator('#acc-detail .cf-row').last().locator('.cf-value').fill('dop_v1_secret');
+  await expect(page.locator('#acc-detail .cf-row').last().locator('.cf-value')).toHaveAttribute('type', 'password');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => {
+    const [i] = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items);
+    return { notes: i.notes, custom: i.fields.filter(f => f.custom).map(f => [f.label, f.value, f.kind]), totp: !!i.totp?.secret };
+  }).toEqual({ notes: 'Billing contact: ops@team', custom: [['Droplet IP', '10.0.0.5', 'text'], ['API token', 'dop_v1_secret', 'password']], totp: true });
+
+  // Reopened: still there; a removed field goes on the next save.
+  await page.reload();
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'DigitalOcean' }).click();
+  await expect(page.locator('#acc-detail .acc-notes')).toHaveValue('Billing contact: ops@team');
+  await expect(page.locator('#acc-detail .cf-row')).toHaveCount(2);
+  await page.locator('#acc-detail .cf-row').first().locator('.cf-del').click();
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items))[0]
+    .fields.filter(f => f.custom).map(f => f.label)).toEqual(['API token']);
+});
+
+test('custom fields on other item types too', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { items: [['server', { title: 'Prod DB' }, { host: 'db.internal' }]] });
+  await page.locator('.acc-head', { hasText: 'Prod DB' }).click();
+  await page.click('#acc-detail .cf-add');
+  await page.locator('#acc-detail .cf-row .cf-label').fill('Region');
+  await page.locator('#acc-detail .cf-row .cf-value').fill('nyc3');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items[0].fields
+    .map(f => [f.label, f.value, !!f.custom]).filter(([, v]) => v))).toEqual([['Host', 'db.internal', false], ['Region', 'nyc3', true]]);
+});
+
+test('a page or a 1.x device saving the login keeps its notes and custom fields', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{ name: 'Site', email: 'me@example.com', secret: '', urls: 'localhost', password: 'old' }] });
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const [i] = (await VaultStore.readAll(key)).items;
+    await VaultStore.save(VaultAccounts.withCustomFields({ ...i, notes: 'keep' }, [{ label: 'PIN', value: '1234', kind: 'password' }]), key);
+    const [acc] = await VaultAccounts.load(key);
+    // A caller that doesn't know about notes / custom fields (page update, v1 blob merge).
+    const { notes, customFields, ...plain } = acc;
+    await VaultAccounts.update(acc._id, acc, { password: 'new' }, key);
+    await VaultAccounts.save([{ ...plain, name: 'Site (renamed)' }], key, new Set([acc._id]));
+  });
+  const i = (await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items))[0];
+  expect([i.title, i.notes, i.fields.filter(f => f.custom).map(f => f.label)]).toEqual(['Site (renamed)', 'keep', ['PIN']]);
+});

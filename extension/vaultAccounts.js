@@ -32,13 +32,32 @@ const VaultAccounts = (() => {
       category: item.tags?.[0] || '',
       moreTags: (item.tags || []).slice(1),
       password: Vault.getValue(item, 'password'),
+      notes: item.notes || '',
+      customFields: customFieldsOf(item),
       _updatedAt: item.updatedAt,
     };
     if (item.iconDomain) acc.domain = item.iconDomain;
     return acc;
   }
 
+  // The user's own fields on an item (label + value; `kind` 'password' when
+  // hidden), after the type's template fields.
+  function customFieldsOf(item) {
+    return (item.fields || []).filter(f => f.custom).map(f => ({ id: f.id, label: f.label || '', value: f.value ?? '', kind: f.kind === 'password' ? 'password' : 'text' }));
+  }
+
+  // Replaces an item's custom fields (template fields untouched). Empty rows
+  // (no label and no value) are dropped.
+  function withCustomFields(item, list) {
+    const custom = (list || [])
+      .map(f => ({ id: f.id || `c-${crypto.randomUUID()}`, label: String(f.label || '').trim(), value: String(f.value ?? ''), kind: f.kind === 'password' ? 'password' : 'text', custom: true }))
+      .filter(f => f.label || f.value);
+    return { ...item, fields: [...(item.fields || []).filter(f => !f.custom), ...custom] };
+  }
+
   // Applies the v1 fields of `acc` onto `item` (a copy), keeping the rest.
+  // `notes` / `customFields` only when the caller has them (the popup's
+  // editor): a page or a 1.x device's account leaves them as they are.
   function applyAccount(item, acc, position) {
     const next = structuredClone(item);
     next.title = acc.name || '';
@@ -64,8 +83,10 @@ const VaultAccounts = (() => {
     const others = Array.isArray(acc.moreTags) ? acc.moreTags : (item.tags || []).slice(1);
     next.tags = normalizeTags([category, ...others]);
     if (acc.domain) next.iconDomain = acc.domain; else delete next.iconDomain;
-    next.position = position;
-    return next;
+    if (typeof acc.notes === 'string') next.notes = acc.notes;
+    const out = Array.isArray(acc.customFields) ? withCustomFields(next, acc.customFields) : next;
+    out.position = position;
+    return out;
   }
 
   // Trimmed, non-empty, no duplicates; order kept (the first is the category).
@@ -287,5 +308,5 @@ const VaultAccounts = (() => {
     return ok;
   }
 
-  return { load, loadOthers, save, exceedsFreeLimit, add, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
+  return { customFieldsOf, withCustomFields, load, loadOthers, save, exceedsFreeLimit, add, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
 })();
