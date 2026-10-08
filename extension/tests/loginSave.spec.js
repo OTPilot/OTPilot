@@ -317,3 +317,39 @@ test('an ambiguous shared match (two usernames differing only by case) still off
   await signIn(site, 'alice@x.com', 'mine');
   await expect(site.locator('#otpilot-login-save')).toContainText('Save this login for localhost?');
 });
+
+test('a login saved from a page is uploaded by the background, with the popup closed', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [], { syncEnabled: true, userPlan: 'personal' });
+  await popup.close();
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  await worker.evaluate(() => {
+    globalThis.uploaded = [];
+    SupabaseAuth.getSession = async () => ({ user: { id: 'u1' } });
+    const reply = (status, body) => new Response(JSON.stringify(body), { status });
+    CloudSync.api = async (path, opts = {}) => {
+      const method = opts.method || 'GET';
+      if (method === 'GET') return reply(200, { items: [], revision: 0, more: false });
+      if (method === 'POST' && path === '/vault/items/batch') {
+        const { items } = JSON.parse(opts.body);
+        items.forEach(i => uploaded.push(i.id));
+        return reply(200, { created: items.map((i, n) => ({ id: i.id, revision: n + 1 })), conflicts: [] });
+      }
+      return reply(400, {});
+    };
+  });
+  const site = await context.newPage();
+  await signIn(site, 'new@example.com', 'n3w-pass!');
+  await site.locator('#otpilot-login-save .otpilot-save-confirm').click();
+  await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
+  await expect.poll(() => worker.evaluate(() => uploaded.length)).toBe(1);
+});
+
+test("the background's twin remaps reach an open popup with its sync notice", async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  await worker.evaluate(() => {
+    SupabaseAuth.getSession = async () => null; // the popup's own sync stays out of it
+    chrome.runtime.sendMessage({ action: 'serverDataChanged', remapped: { 'old-id': 'server-id' } });
+  });
+  await expect.poll(() => popup.evaluate(() => _idRemaps['old-id'] ?? null)).toBe('server-id');
+});

@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, seedLocked, TEST_SECRET, TEST_PASSWORD, LEGACY_AUTH_TEST } from './fixtures.js';
+import { test, expect, seedUnlocked, seedLocked, readAccounts, writeAccounts, TEST_SECRET, TEST_PASSWORD, LEGACY_AUTH_TEST } from './fixtures.js';
 
 // 2.0 master-password lock (vaultLock.js): mandatory password that wraps the
 // vault key; unlocked only in chrome.storage.session; inactivity auto-lock.
@@ -251,6 +251,35 @@ test('restoring a recovery key needs the master password and keeps the key wrapp
   expect(JSON.stringify(local)).not.toContain(recovery);
 });
 
+test('restoring a recovery key keeps password-only logins out of the v1 blob and its tombstones', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  await writeAccounts(page, [
+    { name: 'GitHub', email: '', secret: TEST_SECRET, urls: '' },
+    { name: 'Bank', email: '', secret: '', urls: '', password: 'hunter2' },
+  ]);
+  await page.reload();
+  const recovery = await page.evaluate(() => VaultCrypto.b64e(VaultCrypto.generateKey()));
+  await page.evaluate(k => {
+    // The server blob: GitHub, and a 1.x tombstone named like the password-only login.
+    CloudSync.pull = async () => ({ accounts: [{ name: 'GitHub', email: '', secret: 'JBSWY3DPEHPK3PXP', urls: '' }], tombstones: { Bank: '2099-01-01T00:00:00.000Z' } });
+    window.pushed = null;
+    SupabaseAuth.getAccessToken = async () => 'token';
+    window.fetch = async (url, opts) => {
+      if (String(url).endsWith('/accounts') && opts?.method === 'PUT') window.pushed = JSON.parse(opts.body);
+      return new Response('{}', { status: 200 });
+    };
+    document.getElementById('sync-restore-input').value = k;
+    document.getElementById('sync-restore-password').value = 'test';
+    document.getElementById('btn-restore-key').click();
+  }, recovery);
+  await expect.poll(() => page.evaluate(() => !!window.pushed)).toBe(true);
+  expect(await page.evaluate(() => window.pushed.accounts_count)).toBe(1); // GitHub only
+  const after = await readAccounts(page);
+  expect(after.map(a => [a.name, a.password || '']).sort()).toEqual([['Bank', 'hunter2'], ['GitHub', '']]);
+});
+
 test('a restore that finishes after the vault locked does not reopen it', async ({ context, extensionId }) => {
   const page = await popup(context, extensionId);
   await seedUnlocked(page);
@@ -281,6 +310,18 @@ test('adopting a key while locked keeps the vault locked', async ({ context, ext
   expect(result).toEqual({ status: 'locked', unlocks: true, adopted: true });
 });
 
+test('locking and unlocking the popup keeps the plan (a paying user is not limited as Free)', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page, { userPlan: 'personal' });
+  await page.reload();
+  await page.click('#btn-logout');
+  await expect(page.locator('#lock-login')).toBeVisible();
+  await page.fill('#lock-password', TEST_PASSWORD);
+  await page.click('#lock-login-btn');
+  await expect(page.locator('#lock-overlay')).toHaveClass(/hidden/);
+  expect(await page.evaluate(() => chrome.storage.local.get('userPlan'))).toEqual({ userPlan: 'personal' });
+});
+
 test('an "unlocked" message from the frame itself, after the page navigated it, still needs a real unlock', async ({ context, extensionId }) => {
   const page = await popup(context, extensionId);
   await seedLocked(page, { accounts: [{ name: 'TestApp', secret: TEST_SECRET, urls: 'localhost', email: '' }], activeIndex: 0 });
@@ -296,6 +337,23 @@ test('an "unlocked" message from the frame itself, after the page navigated it, 
   });
   await site.waitForTimeout(800);
   await expect(site.locator('#otpilot-lock')).toBeVisible();
+  await expect(site.locator('input[name="otp_token"]')).toHaveValue('');
+});
+
+test('after unlocking in the popup, a page that navigates its stale unlock frame does not get a fill', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedLocked(page, { accounts: [{ name: 'TestApp', secret: TEST_SECRET, urls: 'localhost', email: '' }], activeIndex: 0 });
+  const site = await context.newPage();
+  await site.goto('http://localhost:8765/test/autofill.html');
+  await expect(site.locator('#otpilot-lock')).toBeVisible();
+  // The user unlocks from the popup instead; the frame stays on the page.
+  expect(await page.evaluate(pw => VaultLock.unlock(pw), TEST_PASSWORD)).toBeTruthy();
+  await site.evaluate(() => {
+    document.querySelector('#otpilot-lock iframe').src =
+      'data:text/html,<script>parent.postMessage({ source: "otpilot-unlock", result: "unlocked" }, "*")</script>';
+  });
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-lock')).toBeVisible(); // not dismissed by the forged message
   await expect(site.locator('input[name="otp_token"]')).toHaveValue('');
 });
 

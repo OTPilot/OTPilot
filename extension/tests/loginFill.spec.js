@@ -106,6 +106,25 @@ test('locked: the offer unlocks in the extension frame, then fills', async ({ co
   await expect(overlay).toHaveCount(0);
 });
 
+test('locked: after unlocking in the popup, a page navigating the stale unlock frame gets no fill', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, [github]);
+  await page.evaluate(() => VaultLock.lock());
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  const overlay = site.locator('#otpilot-login-fill');
+  await expect(overlay.locator('iframe')).toBeVisible();
+  // Unlocked from the popup; the page's frame is still there and the page
+  // points it at its own content, which claims the unlock.
+  expect(await page.evaluate(pw => VaultLock.unlock(pw), TEST_PASSWORD)).toBeTruthy();
+  await site.evaluate(() => {
+    document.querySelector('#otpilot-login-fill iframe').src =
+      'data:text/html,<script>parent.postMessage({ source: "otpilot-unlock", result: "unlocked" }, "*")</script>';
+  });
+  await site.waitForTimeout(800);
+  await expect(site.locator('input[name="password"]')).toHaveValue('');
+  await expect(overlay).toBeVisible();
+});
+
 test('the plaintext index says whether a login has a password, never the password', async ({ context, extensionId }) => {
   const page = await vaultWith(context, extensionId, [github, { name: 'Codes only', email: '', secret: TEST_SECRET, urls: 'localhost' }]);
   const index = await page.evaluate(() => VaultAccounts.readIndex());

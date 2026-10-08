@@ -251,8 +251,10 @@ const CloudSync = (() => {
       try { teamKey = await TeamKeys.exportPrivJwk(); } catch { /* ignore */ }
     }
     // Passwords never go into the v1 blob (1.x devices don't know them, and
-    // the per-item vault sync carries them); only the v1 fields do.
-    const v1Accounts = accounts.map(({ password, ...rest }) => rest);
+    // the per-item vault sync carries them); only the v1 fields do. Logins
+    // without a 2FA secret don't go at all: on 1.x they'd be empty 2FA
+    // entries, and deleting one there would tombstone the login by name.
+    const v1Accounts = accounts.filter(a => a.secret).map(({ password, ...rest }) => rest);
     const encrypted_blob = await encrypt({ accounts: v1Accounts, tombstones, teamKey, ...(writer ? { writer } : {}) }, keyB64);
     const devicePayload  = await getDevicePayload();
     const res = await apiFetch('/accounts', {
@@ -260,7 +262,7 @@ const CloudSync = (() => {
       body: JSON.stringify({
         encrypted_blob,
         updated_at: updatedAt,
-        accounts_count: accounts.length,
+        accounts_count: v1Accounts.length,
         ...devicePayload,
       }),
     });

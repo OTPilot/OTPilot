@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, waitForVault, readAccounts } from './fixtures.js';
+import { test, expect, seedUnlocked, waitForVault, readAccounts, writeAccounts } from './fixtures.js';
 
 // 2.0 per-item sync (vaultSync.js) against an in-memory stand-in for the API's
 // /vault/items endpoints (same semantics as api/src/routes/vault.rs: global
@@ -318,6 +318,22 @@ test('the v1 export tombstones accounts removed since the last export', async ({
   expect(Object.keys(blob.tombstones)).toEqual(['B']);
 });
 
+test('password-only logins never reach 1.x devices, and a 1.x tombstone with their name keeps them', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await writeAccounts(page, [ACC('GitHub', 'JBSWY3DPEHPK3PXP'), { ...ACC('Bank', ''), password: 'hunter2' }]);
+  await fakeBlob(page, null);
+  await page.evaluate(() => doSync());
+  expect((await page.evaluate(() => fakeBlobState)).accounts.map(a => a.name)).toEqual(['GitHub']);
+  // A 1.x device (from an older 2.0 export that still had it) deletes "Bank".
+  await fakeBlob(page, {
+    accounts: [ACC('GitHub', 'JBSWY3DPEHPK3PXP')],
+    tombstones: { Bank: '2099-01-02T00:00:00.000Z' }, updatedAt: '2099-01-02T00:00:00.000Z', writer: null,
+  });
+  await page.evaluate(() => doSync());
+  const after = await readAccounts(page);
+  expect(after.map(a => [a.name, a.password || '']).sort()).toEqual([['Bank', 'hunter2'], ['GitHub', '']]);
+});
+
 test('the list redraws after a sync that only changed items', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, [ACC('GitHub', 'JBSWY3DPEHPK3PXP')]);
   await fakeBlob(page, null);
@@ -399,4 +415,24 @@ test('an edit open while the first sync pairs that login with its server twin la
   });
   await page.click('#btn-save-all');
   await expect.poll(async () => (await readAccounts(page)).map(a => [a._id, a.email])).toEqual([[twinId, 'typed@example.com']]);
+});
+
+test('a pull answered after the device was reset writes nothing back', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    await fakeServer.remoteSave(Vault.newItem('note', { title: 'From elsewhere' }));
+    const key = await VaultKeys.getKey();
+    // The reply is slow; the user resets this device meanwhile.
+    const api = CloudSync.api;
+    CloudSync.api = async (...a) => { await VaultLock.resetDevice(); return api(...a); };
+    let error = null;
+    try { await VaultSync.sync(key); } catch (e) { error = e.message; }
+    CloudSync.api = api;
+    // What sync would write back: records, tombstones, its progress.
+    const left = Object.keys(await chrome.storage.local.get(null))
+      .filter(k => k.startsWith('vi:') || k.startsWith('vt:') || k === 'vaultSyncState');
+    return { error, left };
+  });
+  expect(r.error).toContain('during sync');
+  expect(r.left).toEqual([]);
 });

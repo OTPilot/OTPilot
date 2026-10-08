@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, readAccounts, writeAccounts, waitForVault, TEST_SECRET } from './fixtures.js';
+import { test, expect, seedUnlocked, readAccounts, writeAccounts, waitForVault, TEST_SECRET, TEST_PASSWORD } from './fixtures.js';
 
 // 2.0: the popup and content scripts work with the v1 account list, but it is
 // stored as encrypted vault items (vaultAccounts.js).
@@ -180,4 +180,32 @@ test('a loose match by secret never takes the item another incoming account matc
   const other = items.find(i => i.id !== local._id);
   expect(other.title).toBe('Other account, same secret');
   expect(other.fields.find(f => f.id === 'password').value).toBe('');
+});
+
+test('a page update racing a vault key change never writes a record under the old key', async ({ context, extensionId }) => {
+  const page = await openPopup(context, extensionId, [ACCOUNT]);
+  const r = await page.evaluate(async password => {
+    const oldKey = await VaultKeys.getKey();
+    const [acc] = await VaultAccounts.load(oldKey);
+    const newKey = VaultCrypto.b64e(VaultCrypto.generateKey());
+    // The key changes (recovery key restored in another popup) while the
+    // update is reading the vault.
+    const decrypt = VaultCrypto.decryptItem;
+    let adopting = null;
+    VaultCrypto.decryptItem = async (...a) => {
+      if (!adopting) {
+        adopting = VaultKeys.adoptKey(newKey, password);
+        await new Promise(res => setTimeout(res, 300));
+      }
+      return decrypt(...a);
+    };
+    let updated;
+    try { updated = await VaultAccounts.update(acc._id, acc, { email: 'new@example.com' }, oldKey); } catch { updated = 'refused'; }
+    VaultCrypto.decryptItem = decrypt;
+    await adopting;
+    const { items, failed } = await VaultStore.readAll(newKey);
+    return { updated, failed: failed.length, emails: items.map(i => Vault.getValue(i, 'username')) };
+  }, TEST_PASSWORD);
+  expect(r.failed).toBe(0);
+  expect(r.emails).toEqual([r.updated === true ? 'new@example.com' : 'me@example.com']);
 });

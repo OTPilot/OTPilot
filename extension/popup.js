@@ -755,10 +755,11 @@ const parseTags = text => VaultAccounts.normalizeTags(String(text || '').split('
 
 // ── Team collections in the vault ──
 let collections = [];  // VaultCollections.list()
-let sharedItems = [];  // [{ collection, item }]
+let sharedItems = [];  // [{ collection, item, revision }]
 
-function sharedEntryOf({ collection, item }) {
-  return { ...entryOf(item), _kind: 'shared', cid: collection.id, collectionName: collection.name || 'Shared', role: collection.role };
+// `_baseRev`: the revision this entry shows, which its save is based on.
+function sharedEntryOf({ collection, item, revision }) {
+  return { ...entryOf(item), _kind: 'shared', cid: collection.id, collectionName: collection.name || 'Shared', role: collection.role, _baseRev: revision };
 }
 
 // Pulls every collection this user is in and redraws (team plans only; a
@@ -772,7 +773,7 @@ async function refreshSharedItems() {
   for (const c of list) {
     if (!c.key) continue;
     try { await VaultCollections.pull(c); } catch { /* offline: local copy */ }
-    for (const item of await VaultCollections.items(c)) out.push({ collection: c, item });
+    for (const { item, revision } of await VaultCollections.snapshot(c)) out.push({ collection: c, item, revision });
   }
   collections = list;
   sharedItems = out;
@@ -1327,7 +1328,7 @@ async function saveSharedEntry(entry) {
   if (!c?.key) { setStatus('This collection is not available on this device', false); return; }
   if (!entry.name) { setStatus('It needs a name', false); return; }
   let res;
-  try { res = await VaultCollections.save(c, itemOfEntry(entry)); } catch { setStatus('Could not save — check your connection', false); return; }
+  try { res = await VaultCollections.save(c, itemOfEntry(entry), entry._baseRev); } catch { setStatus('Could not save — check your connection', false); return; }
   if (res.conflict) setStatus('Someone changed this meanwhile — showing their version', false);
   else setStatus(`Saved to ${c.name}`);
   sharedItems = await sharedItemsFromLocal();
@@ -1339,7 +1340,7 @@ async function deleteSharedEntry(entry) {
   const c = collections.find(x => x.id === entry.cid);
   if (!c?.key) return;
   let res;
-  try { res = await VaultCollections.deleteItem(c, entry._id); } catch { setStatus('Could not delete — check your connection', false); return; }
+  try { res = await VaultCollections.deleteItem(c, entry._id, entry._baseRev); } catch { setStatus('Could not delete — check your connection', false); return; }
   if (res.conflict) setStatus('Someone changed this meanwhile — not deleted', false);
   sharedItems = await sharedItemsFromLocal();
   patchEntries([entry._id], sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf));
@@ -1349,7 +1350,7 @@ async function sharedItemsFromLocal() {
   const out = [];
   for (const c of collections) {
     if (!c.key) continue;
-    for (const item of await VaultCollections.items(c)) out.push({ collection: c, item });
+    for (const { item, revision } of await VaultCollections.snapshot(c)) out.push({ collection: c, item, revision });
   }
   return out;
 }
@@ -2788,8 +2789,8 @@ async function lockPopup() {
   _homeCredsKey = null;
   clearRevealedKey();
   hideCsvExport();
-  await new Promise(r => chrome.storage.local.remove('userPlan', r));
-  document.querySelector('.kofi-footer').style.display = '';
+  // userPlan stays: locking isn't signing out, and the item limit reads it
+  // right after unlocking.
   showLockOverlay('login');
   await waitForUnlock();
   // Unlocked: a new lock from here on must be handled again, even while the
@@ -2937,6 +2938,11 @@ async function reloadFromVault(key) {
 // what this device last exported (or a 1.x device just changed it). Accounts
 // that left the vault since the last export get v1 tombstones (keyed by name),
 // or a 1.x device would push them back.
+// Only logins with a 2FA secret exist for 1.x devices: a password-only login
+// would show there as an empty 2FA entry, and deleting that entry would
+// tombstone the real login by name. They're left out of the export and of
+// the merge with a 1.x blob.
+const v1Exportable = list => list.filter(a => a.secret);
 const v1Fields = a => ({ name: a.name, email: a.email || '', secret: a.secret, urls: a.urls || '', autofill: a.autofill !== false, category: a.category || '', domain: a.domain || '' });
 // SHA-256 of the v1 view: what's compared with the last export. Only the hash
 // is stored (the view contains secrets); names are kept for the tombstones
@@ -2949,7 +2955,8 @@ async function v1Snapshot(list) {
 // by another device): nothing is recorded, so the caller merges it and retries.
 async function exportV1Blob(serverMeta, fromV1Device) {
   const { v1Export } = await chrome.storage.local.get('v1Export');
-  const snapshot = await v1Snapshot(accounts);
+  const exported = v1Exportable(accounts);
+  const snapshot = await v1Snapshot(exported);
   // The server keeps the blob with the newest timestamp: stamp the export
   // after the one it holds, so a clock behind another device's still wins.
   const serverMs = serverMeta?.updatedAt ? Date.parse(serverMeta.updatedAt) : NaN;
@@ -2959,13 +2966,13 @@ async function exportV1Blob(serverMeta, fromV1Device) {
     if (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt) await writeLastSyncedAt(serverMeta.updatedAt);
     return true;
   }
-  const current = new Set(accounts.map(a => a.name));
+  const current = new Set(exported.map(a => a.name));
   for (const name of v1Export?.names || []) {
     if (!current.has(name)) tombstones[name] = now;
   }
   for (const name of current) delete tombstones[name];
   await saveTombstones();
-  const res = await CloudSync.push(accounts, tombstones, now, 'v2');
+  const res = await CloudSync.push(exported, tombstones, now, 'v2');
   if (res?.conflict) return false;
   await chrome.storage.local.set({ v1Export: { snapshot, names: [...current] } });
   await writeLastSyncedAt(now);
@@ -2978,10 +2985,13 @@ async function syncV1Blob(key) {
   const fromV1Device = !!serverMeta && serverMeta.writer !== 'v2' &&
     (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt);
   if (fromV1Device) {
+    // Entries without a secret in the blob are password-only logins an
+    // earlier 2.0 export sent; they're not 1.x accounts.
+    const passwordOnly = accounts.filter(a => !a.secret);
     const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
-      accounts, tombstones, serverMeta.accounts, serverMeta.tombstones, lastSyncedAt
+      v1Exportable(accounts), tombstones, v1Exportable(serverMeta.accounts), serverMeta.tombstones, lastSyncedAt
     );
-    accounts   = merged;
+    accounts   = [...merged, ...passwordOnly];
     tombstones = mergedTombs;
     await saveState();
     await saveTombstones();
@@ -3088,8 +3098,9 @@ document.getElementById('btn-confirm-newkey').addEventListener('click', async ()
       // key, so they're deleted and this device's vault is uploaded instead.
       _startFresh = false;
       const now = new Date().toISOString();
-      await CloudSync.push(accounts, tombstones, now, 'v2');
-      await chrome.storage.local.set({ v1Export: { snapshot: await v1Snapshot(accounts), names: accounts.map(a => a.name) } });
+      const exported = v1Exportable(accounts);
+      await CloudSync.push(exported, tombstones, now, 'v2');
+      await chrome.storage.local.set({ v1Export: { snapshot: await v1Snapshot(exported), names: exported.map(a => a.name) } });
       await writeLastSyncedAt(now);
       await VaultSync.wipeServer();
       await VaultSync.sync(await VaultKeys.getKey());
@@ -3151,13 +3162,17 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
     // On reconnect the server is the source of truth.
     // Add any local-only accounts not present or deleted on the server,
     // but discard local tombstones — offline deletions must not override synced data.
-    const remoteNames   = new Set(remoteAccounts.map(a => a.name));
+    // Password-only logins aren't part of the v1 blob (v1Exportable): they're
+    // kept as they are, whatever the blob's names or tombstones say.
+    const passwordOnly  = accounts.filter(a => !a.secret);
+    const remote        = v1Exportable(remoteAccounts);
+    const remoteNames   = new Set(remote.map(a => a.name));
     const remoteDeleted = new Set(Object.keys(remoteTombs));
-    const localOnly     = accounts.filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
-    const merged        = [...remoteAccounts, ...localOnly];
+    const localOnly     = v1Exportable(accounts).filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
+    const merged        = [...remote, ...localOnly];
     const mergedTombs   = remoteTombs;
 
-    accounts   = merged;
+    accounts   = [...merged, ...passwordOnly];
     tombstones = mergedTombs;
     await saveState();
     await saveTombstones();
@@ -3311,7 +3326,12 @@ async function silentPullSync() {
   })();
 
   chrome.runtime.onMessage.addListener(msg => {
-    if (msg.action === 'serverDataChanged') silentPullSync();
+    if (msg.action === 'serverDataChanged') {
+      // Logins the background's sync paired with their server twins: an open
+      // editor's draft follows them (the old ids are already gone).
+      if (msg.remapped) Object.assign(_idRemaps, msg.remapped);
+      silentPullSync();
+    }
   });
 })();
 

@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, waitForVault } from './fixtures.js';
+import { test, expect, seedUnlocked, waitForVault, TEST_PASSWORD } from './fixtures.js';
 import { installFakeCollections } from './fakeCollections.js';
 
 // Team collections in the extension (vaultCollections.js) against an
@@ -180,4 +180,59 @@ test('a collection created here and removed before any item was saved leaves no 
     return c.id in ((await chrome.storage.session.get('collectionKeys')).collectionKeys || {});
   });
   expect(r).toBe(false);
+});
+
+test('an editor saving against the revision it opened does not overwrite a teammate change pulled meanwhile', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Shared');
+    const item = Vault.newItem('note', { title: 'Runbook', notes: 'v1' });
+    await VaultCollections.save(c, item);
+    const [{ revision: opened }] = await VaultCollections.snapshot(c); // the editor opens v1
+    // A teammate changes it, and another popup's refresh pulls that change.
+    const theirs = await VaultCrypto.encryptItem({ ...item, notes: 'v2 (teammate)' }, c.key);
+    fake.items.set(item.id, { ...fake.items.get(item.id), record: theirs, revision: ++fake.rev });
+    await VaultCollections.pull(c);
+    const saved = await VaultCollections.save(c, { ...item, notes: 'v1 edited (me)' }, opened);
+    const server = await VaultCrypto.decryptItem(fake.items.get(item.id).record, c.key);
+    const deleted = await VaultCollections.deleteItem(c, item.id, opened);
+    return { saved, server: server.notes, deleted, stillThere: !fake.items.get(item.id).deleted };
+  });
+  expect(r).toEqual({ saved: { conflict: true }, server: 'v2 (teammate)', deleted: { conflict: true }, stillThere: true });
+});
+
+test('the team private key is stored encrypted under the vault key and follows a vault key change', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async password => {
+    const c = await VaultCollections.create('team-1', 'Shared');
+    const wrapped = fake.collections.get(c.id).members.get('user-me').wrapped_key;
+    const jwk = await TeamKeys.exportPrivJwk();
+    const raw = JSON.stringify(await chrome.storage.local.get(null));
+    // Locked: the public key is still there; the private key can't be used.
+    await VaultLock.lock();
+    const pubLocked = await TeamKeys.getPublicKeyB64();
+    const unwrapLocked = await TeamKeys.unwrapUserShare(wrapped).then(() => 'unwrapped', e => e.message);
+    await VaultLock.unlock(password);
+    // A recovery key restored: the vault key changes, the team key follows.
+    await VaultKeys.adoptKey(VaultCrypto.b64e(VaultCrypto.generateKey()), password);
+    const afterRekey = VaultCrypto.b64e(await TeamKeys.unwrapUserShare(wrapped)) === c.key;
+    return { plaintext: raw.includes(jwk.d), pubLocked: !!pubLocked, unwrapLocked, afterRekey };
+  }, TEST_PASSWORD);
+  expect(r).toEqual({ plaintext: false, pubLocked: true, unwrapLocked: 'the vault is locked', afterRekey: true });
+});
+
+test('a plaintext team private key from before is encrypted on first use, same keypair', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
+    const jwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
+    const pub = VaultCrypto.b64e(await crypto.subtle.exportKey('raw', kp.publicKey));
+    await chrome.storage.local.set({ teamPrivJwk: jwk });
+    const share = await TeamKeys.wrapUserShare(new Uint8Array(32).fill(7), pub);
+    const pubBefore = await TeamKeys.getPublicKeyB64();
+    const unwrapped = await TeamKeys.unwrapUserShare(share);
+    const stored = await chrome.storage.local.get(['teamPrivJwk', 'teamPrivWrapped']);
+    return { samePub: pubBefore === pub, ok: unwrapped.every(b => b === 7), legacy: 'teamPrivJwk' in stored, wrapped: !!stored.teamPrivWrapped };
+  });
+  expect(r).toEqual({ samePub: true, ok: true, legacy: false, wrapped: true });
 });
