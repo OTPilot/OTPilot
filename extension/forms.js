@@ -66,16 +66,23 @@
     let res;
     try { res = await chrome.runtime.sendMessage({ action: 'vaultFillLogin', id }); } catch { res = null; }
     if (!fields || !res?.ok) { showToast('OTPilot could not fill this login', false); return; }
-    if (fields.username && res.username) fillInputValue(fields.username, res.username);
-    fillInputValue(fields.password, res.password);
+    // Filling focuses the fields: that mustn't reopen the dropdown.
+    _filling = true;
+    try {
+      if (fields.username && res.username) fillInputValue(fields.username, res.username);
+      fillInputValue(fields.password, res.password);
+    } finally { _filling = false; }
     closeOverlay();
+    closeDropdown();
   }
 
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  function render(el, { state, logins }) {
+  // `close`: what the ✕ (and dismissing the unlock) does — the corner
+  // overlay stops offering on this page; a field's dropdown just closes.
+  function render(el, { state, logins }, close = () => { _dismissed = true; closeOverlay(); }) {
     el.innerHTML = `${OVERLAY_HEADER}<div class="otpilot-login-body" style="padding:10px 12px 12px;"></div>`;
-    el.querySelector('.otpilot-overlay-close').addEventListener('click', () => { _dismissed = true; closeOverlay(); });
+    el.querySelector('.otpilot-overlay-close').addEventListener('click', close);
     const body = el.querySelector('.otpilot-login-body');
 
     if (state === 'locked') {
@@ -85,9 +92,9 @@
           const next = await loginsForPage();
           if (next.state !== 'unlocked' || !next.logins.length) { closeOverlay(); return; }
           if (next.logins.length === 1) { fill(next.logins[0].id); return; }
-          render(el, next);
+          render(el, next, close);
         },
-        () => { _dismissed = true; closeOverlay(); });
+        close);
       return;
     }
 
@@ -110,12 +117,14 @@
   async function check() {
     if (_dismissed || _checking || !chrome.runtime?.id) return;
     const fields = findLoginFields();
-    if (!fields) { _checkedFor = null; closeOverlay(); return; }
-    if (fields.password === _checkedFor) return;
+    if (!fields) { _checkedFor = null; _pageLogins = null; closeOverlay(); syncBadges(); return; }
+    if (fields.password === _checkedFor) { syncBadges(); return; }
     _checking = true;
     _checkedFor = fields.password;
     try {
       const res = await loginsForPage();
+      _pageLogins = res.state === 'setup' ? null : res;
+      syncBadges();
       if (_dismissed || res.state === 'setup' || !res.logins.length) return;
       closeOverlay();
       const el = makeOverlay(OVERLAY_ID);
@@ -180,7 +189,7 @@
 
   document.addEventListener('submit', e => capture(e.target instanceof HTMLFormElement ? e.target : document), true);
   document.addEventListener('click', e => {
-    if (e.target.closest?.(`#${OVERLAY_ID}, #${SAVE_ID}, #otpilot-password-suggest`)) return; // our own buttons
+    if (e.target.closest?.(`#${OVERLAY_ID}, #${SAVE_ID}, #${DROP_ID}, #otpilot-password-suggest, .${BADGE_CLASS}`)) return; // our own UI
     const btn = e.target.closest?.('button, input[type="submit"], [role="button"]');
     if (!btn || !isSubmitControl(btn)) return;
     const scope = btn.form || btn.closest('form') || document;
@@ -203,7 +212,7 @@
     document.body.appendChild(el);
   }
 
-  const resolve = (offer, choice) => chrome.runtime.sendMessage({ action: 'vaultResolvePendingLogin', id: offer.id, choice }).catch(() => ({ ok: false }));
+  const resolve = (offer, choice, target) => chrome.runtime.sendMessage({ action: 'vaultResolvePendingLogin', id: offer.id, choice, target }).catch(() => ({ ok: false }));
   const closeSave = () => document.getElementById(SAVE_ID)?.remove();
 
   function saveButton(label, primary) {
@@ -222,9 +231,11 @@
     el.innerHTML = `${OVERLAY_HEADER}<div class="otpilot-save-body" style="padding:10px 12px 12px;color:var(--ink-0, #f1f5f9);font-size:13px;"></div>`;
     el.querySelector('.otpilot-overlay-close').addEventListener('click', trusted(() => { resolve(offer, 'dismiss'); closeSave(); }));
     const body = el.querySelector('.otpilot-save-body');
-    const title = offer.kind === 'update'
-      ? `Update the password for <b>${esc(offer.name || offer.host)}</b>?`
-      : `Save this login for <b>${esc(offer.host)}</b>?`;
+    const first = (offer.candidates || [])[0];
+    const title = offer.kind !== 'update' ? `Save this login for <b>${esc(offer.host)}</b>?`
+      : (offer.candidates || []).length > 1 ? `Update a login for <b>${esc(offer.host)}</b>?`
+      : first && !first.username && offer.username ? `Add this username and password to <b>${esc(offer.name || offer.host)}</b>?`
+      : `Update the password for <b>${esc(offer.name || offer.host)}</b>?`;
 
     if (offer.kind === 'locked') {
       mountUnlockFrame(body, { name: offer.host, action: 'Unlock & save', intro: `Unlock OTPilot to save your ${offer.host} login.` },
@@ -240,24 +251,67 @@
 
     body.innerHTML = `<div class="otpilot-save-title" style="margin-bottom:4px;">${title}</div>`
       + (offer.username ? `<div style="color:var(--ink-3, #94a3b8);font-size:12px;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(offer.username)}</div>` : '<div style="height:6px"></div>');
-    if (offer.limit) {
-      body.insertAdjacentHTML('beforeend', '<div class="otpilot-save-limit" style="color:var(--warning, #fbbf24);font-size:12px;">The Free plan holds 50 items. Upgrade to save more.</div>');
+
+    // An update can apply to several of the site's logins (no username was
+    // captured): the user picks which.
+    const candidates = offer.kind === 'update' ? (offer.candidates || []) : [];
+    let picker = null;
+    if (candidates.length > 1) {
+      picker = document.createElement('select');
+      picker.className = 'otpilot-save-target';
+      Object.assign(picker.style, {
+        width: '100%', margin: '0 0 10px', padding: '6px 8px', borderRadius: '7px', font: 'inherit', fontSize: '12px',
+        background: 'var(--bg, #0f172a)', color: 'var(--ink-0, #f1f5f9)', border: '1px solid var(--border, #1e3a5f)',
+      });
+      for (const c of candidates) {
+        const o = document.createElement('option');
+        o.value = c.id;
+        o.textContent = c.username ? `${c.name || offer.host} — ${c.username}` : (c.name || offer.host);
+        picker.appendChild(o);
+      }
+      body.appendChild(picker);
+    }
+    const chosen = () => candidates.find(c => c.id === picker?.value) || candidates[0];
+    const updateLimited = () => offer.kind === 'update' ? !!chosen()?.limit : !!offer.limit;
+
+    const limitNote = document.createElement('div');
+    limitNote.className = 'otpilot-save-limit';
+    limitNote.textContent = 'The Free plan holds 50 items. Upgrade to save more.';
+    Object.assign(limitNote.style, { color: 'var(--warning, #fbbf24)', fontSize: '12px', margin: '0 0 8px' });
+    // Nothing this offer could do fits the Free plan: just say why.
+    if (offer.limit && (offer.kind === 'new' || offer.newLimit) && !picker) {
+      body.appendChild(limitNote);
       return;
     }
+
+    const done = async (choice, target) => {
+      const res = await resolve(offer, choice, target);
+      closeSave();
+      const updated = choice === 'save' && offer.kind === 'update';
+      showToast(res?.ok ? (updated ? 'Login updated in OTPilot' : 'Login saved to OTPilot') : 'OTPilot could not save this login', !!res?.ok);
+      // Its site icon, from this page's own <link rel=icon> (content.js), as
+      // a 2FA account added from a page gets.
+      if (res?.ok) requestSiteIcon(offer.host); // the saved login's host (its URL)
+    };
+
     const row = document.createElement('div');
-    Object.assign(row.style, { display: 'flex', gap: '6px' });
+    Object.assign(row.style, { display: 'flex', gap: '6px', flexWrap: 'wrap' });
     const save = saveButton(offer.kind === 'update' ? 'Update' : 'Save', true);
     save.className = 'otpilot-save-confirm';
-    save.addEventListener('click', trusted(async () => {
-      save.disabled = true;
-      const res = await resolve(offer, 'save');
-      closeSave();
-      showToast(res?.ok ? (offer.kind === 'update' ? 'Password updated in OTPilot' : 'Login saved to OTPilot') : 'OTPilot could not save this login', !!res?.ok);
-    }));
+    save.addEventListener('click', trusted(() => { save.disabled = true; done('save', offer.kind === 'update' ? chosen()?.id : undefined); }));
+    row.append(save);
+    if (offer.kind === 'update') {
+      const asNew = saveButton('Save as new');
+      asNew.className = 'otpilot-save-new';
+      asNew.disabled = !!offer.newLimit;
+      if (offer.newLimit) asNew.title = 'The Free plan holds 50 items';
+      asNew.addEventListener('click', trusted(() => { asNew.disabled = true; done('new'); }));
+      row.append(asNew);
+    }
     const later = saveButton('Not now');
     later.className = 'otpilot-save-later';
     later.addEventListener('click', trusted(() => { resolve(offer, 'dismiss'); closeSave(); }));
-    row.append(save, later);
+    row.append(later);
     if (offer.kind === 'new') {
       const never = saveButton('Never');
       never.className = 'otpilot-save-never';
@@ -265,7 +319,13 @@
       never.addEventListener('click', trusted(() => { resolve(offer, 'never'); closeSave(); }));
       row.append(never);
     }
+    const syncLimit = () => {
+      save.disabled = updateLimited();
+      if (updateLimited()) body.insertBefore(limitNote, row); else limitNote.remove();
+    };
+    picker?.addEventListener('change', syncLimit);
     body.appendChild(row);
+    syncLimit();
   }
 
   // ── Suggesting a password ──────────────────────────────────────────────
@@ -278,39 +338,235 @@
   const isNewPassword = el => el instanceof HTMLInputElement && el.type === 'password'
     && autocompleteOf(el).includes('new-password');
 
-  async function suggestPassword(field) {
-    if (_genDismissed || document.getElementById(GEN_ID) || !chrome.runtime?.id) return;
+  // Shown under the field (its badge opens it again after a dismissal).
+  async function suggestPassword(field, { force = false } = {}) {
+    if ((_genDismissed && !force) || document.getElementById(GEN_ID) || !chrome.runtime?.id) return;
     let options = {};
     try { options = (await chrome.storage.local.get('generatorOptions')).generatorOptions || {}; } catch { /* defaults */ }
     if (document.getElementById(GEN_ID)) return;
     let value = Generator.generate({ ...options, mode: 'password' });
 
-    const el = makeOverlay(GEN_ID);
+    closeDropdown();
+    const el = makeAnchored(GEN_ID, field);
     el.innerHTML = `${OVERLAY_HEADER}<div style="padding:10px 12px 12px;color:var(--ink-0, #f1f5f9);font-size:13px;">
       <div style="margin-bottom:6px;">Use a strong password?</div>
       <div class="otpilot-gen-value" style="font-family:ui-monospace,Menlo,monospace;font-size:13px;background:var(--bg, #0f172a);border:1px solid var(--border, #1e3a5f);border-radius:7px;padding:7px 9px;margin-bottom:8px;word-break:break-all;"></div>
       <div class="otpilot-gen-row" style="display:flex;gap:6px;"></div></div>`;
     const shown = el.querySelector('.otpilot-gen-value');
     shown.textContent = value;
-    el.querySelector('.otpilot-overlay-close').addEventListener('click', () => { _genDismissed = true; el.remove(); });
+    el.querySelector('.otpilot-overlay-close').addEventListener('click', () => { _genDismissed = true; closeDropdown(); });
 
     const use = saveButton('Use', true);
     use.className = 'otpilot-gen-use';
     use.addEventListener('click', trusted(() => {
       const scope = field.form || document;
       const targets = [...scope.querySelectorAll('input[type="password"]')].filter(f => isNewPassword(f) && isVisible(f));
-      for (const f of targets.length ? targets : [field]) fillInputValue(f, value);
-      el.remove();
+      _filling = true;
+      try { for (const f of targets.length ? targets : [field]) fillInputValue(f, value); } finally { _filling = false; }
+      closeDropdown();
     }));
     const again = saveButton('New');
     again.className = 'otpilot-gen-again';
     again.addEventListener('click', () => { value = Generator.generate({ ...options, mode: 'password' }); shown.textContent = value; });
     el.querySelector('.otpilot-gen-row').append(use, again);
-    document.body.appendChild(el);
+    showAnchored(el, field);
   }
 
+  // ── In-field badges and dropdowns ──────────────────────────────────────
+  // Like the corner offer, but at the field: an OTPilot badge inside the
+  // sign-in fields (when this site has logins) and inside new-password fields.
+  // Focusing an empty sign-in field, or clicking a badge, opens a dropdown
+  // under the field: the logins (or the unlock frame), or a generated
+  // password. The corner offer stays as well.
+  const DROP_ID = 'otpilot-login-dropdown';
+  const BADGE_CLASS = 'otpilot-field-badge';
+  const BADGE = 18;
+  let _pageLogins = null;        // the last vaultLoginsForPage answer for this page's form
+  let _filling = false;          // a fill is focusing fields
+  const _badges = new Map();     // field -> badge
+  let _anchor = null;            // { el, field } of the open dropdown
+
+  const BADGE_SVG = `<svg width="${BADGE}" height="${BADGE}" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M64 14 L102 31 V66 Q102 95 64 114 Q26 95 26 66 V31 Z" style="fill:var(--accent-2, #38bdf8)"/>
+    <circle cx="64" cy="66" r="20" style="fill:var(--bg, #0f172a)"/>
+    <circle cx="64" cy="66" r="5" style="fill:var(--accent-2, #38bdf8)"/></svg>`;
+
+  // Clicks on our UI must not reach the page's outside-click handlers (see
+  // makeOverlay) nor take the focus away from the field.
+  function isolate(el, keepFocus) {
+    for (const ev of ['pointerdown', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend']) {
+      el.addEventListener(ev, e => {
+        e.stopPropagation();
+        if (keepFocus && (ev === 'mousedown' || ev === 'pointerdown')) e.preventDefault();
+      });
+    }
+  }
+
+  function makeAnchored(id, field) {
+    const el = document.createElement('div');
+    el.id = id;
+    themeUi(el);
+    Object.assign(el.style, {
+      position: 'fixed', zIndex: '2147483647', width: '280px', background: 'var(--surface, #1e293b)',
+      border: '1px solid var(--border, #1e3a5f)', borderRadius: '10px', boxShadow: '0 6px 24px rgba(0,0,0,.45)',
+      fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif)', overflow: 'hidden',
+    });
+    isolate(el, false);
+    return el;
+  }
+
+  // Under the field, or above it when there's more room there; never taller
+  // than that room (it scrolls instead), so every choice stays reachable.
+  function placeUnder(el, field) {
+    const r = field.getBoundingClientRect();
+    const w = Math.min(Math.max(r.width, 240), 320, window.innerWidth - 16);
+    el.style.width = `${w}px`;
+    el.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
+    const roomBelow = window.innerHeight - r.bottom - 6 - 8;
+    const roomAbove = r.top - 6 - 8;
+    el.style.maxHeight = 'none';
+    const h = el.scrollHeight || 160;
+    const above = h > roomBelow && roomAbove > roomBelow;
+    const room = Math.max(80, above ? roomAbove : roomBelow);
+    el.style.maxHeight = `${room}px`;
+    // Always scrollable within that room: the content can grow later (the
+    // unlock frame replaced by the login choices).
+    el.style.overflowY = 'auto';
+    el.style.top = `${above ? r.top - 6 - Math.min(h, room) : r.bottom + 6}px`;
+  }
+
+  function showAnchored(el, field) {
+    closeDropdown();
+    document.body.appendChild(el);
+    _anchor = { el, field };
+    placeUnder(el, field);
+  }
+
+  // Closing also cancels an open still waiting for the background's answer
+  // (typed, Escape, clicked elsewhere meanwhile): its reply is then ignored.
+  let _openSeq = 0;
+  let _pendingField = null;
+  function closeDropdown() {
+    _openSeq++;
+    _pendingField = null;
+    _anchor?.el.remove();
+    _anchor = null;
+  }
+
+  async function openLogins(field) {
+    if (!chrome.runtime?.id) return;
+    closeDropdown();
+    const seq = _openSeq;
+    _pendingField = field;
+    const res = await loginsForPage();
+    if (seq !== _openSeq) return; // closed or superseded meanwhile
+    _pendingField = null;
+    _pageLogins = res.state === 'setup' ? null : res;
+    if (!_pageLogins?.logins.length || !field.isConnected) return;
+    const el = makeAnchored(DROP_ID, field);
+    render(el, res, closeDropdown);
+    showAnchored(el, field);
+  }
+
+  function makeBadge(field, kind, open) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = BADGE_CLASS;
+    b.dataset.kind = kind;
+    b.title = 'OTPilot';
+    b.setAttribute('aria-label', 'OTPilot');
+    themeUi(b);
+    b.innerHTML = BADGE_SVG;
+    Object.assign(b.style, {
+      position: 'fixed', zIndex: '2147483646', width: `${BADGE + 4}px`, height: `${BADGE + 4}px`, padding: '2px',
+      margin: '0', border: '0', background: 'transparent', cursor: 'pointer', lineHeight: '0', opacity: '.9',
+    });
+    isolate(b, true);
+    b.addEventListener('click', trusted(() => {
+      if (_anchor?.field === field) { closeDropdown(); return; }
+      open();
+    }));
+    return b;
+  }
+
+  // Inside the field's right edge, sized to fit it (hidden on a field too
+  // small or scrolled away).
+  function placeBadge(b, field) {
+    const r = field.getBoundingClientRect();
+    const size = Math.min(BADGE + 4, Math.floor(r.height - 2));
+    const show = size >= 14 && r.width > size * 4 && isVisible(field);
+    b.style.display = show ? '' : 'none';
+    if (!show) return;
+    Object.assign(b.style, {
+      width: `${size}px`, height: `${size}px`, padding: `${Math.max(1, Math.round(size / 10))}px`,
+      left: `${r.right - size - 4}px`, top: `${r.top + (r.height - size) / 2}px`,
+    });
+    const svg = b.firstElementChild;
+    if (svg) { svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%'); }
+  }
+
+  // The fields that get a badge now: this form's sign-in fields when the
+  // site has logins, and every visible new-password field.
+  function badgeTargets() {
+    const out = new Map();
+    const login = _pageLogins?.logins.length ? findLoginFields() : null;
+    for (const f of [login?.username, login?.password]) if (f) out.set(f, ['login', () => openLogins(f)]);
+    for (const f of document.querySelectorAll('input[type="password"]')) {
+      if (isNewPassword(f) && isVisible(f)) out.set(f, ['generate', () => suggestPassword(f, { force: true })]);
+    }
+    return out;
+  }
+
+  function syncBadges() {
+    if (!chrome.runtime?.id) return;
+    const targets = badgeTargets();
+    for (const [field, b] of _badges) {
+      if (!targets.has(field)) { b.remove(); _badges.delete(field); }
+    }
+    for (const [field, [kind, open]] of targets) {
+      let b = _badges.get(field);
+      if (b && b.dataset.kind !== kind) { b.remove(); b = null; }
+      if (!b) { b = makeBadge(field, kind, open); _badges.set(field, b); document.body.appendChild(b); }
+      placeBadge(b, field);
+    }
+    if (_anchor && !_anchor.field.isConnected) closeDropdown();
+  }
+
+  let _placing = false;
+  const reposition = () => {
+    if (_placing) return;
+    _placing = true;
+    requestAnimationFrame(() => {
+      _placing = false;
+      for (const [field, b] of _badges) placeBadge(b, field);
+      if (_anchor) placeUnder(_anchor.el, _anchor.field);
+    });
+  };
+  window.addEventListener('scroll', reposition, { capture: true, passive: true });
+  window.addEventListener('resize', reposition, { passive: true });
+
+  // A click elsewhere (not on the field, its badge or the dropdown) or Escape
+  // closes the dropdown.
+  document.addEventListener('pointerdown', e => {
+    if (!_anchor && !_pendingField) return;
+    const t = e.target;
+    if (t === (_anchor?.field ?? _pendingField) || _anchor?.el.contains(t) || t.closest?.(`.${BADGE_CLASS}`)) return;
+    closeDropdown();
+  }, true);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDropdown(); }, true);
+  // Typing in the field: the user isn't picking from the dropdown (it would
+  // also cover the fields below).
+  document.addEventListener('input', e => {
+    if (e.isTrusted && (_anchor?.field === e.target || _pendingField === e.target)) closeDropdown();
+  }, true);
+
   document.addEventListener('focusin', e => {
-    if (isNewPassword(e.target) && isVisible(e.target) && !e.target.value) suggestPassword(e.target);
+    const f = e.target;
+    if (_filling || !(f instanceof HTMLInputElement) || !isVisible(f) || f.value) return;
+    if (isNewPassword(f)) { suggestPassword(f); return; }
+    if (!_pageLogins?.logins.length || _anchor?.field === f) return;
+    const login = findLoginFields();
+    if (login && (f === login.username || f === login.password)) openLogins(f);
   }, true);
 
   // Sign-in forms often appear after load (SPAs, modals).
@@ -320,6 +576,7 @@
     timer = setTimeout(() => {
       if (!chrome.runtime?.id) { observer.disconnect(); return; } // extension reloaded
       check();
+      syncBadges();
       // A sign-in that takes a while to finish: offer once its form is gone.
       if (_capturedAt && Date.now() - _capturedAt < 3 * 60 * 1000) offerSave();
     }, 400);

@@ -1474,28 +1474,24 @@ function addToDraft(type) {
 
 function closeAddMenu() {
   document.getElementById('add-type-menu').style.display = 'none';
+  document.getElementById('quick-add-menu').style.display = 'none';
 }
 
-document.getElementById('btn-add').addEventListener('click', e => {
-  e.stopPropagation();
-  const menu = document.getElementById('add-type-menu');
-  if (menu.style.display !== 'none') { closeAddMenu(); return; }
+// The type picker: "2FA code" first (a login opened in its compact,
+// 2FA-first form), then every item type, then the upcoming ones. `pick`
+// receives the chosen type.
+function fillAddMenu(menu, pick) {
   menu.innerHTML = '';
-  // "2FA code" first: a login opened in its compact, 2FA-first form.
-  const twoFa = document.createElement('button');
-  twoFa.className = 'add-type';
-  twoFa.dataset.addType = '2fa';
-  twoFa.textContent = '2FA code';
-  twoFa.addEventListener('click', () => { closeAddMenu(); addToDraft('2fa'); });
-  menu.appendChild(twoFa);
-  for (const [type, t] of Object.entries(Vault.TYPES)) {
+  const add = (type, label) => {
     const b = document.createElement('button');
     b.className = 'add-type';
     b.dataset.addType = type;
-    b.textContent = t.label;
-    b.addEventListener('click', () => { closeAddMenu(); addToDraft(type); });
+    b.textContent = label;
+    b.addEventListener('click', () => { closeAddMenu(); pick(type); });
     menu.appendChild(b);
-  }
+  };
+  add('2fa', '2FA code');
+  for (const [type, t] of Object.entries(Vault.TYPES)) add(type, t.label);
   for (const t of Vault.UPCOMING_TYPES) {
     const b = document.createElement('button');
     b.className = 'add-type soon';
@@ -1503,10 +1499,23 @@ document.getElementById('btn-add').addEventListener('click', e => {
     b.innerHTML = `${esc(t.label)} <span class="soon-tag">Soon</span>`;
     menu.appendChild(b);
   }
+}
+
+function toggleAddMenu(id, pick) {
+  const menu = document.getElementById(id);
+  const open = menu.style.display !== 'none';
+  closeAddMenu();
+  if (open) return;
+  fillAddMenu(menu, pick);
   menu.style.display = '';
+}
+
+document.getElementById('btn-add').addEventListener('click', e => {
+  e.stopPropagation();
+  toggleAddMenu('add-type-menu', addToDraft);
 });
 document.addEventListener('click', e => {
-  if (!e.target.closest?.('#add-type-menu')) closeAddMenu();
+  if (!e.target.closest?.('#add-type-menu, #quick-add-menu')) closeAddMenu();
 });
 
 document.getElementById('acc-search').addEventListener('input', applyVaultSearch);
@@ -1937,9 +1946,15 @@ document.getElementById('gen-copy').addEventListener('click', async () => {
 });
 document.getElementById('nav-team').addEventListener('click',     () => showView('team'));
 
-document.getElementById('btn-quick-add').addEventListener('click', () => {
-  showView('accounts');
-  document.getElementById('btn-add').click();
+// The header's "+": the same type picker, from any view; the chosen type
+// opens its editor in the vault.
+document.getElementById('btn-quick-add').addEventListener('click', e => {
+  e.stopPropagation();
+  toggleAddMenu('quick-add-menu', type => {
+    // Already in the vault: keep its unsaved edits (showView rebuilds the list).
+    if (document.getElementById('settings-panel').style.display === 'none') showView('accounts');
+    addToDraft(type);
+  });
 });
 
 // ── Crypto: Export / Import ───────────────────────────────────────────────────

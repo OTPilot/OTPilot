@@ -194,3 +194,130 @@ test('logins in a team collection unlocked this session are offered and filled t
   await again.waitForTimeout(1000);
   await expect(again.locator('#otpilot-login-fill')).toHaveCount(0); // locked: no index entry, keys gone
 });
+
+// ── In-field badge and dropdown ──────────────────────────────────────────────
+
+test('sign-in fields get a badge; focusing the empty username opens the logins under it, and a pick fills', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await expect(site.locator('#otpilot-login-fill')).toBeVisible(); // the corner offer stays
+  await expect(site.locator('.otpilot-field-badge[data-kind="login"]')).toHaveCount(2);
+
+  await site.focus('input[name="email"]');
+  const drop = site.locator('#otpilot-login-dropdown');
+  await expect(drop).toBeVisible();
+  const field = await site.locator('input[name="email"]').boundingBox();
+  const box = await drop.boundingBox();
+  expect(Math.abs(box.y - (field.y + field.height + 6))).toBeLessThan(2);
+  expect(Math.abs(box.x - field.x)).toBeLessThan(2);
+  await site.screenshot({ path: test.info().outputPath('dropdown.png') });
+
+  await drop.locator('.otpilot-login-choice').click();
+  await expect(site.locator('input[name="email"]')).toHaveValue('me@example.com');
+  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+  await expect(drop).toHaveCount(0);
+  await expect(site.locator('#otpilot-login-fill')).toHaveCount(0);
+});
+
+test('the badge toggles the dropdown; Escape, typing or a click elsewhere closes it', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  const drop = site.locator('#otpilot-login-dropdown');
+  const badge = site.locator('.otpilot-field-badge[data-kind="login"]').nth(1); // the password field's
+  await expect(badge).toBeVisible();
+  await badge.click();
+  await expect(drop).toBeVisible();
+  await badge.click();
+  await expect(drop).toHaveCount(0);
+
+  await site.focus('input[name="email"]');
+  await expect(drop).toBeVisible();
+  await site.keyboard.press('Escape');
+  await expect(drop).toHaveCount(0);
+
+  await site.locator('input[name="email"]').blur();
+  await site.focus('input[name="email"]');
+  await expect(drop).toBeVisible();
+  await site.keyboard.type('x');
+  await expect(drop).toHaveCount(0);
+
+  await badge.click();
+  await expect(drop).toBeVisible();
+  await site.mouse.click(5, 5);
+  await expect(drop).toHaveCount(0);
+});
+
+test('no badge without a saved login for the site', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ ...github, urls: 'elsewhere.example' }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await site.focus('input[name="email"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('.otpilot-field-badge[data-kind="login"]')).toHaveCount(0);
+  await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0);
+});
+
+test('locked: the dropdown unlocks in the extension frame, then fills', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, [github]);
+  await page.evaluate(() => VaultLock.lock());
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await site.focus('input[name="password"]');
+  const frame = site.frameLocator('#otpilot-login-dropdown iframe');
+  await frame.locator('#pw').fill(TEST_PASSWORD);
+  await frame.locator('#unlock').click();
+  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+});
+
+test('with many logins in a short window the dropdown stays on screen and scrolls', async ({ context, extensionId }) => {
+  const many = Array.from({ length: 10 }, (_, i) => ({ ...github, name: `Login ${i}`, email: `u${i}@example.com` }));
+  await vaultWith(context, extensionId, many);
+  const site = await context.newPage();
+  await site.setViewportSize({ width: 800, height: 320 });
+  await site.goto(`${SITE}/login.html`);
+  await site.focus('input[name="email"]');
+  const drop = site.locator('#otpilot-login-dropdown');
+  await expect(drop).toBeVisible();
+  const box = await drop.boundingBox();
+  expect(box.y + box.height).toBeLessThanOrEqual(320);
+  expect(await drop.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  await drop.locator('.otpilot-login-choice').last().scrollIntoViewIfNeeded();
+  await drop.locator('.otpilot-login-choice').last().click();
+  await expect(site.locator('input[name="email"]')).toHaveValue('u9@example.com');
+});
+
+test('a dropdown closed while its logins were still loading does not appear', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await expect(site.locator('#otpilot-login-fill')).toBeVisible();
+  // Focus and Escape in the same tick: the background hasn't answered yet.
+  await site.evaluate(() => {
+    const f = document.querySelector('input[name="email"]');
+    f.focus();
+    f.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0);
+});
+
+test('locked: a long list after unlocking in the dropdown can still scroll to every login', async ({ context, extensionId }) => {
+  const many = Array.from({ length: 10 }, (_, i) => ({ ...github, name: `Login ${i}`, email: `u${i}@example.com` }));
+  const page = await vaultWith(context, extensionId, many);
+  await page.evaluate(() => VaultLock.lock());
+  const site = await context.newPage();
+  await site.setViewportSize({ width: 800, height: 360 });
+  await site.goto(`${SITE}/login.html`);
+  await site.focus('input[name="email"]');
+  const frame = site.frameLocator('#otpilot-login-dropdown iframe');
+  await frame.locator('#pw').fill(TEST_PASSWORD);
+  await frame.locator('#unlock').click();
+  const drop = site.locator('#otpilot-login-dropdown');
+  await expect(drop.locator('.otpilot-login-choice')).toHaveCount(10);
+  expect(await drop.evaluate(el => getComputedStyle(el).overflowY)).toBe('auto');
+  await drop.locator('.otpilot-login-choice').last().scrollIntoViewIfNeeded();
+  await drop.locator('.otpilot-login-choice').last().click();
+  await expect(site.locator('input[name="email"]')).toHaveValue('u9@example.com');
+});

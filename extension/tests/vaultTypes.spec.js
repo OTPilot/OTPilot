@@ -43,6 +43,26 @@ test('Add offers every type, and the planned ones as Soon', async ({ context, ex
   await expect(page.locator('#add-type-menu')).toBeHidden();
 });
 
+test("the header's + opens the type picker from Home; a pick opens that editor in the vault", async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId);
+  await page.click('#nav-home');
+  await page.click('#btn-quick-add');
+  const menu = page.locator('#quick-add-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.locator('[data-add-type="2fa"]')).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('quick-add.png') });
+  await menu.locator('[data-add-type="note"]').click();
+  await expect(menu).toBeHidden();
+  await expect(page.locator('#settings-panel')).toBeVisible();
+  await expect(page.locator('#acc-detail .item-title')).toBeFocused();
+  // A second + while editing keeps that unsaved item.
+  await page.fill('#acc-detail .item-title', 'Draft note');
+  await page.click('#btn-quick-add');
+  await page.locator('#quick-add-menu [data-add-type="2fa"]').click();
+  await expect(page.locator('.acc-row')).toHaveCount(2);
+  await expect(page.locator('.acc-row', { hasText: 'Draft note' })).toHaveCount(1);
+});
+
 test('a secure note with a category and more tags is saved as a note item', async ({ context, extensionId }) => {
   const page = await vault(context, extensionId, { accounts: [{ name: 'GitHub', email: '', secret: TEST_SECRET, urls: '' }] });
   await page.click('#btn-add');
