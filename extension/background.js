@@ -605,8 +605,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const index = accounts.findIndex(a => a._id === msg.attachTo);
         const current = accounts[index];
         const secret = String(msg.account?.secret || '');
-        if (!current || !secret) return { ok: false };
-        const patch = { secret, ...(!current.email && msg.account.email ? { email: String(msg.account.email) } : {}) };
+        // Another tab may have added a code meanwhile: never replace one (the
+        // write itself also re-checks the login is still as loaded).
+        if (!current || !secret || current.secret) return { ok: false };
+        // The page's host joins the login's URLs, so the code auto-fills here
+        // (the OTP matcher doesn't treat a saved www. host as its subdomains').
+        const host = senderHost(_sender);
+        const urls = String(current.urls || '').split('\n').map(u => u.trim()).filter(Boolean);
+        const patch = {
+          secret,
+          ...(!current.email && msg.account.email ? { email: String(msg.account.email) } : {}),
+          ...(host && !urls.some(u => u.toLowerCase() === host) ? { urls: [...urls, host].join('\n') } : {}),
+        };
         if (!(await VaultAccounts.update(current._id, current, patch, vk))) return { ok: false };
         await chrome.storage.local.set({ activeIndex: index });
         vaultChangedByPage();

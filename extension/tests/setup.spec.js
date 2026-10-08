@@ -278,3 +278,12 @@ test('locked: after unlocking, the code is offered to the existing login', async
   await expect.poll(async () => (await readAccounts(popup)).map(a => [a.name, a.email, a.secret]))
     .toEqual([['DigitalOcean', 'demo@example.com', TEST_SECRET]]);
 });
+
+test("attaching adds the setup page's host to the login's URLs, so the code fills there", async ({ context, extensionId }) => {
+  const popup = await withLogins(context, extensionId, [{ name: 'DigitalOcean', email: 'me@example.com', secret: '', urls: 'www.localhost', password: 'pw' }]);
+  const page = await context.newPage();
+  await page.goto('http://cloud.localhost:8765/test/qr-anchor.html');
+  await page.locator('#otpilot-suggestion .otpilot-attach').click();
+  await expect.poll(async () => (await readAccounts(popup)).map(a => [a.urls, a.secret]))
+    .toEqual([['www.localhost\ncloud.localhost', TEST_SECRET]]);
+});

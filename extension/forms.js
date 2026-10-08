@@ -566,8 +566,9 @@
     if (isNewPassword(f)) { suggestPassword(f); return; }
     // Not waiting for the page's first check: focusing the field before the
     // background answered still opens (openLogins asks, and shows only if the
-    // site has logins).
+    // site has logins). Once that check found none, focusing doesn't ask again.
     if (_anchor?.field === f || _pendingField === f) return;
+    if (_pageLogins && !_pageLogins.logins.length) return;
     const login = findLoginFields();
     if (login && (f === login.username || f === login.password)) openLogins(f);
   }, true);
