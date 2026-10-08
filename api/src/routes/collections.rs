@@ -150,15 +150,6 @@ async fn role_in(db: &sqlx::PgPool, cid: Uuid, user_id: Uuid) -> Result<String> 
     .ok_or(ApiError::NotFound)
 }
 
-async fn require_role(db: &sqlx::PgPool, cid: Uuid, user_id: Uuid, allowed: &[&str]) -> Result<()> {
-    let role = role_in(db, cid, user_id).await?;
-    if allowed.contains(&role.as_str()) {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden)
-    }
-}
-
 async fn team_of(db: &sqlx::PgPool, cid: Uuid) -> Result<Uuid> {
     sqlx::query_scalar("SELECT team_id FROM collections WHERE id = $1")
         .bind(cid)
@@ -294,12 +285,17 @@ async fn rename(
     Json(body): Json<RenameRequest>,
 ) -> Result<Json<Value>> {
     opaque("encrypted_name", &body.encrypted_name)?;
-    require_role(&state.db, cid, auth.id, &["manage"]).await?;
+    // The role check and the write in one transaction: a manager demoted or
+    // removed meanwhile (that update waits on the member row locked here, or
+    // this check sees it) can't rename.
+    let mut tx = state.db.begin().await?;
+    allowed(&role_locked(&mut tx, cid, auth.id).await?, &["manage"])?;
     sqlx::query("UPDATE collections SET encrypted_name = $2 WHERE id = $1")
         .bind(cid)
         .bind(&body.encrypted_name)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1233,5 +1229,46 @@ mod db_tests {
         .await
         .unwrap();
         assert_eq!(role, "manage");
+    }
+    #[tokio::test]
+    async fn a_rename_waiting_on_a_demotion_is_refused() {
+        let (app, db, _g) = app().await;
+        let owner = create_user(&db, "team_lite").await;
+        let t = team(&db, owner, &[]).await;
+        let cid = new_collection(&app, owner, t).await;
+        // Another manager is demoting them right now (row locked, not committed).
+        let mut demote = db.begin().await.unwrap();
+        sqlx::query(
+            "UPDATE collection_members SET role = 'view' WHERE collection_id = $1 AND user_id = $2",
+        )
+        .bind(cid)
+        .bind(owner)
+        .execute(&mut *demote)
+        .await
+        .unwrap();
+        let renaming = tokio::spawn({
+            let app = app.clone();
+            async move {
+                call(
+                    &app,
+                    owner,
+                    Method::PATCH,
+                    &format!("/collections/{cid}"),
+                    Some(json!({ "encrypted_name": "renamed" })),
+                )
+                .await
+                .0
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        demote.commit().await.unwrap();
+        assert_eq!(renaming.await.unwrap(), StatusCode::FORBIDDEN);
+        let name: String =
+            sqlx::query_scalar("SELECT encrypted_name FROM collections WHERE id = $1")
+                .bind(cid)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(name, "enc-name");
     }
 }

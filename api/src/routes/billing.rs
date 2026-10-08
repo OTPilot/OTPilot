@@ -77,26 +77,28 @@ pub(crate) async fn cancel_subscription_now(state: &AppState, sub_id: &str) -> R
     }
 }
 
-/// Cancels a subscription right away (best effort: logged on failure).
-async fn cancel_subscription(state: &AppState, sub_id: &str) {
-    if state.stripe_secret_key.is_empty() || sub_id.is_empty() {
-        return;
+/// Cancels a subscription the webhook must not keep (a duplicate, or one
+/// bought by an account being deleted). An error when Stripe can't confirm
+/// it: the webhook then answers with an error, so Stripe retries the event
+/// and the cancellation with it, instead of the subscription staying active.
+async fn cancel_subscription(state: &AppState, sub_id: &str) -> Result<()> {
+    if state.stripe_secret_key.is_empty() {
+        return Ok(()); // development without Stripe: nothing was charged
     }
-    let res = reqwest::Client::new()
-        .delete(format!(
-            "{}/v1/subscriptions/{sub_id}",
-            state.stripe_api_base
-        ))
-        .basic_auth(&state.stripe_secret_key, Some(""))
-        .send()
-        .await;
-    match res {
-        Ok(r) if r.status().is_success() => {
-            tracing::info!("canceled duplicate subscription {sub_id}")
-        }
-        Ok(r) => tracing::error!("could not cancel subscription {sub_id}: {}", r.status()),
-        Err(e) => tracing::error!("could not cancel subscription {sub_id}: {e}"),
-    }
+    cancel_subscription_now(state, sub_id).await
+}
+
+/// Serializes the webhook's work on one subscription (completion and
+/// cancellation), for the rest of the transaction.
+async fn lock_subscription(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    sub_id: &str,
+) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('stripe_subscription'), hashtext($1))")
+        .bind(sub_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
 
 /// Seats included in the base Team Lite subscription (owner + 4).
@@ -385,14 +387,21 @@ async fn webhook(
 
             let is_subscription = obj["mode"].as_str() == Some("subscription");
             let sub_id = obj["subscription"].as_str().unwrap_or("");
-            // Webhooks can arrive out of order: a subscription already
-            // reported as ended grants nothing.
+            // The end check and the grant run in one transaction, holding the
+            // subscription's lock (a cancellation takes it too) and, from the
+            // grant on, the user's row (an account deletion starts by updating
+            // it): a cancellation or a deletion either happens entirely before
+            // — and is seen here — or after, and then sees what was granted.
+            let mut tx = state.db.begin().await?;
             if is_subscription {
+                lock_subscription(&mut tx, sub_id).await?;
+                // Webhooks can arrive out of order: a subscription already
+                // reported as ended grants nothing.
                 let ended: bool = sqlx::query_scalar(
                     "SELECT EXISTS(SELECT 1 FROM stripe_ended_subscriptions WHERE subscription_id = $1)",
                 )
                 .bind(sub_id)
-                .fetch_one(&state.db)
+                .fetch_one(&mut *tx)
                 .await?;
                 if ended {
                     tracing::warn!("checkout completed for already-ended subscription {sub_id}");
@@ -416,15 +425,17 @@ async fn webhook(
                 .bind(sub_id)
                 .bind(customer_id)
                 .bind(user_id)
-                .execute(&state.db)
+                .execute(&mut *tx)
                 .await?;
                 if granted.rows_affected() == 0 {
+                    drop(tx);
                     tracing::warn!(
-                        "user {user_id} already has a Personal subscription; canceling {sub_id}"
+                        "user {user_id} already has a Personal subscription (or is being deleted); canceling {sub_id}"
                     );
-                    cancel_subscription(&state, sub_id).await;
+                    cancel_subscription(&state, sub_id).await?;
                     return Ok(Json(json!({ "received": true })));
                 }
+                tx.commit().await?;
                 tracing::info!("user {user_id} subscribed to personal");
                 if !email.is_empty() {
                     crate::email::send_personal_subscription_email(
@@ -445,20 +456,22 @@ async fn webhook(
                 )
                 .bind(customer_id)
                 .bind(user_id)
-                .execute(&state.db)
+                .execute(&mut *tx)
                 .await?;
                 if granted.rows_affected() == 0 {
+                    drop(tx);
                     tracing::warn!("team checkout for a deleted/deleting account {user_id}; canceling {sub_id}");
-                    cancel_subscription(&state, sub_id).await;
+                    cancel_subscription(&state, sub_id).await?;
                     return Ok(Json(json!({ "received": true })));
                 }
 
+                // Created before the user row is released, so a deletion
+                // starting now finds this team (and its subscription).
                 let has_team: bool =
                     sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM teams WHERE owner_id = $1)")
                         .bind(user_id)
-                        .fetch_one(&state.db)
-                        .await
-                        .unwrap_or(true);
+                        .fetch_one(&mut *tx)
+                        .await?;
                 if !has_team {
                     let default_name = email
                         .split('@')
@@ -466,18 +479,20 @@ async fn webhook(
                         .filter(|s| !s.is_empty())
                         .map(|s| format!("{s}'s Team"))
                         .unwrap_or_else(|| "My Team".to_string());
-                    let _ = crate::routes::teams::create_team_row(
-                        &state.db,
+                    crate::routes::teams::create_team_row(
+                        &mut tx,
                         user_id,
                         &default_name,
                         Some(sub_id),
                     )
-                    .await;
+                    .await?;
                 }
+                tx.commit().await?;
                 tracing::info!("upgraded user {user_id} to team_lite");
             } else {
                 // Personal Cloud one-time purchase (1.x; a session created
                 // before 2.0 can still complete): set plan + the flag.
+                drop(tx);
                 sqlx::query(
                     "UPDATE users SET plan = 'personal', has_personal_cloud = true, stripe_customer_id = $1 WHERE id = $2",
                 )
@@ -500,13 +515,19 @@ async fn webhook(
         "customer.subscription.deleted" => {
             // Team subscription canceled → downgrade everyone + dissolve the team.
             let sub_id = obj["id"].as_str().unwrap_or("");
-            // Remembered, so a checkout completion arriving late grants nothing.
+            // Remembered, so a checkout completion arriving late grants
+            // nothing — under the subscription's lock: a completion running
+            // now has either granted (and committed) already, revoked below,
+            // or will see this row.
+            let mut tx = state.db.begin().await?;
+            lock_subscription(&mut tx, sub_id).await?;
             sqlx::query(
                 "INSERT INTO stripe_ended_subscriptions (subscription_id) VALUES ($1) ON CONFLICT DO NOTHING",
             )
             .bind(sub_id)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await?;
+            tx.commit().await?;
             let team: Option<(uuid::Uuid,)> =
                 sqlx::query_as("SELECT id FROM teams WHERE stripe_subscription_id = $1")
                     .bind(sub_id)
@@ -858,5 +879,94 @@ mod db_tests {
             .await
             .unwrap();
         assert_eq!(teams, 0);
+    }
+    #[tokio::test]
+    async fn a_completion_waits_for_a_cancellation_of_the_same_subscription() {
+        let (app, db, _guard) = app().await;
+        let user = create_user(&db, "free").await;
+        // A cancellation in progress: holds the subscription's lock, its
+        // "ended" row not yet committed.
+        let mut cancel = db.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('stripe_subscription'), hashtext($1))")
+            .bind("sub_race")
+            .execute(&mut *cancel)
+            .await
+            .unwrap();
+        let completing = tokio::spawn({
+            let app = app.clone();
+            async move { send_event(&app, completed(user, "personal", "sub_race")).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        sqlx::query("INSERT INTO stripe_ended_subscriptions (subscription_id) VALUES ('sub_race')")
+            .execute(&mut *cancel)
+            .await
+            .unwrap();
+        cancel.commit().await.unwrap();
+        assert_eq!(completing.await.unwrap(), StatusCode::OK);
+        assert_eq!(row(&db, user).await, ("free".into(), false, None));
+    }
+
+    #[tokio::test]
+    async fn an_account_deletion_starting_mid_completion_waits_until_the_team_exists() {
+        let (app, db, _guard) = app().await;
+        let user = create_user(&db, "free").await;
+        // Hold the team creation, so the completion stops between its plan
+        // update and the new team.
+        let mut hold = db.begin().await.unwrap();
+        sqlx::query("LOCK TABLE teams IN SHARE MODE")
+            .execute(&mut *hold)
+            .await
+            .unwrap();
+        let completing = tokio::spawn({
+            let app = app.clone();
+            async move { send_event(&app, completed(user, "team_lite", "sub_t")).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // The deletion's first step can't get in before the team exists.
+        let mut deletion = db.begin().await.unwrap();
+        sqlx::query("SET LOCAL lock_timeout = '200ms'")
+            .execute(&mut *deletion)
+            .await
+            .unwrap();
+        let started = sqlx::query("UPDATE users SET deletion_started_at = NOW() WHERE id = $1")
+            .bind(user)
+            .execute(&mut *deletion)
+            .await;
+        assert!(
+            started.is_err(),
+            "deletion started while the team was being created"
+        );
+        drop(deletion);
+        hold.commit().await.unwrap();
+        assert_eq!(completing.await.unwrap(), StatusCode::OK);
+        let team_sub: Option<String> =
+            sqlx::query_scalar("SELECT stripe_subscription_id FROM teams WHERE owner_id = $1")
+                .bind(user)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(team_sub.as_deref(), Some("sub_t"));
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_subscription_stripe_could_not_cancel_is_retried() {
+        let db = test_db().await;
+        let pool = db.pool.clone();
+        let mut state = test_state(pool.clone());
+        state.stripe_webhook_secret = SECRET.into();
+        state.stripe_secret_key = "sk_test".into(); // Stripe unreachable (port 9)
+        let app = router().with_state(state);
+        let user = create_user(&pool, "free").await;
+        assert_eq!(
+            send_event(&app, completed(user, "personal", "sub_1")).await,
+            StatusCode::OK
+        );
+        // The second one must be cancelled; Stripe doesn't answer: not
+        // acknowledged, so Stripe sends the event again.
+        assert_ne!(
+            send_event(&app, completed(user, "personal", "sub_2")).await,
+            StatusCode::OK
+        );
+        assert_eq!(row(&pool, user).await.2.as_deref(), Some("sub_1"));
     }
 }

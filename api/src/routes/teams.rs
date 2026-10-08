@@ -321,24 +321,30 @@ async fn create_team(
     if !is_team_plan(&plan) {
         return Err(ApiError::Forbidden);
     }
-    let deleting: bool =
-        sqlx::query_scalar("SELECT deletion_started_at IS NOT NULL FROM users WHERE id = $1")
-            .bind(auth.id)
-            .fetch_one(&state.db)
-            .await?;
+    let name = body.name.unwrap_or_else(|| "My Team".to_string());
+    check_len(name.trim(), MAX_NAME_LEN, "name")?;
+    // The user row stays locked until the team exists: an account deletion
+    // starting meanwhile (it sets deletion_started_at on this row) waits, and
+    // then finds the team among the ones it dissolves.
+    let mut tx = state.db.begin().await?;
+    let deleting: bool = sqlx::query_scalar(
+        "SELECT deletion_started_at IS NOT NULL FROM users WHERE id = $1 FOR UPDATE",
+    )
+    .bind(auth.id)
+    .fetch_one(&mut *tx)
+    .await?;
     if deleting {
         return Err(ApiError::Forbidden); // the account is being deleted
     }
-    let name = body.name.unwrap_or_else(|| "My Team".to_string());
-    check_len(name.trim(), MAX_NAME_LEN, "name")?;
-    let team = create_team_row(&state.db, auth.id, name.trim(), None).await?;
+    let team = create_team_row(&mut tx, auth.id, name.trim(), None).await?;
+    tx.commit().await?;
     Ok(Json(json!(team)))
 }
 
 /// Creates a team + adds the owner as a member. Shared by create_team and the
 /// billing webhook. Caller is responsible for the "1 team per owner" check.
 pub(crate) async fn create_team_row(
-    db: &sqlx::PgPool,
+    db: &mut sqlx::PgConnection,
     owner_id: Uuid,
     name: &str,
     stripe_subscription_id: Option<&str>,
@@ -353,7 +359,7 @@ pub(crate) async fn create_team_row(
     .bind(name)
     .bind(owner_id)
     .bind(stripe_subscription_id)
-    .fetch_one(db)
+    .fetch_one(&mut *db)
     .await?;
 
     sqlx::query(
@@ -361,7 +367,7 @@ pub(crate) async fn create_team_row(
     )
     .bind(team.id)
     .bind(owner_id)
-    .execute(db)
+    .execute(&mut *db)
     .await?;
 
     Ok(team)
