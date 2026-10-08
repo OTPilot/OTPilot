@@ -377,3 +377,158 @@ test('custom-field buttons do only their own job (no errors, copy does not unmas
   await expect(page.locator('#acc-detail .cf-row')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+// ── Merging logins ───────────────────────────────────────────────────────────
+
+const items = page => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => ({
+  title: i.title, user: Vault.getValue(i, 'username'), password: Vault.getValue(i, 'password'), secret: i.totp?.secret || '',
+  urls: i.urls, notes: i.notes, tags: i.tags, custom: i.fields.filter(f => f.custom).map(f => [f.label, f.value]),
+  history: (i.passwordHistory || []).map(h => h.value),
+})));
+
+test('merging a 2FA-only login into the password login of the same account: one login with both', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'DigitalOcean', email: 'me@example.com', secret: '', urls: 'digitalocean.com', password: 'pw', category: 'Infra' },
+    { name: 'DigitalOcean', email: 'me@example.com', secret: TEST_SECRET, urls: 'cloud.digitalocean.com' },
+  ] });
+  await page.locator('.acc-head').first().click();
+  await page.click('#acc-detail .btn-merge');
+  await expect(page.locator('#acc-detail .merge-hint')).toContainText('Nothing conflicts');
+  await page.click('#acc-detail .merge-apply');
+  await expect(page.locator('.acc-row')).toHaveCount(1);
+  await page.click('#btn-save-all');
+  await expect.poll(() => items(page)).toEqual([{
+    title: 'DigitalOcean', user: 'me@example.com', password: 'pw', secret: TEST_SECRET,
+    urls: ['digitalocean.com', 'cloud.digitalocean.com'], notes: '', tags: ['Infra'], custom: [], history: [],
+  }]);
+});
+
+test('merge conflicts are chosen per field; the password left behind goes to the history; notes can keep both', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'Work', email: 'me@example.com', secret: '', urls: 'a.example', password: 'old-pass', notes: 'first' },
+    { name: 'Work (2)', email: 'me@example.com', secret: '', urls: 'b.example', password: 'new-pass', notes: 'second', customFields: [{ label: 'PIN', value: '1234', kind: 'password' }] },
+  ] });
+  await page.locator('.acc-head').first().click(); // "Work" (the list is sorted by name)
+  await expect(page.locator('#acc-detail .acc-name')).toHaveValue('Work');
+  await page.click('#acc-detail .btn-merge');
+  const rows = page.locator('#acc-detail .merge-row');
+  await expect(rows).toHaveCount(3); // name, password, notes
+  await rows.filter({ hasText: 'Password' }).locator('input[value="b"]').check();
+  await page.click('#acc-detail .merge-apply');
+  await page.click('#btn-save-all');
+  await expect.poll(() => items(page)).toEqual([{
+    title: 'Work', user: 'me@example.com', password: 'new-pass', secret: '',
+    urls: ['a.example', 'b.example'], notes: 'first\n\nsecond', tags: [], custom: [['PIN', '1234']], history: ['old-pass'],
+  }]);
+});
+
+test('keeping this login\'s password still keeps the other one in the history', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'A', email: 'u', secret: '', urls: 'a.example', password: 'keep' },
+    { name: 'B', email: 'u', secret: '', urls: 'a.example', password: 'drop' },
+  ] });
+  await page.locator('.acc-head', { hasText: 'A' }).first().click();
+  await page.click('#acc-detail .btn-merge');
+  await page.click('#acc-detail .merge-apply');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await items(page)).map(i => [i.title, i.password, i.history])).toEqual([['A', 'keep', ['drop']]]);
+});
+
+test('two merges before Save keep every password left behind, and the other login\'s history', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'A', email: 'u', secret: '', urls: 'a.example', password: 'pa' },
+    { name: 'B', email: 'u', secret: '', urls: 'a.example', password: 'pb' },
+    { name: 'C', email: 'u', secret: '', urls: 'a.example', password: 'pc' },
+  ] });
+  // B already had an older password.
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const b = (await VaultStore.readAll(key)).items.find(i => i.title === 'B');
+    b.passwordHistory = [{ value: 'pb-old', changedAt: '2026-01-01T00:00:00.000Z' }];
+    await VaultStore.save(b, key);
+  });
+  await page.reload();
+  await page.click('#nav-settings');
+  await page.locator('.acc-head').first().click(); // A
+  for (const other of ['B', 'C']) {
+    await page.click('#acc-detail .btn-merge');
+    await page.locator('#acc-detail .merge-target').selectOption({ label: `${other} — u` });
+    await page.locator('#acc-detail .merge-row', { hasText: 'Password' }).locator('input[value="b"]').check();
+    await page.click('#acc-detail .merge-apply');
+  }
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await items(page)).map(i => [i.title, i.password, [...i.history].sort()]))
+    .toEqual([['A', 'pc', ['pa', 'pb', 'pb-old']]]);
+});
+
+test('a password of only spaces is a password: merging with a login without one keeps it', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'A', email: 'u', secret: '', urls: 'a.example', password: '   ' },
+    { name: 'B', email: 'u', secret: TEST_SECRET, urls: 'a.example', password: '' },
+  ] });
+  await page.locator('.acc-head').first().click();
+  await page.click('#acc-detail .btn-merge');
+  await expect(page.locator('#acc-detail .merge-row', { hasText: 'Password' })).toHaveCount(0);
+  await page.click('#acc-detail .merge-apply');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await items(page)).map(i => [i.password, i.secret])).toEqual([['   ', TEST_SECRET]]);
+});
+
+test('the merge panel can show the passwords it asks to choose between', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'A', email: 'u', secret: '', urls: 'a.example', password: 'same-len-1' },
+    { name: 'B', email: 'u', secret: '', urls: 'a.example', password: 'same-len-2' },
+  ] });
+  await page.locator('.acc-head').first().click();
+  await page.click('#acc-detail .btn-merge');
+  const row = page.locator('#acc-detail .merge-row', { hasText: 'Password' });
+  await expect(row.locator('.merge-secret')).toHaveText(['••••••••••', '••••••••••']);
+  await row.locator('.merge-reveal').click();
+  await expect(row.locator('.merge-secret')).toHaveText(['same-len-1', 'same-len-2']);
+});
+
+test('a conflict created in the editor while the merge panel is open is asked about, not decided silently', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'Same', email: 'u', secret: '', urls: 'a.example', password: 'p' },
+    { name: 'Same', email: 'u', secret: TEST_SECRET, urls: 'a.example', password: 'p' },
+  ] });
+  // The one without a 2FA secret.
+  await page.locator('.acc-head').first().click();
+  if (await page.locator('#acc-detail .acc-secret').inputValue()) await page.locator('.acc-head').nth(1).click();
+  await page.click('#acc-detail .btn-merge');
+  await expect(page.locator('#acc-detail .merge-hint')).toContainText('Nothing conflicts');
+  await page.fill('#acc-detail .acc-secret', 'GEZDGNBVGY3TQOJQ'); // a different secret, typed meanwhile
+  await page.click('#acc-detail .merge-apply');
+  await expect(page.locator('#status-msg')).toContainText('review the choices');
+  await expect(page.locator('#acc-detail .merge-row', { hasText: '2FA secret' })).toHaveCount(1);
+  await expect(page.locator('.acc-row')).toHaveCount(2); // nothing merged yet
+});
+
+test('a merge that only sets a password aside still stamps the login as changed', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'A', email: 'u', secret: '', urls: 'a.example', password: 'keep' },
+    { name: 'A2', email: 'u', secret: '', urls: 'a.example', password: 'other' },
+  ] });
+  const before = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.find(i => i.title === 'A').updatedAt);
+  await page.waitForTimeout(20);
+  await page.locator('.acc-head').first().click(); // A: keeps its name and password (the defaults)
+  await page.click('#acc-detail .btn-merge');
+  await page.click('#acc-detail .merge-apply');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await items(page)).map(i => [i.title, i.password, i.history])).toEqual([['A', 'keep', ['other']]]);
+  const [merged] = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items);
+  expect(merged.updatedAt > before).toBe(true);
+});
+
+test('a custom field hidden on either side stays hidden after the merge', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'A', email: 'u', secret: '', urls: 'a.example', password: 'p', customFields: [{ label: 'PIN', value: '1234', kind: 'text' }] },
+    { name: 'B', email: 'u', secret: '', urls: 'a.example', password: 'p', customFields: [{ label: 'PIN', value: '1234', kind: 'password' }] },
+  ] });
+  await page.locator('.acc-head').first().click();
+  await page.click('#acc-detail .btn-merge');
+  await page.click('#acc-detail .merge-apply');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
+    .flatMap(i => i.fields.filter(f => f.custom).map(f => [f.label, f.kind])))).toEqual([['PIN', 'password']]);
+});

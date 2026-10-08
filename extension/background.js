@@ -63,7 +63,7 @@ async function accountsForContent() {
   if ((await VaultLock.state()) === 'unlocked') {
     // No passwords, notes or custom fields: content scripts only fill 2FA
     // codes from this list, so they don't get them.
-    const accounts = (await VaultAccounts.load(await VaultKeys.getKey())).map(({ password, notes, customFields, ...acc }) => acc);
+    const accounts = (await VaultAccounts.load(await VaultKeys.getKey())).map(({ password, notes, customFields, _history, ...acc }) => acc);
     return { locked: false, activeIndex, accounts };
   }
   let index = await VaultAccounts.readIndex();

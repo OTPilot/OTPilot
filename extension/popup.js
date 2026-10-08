@@ -1026,7 +1026,10 @@ ${esc(acc.notes || '')}</textarea>
   body.innerHTML = `
     <div class="acc-body-head">
       <span class="acc-body-title">${esc(acc.name) || (compact ? 'New 2FA code' : `Account ${openAccIdx + 1}`)}${sharedBadgeHTML(findSharedCode(acc))}</span>
-      <button class="btn-del" title="Delete account">✕ Delete</button>
+      <span class="acc-head-actions">
+        ${acc._id && _draftBase.some(b => b._id === acc._id) ? '<button class="btn-del btn-merge" title="Merge another login into this one">⇄ Merge</button>' : ''}
+        <button class="btn-del" title="Delete account">✕ Delete</button>
+      </span>
     </div>
     ${compact
       ? nameField + secretField + userField + urlsField + passwordField + tagFieldsHTML(acc) + extras
@@ -1065,7 +1068,9 @@ ${esc(acc.notes || '')}</textarea>
     if (!user.value.trim() && parsed.account) user.value = parsed.account;
   });
 
-  body.querySelector('.btn-del').addEventListener('click', () => {
+  body.querySelector('.btn-merge')?.addEventListener('click', () => openMergePanel(body, openAccIdx));
+
+  body.querySelector('.btn-del:not(.btn-merge)').addEventListener('click', () => {
     syncOpenAccToDraft(); // pick up an in-progress name edit before naming it in the prompt
     const name = draft[openAccIdx].name || `Account ${openAccIdx + 1}`;
     if (!confirm(`Delete "${name}"? This can't be undone once you save.`)) return;
@@ -1117,6 +1122,149 @@ ${esc(acc.notes || '')}</textarea>
 
   container.innerHTML = '';
   container.appendChild(body);
+}
+
+// ── Merging two logins ──
+// The fields where two logins disagree (both set, different); an empty side
+// just takes the other's value. `secret` ones are shown masked.
+const MERGE_FIELDS = [
+  { key: 'name', label: 'Name' },
+  { key: 'email', label: 'Username' },
+  { key: 'password', label: 'Password', secret: true },
+  { key: 'secret', label: '2FA secret', secret: true },
+  { key: 'notes', label: 'Notes', both: true },
+  { key: 'autofill', label: 'Auto-fill' },
+];
+
+// Empty: nothing at all for a password (spaces can be part of one), blank
+// for the rest.
+const mergeEmpty = (key, v) => (key === 'password' ? (v ?? '') === '' : String(v ?? '').trim() === '');
+
+function mergeConflicts(a, b) {
+  return MERGE_FIELDS.filter(f => {
+    const x = a[f.key], y = b[f.key];
+    if (f.key === 'autofill') return (x !== false) !== (y !== false);
+    return !mergeEmpty(f.key, x) && !mergeEmpty(f.key, y) && String(x) !== String(y);
+  });
+}
+
+// `b` merged into `a` (which keeps its id): `choice[key]` is 'a', 'b' or —
+// for notes — 'both' where they disagree. URLs, tags and custom fields are
+// joined. Every password left behind — either login's current one, ones a
+// previous merge already set aside, the other login's history — goes to
+// this one's history, except `stored` (`a`'s saved password, which Save
+// moves to the history itself when it changes).
+function mergeLogins(a, b, choice = {}, { stored } = {}) {
+  const pick = key => {
+    const x = a[key], y = b[key];
+    if (key === 'autofill') return (choice[key] === 'b' ? y : x) !== false;
+    if (mergeEmpty(key, x)) return y ?? '';
+    if (mergeEmpty(key, y)) return x;
+    if (String(x) === String(y)) return x;
+    if (key === 'notes' && (choice.notes ?? 'both') === 'both') return `${x}\n\n${y}`;
+    return choice[key] === 'b' ? y : x;
+  };
+  const lines = s => String(s || '').split('\n').map(u => u.trim()).filter(Boolean);
+  const urls = [];
+  for (const u of [...lines(a.urls), ...lines(b.urls)]) if (!urls.some(v => v.toLowerCase() === u.toLowerCase())) urls.push(u);
+  const category = a.category || b.category || '';
+  const tags = [...new Set([a.category, ...(a.moreTags || []), b.category, ...(b.moreTags || [])].map(t => String(t || '').trim()).filter(Boolean))];
+  const custom = [...(a.customFields || [])];
+  for (const f of b.customFields || []) {
+    // The same field on both: one copy, hidden if either side hid it.
+    const same = custom.find(c => c.label === f.label && c.value === f.value);
+    if (!same) custom.push({ ...f, id: undefined });
+    else if (Vault.SECRET_KINDS.includes(f.kind) && !Vault.SECRET_KINDS.includes(same.kind)) custom[custom.indexOf(same)] = { ...same, kind: f.kind };
+  }
+  const password = pick('password');
+  const left = [...new Set([a.password, b.password, ...(a.extraPasswordHistory || []), ...(b.extraPasswordHistory || []), ...(b._history || [])])]
+    .filter(p => p && p !== password && p !== stored && !(a._history || []).includes(p));
+  return {
+    ...a,
+    name: pick('name'), email: pick('email'), password, secret: pick('secret'), notes: pick('notes'),
+    autofill: pick('autofill'), urls: urls.join('\n'), category, moreTags: tags.filter(t => t !== category),
+    customFields: custom, domain: a.domain || b.domain,
+    extraPasswordHistory: left,
+  };
+}
+
+// The merge panel inside a login's editor: pick the other login, settle the
+// fields that disagree, then Merge (the other login leaves the list; nothing
+// is written until Save, like every other edit).
+function openMergePanel(body, idx) {
+  const a = draft[idx];
+  const others = draft.filter((e, i) => i !== idx && isLoginEntry(e) && e._id && _draftBase.some(b => b._id === e._id));
+  if (!others.length) { setStatus('There is no other login to merge with', false); return; }
+  const dom = accountIconDomain(a);
+  others.sort((x, y) => (accountIconDomain(y) === dom) - (accountIconDomain(x) === dom) || (x.name || '').localeCompare(y.name || ''));
+  body.querySelector('.merge-panel')?.remove();
+  const panel = document.createElement('div');
+  panel.className = 'merge-panel';
+  panel.innerHTML = `
+    <div class="merge-title">Merge another login into this one</div>
+    <select class="merge-target">${others.map(o => `<option value="${esc(o._id)}">${esc(o.name || 'Untitled')}${o.email ? ` — ${esc(o.email)}` : ''}</option>`).join('')}</select>
+    <div class="merge-conflicts"></div>
+    <div class="merge-actions">
+      <button type="button" class="btn-crypto-ok merge-apply">Merge</button>
+      <button type="button" class="btn-del merge-cancel">Cancel</button>
+    </div>`;
+  body.querySelector('.acc-body-head').after(panel);
+  const target = () => others.find(o => o._id === panel.querySelector('.merge-target').value);
+  const show = (f, v) => (f.key === 'autofill' ? (v !== false ? 'On' : 'Off') : String(v ?? ''));
+  const cell = (f, v) => (f.secret
+    ? `<span class="merge-secret" data-value="${esc(show(f, v))}">${'•'.repeat(10)}</span>`
+    : `<span>${esc(show(f, v))}</span>`);
+  // What the choices on screen were made for: Merge re-checks it, since the
+  // editor can change while the panel is open.
+  let shownFor = '';
+  const conflictKey = list => JSON.stringify(list.map(f => [f.key, String(draft[idx][f.key] ?? ''), String(target()[f.key] ?? '')]));
+  const renderConflicts = () => {
+    syncOpenAccToDraft();
+    const b = target();
+    const list = mergeConflicts(draft[idx], b);
+    shownFor = conflictKey(list);
+    const box = panel.querySelector('.merge-conflicts');
+    box.innerHTML = list.length
+      ? '<div class="merge-hint">These differ — choose what stays. Everything else (URLs, tags, custom fields, empty fields) is combined.</div>' + list.map(f => `
+        <div class="merge-row" data-key="${f.key}">
+          <div class="merge-label">${esc(f.label)}${f.secret ? ` <button type="button" class="coll-link merge-reveal">Show</button>` : ''}</div>
+          <label><input type="radio" name="m-${f.key}" value="a" ${f.both ? '' : 'checked'}> ${cell(f, draft[idx][f.key])} <em>this one</em></label>
+          <label><input type="radio" name="m-${f.key}" value="b"> ${cell(f, b[f.key])} <em>${esc(b.name || 'other')}</em></label>
+          ${f.both ? '<label><input type="radio" name="m-' + f.key + '" value="both" checked> <span>Keep both</span></label>' : ''}
+        </div>`).join('')
+      : '<div class="merge-hint">Nothing conflicts: the other login\'s details are added to this one.</div>';
+    // Show / hide both values of a password or 2FA row, to tell them apart.
+    box.querySelectorAll('.merge-reveal').forEach(btn => btn.addEventListener('click', () => {
+      const shown = btn.textContent === 'Hide';
+      btn.textContent = shown ? 'Show' : 'Hide';
+      btn.closest('.merge-row').querySelectorAll('.merge-secret').forEach(s => { s.textContent = shown ? '•'.repeat(10) : s.dataset.value; });
+    }));
+  };
+  panel.querySelector('.merge-target').addEventListener('change', renderConflicts);
+  panel.querySelector('.merge-cancel').addEventListener('click', () => panel.remove());
+  panel.querySelector('.merge-apply').addEventListener('click', () => {
+    syncOpenAccToDraft();
+    const b = target();
+    if (conflictKey(mergeConflicts(draft[idx], b)) !== shownFor) {
+      // Something changed in the editor since the choices were shown.
+      renderConflicts();
+      setStatus('The login changed — review the choices, then Merge', false);
+      return;
+    }
+    const choice = Object.fromEntries([...panel.querySelectorAll('.merge-row')].map(r => [r.dataset.key, r.querySelector('input:checked')?.value || 'a']));
+    const merged = mergeLogins(draft[idx], b, choice, { stored: _draftBase.find(x => x._id === draft[idx]._id)?.password });
+    const bIdx = draft.indexOf(b);
+    draft[idx] = merged;
+    draft.splice(bIdx, 1);
+    openAccIdx = draft.indexOf(merged);
+    rebuildAccountsDOM();
+    renderVaultTypeBar();
+    renderVaultCatBar();
+    applyVaultSearch();
+    renderAccDetail();
+    setStatus(`Merged "${b.name || 'login'}" into "${merged.name || 'login'}" — Save to keep it`);
+  });
+  renderConflicts();
 }
 
 // ── Custom fields (every editor) ──
@@ -1704,7 +1852,8 @@ async function saveAccounts(intended) {
       (old.category || '') !== (acc.category || '') ||
       JSON.stringify(old.moreTags || []) !== JSON.stringify(acc.moreTags || []) ||
       (old.notes || '') !== (acc.notes || '') ||
-      JSON.stringify(old.customFields || []) !== JSON.stringify(acc.customFields || []);
+      JSON.stringify(old.customFields || []) !== JSON.stringify(acc.customFields || []) ||
+      (acc.extraPasswordHistory || []).length > 0; // a merge set passwords aside
     acc._updatedAt = changed ? now : (old._updatedAt ?? now);
   }
 
