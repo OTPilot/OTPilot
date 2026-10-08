@@ -1,4 +1,4 @@
-import { test, expect, FAKE_AUTH, SESSION_24H, TEST_SECRET } from './fixtures.js';
+import { test, expect, readAccounts, seedUnlocked, TEST_SECRET } from './fixtures.js';
 
 test('shows setup screen on first open (no master password)', async ({ context, extensionId }) => {
   const page = await context.newPage();
@@ -17,15 +17,14 @@ test('shows OTP code when unlocked with an account', async ({ context, extension
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await page.evaluate(([auth, expiry, secret]) => {
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       obfuscated: false, // reveal code on load
       accounts: [{ name: 'TestApp', secret, urls: '', email: 'demo@example.com' }],
       activeIndex: 0,
     }, r));
-  }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  }, [TEST_SECRET]);
 
   await page.reload();
 
@@ -54,16 +53,15 @@ test('accounts view lists all accounts and has Add button', async ({ context, ex
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await page.evaluate(([auth, expiry, secret]) => {
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       accounts: [
         { name: 'GitHub', secret, urls: 'github.com', email: 'user@github.com' },
         { name: 'Google', secret, urls: 'accounts.google.com', email: 'user@google.com' },
       ],
     }, r));
-  }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  }, [TEST_SECRET]);
 
   await page.reload();
 
@@ -83,46 +81,40 @@ test('search filters accounts in accounts view', async ({ context, extensionId }
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await page.evaluate(([auth, expiry, secret]) => {
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       accounts: [
         { name: 'GitHub', secret, urls: 'github.com', email: '' },
         { name: 'Google', secret, urls: 'google.com', email: '' },
         { name: 'Dropbox', secret, urls: 'dropbox.com', email: '' },
       ],
     }, r));
-  }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  }, [TEST_SECRET]);
 
   await page.reload();
   await page.click('#nav-settings');
 
+  // Accounts load from the vault asynchronously: wait for the list first.
+  await expect(page.locator('.acc-row')).toHaveCount(3);
   // Type in search to filter
   await page.fill('#acc-search', 'git');
 
   // applyVaultSearch hides non-matching rows via style.display='none';
   // count visible rows directly rather than DOM count
-  // Accounts are sorted alphabetically; hidden via style.display='none'
-  const { visibleCount, visibleName } = await page.locator('.acc-row').evaluateAll(els => {
+  await expect.poll(() => page.locator('.acc-row').evaluateAll(els => {
     const visible = els.filter(el => el.style.display !== 'none');
-    return {
-      visibleCount: visible.length,
-      visibleName: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '',
-    };
-  });
-  expect(visibleCount).toBe(1);
-  expect(visibleName).toBe('GitHub');
+    return { count: visible.length, name: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '' };
+  })).toEqual({ count: 1, name: 'GitHub' });
 });
 
 test('category filter bar narrows the home account chips', async ({ context, extensionId }) => {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await page.evaluate(([auth, expiry, secret]) => {
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       accounts: [
         { name: 'GitHub',   secret, urls: '', email: '', category: 'Work' },
         { name: 'AWS',      secret, urls: '', email: '', category: 'Work' },
@@ -130,7 +122,7 @@ test('category filter bar narrows the home account chips', async ({ context, ext
         { name: 'Coinbase', secret, urls: '', email: '', category: 'Finance' },
       ],
     }, r));
-  }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  }, [TEST_SECRET]);
 
   await page.reload();
 
@@ -155,13 +147,12 @@ test('assigning a new category in the editor persists and tags the account', asy
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await page.evaluate(([auth, expiry, secret]) => {
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       accounts: [{ name: 'GitHub', secret, urls: '', email: '' }],
     }, r));
-  }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  }, [TEST_SECRET]);
 
   await page.reload();
   await page.click('#nav-settings');
@@ -174,10 +165,8 @@ test('assigning a new category in the editor persists and tags the account', asy
 
   // Save, then verify the assignment landed in storage
   await page.click('#btn-save-all');
-  const stored = await page.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts)))
-  );
-  expect(stored[0].category).toBe('Work');
+  // Saving to the vault is async (encrypt + write): poll for it.
+  await expect.poll(async () => (await readAccounts(page))[0]?.category).toBe('Work');
 
   // Re-open the vault — the row header now shows the category tag
   await page.click('#nav-settings');
@@ -188,10 +177,9 @@ test('adding an account while a category filter is active keeps it visible and p
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await page.evaluate(([auth, expiry, secret]) => {
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       categoryFilter: 'Work',
       accounts: [
         { name: 'GitHub', secret, urls: '', email: '', category: 'Work' },
@@ -199,18 +187,19 @@ test('adding an account while a category filter is active keeps it visible and p
         { name: 'Gmail',  secret, urls: '', email: '', category: 'Personal' },
       ],
     }, r));
-  }, [FAKE_AUTH, SESSION_24H(), TEST_SECRET]);
+  }, [TEST_SECRET]);
 
   await page.reload();
   await page.click('#nav-settings');
 
   // Vault opens filtered to Work: 2 visible rows
-  const visibleBefore = await page.locator('.acc-row').evaluateAll(els =>
-    els.filter(el => el.style.display !== 'none').length);
-  expect(visibleBefore).toBe(2);
+  // Accounts load from the vault asynchronously: wait for the rows.
+  await expect.poll(() => page.locator('.acc-row').evaluateAll(els =>
+    els.filter(el => el.style.display !== 'none').length)).toBe(2);
 
   // Add an account while the Work filter is active
   await page.click('#btn-add');
+  await page.click('[data-add-type="login"]');
 
   // The new row is visible (not hidden by the filter) → 3 visible rows
   const visibleAfter = await page.locator('.acc-row').evaluateAll(els =>
@@ -226,6 +215,31 @@ test('adding an account while a category filter is active keeps it visible and p
   ).toHaveText('3');
 });
 
+// Regression: the "shared with team" badges load asynchronously on open and
+// redraw the vault rows; the redraw dropped the active category filter, so
+// every account showed again under the "Work" pill (a CI flake of the test
+// above whenever the badges landed after the list).
+test('regression: the shared-badge refresh keeps the category filter applied', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => new Promise(r => chrome.storage.local.set({
+    categoryFilter: 'Work',
+    accounts: [
+      { name: 'GitHub', secret, urls: '', email: '', category: 'Work' },
+      { name: 'Gmail',  secret, urls: '', email: '', category: 'Personal' },
+    ],
+  }, r)), [TEST_SECRET]);
+  await page.reload();
+  await page.click('#nav-settings');
+  const visible = () => page.locator('.acc-row').evaluateAll(els =>
+    els.filter(el => el.style.display !== 'none').map(el => el.querySelector('.acc-head-name').textContent));
+  await expect.poll(visible).toEqual(['GitHub']);
+
+  await page.evaluate(() => refreshSharedBadges());
+  expect(await visible()).toEqual(['GitHub']);
+});
+
 // ── "Shared with you" row layout (regression: a long account name + owner
 // email pushed the row past the popup's fixed 600px width — clipped by
 // overflow-x:hidden rather than wrapping, cutting off the code and buttons
@@ -235,9 +249,10 @@ test('regression: a long shared-code row wraps instead of overflowing the popup 
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
 
-  await page.evaluate(([auth, expiry]) => new Promise(r =>
-    chrome.storage.local.set({ auth, sessionExpiry: expiry, accounts: [], obfuscated: false }, r)
-  ), [FAKE_AUTH, SESSION_24H()]);
+  await seedUnlocked(page);
+  await page.evaluate(() => new Promise(r =>
+    chrome.storage.local.set({ accounts: [], obfuscated: false }, r)
+  ));
   await page.reload();
 
   // Stubs Sharing directly rather than the network/crypto it wraps (ECDH key

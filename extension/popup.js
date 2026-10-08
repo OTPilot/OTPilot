@@ -1,5 +1,6 @@
-// Storage schema: { accounts: [{name, secret, urls}], activeIndex: 0,
-//                   auth: {salt,iv,data}, sessionExpiry: number, sessionDuration: number }
+// Storage schema: { accounts: [{name, secret, urls}], activeIndex: 0 }
+// The master-password lock lives in vaultLock.js (vault key wrapped at rest,
+// unlocked only in chrome.storage.session).
 
 let accounts = [];
 let activeIndex = 0;
@@ -50,8 +51,8 @@ function findSharedCode(acc) {
 
 // ── Appearance (themes) ──────────────────────────────────────────────────────
 // Single source of truth for the theme picker in Settings → Appearance. Adding
-// a theme is two steps: 1) a body[data-theme="id"] token block in popup.html's
-// <style> (same custom-property names as the others), 2) one entry here.
+// a theme is two steps: 1) a body[data-theme="id"] token block in theme.css
+// (same custom-property names as the others), 2) one entry here.
 const THEMES = [
   { id: 'original', name: 'Original', desc: 'The classic slate & sky-blue look.',       swatch: ['#0f172a', '#38bdf8'] },
   { id: 'vault',    name: 'Vault',    desc: 'Graphite & brass — precise and premium.', swatch: ['#1c1a17', '#c9a15a'] },
@@ -61,10 +62,13 @@ const THEMES = [
 ];
 const DEFAULT_THEME = 'original';
 
-function applyTheme(id) {
+// `persist`: only when the user picks a theme. Applying the stored one at
+// startup must not write it back — a theme changed meanwhile (another popup,
+// Settings elsewhere) would be overwritten by the value read earlier.
+function applyTheme(id, { persist = false } = {}) {
   document.body.dataset.theme = id;
   try { localStorage.setItem('otpilotTheme', id); } catch { /* private mode etc. */ }
-  chrome.storage.local.set({ theme: id });
+  if (persist) chrome.storage.local.set({ theme: id });
   const sub = document.getElementById('row-settings-theme-sub');
   if (sub) sub.textContent = THEMES.find(t => t.id === id)?.name ?? id;
 }
@@ -87,7 +91,7 @@ function renderThemePicker(current) {
         : ''}</span>`;
     row.addEventListener('click', () => {
       if (t.id === current) return;
-      applyTheme(t.id);
+      applyTheme(t.id, { persist: true });
       current = t.id;
       renderThemePicker(current);
     });
@@ -147,10 +151,23 @@ async function syncActiveIndexToUrl() {
 
 // ── Storage ──────────────────────────────────────────────────────────────────
 
-function loadState() {
+// Ids of the vault items this popup loaded: saveState only deletes those (an
+// account added meanwhile from a page isn't in `accounts` and must survive).
+let _loadedIds = new Set();
+
+// Vault items that aren't logins (secure notes, servers, API credentials):
+// listed and edited in the Vault view next to the logins in `accounts`.
+let otherItems = [];
+
+async function loadState() {
+  // Accounts live encrypted in the vault (only read once unlocked).
+  const key = await VaultKeys.getKey();
+  const vaultAccounts = key ? await VaultAccounts.load(key) : [];
+  _loadedIds = new Set(vaultAccounts.map(a => a._id));
+  otherItems = key ? await VaultAccounts.loadOthers(key) : [];
   return new Promise(r =>
-    chrome.storage.local.get(['accounts', 'activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'categoryFilter', 'iconCache'], d => {
-      accounts       = d.accounts || [];
+    chrome.storage.local.get(['activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'categoryFilter', 'iconCache'], d => {
+      accounts       = vaultAccounts;
       activeIndex    = Math.min(d.activeIndex ?? 0, Math.max(accounts.length - 1, 0));
       obfuscated     = d.obfuscated ?? true;
       categoryFilter = d.categoryFilter ?? '';
@@ -167,18 +184,43 @@ function loadState() {
   );
 }
 
-function saveState() {
-  return new Promise(r => chrome.storage.local.set({ accounts, activeIndex }, r));
+// After "Reset OTPilot on this device" storage is empty and the vault is back
+// at first run. A write still in flight from before (a sync finishing its
+// request, another open page) must not put data back, so every account/sync
+// write goes through this check.
+async function deviceWasReset() {
+  return (await VaultLock.state()) === 'setup';
 }
 
-function stampLocalChange() {
+async function saveState() {
+  // Locked (or reset) means no vault key: nothing can be written, and a stale
+  // in-memory list mustn't be. Throw, so a sync stops before it records
+  // success (lastSyncedAt) for data that was never saved.
+  if ((await VaultLock.state()) !== 'unlocked') throw new Error('vault is locked');
+  const key = await VaultKeys.getKey();
+  await VaultAccounts.save(accounts, key, _loadedIds);
+  // Re-read what was stored: entries that came without a password (a 1.x
+  // device's blob) keep the vault's, and the list must show it again.
+  accounts = await VaultAccounts.load(key);
+  _loadedIds = new Set(accounts.map(a => a._id));
+  await chrome.storage.local.set({ activeIndex });
+}
+
+async function saveTombstones() {
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ tombstones });
+}
+
+async function stampLocalChange() {
   localChangedAt = new Date().toISOString();
-  return new Promise(r => chrome.storage.local.set({ localChangedAt }, r));
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ localChangedAt });
 }
 
-function writeLastSyncedAt(ts) {
+async function writeLastSyncedAt(ts) {
   lastSyncedAt = ts;
-  return new Promise(r => chrome.storage.local.set({ lastSyncedAt: ts }, r));
+  if (await deviceWasReset()) return;
+  await chrome.storage.local.set({ lastSyncedAt: ts });
 }
 
 function formatRelativeTime(isoStr) {
@@ -242,13 +284,18 @@ let categoryFilter = ''; // '' = All
 
 // Unique, sorted category labels present in a list of accounts (defaults to the
 // saved set; the vault passes its in-progress `draft` so counts match the rows).
+// Every tag of an account or vault entry: the category (first tag) plus the
+// rest ("More tags").
+function tagsOf(a) {
+  return [(a.category || '').trim(), ...(a.moreTags || []).map(t => String(t).trim())].filter(Boolean);
+}
+
 function getCategories(list = accounts) {
-  return [...new Set(list.map(a => (a.category || '').trim()).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b));
+  return [...new Set(list.flatMap(tagsOf))].sort((a, b) => a.localeCompare(b));
 }
 
 function categoryCount(name, list = accounts) {
-  return list.filter(a => (a.category || '').trim() === name).length;
+  return list.filter(a => tagsOf(a).includes(name)).length;
 }
 
 // Categories present in the in-progress vault draft (so a label created on one
@@ -294,7 +341,7 @@ function renderCategoryBar(barEl, onPick, source = accounts) {
 }
 
 function accountMatchesFilter(acc) {
-  return !categoryFilter || (acc.category || '').trim() === categoryFilter;
+  return !categoryFilter || tagsOf(acc).includes(categoryFilter);
 }
 
 // ── Site icons ────────────────────────────────────────────────────────────────
@@ -439,7 +486,7 @@ function renderAccountBar() {
 
     row.addEventListener('click', () => {
       activeIndex = i;
-      saveState();
+      chrome.storage.local.set({ activeIndex }); // only the selection changed
       renderAccountBar();
       startTimer();
     });
@@ -485,6 +532,7 @@ async function refreshDisplay() {
   currentCode = '';
 
   if (!acc) {
+    renderHomeCreds(null);
     bigIcon.innerHTML = '';
     nameLabel.textContent = '';
     display.textContent = '••• •••';
@@ -500,6 +548,7 @@ async function refreshDisplay() {
   }
 
   nameLabel.innerHTML = esc(acc.name || '') + sharedBadgeHTML(findSharedCode(acc));
+  renderHomeCreds(acc);
 
   // Only the real site favicon, never the letter-avatar fallback — this is
   // decorative extra space, not a place to render initials twice.
@@ -507,9 +556,9 @@ async function refreshDisplay() {
   bigIcon.innerHTML = bigIconUrl ? `<img src="${bigIconUrl}" alt="">` : '';
 
   if (!acc.secret) {
-    display.textContent = 'no secret';
+    display.textContent = 'No 2FA code';
     display.className = 'dim';
-    countdown.textContent = 'Set a secret in Settings';
+    countdown.textContent = acc.password ? '' : 'Add a password or 2FA secret in Accounts';
     bar.style.width = '0%';
     btnCopy.disabled = true;
     btnFill.disabled = true;
@@ -541,6 +590,46 @@ async function refreshDisplay() {
     btnFill.disabled = true;
     currentCode = '';
   }
+}
+
+// Username and password under the code. Re-rendered only when the account or
+// its values change, not on every timer tick (that would reset Show and eat clicks).
+let _homeCredsKey = null;
+function renderHomeCreds(acc) {
+  const key = acc ? JSON.stringify([acc._id, acc.email || '', acc.password || '']) : '';
+  if (key === _homeCredsKey) return;
+  _homeCredsKey = key;
+  const box = document.getElementById('home-creds');
+  box.innerHTML = '';
+  if (!acc || (!acc.email && !acc.password)) return;
+  const row = (label, value, secret) => {
+    const el = document.createElement('div');
+    el.className = 'home-cred';
+    el.innerHTML = `<div class="home-cred-text"><span class="home-cred-label">${label}</span><span class="home-cred-value"></span></div>`;
+    const valueEl = el.querySelector('.home-cred-value');
+    const show = shown => { valueEl.textContent = secret && !shown ? '•'.repeat(Math.min(value.length, 14)) : value; };
+    show(false);
+    if (secret) {
+      const eye = document.createElement('button');
+      eye.className = 'home-cred-btn';
+      eye.title = 'Show/hide';
+      eye.innerHTML = SVG_EYE;
+      let shown = false;
+      eye.addEventListener('click', () => { shown = !shown; show(shown); eye.innerHTML = shown ? SVG_EYE_OFF : SVG_EYE; });
+      el.appendChild(eye);
+    }
+    const copy = document.createElement('button');
+    copy.className = 'home-cred-btn';
+    copy.textContent = 'Copy';
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(value); setStatus(`${label} copied`); }
+      catch { setStatus('Could not copy — the browser blocked the clipboard', false); }
+    });
+    el.appendChild(copy);
+    box.appendChild(el);
+  };
+  if (acc.email) row('Username', acc.email, false);
+  if (acc.password) row('Password', acc.password, true);
 }
 
 function startTimer() {
@@ -625,10 +714,82 @@ let _justSavedMessage = false;
 // used by the "edit this account" shortcut on the Home view. draft entries
 // are clones, so the origin index has to be tracked through the sort to
 // translate it into draft's index space.
+// Bumped each time the editor starts over from the saved list (a new draft).
+let _editSession = 0;
+
+// ── Vault entries ──
+// The editor's draft holds logins as v1 accounts (see VaultAccounts) and every
+// other item as an entry wrapping it: { _kind: 'item', _id, type, name,
+// category, moreTags, email (the row's summary line), item }. Save splits them.
+const isItemEntry = e => e?._kind === 'item';
+// Items of a team collection: { _kind: 'shared', cid, collection, …entry }.
+// Listed with the rest but saved straight to their collection, never by Save.
+const isSharedEntry = e => e?._kind === 'shared';
+const isLoginEntry = e => !e?._kind; // a personal login (v1 account)
+const entryType = e => (e?._kind ? e.type : 'login');
+const typeLabel = type => Vault.TYPES[type]?.label || type;
+// The fields that summarize an item on its row.
+const ITEM_SUMMARY = { server: ['host', 'username'], api: ['environment', 'clientId'] };
+let typeFilter = ''; // '' = every type
+
+function itemSummary(item) {
+  return (ITEM_SUMMARY[item.type] || []).map(id => Vault.getValue(item, id)).filter(Boolean).join(' · ');
+}
+
+function entryOf(item) {
+  const tags = item.tags || [];
+  return {
+    _kind: 'item', _id: item.id, type: item.type, name: item.title || '',
+    category: tags[0] || '', moreTags: tags.slice(1), email: itemSummary(item), item: structuredClone(item),
+  };
+}
+
+function itemOfEntry(entry) {
+  const item = structuredClone(entry.item);
+  item.title = entry.name;
+  item.tags = VaultAccounts.normalizeTags([entry.category, ...(entry.moreTags || [])]);
+  return item;
+}
+
+const parseTags = text => VaultAccounts.normalizeTags(String(text || '').split(','));
+
+// ── Team collections in the vault ──
+let collections = [];  // VaultCollections.list()
+let sharedItems = [];  // [{ collection, item, revision }]
+
+// `_baseRev`: the revision this entry shows, which its save is based on.
+function sharedEntryOf({ collection, item, revision }) {
+  return { ...entryOf(item), _kind: 'shared', cid: collection.id, collectionName: collection.name || 'Shared', role: collection.role, _baseRev: revision };
+}
+
+// Pulls every collection this user is in and redraws (team plans only; a
+// failure, e.g. offline, keeps what was shown).
+async function refreshSharedItems() {
+  const { userPlan } = await chrome.storage.local.get('userPlan');
+  if (!['team_lite', 'team_pro'].includes(userPlan)) { collections = []; sharedItems = []; return; }
+  let list;
+  try { list = await VaultCollections.list(); } catch { return; }
+  const out = [];
+  for (const c of list) {
+    if (!c.key) continue;
+    try { await VaultCollections.pull(c); } catch { /* offline: local copy */ }
+    for (const { item, revision } of await VaultCollections.snapshot(c)) out.push({ collection: c, item, revision });
+  }
+  collections = list;
+  sharedItems = out;
+  refreshAccountsUI();
+}
+
 function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {}) {
-  const withOrigin = accounts.map((a, i) => ({ acc: { ...a }, origIdx: i }));
+  _editSession++;
+  const withOrigin = [
+    ...accounts.map((a, i) => ({ acc: { ...a }, origIdx: i })),
+    ...otherItems.map(item => ({ acc: entryOf(item), origIdx: -1 })),
+    ...sharedItems.map(s => ({ acc: sharedEntryOf(s), origIdx: -1 })),
+  ];
   withOrigin.sort((x, y) => (x.acc.name || '').localeCompare(y.acc.name || ''));
   draft = withOrigin.map(w => w.acc);
+  _draftBase = structuredClone(draft);
   openAccIdx = openTargetIdx >= 0 ? withOrigin.findIndex(w => w.origIdx === openTargetIdx) : -1;
   if (!preserveSearch) document.getElementById('acc-search').value = '';
   // A leftover category filter from a previous Accounts-view visit could hide
@@ -638,6 +799,7 @@ function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {})
     categoryFilter = '';
     chrome.storage.local.set({ categoryFilter });
   }
+  renderVaultTypeBar();
   renderVaultCatBar();
   rebuildAccountsDOM();
   applyVaultSearch();
@@ -658,21 +820,42 @@ function syncOpenAccToDraft() {
   if (openAccIdx < 0) return;
   const body = document.querySelector('#acc-detail .acc-body');
   if (!body) return;
+  const entry = draft[openAccIdx];
+  if (isSharedEntry(entry) && entry.role === 'view') return; // read-only: nothing to read back
+  entry.category = (body.querySelector('.cat-choose')?.dataset.value || '').trim();
+  entry.moreTags = parseTags(body.querySelector('.acc-more-tags')?.value).filter(t => t !== entry.category);
+  if (entry._kind) {
+    entry.name = body.querySelector('.item-title').value.trim();
+    const urls = body.querySelector('.item-urls');
+    if (urls) entry.item.urls = urls.value.split('\n').map(u => u.trim()).filter(Boolean);
+    const secret = body.querySelector('.item-totp');
+    if (secret?.dataset.dirty) entry.item.totp = secret.value.trim() ? { ...(entry.item.totp || { digits: 6, period: 30, algorithm: 'SHA1' }), secret: secret.value.trim() } : null;
+    // Only fields the user changed: an input can't always hold a stored
+    // value exactly (a date in another format, a newer version's kind).
+    body.querySelectorAll('.item-field[data-dirty]').forEach(inp => {
+      const field = Vault.getField(entry.item, inp.dataset.id);
+      if (field) field.value = inp.value;
+    });
+    entry.item.notes = body.querySelector('.item-notes').value;
+    entry.email = itemSummary(entry.item);
+    return;
+  }
   draft[openAccIdx].name     = body.querySelector('.acc-name').value.trim();
   draft[openAccIdx].email    = body.querySelector('.acc-email').value.trim();
+  draft[openAccIdx].password = body.querySelector('.acc-password').value;
   draft[openAccIdx].secret   = body.querySelector('.acc-secret').value.trim();
   draft[openAccIdx].urls     = body.querySelector('.acc-urls').value.trim();
   draft[openAccIdx].autofill = body.querySelector('.acc-autofill').checked;
-  draft[openAccIdx].category = (body.querySelector('.cat-choose')?.dataset.value || '').trim();
 }
 
 function updateVaultCount() {
   const rows = document.querySelectorAll('.acc-row');
   const visible = [...rows].filter(r => r.style.display !== 'none').length;
   const total = draft.length;
+  const noun = draft.some(e => e._kind) ? 'item' : 'account';
   const el = document.getElementById('acc-count');
   if (el) el.textContent = visible === total
-    ? `${total} account${total !== 1 ? 's' : ''}`
+    ? `${total} ${noun}${total !== 1 ? 's' : ''}`
     : `${visible} of ${total}`;
 }
 
@@ -684,10 +867,34 @@ function applyVaultSearch() {
     const textMatch = !q
       || (acc.name  || '').toLowerCase().includes(q)
       || (acc.email || '').toLowerCase().includes(q);
-    const catMatch = !categoryFilter || (acc.category || '').trim() === categoryFilter;
-    row.style.display = (textMatch && catMatch) ? '' : 'none';
+    const catMatch = !categoryFilter || tagsOf(acc).includes(categoryFilter);
+    const typeMatch = !typeFilter || entryType(acc) === typeFilter;
+    row.style.display = (textMatch && catMatch && typeMatch) ? '' : 'none';
   });
   updateVaultCount();
+}
+
+// Type filter (All · Logins · Secure notes · …): shown once the vault holds
+// more than one type.
+function renderVaultTypeBar() {
+  const bar = document.getElementById('vault-type-bar');
+  const types = [...new Set(draft.map(entryType))];
+  if (typeFilter && !types.includes(typeFilter)) typeFilter = '';
+  if (types.length < 2) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  bar.style.display = '';
+  bar.innerHTML = '';
+  const order = Object.keys(Vault.TYPES);
+  const options = [['', 'All', draft.length],
+    ...types.sort((a, b) => order.indexOf(a) - order.indexOf(b))
+      .map(t => [t, `${typeLabel(t)}s`, draft.filter(e => entryType(e) === t).length])];
+  for (const [value, label, count] of options) {
+    const pill = document.createElement('button');
+    pill.className = 'cat-pill type-pill' + (typeFilter === value ? ' active' : '');
+    pill.dataset.type = value;
+    pill.innerHTML = `${esc(label)} <span class="count">${count}</span>`;
+    pill.addEventListener('click', () => { typeFilter = value; renderVaultTypeBar(); applyVaultSearch(); });
+    bar.appendChild(pill);
+  }
 }
 
 function renderVaultCatBar() {
@@ -715,11 +922,14 @@ function rebuildAccountsDOM() {
     const head = document.createElement('button');
     head.className = 'acc-head' + (i === openAccIdx ? ' open' : '');
     const cat = (acc.category || '').trim();
+    const item = !!acc._kind;
     head.innerHTML = `
       ${avatarHTML(acc, 'acc-av-md')}
       <span class="acc-head-text">
-        <span class="acc-head-name">${esc(acc.name) || `Account ${i + 1}`}${sharedBadgeHTML(findSharedCode(acc))}</span>
-        ${cat || acc.email ? `<span class="acc-head-sub">
+        <span class="acc-head-name">${esc(acc.name) || (item ? esc(`Untitled ${typeLabel(acc.type).toLowerCase()}`) : `Account ${i + 1}`)}${item ? '' : sharedBadgeHTML(findSharedCode(acc))}</span>
+        ${cat || acc.email || item ? `<span class="acc-head-sub">
+          ${item ? `<span class="type-tag">${esc(typeLabel(acc.type))}</span>` : ''}
+          ${isSharedEntry(acc) ? `<span class="type-tag shared-tag">Shared · ${esc(acc.collectionName)}</span>` : ''}
           ${cat ? `<span class="cat-tag">${catDot(cat)}${esc(cat)}</span>` : ''}
           ${acc.email ? `<span class="acc-head-email">${esc(acc.email)}</span>` : ''}
         </span>` : ''}
@@ -729,6 +939,7 @@ function rebuildAccountsDOM() {
       syncOpenAccToDraft();
       openAccIdx = i;
       rebuildAccountsDOM();
+      renderVaultTypeBar();
       renderVaultCatBar();
       applyVaultSearch();
       renderAccDetail();
@@ -758,41 +969,58 @@ function renderAccDetail() {
     return;
   }
 
-  const cat = (acc.category || '').trim();
+  if (acc._kind) { renderItemDetail(container, acc); return; }
+
+  // "2FA code" (from + Add) opens the same login editor in a compact form:
+  // the 2FA secret first, the password behind "+ Add password". Saved, it's
+  // a regular login (and, with only a 2FA code, doesn't count toward Free).
+  const compact = !!acc._compact;
+  // Shown once it has a password or the user asked for it (kept while editing).
+  const hidePassword = compact && !acc.password && !acc._showPassword;
+  const nameField = `
+    <div class="acc-field">
+      <label>Name</label>
+      <input class="acc-name" type="text" placeholder="${compact ? 'e.g. GitHub' : 'e.g. My Project QA'}" value="${esc(acc.name)}">
+    </div>`;
+  const userField = `
+    <div class="acc-field">
+      <label>Username or email (optional)</label>
+      <input class="acc-email" type="text" placeholder="e.g. user@example.com" value="${esc(acc.email || '')}">
+    </div>`;
+  const passwordField = `
+    <div class="acc-field acc-password-field"${hidePassword ? ' style="display:none"' : ''}>
+      <label>Password (optional)</label>
+      <div class="field-row">
+        <input class="acc-password" type="password" placeholder="Password" value="${esc(acc.password || '')}" autocomplete="new-password">
+        <button class="btn-eye" title="Show/hide">${SVG_EYE}</button>
+        <button class="btn-eye btn-gen-password" title="Generate a password">⟳</button>
+      </div>
+    </div>
+    ${hidePassword ? '<button type="button" class="coll-link btn-add-password">+ Add password</button>' : ''}`;
+  const secretField = `
+    <div class="acc-field">
+      <label>${compact ? '2FA secret or otpauth:// link' : '2FA secret (optional, base32 or hex)'}</label>
+      <div class="field-row">
+        <input class="acc-secret" type="password" placeholder="${compact ? 'Paste the setup key or otpauth:// link' : 'Secret'}" value="${esc(acc.secret)}" autocomplete="off">
+        <button class="btn-eye" title="Show/hide">${SVG_EYE}</button>
+      </div>
+    </div>`;
+  const urlsField = `
+    <div class="acc-field">
+      <label>${compact ? 'Site (optional, for auto-fill)' : 'URLs (one per line, * wildcard ok)'}</label>
+      <textarea class="acc-urls" placeholder="*.example.com&#10;staging.myapp.io">
+${esc(acc.urls || '')}</textarea>
+    </div>`;
   const body = document.createElement('div');
   body.className = 'acc-body open';
   body.innerHTML = `
     <div class="acc-body-head">
-      <span class="acc-body-title">${esc(acc.name) || `Account ${openAccIdx + 1}`}${sharedBadgeHTML(findSharedCode(acc))}</span>
+      <span class="acc-body-title">${esc(acc.name) || (compact ? 'New 2FA code' : `Account ${openAccIdx + 1}`)}${sharedBadgeHTML(findSharedCode(acc))}</span>
       <button class="btn-del" title="Delete account">✕ Delete</button>
     </div>
-    <div class="acc-field">
-      <label>Name</label>
-      <input class="acc-name" type="text" placeholder="e.g. My Project QA" value="${esc(acc.name)}">
-    </div>
-    <div class="acc-field">
-      <label>Email (optional)</label>
-      <input class="acc-email" type="email" placeholder="e.g. user@example.com" value="${esc(acc.email || '')}">
-    </div>
-    <div class="acc-field">
-      <label>Category</label>
-      <div class="cat-choose" data-value="${esc(cat)}">
-        <button type="button" class="cat-choice${cat ? '' : ' sel'}" data-cat=""><span class="cat-dot" style="background:var(--ink-4)"></span>None</button>
-        ${draftCategories().map(c => `<button type="button" class="cat-choice${cat === c ? ' sel' : ''}" data-cat="${esc(c)}">${catDot(c)}${esc(c)}</button>`).join('')}
-        <button type="button" class="cat-choice new">+ New</button>
-      </div>
-    </div>
-    <div class="acc-field">
-      <label>Secret (base32 or hex)</label>
-      <div class="field-row">
-        <input class="acc-secret" type="password" placeholder="Secret" value="${esc(acc.secret)}" autocomplete="off">
-        <button class="btn-eye" title="Show/hide">${SVG_EYE}</button>
-      </div>
-    </div>
-    <div class="acc-field">
-      <label>URLs (one per line, * wildcard ok)</label>
-      <textarea class="acc-urls" placeholder="*.example.com&#10;staging.myapp.io">${esc(acc.urls || '')}</textarea>
-    </div>
+    ${compact
+      ? nameField + secretField + userField + urlsField + passwordField + tagFieldsHTML(acc)
+      : nameField + userField + passwordField + tagFieldsHTML(acc) + secretField + urlsField}
     <label class="toggle">
       <input type="checkbox" class="acc-autofill" ${acc.autofill !== false ? 'checked' : ''}>
       <span class="toggle-track"></span>
@@ -801,7 +1029,31 @@ function renderAccDetail() {
     <div class="acc-share">
       <button type="button" class="btn-share-team">↗ Share with team</button>
       <div class="share-picker" style="display:none"></div>
-    </div>`;
+    </div>
+    ${collectionControlsHTML(acc)}`;
+
+  body.querySelector('.btn-add-password')?.addEventListener('click', e => {
+    acc._showPassword = true;
+    body.querySelector('.acc-password-field').style.display = '';
+    e.currentTarget.remove();
+    body.querySelector('.acc-password').focus();
+  });
+  // A pasted otpauth:// link fills in the secret, and the name and username
+  // when they're still empty.
+  body.querySelector('.acc-secret').addEventListener('input', e => {
+    const parsed = parseOtpauth(e.target.value);
+    if (!parsed) return;
+    if (parsed.unsupported || parsed.invalid) {
+      e.target.value = '';
+      setStatus(parsed.invalid ? 'That otpauth:// link is malformed' : 'That code uses settings OTPilot can\'t generate (only 6-digit, 30-second codes)', false);
+      return;
+    }
+    e.target.value = parsed.secret;
+    const name = body.querySelector('.acc-name');
+    const user = body.querySelector('.acc-email');
+    if (!name.value.trim() && parsed.issuer) { name.value = parsed.issuer; name.dispatchEvent(new Event('input')); }
+    if (!user.value.trim() && parsed.account) user.value = parsed.account;
+  });
 
   body.querySelector('.btn-del').addEventListener('click', () => {
     syncOpenAccToDraft(); // pick up an in-progress name edit before naming it in the prompt
@@ -810,17 +1062,27 @@ function renderAccDetail() {
     draft.splice(openAccIdx, 1);
     openAccIdx = -1;
     rebuildAccountsDOM();
+    renderVaultTypeBar();
     renderVaultCatBar();
     applyVaultSearch();
     renderAccDetail();
   });
 
-  body.querySelector('.btn-eye').addEventListener('click', e => {
+  body.querySelectorAll('.btn-eye:not(.btn-gen-password)').forEach(b => b.addEventListener('click', e => {
     const btn = e.currentTarget;
-    const inp = btn.previousElementSibling;
+    const inp = btn.parentElement.querySelector('input');
     const reveal = inp.type === 'password';
     inp.type = reveal ? 'text' : 'password';
     btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
+  }));
+
+  // Fills a new password with the Generate view's settings, shown so the user sees what they got.
+  body.querySelector('.btn-gen-password').addEventListener('click', async () => {
+    const { generatorOptions } = await chrome.storage.local.get('generatorOptions');
+    const inp = body.querySelector('.acc-password');
+    inp.value = Generator.generate({ ...generatorOptions, mode: 'password' });
+    inp.type = 'text';
+    inp.parentElement.querySelector('.btn-eye:not(.btn-gen-password)').innerHTML = SVG_EYE_OFF;
   });
 
   // Live-update the list row's name/email as you type, without a full
@@ -831,13 +1093,39 @@ function renderAccDetail() {
     if (head) head.innerHTML = esc(e.target.value.trim() || `Account ${idx + 1}`) + sharedBadgeHTML(findSharedCode(draft[idx]));
   });
 
+  mountCollectionControls(body, acc);
+
   // ── Share with team ──
   body.querySelector('.btn-share-team').addEventListener('click', () => {
     syncOpenAccToDraft();
     openSharePicker(body.querySelector('.share-picker'), draft[idx]);
   });
 
-  // ── Category chooser ──
+  mountCategoryChooser(body);
+
+  container.innerHTML = '';
+  container.appendChild(body);
+}
+
+// The category (first tag) chooser plus "More tags", shared by every editor.
+function tagFieldsHTML(entry) {
+  const cat = (entry.category || '').trim();
+  return `
+    <div class="acc-field">
+      <label>Category</label>
+      <div class="cat-choose" data-value="${esc(cat)}">
+        <button type="button" class="cat-choice${cat ? '' : ' sel'}" data-cat=""><span class="cat-dot" style="background:var(--ink-4)"></span>None</button>
+        ${draftCategories().map(c => `<button type="button" class="cat-choice${cat === c ? ' sel' : ''}" data-cat="${esc(c)}">${catDot(c)}${esc(c)}</button>`).join('')}
+        <button type="button" class="cat-choice new">+ New</button>
+      </div>
+    </div>
+    <div class="acc-field">
+      <label>More tags (comma separated)</label>
+      <input class="acc-more-tags" type="text" placeholder="e.g. client-x, infra" value="${esc((entry.moreTags || []).join(', '))}">
+    </div>`;
+}
+
+function mountCategoryChooser(body) {
   const choose = body.querySelector('.cat-choose');
   choose.querySelectorAll('.cat-choice:not(.new)').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -866,9 +1154,282 @@ function renderAccDetail() {
     field.appendChild(inp);
     inp.focus();
   });
+}
 
+// Editor for a non-login item, built from its fields (the type's template,
+// plus any field it carries that this version doesn't know — kept as text).
+// Secret kinds are masked with show/copy; password kinds can be generated.
+function renderItemDetail(container, entry) {
+  const idx = openAccIdx;
+  const item = entry.item;
+  const fieldHTML = f => {
+    const id = esc(f.id);
+    const val = esc(String(f.value ?? ''));
+    const secret = Vault.SECRET_KINDS.includes(f.kind);
+    let input;
+    const known = Vault.FIELD_KINDS.includes(f.kind);
+    if (f.kind === 'multiline' || !known) input = `<textarea class="item-field" data-id="${id}">
+${val}</textarea>`;
+    else if (f.kind === 'date') input = `<input class="item-field" data-id="${id}" type="date" value="${val}">`;
+    else input = `<input class="item-field" data-id="${id}" type="${secret ? 'password' : 'text'}" value="${val}" autocomplete="off">`;
+    return `<div class="acc-field">
+      <label>${esc(f.label || f.id)}</label>
+      <div class="field-row">
+        ${input}
+        ${secret ? `<button class="btn-eye" title="Show/hide">${SVG_EYE}</button>` : ''}
+        ${f.kind === 'password' ? '<button class="btn-eye btn-gen-password" title="Generate">⟳</button>' : ''}
+        ${f.kind === 'multiline' ? '' : '<button class="btn-eye btn-copy-field" title="Copy">⧉</button>'}
+      </div>
+    </div>`;
+  };
+  const body = document.createElement('div');
+  body.className = 'acc-body open item-body';
+  body.dataset.type = entry.type;
+  body.innerHTML = `
+    <div class="acc-body-head">
+      <span class="acc-body-title">${esc(entry.name) || esc(`Untitled ${typeLabel(entry.type).toLowerCase()}`)}</span>
+      <span class="type-tag">${esc(typeLabel(entry.type))}</span>
+      <button class="btn-del" title="Delete">✕ Delete</button>
+    </div>
+    <div class="acc-field">
+      <label>Name</label>
+      <input class="item-title" type="text" placeholder="${esc(typeLabel(entry.type))} name" value="${esc(entry.name)}">
+    </div>
+    ${(item.fields || []).map(fieldHTML).join('')}
+    ${Vault.TYPES[entry.type]?.urls ? `
+    <div class="acc-field">
+      <label>2FA secret (optional, base32 or hex)</label>
+      <div class="field-row">
+        <input class="item-totp" type="password" value="${esc(item.totp?.secret || '')}" autocomplete="off">
+        <button class="btn-eye btn-eye-totp" title="Show/hide">${SVG_EYE}</button>
+      </div>
+    </div>
+    <div class="acc-field">
+      <label>URLs (one per line, * wildcard ok)</label>
+      <textarea class="item-urls">
+${esc((item.urls || []).join('\n'))}</textarea>
+    </div>` : ''}
+    <div class="acc-field">
+      <label>Notes</label>
+      <textarea class="item-notes" placeholder="${entry.type === 'note' ? 'Write your note' : 'Anything else worth keeping'}">
+${esc(item.notes || '')}</textarea>
+    </div>
+    ${tagFieldsHTML(entry)}
+    ${collectionControlsHTML(entry)}`;
+
+  body.querySelectorAll('.item-field').forEach(inp => inp.addEventListener('input', () => { inp.dataset.dirty = '1'; }));
+  const shared = isSharedEntry(entry);
+  if (shared) {
+    body.querySelector('.acc-body-head .type-tag').textContent = `Shared · ${entry.collectionName}`;
+    if (entry.role === 'view') {
+      body.querySelectorAll('input, textarea').forEach(el => { el.readOnly = true; });
+      body.querySelectorAll('.cat-choice').forEach(el => { el.disabled = true; });
+      body.querySelectorAll('.btn-gen-password, .btn-del').forEach(el => el.remove());
+    }
+  }
+  body.querySelector('.item-totp')?.addEventListener('input', e => { e.target.dataset.dirty = '1'; });
+  body.querySelector('.btn-eye-totp')?.addEventListener('click', e => {
+    const inp = body.querySelector('.item-totp');
+    const reveal = inp.type === 'password';
+    inp.type = reveal ? 'text' : 'password';
+    e.currentTarget.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
+  });
+  mountCollectionControls(body, entry);
+
+  body.querySelector('.btn-del')?.addEventListener('click', async () => {
+    syncOpenAccToDraft();
+    if (shared) {
+      if (!confirm(`Delete "${draft[idx].name}" from "${entry.collectionName}" for everyone in it?`)) return;
+      await deleteSharedEntry(entry);
+      return;
+    }
+    const name = draft[idx].name || `this ${typeLabel(entry.type).toLowerCase()}`;
+    if (!confirm(`Delete "${name}"? This can't be undone once you save.`)) return;
+    draft.splice(idx, 1);
+    openAccIdx = -1;
+    rebuildAccountsDOM();
+    renderVaultTypeBar();
+    renderVaultCatBar();
+    applyVaultSearch();
+    renderAccDetail();
+  });
+  body.querySelectorAll('.btn-eye:not(.btn-gen-password):not(.btn-copy-field):not(.btn-eye-totp)').forEach(b => b.addEventListener('click', e => {
+    const btn = e.currentTarget;
+    const inp = btn.parentElement.querySelector('.item-field');
+    const reveal = inp.type === 'password';
+    inp.type = reveal ? 'text' : 'password';
+    btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
+  }));
+  body.querySelectorAll('.btn-gen-password').forEach(b => b.addEventListener('click', async () => {
+    const inp = b.parentElement.querySelector('.item-field');
+    const { generatorOptions } = await chrome.storage.local.get('generatorOptions');
+    inp.value = Generator.generate({ ...generatorOptions, mode: 'password' });
+    inp.dataset.dirty = '1';
+    inp.type = 'text';
+  }));
+  body.querySelectorAll('.btn-copy-field').forEach(b => b.addEventListener('click', async () => {
+    const inp = b.parentElement.querySelector('.item-field');
+    if (inp.value && await copyText(inp.value)) setStatus('Copied');
+  }));
+  body.querySelector('.item-title').addEventListener('input', e => {
+    const head = document.querySelector(`.acc-row[data-i="${idx}"] .acc-head-name`);
+    if (head) head.textContent = e.target.value.trim() || `Untitled ${typeLabel(entry.type).toLowerCase()}`;
+  });
+  mountCategoryChooser(body);
   container.innerHTML = '';
   container.appendChild(body);
+}
+
+// ── Collections in the editor ──
+// A shared item: "Save to <collection>" (edit/manage). A saved personal item
+// or login: "Move to collection…" (re-encrypted under the collection key,
+// then removed from the personal vault).
+function collectionControlsHTML(entry) {
+  if (isSharedEntry(entry)) {
+    return entry.role === 'view'
+      ? `<div class="coll-meta">View only — ask a manager of "${esc(entry.collectionName)}" for edit access.</div>`
+      : `<button type="button" class="btn-save-all btn-save-shared">Save to ${esc(entry.collectionName)}</button>`;
+  }
+  const targets = collections.filter(c => c.key && c.role !== 'view');
+  if (!targets.length || !entry._id || !_draftBase.some(b => b._id === entry._id)) return '';
+  return `<div class="acc-field move-to-collection">
+    <label>Share in a team collection</label>
+    <div class="field-row">
+      <select class="move-target">${targets.map(c => `<option value="${esc(c.id)}">${esc(c.name || 'Collection')}</option>`).join('')}</select>
+      <button type="button" class="btn-crypto-ok btn-move-collection">Move</button>
+    </div>
+  </div>`;
+}
+
+function mountCollectionControls(body, entry) {
+  body.querySelector('.btn-save-shared')?.addEventListener('click', () => saveSharedEntry(entry));
+  body.querySelector('.btn-move-collection')?.addEventListener('click', () =>
+    moveToCollection(entry, body.querySelector('.move-target').value));
+}
+
+// Replaces the rows of the given ids (in the draft and its base) with fresh
+// entries, keeping every other unsaved edit in the editor.
+function patchEntries(ids, fresh) {
+  const drop = new Set(ids);
+  const keep = list => list.filter(e => !drop.has(e._id));
+  draft = [...keep(draft), ...fresh];
+  _draftBase = [...keep(_draftBase), ...fresh.map(e => structuredClone(e))];
+  openAccIdx = -1;
+  rebuildAccountsDOM();
+  renderVaultTypeBar();
+  renderVaultCatBar();
+  applyVaultSearch();
+  renderAccDetail();
+}
+
+async function saveSharedEntry(entry) {
+  syncOpenAccToDraft();
+  const c = collections.find(x => x.id === entry.cid);
+  if (!c?.key) { setStatus('This collection is not available on this device', false); return; }
+  if (!entry.name) { setStatus('It needs a name', false); return; }
+  let res;
+  try { res = await VaultCollections.save(c, itemOfEntry(entry), entry._baseRev); } catch { setStatus('Could not save — check your connection', false); return; }
+  if (res.conflict) setStatus('Someone changed this meanwhile — showing their version', false);
+  else setStatus(`Saved to ${c.name}`);
+  sharedItems = await sharedItemsFromLocal();
+  const fresh = sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf);
+  patchEntries([entry._id], fresh);
+}
+
+async function deleteSharedEntry(entry) {
+  const c = collections.find(x => x.id === entry.cid);
+  if (!c?.key) return;
+  let res;
+  try { res = await VaultCollections.deleteItem(c, entry._id, entry._baseRev); } catch { setStatus('Could not delete — check your connection', false); return; }
+  if (res.conflict) setStatus('Someone changed this meanwhile — not deleted', false);
+  sharedItems = await sharedItemsFromLocal();
+  patchEntries([entry._id], sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf));
+}
+
+async function sharedItemsFromLocal() {
+  const out = [];
+  for (const c of collections) {
+    if (!c.key) continue;
+    for (const { item, revision } of await VaultCollections.snapshot(c)) out.push({ collection: c, item, revision });
+  }
+  return out;
+}
+
+let _moving = false;
+async function moveToCollection(entry, cid) {
+  if (_moving) return; // a second click would put another copy in the collection
+  _moving = true;
+  const btn = document.querySelector('#acc-detail .btn-move-collection');
+  if (btn) btn.disabled = true;
+  try { await moveNow(entry, cid); } finally { _moving = false; if (btn?.isConnected) btn.disabled = false; }
+}
+
+async function moveNow(entry, cid) {
+  syncOpenAccToDraft();
+  if (JSON.stringify(draft) !== JSON.stringify(_draftBase)) { setStatus('Save or cancel your changes first', false); return; }
+  const c = collections.find(x => x.id === cid);
+  const key = await VaultKeys.getKey();
+  if (!c?.key || !key) return;
+  if (!confirm(`Move "${entry.name}" into "${c.name}"? Everyone in it will see it, and it leaves your personal vault.`)) return;
+  // The exact record copied: the personal copy is only removed if it is
+  // still this one once the collection has it (a page may update the login
+  // meanwhile).
+  const copied = (await VaultStore.listRecords())[entry._id];
+  const item = copied && await VaultCrypto.decryptItem(copied, key).catch(() => null);
+  if (!item) { setStatus('Could not read this item', false); return; }
+  try {
+    const res = await VaultCollections.moveIn(c, item);
+    if (!res.ok) throw new Error('not saved');
+  } catch { setStatus('Could not move it — check your connection', false); return; }
+  const before = new Set(sharedItems.map(s => s.item.id));
+  const removed = await VaultStore.transaction(async tx => {
+    const now = (await tx.listRecords())[entry._id];
+    if (!now || now.data?.iv !== copied.data?.iv) return false;
+    await tx.remove(entry._id);
+    return true;
+  });
+  if (!removed) {
+    setStatus('It changed while moving: the collection has the earlier copy, your updated one stays in your vault', false);
+  }
+  // The locked-vault index must stop offering it now, sync or not (rebuilt
+  // under the vault lock, so a page saving a login meanwhile isn't undone).
+  await VaultAccounts.rebuildIndex(key);
+  await stampLocalChange();
+  silentPullSync(); // the removal reaches the user's other devices
+  accounts = await VaultAccounts.load(key);
+  _loadedIds = new Set(accounts.map(a => a._id));
+  otherItems = await VaultAccounts.loadOthers(key);
+  sharedItems = await sharedItemsFromLocal();
+  const added = sharedItems.filter(s => !before.has(s.item.id)).map(sharedEntryOf);
+  if (removed) patchEntries([entry._id], added);
+  else {
+    // Kept: show (and base later saves on) the updated version, not the copy.
+    const kept = [...accounts, ...otherItems.map(entryOf)].find(e => e._id === entry._id);
+    patchEntries([entry._id], [...(kept ? [{ ...structuredClone(kept) }] : []), ...added]);
+  }
+  renderAccountBar();
+  if (removed) setStatus(`Moved to ${c.name}`);
+}
+
+// An otpauth://totp/ link (what a 2FA QR code holds): { secret, issuer,
+// account }, { unsupported: true } for settings OTPilot can't generate,
+// { invalid: true } for a malformed one, or null when it isn't one.
+function parseOtpauth(text) {
+  const v = String(text || '').trim();
+  if (!/^otpauth:\/\//i.test(v)) return null;
+  let url;
+  try { url = new URL(v); } catch { return null; }
+  const p = url.searchParams;
+  const secret = (p.get('secret') || '').replace(/\s/g, '').toUpperCase();
+  if (!secret) return null;
+  if (url.host.toLowerCase() !== 'totp' || (p.get('digits') ?? '6') !== '6' || (p.get('period') ?? '30') !== '30'
+    || (p.get('algorithm') ?? 'SHA1').toUpperCase() !== 'SHA1') return { unsupported: true };
+  let label;
+  try { label = decodeURIComponent(url.pathname.replace(/^\/+/, '')); } catch { return { invalid: true }; }
+  const [labelIssuer, account] = label.includes(':') ? label.split(/:(.*)/s) : ['', label];
+  // Links carry base32; one that also looks like hex would be read as hex
+  // (totp.js decodeSecret), so it's stored as the hex of its bytes.
+  return { secret: Importers.storableSecret(secret.replace(/=+$/, '')), issuer: (p.get('issuer') || labelIssuer || '').trim(), account: (account || '').trim() };
 }
 
 function esc(s = '') {
@@ -885,18 +1446,67 @@ function sharedBadgeHTML(code) {
   </span>`;
 }
 
-document.getElementById('btn-add').addEventListener('click', () => {
+// "+ Add" opens the type picker: the item types, and the planned ones as
+// "Soon". A Login starts the login editor; the others an item editor.
+function addToDraft(type) {
   syncOpenAccToDraft();
   // Adding while a category filter is active pre-assigns that category, so the
   // new row matches the active filter and stays visible (instead of being
-  // hidden by applyVaultSearch the moment it's created).
-  draft.push({ name: '', email: '', secret: '', urls: '', autofill: true, category: categoryFilter });
+  // hidden by applyVaultSearch the moment it's created). Same for the type.
+  if (type === 'login' || type === '2fa') {
+    draft.push({
+      name: '', email: '', secret: '', urls: '', autofill: true, category: categoryFilter, moreTags: [],
+      ...(type === '2fa' ? { _compact: true } : {}),
+    });
+  } else {
+    draft.push(entryOf(Vault.newItem(type, { tags: categoryFilter ? [categoryFilter] : [] })));
+  }
+  if (typeFilter && typeFilter !== (type === '2fa' ? 'login' : type)) typeFilter = '';
   openAccIdx = draft.length - 1;
   rebuildAccountsDOM();
+  renderVaultTypeBar();
   renderVaultCatBar();
   applyVaultSearch();
   renderAccDetail();
   document.getElementById('accounts-list').lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  document.querySelector(type === '2fa' ? '#acc-detail .acc-secret' : '#acc-detail .acc-name, #acc-detail .item-title')?.focus();
+}
+
+function closeAddMenu() {
+  document.getElementById('add-type-menu').style.display = 'none';
+}
+
+document.getElementById('btn-add').addEventListener('click', e => {
+  e.stopPropagation();
+  const menu = document.getElementById('add-type-menu');
+  if (menu.style.display !== 'none') { closeAddMenu(); return; }
+  menu.innerHTML = '';
+  // "2FA code" first: a login opened in its compact, 2FA-first form.
+  const twoFa = document.createElement('button');
+  twoFa.className = 'add-type';
+  twoFa.dataset.addType = '2fa';
+  twoFa.textContent = '2FA code';
+  twoFa.addEventListener('click', () => { closeAddMenu(); addToDraft('2fa'); });
+  menu.appendChild(twoFa);
+  for (const [type, t] of Object.entries(Vault.TYPES)) {
+    const b = document.createElement('button');
+    b.className = 'add-type';
+    b.dataset.addType = type;
+    b.textContent = t.label;
+    b.addEventListener('click', () => { closeAddMenu(); addToDraft(type); });
+    menu.appendChild(b);
+  }
+  for (const t of Vault.UPCOMING_TYPES) {
+    const b = document.createElement('button');
+    b.className = 'add-type soon';
+    b.disabled = true;
+    b.innerHTML = `${esc(t.label)} <span class="soon-tag">Soon</span>`;
+    menu.appendChild(b);
+  }
+  menu.style.display = '';
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest?.('#add-type-menu')) closeAddMenu();
 });
 
 document.getElementById('acc-search').addEventListener('input', applyVaultSearch);
@@ -906,10 +1516,78 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
   showView('home');
 });
 
+// One save at a time: a second click while one is in flight would read the
+// open form into a draft the first save already merged and re-sorted.
+let _savingAccounts = false;
 document.getElementById('btn-save-all').addEventListener('click', async () => {
+  if (_savingAccounts) return;
+  _savingAccounts = true;
+  // What this click saves is captured now, before waiting for the lock: if
+  // the user leaves the editor or starts over meanwhile, the queued save
+  // stops instead of saving a later editing session nobody clicked Save on.
   syncOpenAccToDraft();
+  const intended = { session: _editSession, draft: JSON.stringify(draft) };
+  // Counting toward the Free limit and writing share one lock with every
+  // other user-initiated add (the page's Save login, CSV import), so two of
+  // them can't both take the last free slot.
+  try { await navigator.locks.request('otpilot-item-limit', () => saveAccounts(intended)); } finally { _savingAccounts = false; }
+});
+
+async function saveAccounts(intended) {
+  if (_editSession !== intended.session || JSON.stringify(draft) !== intended.draft) {
+    setStatus('The list changed while saving — save again', false);
+    return;
+  }
 
   if (draft.some(a => !a.name)) { setStatus('Every account needs a name', false); return; }
+  // Shared items are saved to their collection, not by this button: never
+  // drop their edits silently.
+  const baseById = new Map(_draftBase.map(e => [e._id, JSON.stringify(e)]));
+  const sharedDirty = draft.find(e => isSharedEntry(e) && baseById.get(e._id) !== JSON.stringify(e));
+  if (sharedDirty) {
+    setStatus(`"${sharedDirty.name}" is shared: use "Save to ${sharedDirty.collectionName}" first, or Cancel`, false);
+    return;
+  }
+
+  // Free plan: up to 50 items (2FA-only logins don't count). Checked before
+  // anything changes, so a refused save leaves the editor as it was. The
+  // check is async: an edit made meanwhile (Add clicked again, typing in the
+  // open form) stops the save instead of saving something unchecked or
+  // dropping the typing. The draft is merged only after the check, so the
+  // open row's index still matches it when the form is read again.
+  const edited = JSON.stringify(draft);
+  let overLimit;
+  try {
+    const key = await VaultKeys.getKey();
+    const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+    const merged = mergeDraftWithCurrent();
+    overLimit = !!key && await VaultAccounts.exceedsFreeLimit(
+      merged.filter(isLoginEntry), key, _loadedIds, userPlan, planOtherItems(merged));
+  } catch {
+    setStatus('Could not check the Free plan limit — try again', false);
+    return;
+  }
+  if (overLimit) {
+    setStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items (2FA-only logins don't count). Upgrade to add more.`, false);
+    return;
+  }
+  syncOpenAccToDraft();
+  if (JSON.stringify(draft) !== edited) {
+    setStatus('The list changed while saving — save again', false);
+    return;
+  }
+  draft = mergeDraftWithCurrent();
+
+  // Non-login items are written as items; the rest of this works on logins.
+  const others = planOtherItems(draft);
+  if (others.put.length || others.remove.length) {
+    const key = await VaultKeys.getKey();
+    if (!key) { setStatus('OTPilot is locked', false); return; }
+    if (others.put.length) await VaultStore.save(others.put, key);
+    if (others.remove.length) await VaultStore.remove(others.remove);
+    otherItems = await VaultAccounts.loadOthers(key);
+  }
+  draft = draft.filter(isLoginEntry);
 
   // Diff old accounts vs draft: stamp _updatedAt on new/changed, tombstone deleted
   const now      = new Date().toISOString();
@@ -921,7 +1599,9 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
     const changed = !old ||
       old.secret !== acc.secret || old.urls !== acc.urls ||
       old.email !== acc.email || old.autofill !== acc.autofill ||
-      (old.category || '') !== (acc.category || '');
+      (old.password || '') !== (acc.password || '') ||
+      (old.category || '') !== (acc.category || '') ||
+      JSON.stringify(old.moreTags || []) !== JSON.stringify(acc.moreTags || []);
     acc._updatedAt = changed ? now : (old._updatedAt ?? now);
   }
 
@@ -930,7 +1610,7 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
     if (!draftSet.has(acc.name)) newTombs[acc.name] = now;
   }
   tombstones = newTombs;
-  await new Promise(r => chrome.storage.local.set({ tombstones }, r));
+  await saveTombstones();
 
   draft.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   accounts = draft;
@@ -949,16 +1629,86 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   _justSavedMessage = true;
   showView('accounts', { openAccountIdx: -1, preserveSearch: true });
   setStatus('Saved');
-});
+}
 
 // ── View switching ────────────────────────────────────────────────────────────
 
+// Redraws whatever shows the account list: Home always, and the Accounts view
+// if it's open (keeping its search). Used after the list changes underneath
+// the UI (first load, a sync).
+// Never rebuilds an editor with unsaved changes or an open form: a sync
+// finishing mid-edit would otherwise discard what the user typed. Saving
+// merges the edits with whatever changed meanwhile (mergeDraftWithCurrent).
+let _draftBase = [];
+function accountsEditorBusy() {
+  if (document.getElementById('settings-panel').style.display === 'none') return false;
+  syncOpenAccToDraft();
+  return openAccIdx >= 0 || JSON.stringify(draft) !== JSON.stringify(_draftBase);
+}
+
+function refreshAccountsUI() {
+  renderAccountBar();
+  if (document.getElementById('settings-panel').style.display === 'none') return;
+  if (accountsEditorBusy()) {
+    setStatus('Synced — other changes appear after you save or cancel');
+    return;
+  }
+  renderAccountsList(-1, { preserveSearch: true });
+}
+
+// Three-way merge for Save, against the list the editor started from
+// (_draftBase): accounts the user didn't touch take their current version
+// (a sync may have changed or deleted them), edited and new ones are the
+// user's, and accounts that arrived meanwhile are kept.
+// Item ids a sync replaced while the popup was open (a login migrated on two
+// devices kept under the server's id): the editor's copies follow them.
+const _idRemaps = {};
+const remapId = a => (a._id && _idRemaps[a._id] ? { ...a, _id: _idRemaps[a._id] } : a);
+
+function mergeDraftWithCurrent() {
+  const base = new Map(_draftBase.filter(a => a._id).map(remapId).map(a => [a._id, JSON.stringify(a)]));
+  const currentList = [...accounts, ...otherItems.map(entryOf), ...sharedItems.map(sharedEntryOf)];
+  const current = new Map(currentList.filter(a => a._id).map(a => [a._id, a]));
+  const merged = [];
+  for (const d0 of draft) {
+    const d = remapId(d0);
+    const untouched = d._id && base.get(d._id) === JSON.stringify(d);
+    if (!untouched) merged.push(d);
+    else if (current.has(d._id)) merged.push({ ...current.get(d._id) });
+    // untouched here and gone from the vault: deleted elsewhere, stays deleted
+  }
+  for (const a of currentList) {
+    if (a._id && !base.has(a._id)) merged.push({ ...a }); // arrived while editing
+  }
+  return merged;
+}
+
+// The non-login item writes for a merged draft: changed or new items (`put`)
+// and the ids the user deleted (`remove`: in the vault, gone from the draft).
+function planOtherItems(merged) {
+  const current = new Map(otherItems.map(i => [i.id, i]));
+  const same = (a, b) => JSON.stringify({ ...a, updatedAt: null }) === JSON.stringify({ ...b, updatedAt: null });
+  const now = new Date().toISOString();
+  const put = [];
+  const kept = new Set();
+  for (const entry of merged.filter(isItemEntry)) {
+    kept.add(entry._id);
+    const item = itemOfEntry(entry);
+    const cur = current.get(entry._id);
+    if (!cur || !same(item, cur)) put.push({ ...item, updatedAt: now });
+  }
+  return { put, remove: [...current.keys()].filter(id => !kept.has(id)) };
+}
+
 function showView(view, opts = {}) {
+  if (view !== 'settings') { clearRevealedKey(); hideCsvExport(); }
   document.getElementById('home-view').style.display      = view === 'home'     ? '' : 'none';
   document.getElementById('settings-panel').style.display = view === 'accounts' ? '' : 'none';
   document.getElementById('config-panel').style.display   = view === 'settings' ? '' : 'none';
   document.getElementById('sync-panel').style.display     = view === 'sync'     ? '' : 'none';
   document.getElementById('team-panel').style.display     = view === 'team'     ? '' : 'none';
+  document.getElementById('generate-panel').style.display = view === 'generate' ? '' : 'none';
+  document.getElementById('nav-generate').classList.toggle('active', view === 'generate');
   document.getElementById('nav-home').classList.toggle('active',     view === 'home');
   document.getElementById('nav-settings').classList.toggle('active', view === 'accounts');
   document.getElementById('nav-config').classList.toggle('active',   view === 'settings');
@@ -967,6 +1717,7 @@ function showView(view, opts = {}) {
   if (view === 'accounts') renderAccountsList(opts.openAccountIdx ?? -1, { preserveSearch: opts.preserveSearch });
   if (view === 'sync') renderSyncPanel();
   if (view === 'team') renderTeamPanel();
+  if (view === 'generate') renderGenerator();
   if (view === 'settings') {
     chrome.storage.local.get('emailAutoFill', d => {
       const on = d.emailAutoFill ?? true;
@@ -989,7 +1740,9 @@ function showSettingsSubview(id) {
   // no more "back". 'settings-list' as an id just means "no specific item was
   // requested", so it falls back to the first one instead of showing nothing.
   if (id === 'settings-list') id = 'settings-theme-view';
-  const views = ['settings-theme-view', 'settings-backup-view', 'settings-google-import-view', 'settings-autofill-view', 'settings-password-view'];
+  if (id !== 'settings-password-view') clearRevealedKey();
+  if (id !== 'settings-backup-view') hideCsvExport();
+  const views = ['settings-theme-view', 'settings-backup-view', 'settings-google-import-view', 'settings-csv-import-view', 'settings-autofill-view', 'settings-password-view'];
   views.forEach(v => { document.getElementById(v).style.display = v === id ? '' : 'none'; });
   document.querySelectorAll('#settings-list .settings-row').forEach(row => {
     row.classList.toggle('sel', row.dataset.view === id);
@@ -1012,12 +1765,47 @@ document.getElementById('back-settings-google-import').addEventListener('click',
 document.getElementById('row-settings-autofill').addEventListener('click', () => showSettingsSubview('settings-autofill-view'));
 document.getElementById('back-settings-autofill').addEventListener('click', () => showSettingsSubview('settings-list'));
 
-document.getElementById('row-settings-password').addEventListener('click', () => {
-  ['change-pw-current', 'change-pw-new', 'change-pw-confirm'].forEach(id => document.getElementById(id).value = '');
+document.getElementById('row-settings-password').addEventListener('click', async () => {
+  ['change-pw-current', 'change-pw-new', 'change-pw-confirm', 'reveal-key-password'].forEach(id => document.getElementById(id).value = '');
+  clearRevealedKey();
+  document.getElementById('reveal-key-err').textContent = '';
   document.getElementById('change-pw-err').textContent = '';
+  document.getElementById('autolock-select').value = String(await VaultLock.getAutoLock());
   showSettingsSubview('settings-password-view');
 });
-document.getElementById('back-settings-password').addEventListener('click', () => showSettingsSubview('settings-list'));
+// The revealed recovery key is dropped from the page as soon as it's no
+// longer on screen (leaving the view, locking); a reveal still pending then
+// is ignored (the token no longer matches).
+let _revealToken = 0;
+function clearRevealedKey() {
+  _revealToken++;
+  const out = document.getElementById('reveal-key-value');
+  out.textContent = '';
+  out.style.display = 'none';
+}
+
+document.getElementById('reveal-key-btn').addEventListener('click', async () => {
+  const pwEl = document.getElementById('reveal-key-password');
+  const out = document.getElementById('reveal-key-value');
+  const err = document.getElementById('reveal-key-err');
+  err.textContent = '';
+  clearRevealedKey();
+  const token = _revealToken;
+  const key = pwEl.value ? await VaultLock.revealRecoveryKey(pwEl.value) : null;
+  pwEl.value = '';
+  if (token !== _revealToken) return;
+  if (!key) { err.textContent = 'Incorrect password.'; return; }
+  out.textContent = key;
+  out.style.display = '';
+});
+document.getElementById('autolock-select').addEventListener('change', async e => {
+  await VaultLock.setAutoLock(Number(e.target.value));
+  setStatus('Auto-lock updated');
+});
+document.getElementById('back-settings-password').addEventListener('click', () => {
+  clearRevealedKey();
+  showSettingsSubview('settings-list');
+});
 
 document.getElementById('change-pw-submit').addEventListener('click', async () => {
   const current = document.getElementById('change-pw-current').value;
@@ -1032,17 +1820,12 @@ document.getElementById('change-pw-submit').addEventListener('click', async () =
 
   setLockButtonState(btn, true);
   try {
-    const { auth, sessionDuration } = await loadAuthState();
-    const ok = await verifyMasterPassword(current, auth);
+    const ok = await VaultLock.changePassword(current, next);
     if (!ok) {
       err.textContent = 'Current password is incorrect.';
       setLockButtonState(btn, false);
       return;
     }
-    await createAuth(next);
-    // Renew the session from now, like setup/login do — otherwise a change
-    // made near the old expiry could immediately re-lock the popup.
-    await saveSessionExpiry(sessionDuration ?? 86400000);
     ['change-pw-current', 'change-pw-new', 'change-pw-confirm'].forEach(id => document.getElementById(id).value = '');
     showSettingsSubview('settings-list');
     setStatus('Master password updated');
@@ -1063,6 +1846,95 @@ document.getElementById('nav-home').addEventListener('click',    () => showView(
 document.getElementById('nav-settings').addEventListener('click', () => showView('accounts'));
 document.getElementById('nav-config').addEventListener('click',   () => showView('settings'));
 document.getElementById('nav-sync').addEventListener('click',     () => showView('sync'));
+document.getElementById('nav-generate').addEventListener('click', () => showView('generate'));
+
+// ── Generate ─────────────────────────────────────────────────────────────────
+// Options persist (chrome.storage.local, not secret). Copied passwords are kept
+// for this browser session only (chrome.storage.session, memory-only), so one
+// generated for a signup form that got closed can still be recovered.
+let _genOptions = { ...Generator.DEFAULTS };
+let _genValue = '';
+const GEN_HISTORY_MAX = 10;
+
+async function renderGenerator() {
+  const { generatorOptions } = await chrome.storage.local.get('generatorOptions');
+  _genOptions = Generator.normalize(generatorOptions);
+  regenerate();
+  renderGenHistory();
+}
+
+function syncGenControls() {
+  document.querySelectorAll('[data-gen-mode]').forEach(b => b.classList.toggle('active', b.dataset.genMode === _genOptions.mode));
+  document.getElementById('gen-length').textContent = _genOptions.length;
+  document.querySelectorAll('[data-gen-opt]').forEach(i => { i.checked = !!_genOptions[i.dataset.genOpt]; });
+  document.getElementById('gen-opts').style.display = _genOptions.mode === 'pin' ? 'none' : '';
+  const { bits, label } = Generator.strength(_genOptions);
+  document.getElementById('gen-strength').textContent = `${label} · ${_genOptions.length} characters · ~${bits} bits`;
+  document.getElementById('gen-bar').style.width = `${Math.min(100, bits)}%`;
+}
+
+function regenerate() {
+  _genValue = Generator.generate(_genOptions);
+  document.getElementById('gen-output').textContent = _genValue;
+  syncGenControls();
+}
+
+function setGenOptions(patch) {
+  _genOptions = Generator.normalize({ ..._genOptions, ...patch });
+  chrome.storage.local.set({ generatorOptions: _genOptions });
+  regenerate();
+}
+
+async function renderGenHistory() {
+  const { generatorHistory = [] } = await chrome.storage.session.get('generatorHistory');
+  const list = document.getElementById('gen-history');
+  list.innerHTML = '';
+  document.getElementById('gen-history-title').style.display = generatorHistory.length ? '' : 'none';
+  for (const value of generatorHistory) {
+    const row = document.createElement('div');
+    row.className = 'gen-history-row';
+    const text = document.createElement('span');
+    text.textContent = value;
+    const copy = document.createElement('button');
+    copy.className = 'gen-step';
+    copy.title = 'Copy';
+    copy.textContent = '⧉';
+    copy.addEventListener('click', async () => {
+      if (await copyText(value)) setStatus('Copied');
+    });
+    row.append(text, copy);
+    list.appendChild(row);
+  }
+}
+
+document.querySelectorAll('[data-gen-mode]').forEach(b =>
+  b.addEventListener('click', () => setGenOptions({ mode: b.dataset.genMode, length: b.dataset.genMode === 'pin' ? 6 : 16 })));
+document.querySelectorAll('[data-gen-opt]').forEach(i =>
+  i.addEventListener('change', () => setGenOptions({ [i.dataset.genOpt]: i.checked })));
+document.getElementById('gen-minus').addEventListener('click', () => setGenOptions({ length: _genOptions.length - 1 }));
+document.getElementById('gen-plus').addEventListener('click', () => setGenOptions({ length: _genOptions.length + 1 }));
+document.getElementById('gen-regenerate').addEventListener('click', regenerate);
+// Copies or reports why it couldn't; returns whether the clipboard got it.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    setStatus('Could not copy — the browser blocked the clipboard', false);
+    return false;
+  }
+}
+
+document.getElementById('gen-copy').addEventListener('click', async () => {
+  // Capture now: Regenerate or an option change while this runs replaces _genValue.
+  const value = _genValue;
+  if (!(await copyText(value))) return;
+  const { generatorHistory = [] } = await chrome.storage.session.get('generatorHistory');
+  const next = [value, ...generatorHistory.filter(v => v !== value)].slice(0, GEN_HISTORY_MAX);
+  await chrome.storage.session.set({ generatorHistory: next });
+  setStatus('Password copied');
+  renderGenHistory();
+});
 document.getElementById('nav-team').addEventListener('click',     () => showView('team'));
 
 document.getElementById('btn-quick-add').addEventListener('click', () => {
@@ -1245,6 +2117,214 @@ document.getElementById('import-picker-confirm').addEventListener('click', async
 
 document.getElementById('import-picker-cancel').addEventListener('click', hideImportPicker);
 
+// ── Import from another password manager (CSV) ──────────────────────────────
+// Importers parses the file and plans each entry against the vault (new
+// login / password added to an existing one / already there); the items are
+// written straight to the vault, so notes and folders survive.
+
+let _csvImport = null; // { entries, plans }
+
+function csvImportStatus(text, ok = true) {
+  const el = document.getElementById('csv-import-status');
+  el.textContent = text;
+  el.style.color = ok ? 'var(--ink-4)' : 'var(--danger)';
+}
+
+function hideCsvReview() {
+  _csvImport = null;
+  document.getElementById('csv-import-review').style.display = 'none';
+  document.getElementById('csv-import-list').innerHTML = '';
+}
+
+let _csvReviewSeq = 0; // a newer file picked meanwhile makes an older review stale
+async function showCsvReview(file) {
+  const seq = ++_csvReviewSeq;
+  hideCsvReview();
+  let parsed;
+  try { parsed = Importers.parse(await file.text()); } catch (e) {
+    if (seq !== _csvReviewSeq) return;
+    csvImportStatus(e.message === 'No password column found' ? 'This CSV has no password column.' : 'Could not read this file.', false);
+    return;
+  }
+  const key = await VaultKeys.getKey();
+  if (!key) { csvImportStatus('Unlock OTPilot first.', false); return; }
+  const { items } = await VaultStore.readAll(key);
+  if (seq !== _csvReviewSeq) return;
+  hideCsvReview();
+  const plans = Importers.plan(parsed.entries, items);
+  const names = new Map(items.map(i => [i.id, i.title]));
+  _csvImport = { entries: parsed.entries, plans };
+
+  const skipped = [
+    parsed.invalid ? `${parsed.invalid} row${parsed.invalid === 1 ? '' : 's'} without a password skipped` : '',
+    parsed.otherTypes ? `${parsed.otherTypes} server/API item${parsed.otherTypes === 1 ? '' : 's'} not imported (not supported from CSV yet)` : '',
+    parsed.unsupportedTotp ? `${parsed.unsupportedTotp} 2FA code${parsed.unsupportedTotp === 1 ? '' : 's'} with unsupported settings (HOTP, 8 digits, SHA256…) not imported` : '',
+  ].filter(Boolean);
+  const nLogins = parsed.entries.filter(e => e.type === 'login').length;
+  const nNotes = parsed.entries.length - nLogins;
+  const found = `${nLogins} login${nLogins === 1 ? '' : 's'}${nNotes ? ` and ${nNotes} secure note${nNotes === 1 ? '' : 's'}` : ''}`;
+  csvImportStatus([`${parsed.source}: ${found} found`, ...skipped].join(' · '));
+  if (!parsed.entries.length) return;
+
+  const list = document.getElementById('csv-import-list');
+  parsed.entries.forEach((entry, i) => {
+    const p = plans[i];
+    const exists = p.action === 'exists';
+    const label = document.createElement('label');
+    label.className = 'export-acc-row' + (exists ? ' disabled' : '');
+    label.innerHTML = `<input type="checkbox" ${exists ? 'disabled' : 'checked'} data-idx="${i}">
+      <span class="export-acc-name">${esc(entry.title)}</span>
+      ${entry.type === 'note' ? '<span class="type-tag">Secure note</span>' : ''}
+      ${entry.username ? `<span class="export-acc-email">${esc(entry.username)}</span>` : ''}
+      ${exists ? '<span class="export-acc-exists">already in vault</span>' : ''}
+      ${p.action === 'merge' ? `<span class="export-acc-exists">adds password to ${esc(names.get(p.target) || 'login')}</span>` : ''}`;
+    list.appendChild(label);
+  });
+  document.getElementById('csv-import-all').checked = plans.some(p => p.action !== 'exists');
+  document.getElementById('csv-import-review').style.display = '';
+}
+
+document.getElementById('row-settings-csv-import').addEventListener('click', () => {
+  hideCsvReview();
+  csvImportStatus('');
+  showSettingsSubview('settings-csv-import-view');
+});
+document.getElementById('csv-import-pick').addEventListener('click', () => document.getElementById('csv-import-file').click());
+document.getElementById('csv-import-file').addEventListener('change', e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (file) showCsvReview(file);
+});
+document.getElementById('csv-import-all').addEventListener('change', e => {
+  document.querySelectorAll('#csv-import-list input:not(:disabled)').forEach(cb => { cb.checked = e.target.checked; });
+});
+document.getElementById('csv-import-cancel').addEventListener('click', () => { hideCsvReview(); csvImportStatus(''); });
+
+let _csvImporting = false;
+document.getElementById('csv-import-confirm').addEventListener('click', async () => {
+  if (!_csvImport || _csvImporting) return;
+  const chosen = [...document.querySelectorAll('#csv-import-list input:checked')].map(cb => _csvImport.entries[+cb.dataset.idx]);
+  if (!chosen.length) { setStatus('Select at least one login', false); return; }
+  // One import at a time: a second click would read the same vault and add
+  // the same rows again under new ids.
+  _csvImporting = true;
+  const btn = document.getElementById('csv-import-confirm');
+  btn.disabled = true;
+  try {
+    // The Free-limit lock shared by every user-initiated add (editor Save,
+    // the page's Save login), then the vault lock inside: same order everywhere.
+    await navigator.locks.request('otpilot-item-limit', () => importCsvEntries(chosen));
+  } catch (e) {
+    csvImportStatus(`Import failed — nothing was changed${e?.message ? ` (${e.message})` : ''}.`, false);
+  } finally {
+    _csvImporting = false;
+    btn.disabled = false;
+  }
+});
+
+async function importCsvEntries(chosen) {
+  const key = await VaultKeys.getKey();
+  if (!key) { csvImportStatus('Unlock OTPilot first.', false); return; }
+  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+  // Read, plan, check the Free limit and write as one step under the vault
+  // lock: a sync or another writer can't change a merge target (or delete
+  // it) in between. Planned with only the chosen rows (an unchecked row
+  // must not take a merge target).
+  const result = await VaultStore.transaction(async tx => {
+    const items = [];
+    for (const rec of Object.values(await tx.listRecords())) {
+      try { items.push(await VaultCrypto.decryptItem(rec, key)); } catch { /* unreadable: never a merge target */ }
+    }
+    const toSave = Importers.toItems(chosen, Importers.plan(chosen, items), items);
+    if (!Vault.PAID_PLANS.includes(userPlan)) {
+      const after = new Map(items.map(i => [i.id, i]));
+      toSave.forEach(i => after.set(i.id, i));
+      const count = Vault.countedItems([...after.values()]);
+      const before = Vault.countedItems(items);
+      if (count > Vault.FREE_ITEM_LIMIT && count > before) return { room: Math.max(Vault.FREE_ITEM_LIMIT - before, 0) };
+    }
+    const records = [];
+    for (const item of toSave) records.push([item.id, await VaultCrypto.encryptItem(item, key)]);
+    if (records.length) await tx.putMany(records); // one write: all or nothing
+    return { items, toSave };
+  });
+  if (result.room !== undefined) {
+    const { room } = result;
+    csvImportStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items: ${room ? `select at most ${room} more` : 'there is no room for more'}, or upgrade.`, false);
+    return;
+  }
+  const { items, toSave } = result;
+  if (toSave.length) {
+    await reloadFromVault(key);
+    await stampLocalChange();
+    silentPullSync();
+  }
+  const created = toSave.filter(i => !items.some(x => x.id === i.id));
+  const added = created.filter(i => i.type === 'login').length;
+  const notes = created.length - added;
+  const merged = toSave.length - created.length;
+  hideCsvReview();
+  csvImportStatus(`Imported ${added} login${added === 1 ? '' : 's'}${notes ? ` and ${notes} secure note${notes === 1 ? '' : 's'}` : ''}${merged ? `, added ${merged} to existing logins` : ''}.`);
+}
+
+// ── Export everything as CSV (not encrypted) ───────────────────────────────
+// Asks for the master password again: the file holds every secret in plain
+// text. Columns are the ones the CSV import reads (Importers.toCsv).
+
+// Bumped whenever the form closes (Cancel, Escape, toggling it, leaving the
+// view, locking): an export still checking the password or reading the
+// vault then writes nothing.
+let _csvExportSeq = 0;
+let _csvExporting = false;
+
+function hideCsvExport() {
+  _csvExportSeq++;
+  document.getElementById('csv-export-form').style.display = 'none';
+  document.getElementById('csv-export-password').value = '';
+}
+
+document.getElementById('btn-export-csv').addEventListener('click', () => {
+  const form = document.getElementById('csv-export-form');
+  if (form.style.display !== 'none') { hideCsvExport(); return; }
+  form.style.display = '';
+  document.getElementById('csv-export-password').focus();
+});
+document.getElementById('csv-export-cancel').addEventListener('click', hideCsvExport);
+document.getElementById('csv-export-password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('csv-export-confirm').click();
+  if (e.key === 'Escape') hideCsvExport();
+});
+
+document.getElementById('csv-export-confirm').addEventListener('click', async () => {
+  if (_csvExporting) return; // one export at a time: never two plaintext copies
+  const password = document.getElementById('csv-export-password').value;
+  if (!password) { setStatus('Enter your master password', false); return; }
+  const seq = _csvExportSeq;
+  const btn = document.getElementById('csv-export-confirm');
+  _csvExporting = true;
+  btn.disabled = true;
+  try { await exportCsv(password, seq); } finally { _csvExporting = false; btn.disabled = false; }
+});
+
+async function exportCsv(password, seq) {
+  const key = await VaultLock.revealRecoveryKey(password).catch(() => null);
+  if (seq !== _csvExportSeq) return; // closed meanwhile
+  if (!key) { setStatus('Incorrect password', false); return; }
+  const { items, failed } = await VaultStore.readAll(key);
+  if (seq !== _csvExportSeq || (await VaultLock.state()) !== 'unlocked') return;
+  if (!items.length) {
+    setStatus(failed.length ? `Could not export: ${failed.length} unreadable item${failed.length === 1 ? '' : 's'}` : 'The vault is empty', false);
+    return;
+  }
+  const a = document.createElement('a');
+  a.download = `otpilot-export-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.href = URL.createObjectURL(new Blob([Importers.toCsv(items)], { type: 'text/csv' }));
+  a.click();
+  URL.revokeObjectURL(a.href);
+  hideCsvExport();
+  setStatus(`Exported ${items.length} item${items.length === 1 ? '' : 's'}${failed.length ? ` (${failed.length} unreadable left out)` : ''} — delete the file after use`);
+}
+
 // ── Google Authenticator import ─────────────────────────────────────────────
 
 async function decodeQrFromImageFile(file) {
@@ -1424,40 +2504,11 @@ document.getElementById('crypto-password').addEventListener('keydown', e => {
 
 // ── Lock / Session ────────────────────────────────────────────────────────────
 
-const AUTH_SENTINEL = 'otpilot-auth-ok';
-let lockSetupResolve = null;
-let lockLoginResolve = null;
-
-function loadAuthState() {
-  return new Promise(r =>
-    chrome.storage.local.get(['auth', 'sessionExpiry', 'sessionDuration'], r)
-  );
-}
-
-function saveSessionExpiry(durationMs) {
-  const expiry = Date.now() + durationMs;
-  return new Promise(r =>
-    chrome.storage.local.set({ sessionExpiry: expiry, sessionDuration: durationMs }, r)
-  );
-}
-
-async function createAuth(password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key  = await deriveKey(password, salt);
-  const { iv, data } = await encryptData(key, AUTH_SENTINEL);
-  const auth = { salt: b64enc(salt), iv, data };
-  return new Promise(r => chrome.storage.local.set({ auth }, r)).then(() => auth);
-}
-
-async function verifyMasterPassword(password, auth) {
-  try {
-    const key   = await deriveKey(password, b64dec(auth.salt));
-    const plain = await decryptData(key, auth.iv, auth.data);
-    return plain === AUTH_SENTINEL;
-  } catch {
-    return false;
-  }
-}
+// Everyone waiting for the vault to be unlocked: popup startup (initLock) and
+// a re-lock while the popup is open (lockPopup). All are released together
+// once an unlock fully completes (including the recovery-key screen).
+const _unlockWaiters = [];
+const waitForUnlock = () => new Promise(resolve => _unlockWaiters.push(resolve));
 
 function setLockButtonState(btn, busy) {
   btn.disabled = busy;
@@ -1469,29 +2520,19 @@ function setLockButtonState(btn, busy) {
   }
 }
 
+const LOCK_SCREENS = ['setup', 'login', 'kit', 'recover', 'reset'];
+
 function showLockOverlay(mode) {
-  const overlay = document.getElementById('lock-overlay');
-  const setup   = document.getElementById('lock-setup');
-  const login   = document.getElementById('lock-login');
-  overlay.classList.remove('hidden');
-  if (mode === 'setup') {
-    setup.style.display = '';
-    login.style.display = 'none';
-    document.getElementById('lock-new-password').value = '';
-    document.getElementById('lock-confirm-password').value = '';
-    document.getElementById('lock-setup-err').textContent = '';
-    document.getElementById('lock-new-password').focus();
-  } else {
-    setup.style.display = 'none';
-    login.style.display = '';
-    document.getElementById('lock-password').value = '';
-    document.getElementById('lock-login-err').textContent = '';
-    document.getElementById('lock-password').classList.remove('err');
-    chrome.storage.local.get('sessionDuration', d => {
-      document.getElementById('lock-login-30d').checked = d.sessionDuration === 2592000000;
-    });
-    document.getElementById('lock-password').focus();
-  }
+  document.getElementById('lock-overlay').classList.remove('hidden');
+  for (const m of LOCK_SCREENS) document.getElementById(`lock-${m}`).style.display = m === mode ? '' : 'none';
+  // A screen can be shown again later in the same popup (it re-locks while
+  // open), so reset its fields and any button left in the "Verifying…" state.
+  document.querySelectorAll(`#lock-${mode} .lock-btn`).forEach(b => {
+    if (b.dataset.origText) setLockButtonState(b, false);
+  });
+  document.querySelectorAll(`#lock-${mode} .lock-err`).forEach(e => { e.textContent = ''; });
+  document.querySelectorAll(`#lock-${mode} input.lock-input`).forEach(i => { i.value = ''; i.classList.remove('err'); });
+  document.querySelector(`#lock-${mode} input.lock-input`)?.focus();
 }
 
 function hideLockOverlay() {
@@ -1499,18 +2540,24 @@ function hideLockOverlay() {
 }
 
 async function initLock() {
-  const { auth, sessionExpiry } = await loadAuthState();
-  if (!auth) {
-    return new Promise(resolve => {
-      lockSetupResolve = resolve;
-      showLockOverlay('setup');
-    }).then(() => true);
+  const state = await VaultLock.state();
+  if (state === 'setup') {
+    showLockOverlay('setup');
+    return waitForUnlock().then(() => true);
   }
-  if (sessionExpiry && Date.now() < sessionExpiry) return false;
-  return new Promise(resolve => {
-    lockLoginResolve = resolve;
-    showLockOverlay('login');
-  }).then(() => true);
+  if (state === 'unlocked') {
+    await VaultLock.touch(); // opening the popup counts as activity
+    // The recovery-key screen was closed without confirming (popup closed, or
+    // the vault was unlocked from a page): show it before anything else.
+    if (await VaultLock.needsRecoveryKeyNotice()) {
+      const unlocked = waitForUnlock();
+      completeUnlock();
+      return unlocked.then(() => true);
+    }
+    return false;
+  }
+  showLockOverlay('login');
+  return waitForUnlock().then(() => true);
 }
 
 async function tryAutoFillCurrentTab() {
@@ -1527,7 +2574,7 @@ document.getElementById('lock-setup-btn').addEventListener('click', async () => 
   const pw2 = document.getElementById('lock-confirm-password').value;
   const err = document.getElementById('lock-setup-err');
   const btn = document.getElementById('lock-setup-btn');
-  const is30 = document.getElementById('lock-setup-30d').checked;
+  const autoLock = Number(document.getElementById('lock-setup-autolock').value);
 
   err.textContent = '';
   document.getElementById('lock-new-password').classList.remove('err');
@@ -1546,12 +2593,9 @@ document.getElementById('lock-setup-btn').addEventListener('click', async () => 
 
   setLockButtonState(btn, true);
   try {
-    await createAuth(pw1);
-    await saveSessionExpiry(is30 ? 2592000000 : 86400000);
-    hideLockOverlay();
-    const cb = lockSetupResolve;
-    lockSetupResolve = null;
-    cb?.();
+    await VaultLock.setup(pw1);
+    await VaultLock.setAutoLock(autoLock);
+    await completeUnlock();
   } catch {
     err.textContent = 'Failed to set password. Try again.';
     setLockButtonState(btn, false);
@@ -1570,7 +2614,6 @@ document.getElementById('lock-login-btn').addEventListener('click', async () => 
   const err = document.getElementById('lock-login-err');
   const btn = document.getElementById('lock-login-btn');
   const inp = document.getElementById('lock-password');
-  const is30 = document.getElementById('lock-login-30d').checked;
 
   err.textContent = '';
   inp.classList.remove('err');
@@ -1583,14 +2626,9 @@ document.getElementById('lock-login-btn').addEventListener('click', async () => 
 
   setLockButtonState(btn, true);
   try {
-    const { auth } = await loadAuthState();
-    const ok = await verifyMasterPassword(pw, auth);
+    const ok = await VaultLock.unlock(pw);
     if (ok) {
-      await saveSessionExpiry(is30 ? 2592000000 : 86400000);
-      hideLockOverlay();
-      const cb = lockLoginResolve;
-      lockLoginResolve = null;
-      cb?.();
+      await completeUnlock();
     } else {
       err.textContent = 'Incorrect password.';
       inp.classList.add('err');
@@ -1607,25 +2645,190 @@ document.getElementById('lock-password').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('lock-login-btn').click();
 });
 
-// Logout button
-document.getElementById('btn-logout').addEventListener('click', async () => {
-  clearInterval(timerInterval);
-  await new Promise(r => chrome.storage.local.set({ sessionExpiry: 0 }, r));
-  await new Promise(r => chrome.storage.local.remove('userPlan', r));
-  document.querySelector('.kofi-footer').style.display = '';
-  await new Promise(resolve => {
-    lockLoginResolve = async () => {
-      await loadState();
-      await syncActiveIndexToUrl();
-      renderAccountBar();
-      startTimer();
-      showView('home');
-      tryAutoFillCurrentTab();
-      resolve();
-    };
-    showLockOverlay('login');
-  });
+// After any successful setup/unlock/recovery: show the recovery key once if the
+// user hasn't confirmed saving it (first setup, or upgraded from v1), then hand
+// back to whoever was waiting on the lock screen.
+const KEY_REPLACED_NOTE = 'Your recovery key is now the one you restored. Any Emergency Kit you saved before no longer works.';
+
+async function completeUnlock() {
+  if (await VaultLock.needsRecoveryKeyNotice()) {
+    const note = (await VaultLock.wasRecoveryKeyReplaced()) ? KEY_REPLACED_NOTE : '';
+    // Cancelled when the vault locks while the screen is up: the waiters stay
+    // queued for the next unlock.
+    if (!(await showRecoveryKit(note))) return;
+  }
+  // Never drop the lock screen unless the vault really is unlocked.
+  if ((await VaultLock.state()) !== 'unlocked') { showLockOverlay('login'); return; }
+  hideLockOverlay();
+  for (const release of _unlockWaiters.splice(0)) release();
+}
+
+// Resolves true once the user confirms saving the key, false if cancelled or
+// if the vault isn't unlocked (there is no key to show, and this screen must
+// never stand in for the lock screen).
+// Each request takes a token; a lock (cancelRecoveryKit) or a newer request
+// bumps it, and every await is followed by a token check, so a stale request
+// can't show the screen over the login or fill in a key after cancellation.
+let _kitSettle = null;
+let _kitToken = 0;
+async function showRecoveryKit(note = '') {
+  _kitSettle?.(false);
+  _kitSettle = null;
+  const token = ++_kitToken;
+  if ((await VaultLock.state()) !== 'unlocked' || token !== _kitToken) return false;
+  const key = await VaultKeys.getKey();
+  if (!key || token !== _kitToken) return false;
+  // No await from here until _kitSettle is set: nothing can cancel in between.
+  showLockOverlay('kit');
+  document.getElementById('lock-kit-note').textContent = note;
+  document.getElementById('lock-kit-note').style.display = note ? '' : 'none';
+  document.getElementById('lock-kit-key').textContent = key;
+  document.getElementById('lock-kit-saved').checked = false;
+  document.getElementById('lock-kit-done').disabled = true;
+  return new Promise(resolve => { _kitSettle = resolve; });
+}
+
+function cancelRecoveryKit() {
+  _kitToken++;
+  document.getElementById('lock-kit-key').textContent = '';
+  const settle = _kitSettle;
+  _kitSettle = null;
+  settle?.(false);
+}
+
+function downloadEmergencyKit(key) {
+  const text = [
+    'OTPilot Emergency Kit',
+    `Created: ${new Date().toISOString().slice(0, 10)}`,
+    '',
+    `Recovery key: ${key}`,
+    '',
+    'This key decrypts everything you keep in OTPilot.',
+    '- Forgot your master password? Choose "Forgot your master password?" on the lock screen and paste this key.',
+    '- New device? Sign in, open Sync and paste this key.',
+    'Keep it offline and private. Anyone with it (and your account) can read your vault.',
+    '',
+  ].join('\n');
+  const a = document.createElement('a');
+  a.download = 'OTPilot-Emergency-Kit.txt';
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById('lock-kit-copy').addEventListener('click', async () => {
+  await navigator.clipboard.writeText(document.getElementById('lock-kit-key').textContent).catch(() => {});
+  setStatus('Recovery key copied');
 });
+document.getElementById('lock-kit-download').addEventListener('click', () =>
+  downloadEmergencyKit(document.getElementById('lock-kit-key').textContent));
+document.getElementById('lock-kit-saved').addEventListener('change', e => {
+  document.getElementById('lock-kit-done').disabled = !e.target.checked;
+});
+document.getElementById('lock-kit-done').addEventListener('click', async () => {
+  await VaultLock.acknowledgeRecoveryKey();
+  document.getElementById('lock-kit-key').textContent = '';
+  const settle = _kitSettle;
+  _kitSettle = null;
+  settle?.(true);
+});
+
+// Forgot master password → recovery key
+document.getElementById('lock-forgot').addEventListener('click', () => showLockOverlay('recover'));
+document.getElementById('lock-recover-back').addEventListener('click', () => showLockOverlay('login'));
+document.getElementById('lock-recover-nokey').addEventListener('click', () => showLockOverlay('reset'));
+document.getElementById('lock-reset-back').addEventListener('click', () => showLockOverlay('recover'));
+
+document.getElementById('lock-recover-btn').addEventListener('click', async () => {
+  const key = document.getElementById('lock-recover-key').value.trim();
+  const pw1 = document.getElementById('lock-recover-new').value;
+  const pw2 = document.getElementById('lock-recover-confirm').value;
+  const err = document.getElementById('lock-recover-err');
+  const btn = document.getElementById('lock-recover-btn');
+  err.textContent = '';
+  if (!key) { err.textContent = 'Paste your recovery key.'; return; }
+  if (!pw1) { err.textContent = 'Choose a new master password.'; return; }
+  if (pw1 !== pw2) { err.textContent = 'Passwords do not match.'; return; }
+
+  setLockButtonState(btn, true);
+  try {
+    await VaultLock.recover(key, pw1);
+    await VaultLock.acknowledgeRecoveryKey(); // they just used it
+    await completeUnlock();
+  } catch (e) {
+    err.textContent = e.message === 'wrong recovery key'
+      ? "That recovery key doesn't match this device."
+      : e.message === "recovery key can't be checked"
+        ? "There's nothing on this device to check the key against. Reset this device, then restore from Sync."
+        : 'Something went wrong. Try again.';
+    setLockButtonState(btn, false);
+  }
+});
+
+document.getElementById('lock-reset-btn').addEventListener('click', async () => {
+  if (document.getElementById('lock-reset-confirm').value.trim() !== 'RESET') {
+    document.getElementById('lock-reset-err').textContent = 'Type RESET to confirm.';
+    return;
+  }
+  await VaultLock.resetDevice();
+  location.reload();
+});
+
+// Shows the lock screen over an open popup, stopping the code timer until the
+// master password is entered again. Used by the lock button and whenever the
+// vault locks elsewhere (auto-lock alarm, another popup) while this one is open.
+let _popupLocked = false;
+async function lockPopup() {
+  if (_popupLocked) return;
+  _popupLocked = true;
+  clearInterval(timerInterval);
+  clearInterval(_sharedRefreshTimer);
+  cancelRecoveryKit();
+  // Passwords start masked again after unlocking.
+  document.getElementById('home-creds').innerHTML = '';
+  _homeCredsKey = null;
+  clearRevealedKey();
+  hideCsvExport();
+  // userPlan stays: locking isn't signing out, and the item limit reads it
+  // right after unlocking.
+  showLockOverlay('login');
+  await waitForUnlock();
+  // Unlocked: a new lock from here on must be handled again, even while the
+  // view below is still reloading (reading the vault takes a moment).
+  _popupLocked = false;
+  await loadState();
+  if (_popupLocked) return;
+  await syncActiveIndexToUrl();
+  if (_popupLocked) return;
+  renderAccountBar();
+  startTimer();
+  renderSharedCodes();
+  showView('home');
+  tryAutoFillCurrentTab();
+}
+
+document.getElementById('btn-logout').addEventListener('click', async () => {
+  await VaultLock.lock(); // storage.session change below shows the lock screen
+  await lockPopup();
+});
+
+// The vault key leaving chrome.storage.session means the vault locked —
+// from the auto-lock alarm, or another popup/window.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'session' && changes.vaultKeyUnlocked && !changes.vaultKeyUnlocked.newValue) lockPopup();
+});
+
+// The alarm runs once a minute; while the popup is open, check the deadline
+// more often so it never shows codes past it.
+setInterval(() => { if (!_popupLocked) VaultLock.state().catch(() => {}); }, 15000);
+
+// Using the popup counts as activity for the auto-lock (throttled).
+let _lastTouch = 0;
+['click', 'keydown'].forEach(type => document.addEventListener(type, () => {
+  if (_popupLocked || Date.now() - _lastTouch < 30000) return;
+  _lastTouch = Date.now();
+  VaultLock.touch().catch(() => {});
+}, true));
 
 // ── Cloud Sync UI ─────────────────────────────────────────────────────────────
 
@@ -1718,48 +2921,104 @@ async function renderSyncPanel() {
 }
 
 let _syncInProgress = false;
+// After a sync changed the vault: reload the list, rebuild the locked-vault
+// index (pulled URLs/names/deletions), and redraw.
+async function reloadFromVault(key) {
+  accounts = await VaultAccounts.load(key);
+  _loadedIds = new Set(accounts.map(a => a._id));
+  otherItems = await VaultAccounts.loadOthers(key);
+  activeIndex = Math.min(activeIndex, Math.max(accounts.length - 1, 0));
+  await VaultAccounts.writeIndex((await VaultStore.readAll(key)).items);
+  refreshAccountsUI();
+  requestIcons();
+  startTimer();
+}
+
+// The v1 view of the vault for 1.x devices: written when it no longer matches
+// what this device last exported (or a 1.x device just changed it). Accounts
+// that left the vault since the last export get v1 tombstones (keyed by name),
+// or a 1.x device would push them back.
+// Only logins with a 2FA secret exist for 1.x devices: a password-only login
+// would show there as an empty 2FA entry, and deleting that entry would
+// tombstone the real login by name. They're left out of the export and of
+// the merge with a 1.x blob.
+const v1Exportable = list => list.filter(a => a.secret);
+const v1Fields = a => ({ name: a.name, email: a.email || '', secret: a.secret, urls: a.urls || '', autofill: a.autofill !== false, category: a.category || '', domain: a.domain || '' });
+// SHA-256 of the v1 view: what's compared with the last export. Only the hash
+// is stored (the view contains secrets); names are kept for the tombstones
+// and are already in the plaintext vaultIndex.
+async function v1Snapshot(list) {
+  const bytes = new TextEncoder().encode(JSON.stringify(list.map(v1Fields)));
+  return VaultCrypto.b64e(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
+}
+// Returns false when the server kept a newer blob instead (written meanwhile
+// by another device): nothing is recorded, so the caller merges it and retries.
+async function exportV1Blob(serverMeta, fromV1Device) {
+  const { v1Export } = await chrome.storage.local.get('v1Export');
+  const exported = v1Exportable(accounts);
+  const snapshot = await v1Snapshot(exported);
+  // The server keeps the blob with the newest timestamp: stamp the export
+  // after the one it holds, so a clock behind another device's still wins.
+  const serverMs = serverMeta?.updatedAt ? Date.parse(serverMeta.updatedAt) : NaN;
+  const now = new Date(Math.max(Date.now(), Number.isNaN(serverMs) ? 0 : serverMs + 1)).toISOString();
+  if (!fromV1Device && serverMeta && v1Export?.snapshot === snapshot) {
+    // Up to date (possibly written by another 2.0 device): nothing to upload.
+    if (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt) await writeLastSyncedAt(serverMeta.updatedAt);
+    return true;
+  }
+  const current = new Set(exported.map(a => a.name));
+  for (const name of v1Export?.names || []) {
+    if (!current.has(name)) tombstones[name] = now;
+  }
+  for (const name of current) delete tombstones[name];
+  await saveTombstones();
+  const res = await CloudSync.push(exported, tombstones, now, 'v2');
+  if (res?.conflict) return false;
+  await chrome.storage.local.set({ v1Export: { snapshot, names: [...current] } });
+  await writeLastSyncedAt(now);
+  return true;
+}
+
+// One pass of the v1 transition: merge a blob from a 1.x device, then export.
+async function syncV1Blob(key) {
+  const serverMeta = await CloudSync.getServerMeta();
+  const fromV1Device = !!serverMeta && serverMeta.writer !== 'v2' &&
+    (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt);
+  if (fromV1Device) {
+    // Entries without a secret in the blob are password-only logins an
+    // earlier 2.0 export sent; they're not 1.x accounts.
+    const passwordOnly = accounts.filter(a => !a.secret);
+    const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
+      v1Exportable(accounts), tombstones, v1Exportable(serverMeta.accounts), serverMeta.tombstones, lastSyncedAt
+    );
+    accounts   = [...merged, ...passwordOnly];
+    tombstones = mergedTombs;
+    await saveState();
+    await saveTombstones();
+    Object.assign(_idRemaps, (await VaultSync.sync(key)).remapped); // so the 1.x edits reach other 2.0 devices too
+    await reloadFromVault(key);
+  }
+  return { serverMeta, exported: await exportV1Blob(serverMeta, fromV1Device) };
+}
+
 async function doSync() {
   if (_syncInProgress) return;
   _syncInProgress = true;
   syncSetStatus('syncing', 'Syncing…');
   try {
-    const serverMeta = await CloudSync.getServerMeta();
+    // 2.0: the vault syncs item by item (/vault/items); the v1 blob only keeps
+    // 1.x devices in step during the transition. Blobs written by 2.0 devices
+    // carry writer 'v2' and are ignored here (their items already arrived);
+    // only a blob from a 1.x device is merged in.
+    const key = await VaultKeys.getKey();
+    if (!key) throw new Error('vault is locked');
+    Object.assign(_idRemaps, (await VaultSync.sync(key)).remapped);
+    await reloadFromVault(key);
 
-    const serverNewer = serverMeta !== null &&
-      (lastSyncedAt === null || serverMeta.updatedAt > lastSyncedAt);
-    const localNewer  = localChangedAt !== null &&
-      (lastSyncedAt === null || localChangedAt > lastSyncedAt);
-
-    if (serverNewer && !localNewer) {
-      accounts   = serverMeta.accounts;
-      tombstones = serverMeta.tombstones;
-      await saveState();
-      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
-      renderAccountBar();
-      requestIcons(); // pick up icons for accounts pulled in from another device
-      startTimer();
-      await writeLastSyncedAt(serverMeta.updatedAt);
-    } else if (!serverNewer && localNewer) {
-      await CloudSync.push(accounts, tombstones, localChangedAt);
-      await writeLastSyncedAt(localChangedAt);
-    } else if (serverNewer && localNewer) {
-      const { accounts: merged, tombstones: mergedTombs } = CloudSync.mergeWithTombstones(
-        accounts, tombstones, serverMeta.accounts, serverMeta.tombstones, lastSyncedAt
-      );
-      accounts   = merged;
-      tombstones = mergedTombs;
-      const now = new Date().toISOString();
-      await saveState();
-      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
-      renderAccountBar();
-      requestIcons(); // pick up icons for accounts merged in from another device
-      startTimer();
-      await CloudSync.push(merged, mergedTombs, now);
-      await writeLastSyncedAt(now);
-    } else if (!serverMeta && localChangedAt) {
-      await CloudSync.push(accounts, tombstones, localChangedAt);
-      await writeLastSyncedAt(localChangedAt);
-    }
+    let { serverMeta, exported } = await syncV1Blob(key);
+    // Refused: a blob written meanwhile by another device. Merge it and export
+    // again, once; past that the next sync picks it up.
+    if (!exported) ({ serverMeta } = await syncV1Blob(key));
 
     if (serverMeta?.command) {
       await CloudSync.executeCommand(serverMeta.command);
@@ -1835,10 +3094,16 @@ document.getElementById('btn-confirm-newkey').addEventListener('click', async ()
       // Overwrite the server blob with the new key directly — do NOT read/merge
       // the existing blob (it was encrypted with a different key and can't be
       // decrypted, which would otherwise fail the whole sync).
+      // Same for the per-item vault: its items may be encrypted with the lost
+      // key, so they're deleted and this device's vault is uploaded instead.
       _startFresh = false;
       const now = new Date().toISOString();
-      await CloudSync.push(accounts, tombstones, now);
+      const exported = v1Exportable(accounts);
+      await CloudSync.push(exported, tombstones, now, 'v2');
+      await chrome.storage.local.set({ v1Export: { snapshot: await v1Snapshot(exported), names: exported.map(a => a.name) } });
       await writeLastSyncedAt(now);
+      await VaultSync.wipeServer();
+      await VaultSync.sync(await VaultKeys.getKey());
       syncSetStatus('ok', 'Synced');
     } else {
       await stampLocalChange(); // force initial push so other devices can detect existing sync
@@ -1854,41 +3119,79 @@ document.getElementById('btn-restore-key').addEventListener('click', async () =>
   const input = document.getElementById('sync-restore-input');
   const errEl = document.getElementById('sync-restore-err');
   const keyB64 = input.value.trim();
+  const password = document.getElementById('sync-restore-password').value;
   errEl.textContent = '';
   if (!keyB64) { errEl.textContent = 'Paste your recovery key.'; return; }
+  if (!password) { errEl.textContent = 'Enter your master password.'; return; }
+  // Validate the key against the server's data before adopting it: adopting
+  // re-wraps the local vault to this key, so a typo must never get that far.
+  let pullResult;
   try {
-    await CloudSync.saveSyncKey(keyB64);
-    const pullResult = await CloudSync.pull();
-    if (pullResult) {
-      const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
-
-      // On reconnect the server is the source of truth.
-      // Add any local-only accounts not present or deleted on the server,
-      // but discard local tombstones — offline deletions must not override synced data.
-      const remoteNames   = new Set(remoteAccounts.map(a => a.name));
-      const remoteDeleted = new Set(Object.keys(remoteTombs));
-      const localOnly     = accounts.filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
-      const merged        = [...remoteAccounts, ...localOnly];
-      const mergedTombs   = remoteTombs;
-
-      accounts   = merged;
-      tombstones = mergedTombs;
-      await saveState();
-      await new Promise(r => chrome.storage.local.set({ tombstones }, r));
-      renderAccountBar();
-      const now = new Date().toISOString();
-      await CloudSync.push(merged, mergedTombs, now);
-      await writeLastSyncedAt(now);
-    }
-    syncShowView('sv-active');
-    syncSetStatus('ok', 'Restored');
+    pullResult = await CloudSync.pull(keyB64);
   } catch {
     errEl.textContent = 'Invalid key or decryption failed.';
+    return;
+  }
+  if (!pullResult) {
+    // Nothing on the server to decrypt, so the key can't be checked.
+    errEl.textContent = 'There is no synced data to check this key against. Use "Start fresh" instead.';
+    return;
+  }
+  // The vault may have locked (lock button, auto-lock) while the server
+  // request was pending: then stop here instead of adopting the key.
+  if ((await VaultLock.state()) !== 'unlocked') {
+    document.getElementById('sync-restore-password').value = '';
+    return;
+  }
+  const previousKey = await VaultKeys.getKey();
+  if (!previousKey) return; // locked meanwhile: the lock screen is up
+  try {
+    await CloudSync.saveSyncKey(keyB64, password);
+  } catch (e) {
+    errEl.textContent = e.message === 'wrong password' ? 'Incorrect master password.' : 'Could not save the key. Try again.';
+    return;
+  }
+  document.getElementById('sync-restore-password').value = '';
+  // The device key is now the restored one: record it right away, before any
+  // network work that could fail, so the stale-Emergency-Kit warning can't be lost.
+  const keyReplaced = keyB64 !== previousKey;
+  if (keyReplaced) await VaultLock.recoveryKeyReplaced();
+  try {
+    const { accounts: remoteAccounts, tombstones: remoteTombs } = pullResult;
+
+    // On reconnect the server is the source of truth.
+    // Add any local-only accounts not present or deleted on the server,
+    // but discard local tombstones — offline deletions must not override synced data.
+    // Password-only logins aren't part of the v1 blob (v1Exportable): they're
+    // kept as they are, whatever the blob's names or tombstones say.
+    const passwordOnly  = accounts.filter(a => !a.secret);
+    const remote        = v1Exportable(remoteAccounts);
+    const remoteNames   = new Set(remote.map(a => a.name));
+    const remoteDeleted = new Set(Object.keys(remoteTombs));
+    const localOnly     = v1Exportable(accounts).filter(a => !remoteNames.has(a.name) && !remoteDeleted.has(a.name));
+    const merged        = [...remote, ...localOnly];
+    const mergedTombs   = remoteTombs;
+
+    accounts   = [...merged, ...passwordOnly];
+    tombstones = mergedTombs;
+    await saveState();
+    await saveTombstones();
+    renderAccountBar();
+    const now = new Date().toISOString();
+    await CloudSync.push(merged, mergedTombs, now);
+    await writeLastSyncedAt(now);
+    syncShowView('sv-active');
+    syncSetStatus('ok', 'Restored');
+    // Show the new key now if the vault is still unlocked; otherwise the
+    // recorded change shows it after the next unlock.
+    if (keyReplaced && await showRecoveryKit(KEY_REPLACED_NOTE) && (await VaultLock.state()) === 'unlocked') hideLockOverlay();
+  } catch {
+    errEl.textContent = 'Could not finish syncing. Check your connection and try again.';
     await CloudSync.deleteSyncKey();
   }
 });
 
-// Restore: start fresh (replaces server data with a new key)
+// Restore: start fresh (replaces server data, encrypted with this device's vault key)
 document.getElementById('btn-overwrite-server').addEventListener('click', async () => {
   _startFresh = true;
   const newKey = await CloudSync.generateSyncKey();
@@ -1918,7 +3221,7 @@ let _stopSyncMode = 'free';
 document.getElementById('btn-free-signout').addEventListener('click', async () => {
   try { await CloudSync.leaveDevice() } catch (e) { console.error('leaveDevice:', e) }
   await SupabaseAuth.signOut();
-  await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r));
+  await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'v1Export'], r));
   localChangedAt = null;
   lastSyncedAt   = null;
   tombstones     = {};
@@ -1942,7 +3245,7 @@ document.getElementById('btn-confirm-stop-sync').addEventListener('click', async
   await SupabaseAuth.signOut();
   if (_stopSyncMode === 'active') await CloudSync.deleteSyncKey();
   await new Promise(r => chrome.storage.local.remove(
-    ['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones'], r
+    ['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'v1Export'], r
   ));
   localChangedAt = null;
   lastSyncedAt   = null;
@@ -1995,7 +3298,9 @@ async function silentPullSync() {
   const justAuthenticated = await initLock();
   await loadState();
   await syncActiveIndexToUrl();
-  renderAccountBar();
+  // The user may have opened Accounts while the vault was still loading.
+  refreshAccountsUI();
+  refreshSharedItems(); // team collections: pulled in the background, list redrawn when they land
   requestIcons(); // resolve+cache site favicons, then re-render when ready
   startTimer();
   if (justAuthenticated) tryAutoFillCurrentTab();
@@ -2021,7 +3326,12 @@ async function silentPullSync() {
   })();
 
   chrome.runtime.onMessage.addListener(msg => {
-    if (msg.action === 'serverDataChanged') silentPullSync();
+    if (msg.action === 'serverDataChanged') {
+      // Logins the background's sync paired with their server twins: an open
+      // editor's draft follows them (the old ids are already gone).
+      if (msg.remapped) Object.assign(_idRemaps, msg.remapped);
+      silentPullSync();
+    }
   });
 })();
 
@@ -2037,6 +3347,7 @@ function refreshSharedBadges() {
   renderAccountBar();
   if (document.getElementById('settings-panel')?.style.display !== 'none') {
     rebuildAccountsDOM();
+    applyVaultSearch(); // fresh rows start visible: re-apply the search/category filter
   }
 }
 
@@ -2150,6 +3461,7 @@ async function renderTeamPanel() {
   const isOwner = team.owner_id === myId;
 
   const members = await Sharing.getMembers(team.id).catch(() => []);
+  renderTeamCollections(team, members, myId);
   membersEl.innerHTML = members.map(m => `
     <div class="acc-overflow-item" style="cursor:default">
       <span class="acc-av acc-av-md" style="background:${accentColor(m.email || m.user_id)}">${esc(nameInitials(m.email || '?'))}</span>
@@ -2185,6 +3497,182 @@ async function renderTeamPanel() {
       btn.disabled = false;
     };
   }
+}
+
+// ── Team collections (manage) ──────────────────────────────────────────────────
+// Listed in the Team tab: create, rename/delete (manage), members and roles
+// (manage), leave. Their items show in the Vault view (see sharedEntries).
+
+const ROLE_LABELS = { manage: 'Can manage', edit: 'Can edit', view: 'Can view' };
+let _openCollectionId = null;
+
+async function renderTeamCollections(team, members, myId) {
+  const box = document.getElementById('team-collections');
+  const createRow = document.getElementById('collection-create-row');
+  createRow.style.display = 'flex';
+  let list;
+  try { list = await VaultCollections.list(); } catch { box.innerHTML = '<div class="coll-meta">Could not load collections.</div>'; return; }
+  collections = list;
+  const mine = list.filter(c => c.teamId === team.id);
+  box.innerHTML = mine.length ? '' : '<div class="coll-meta">No collections yet.</div>';
+  for (const c of mine) box.appendChild(collectionRow(c, team, members, myId));
+
+  const input = document.getElementById('collection-new-name');
+  const createBtn = document.getElementById('collection-create');
+  createBtn.onclick = async () => {
+    const name = input.value.trim();
+    if (!name) { input.focus(); return; }
+    if (createBtn.disabled) return; // one at a time: a double click would make two
+    createBtn.disabled = true;
+    try {
+      const c = await VaultCollections.create(team.id, name);
+      input.value = '';
+      _openCollectionId = c.id;
+      setStatus(`Created "${name}"`);
+      await renderTeamCollections(team, members, myId);
+    } catch { setStatus('Could not create the collection', false); }
+    finally { createBtn.disabled = false; }
+  };
+}
+
+function collectionRow(c, team, members, myId) {
+  const row = document.createElement('div');
+  row.className = 'coll-row';
+  row.dataset.cid = c.id;
+  const name = c.name ?? 'Collection (key not on this device)';
+  row.innerHTML = `
+    <button class="coll-head">
+      <span class="coll-name">${esc(name)}</span>
+      <span class="coll-meta">${c.members} member${c.members === 1 ? '' : 's'} · ${esc(ROLE_LABELS[c.role] || c.role)}</span>
+    </button>
+    <div class="coll-body" style="display:none"></div>`;
+  const body = row.querySelector('.coll-body');
+  row.querySelector('.coll-head').addEventListener('click', async () => {
+    const open = body.style.display === 'none';
+    _openCollectionId = open ? c.id : null;
+    body.style.display = open ? '' : 'none';
+    if (open) await renderCollectionBody(body, c, team, members, myId);
+  });
+  if (_openCollectionId === c.id) {
+    body.style.display = '';
+    renderCollectionBody(body, c, team, members, myId);
+  }
+  return row;
+}
+
+async function renderCollectionBody(body, c, team, teamMembers, myId) {
+  const manage = c.role === 'manage';
+  body.innerHTML = '<div class="coll-meta">Loading…</div>';
+  let inCollection = [];
+  try { inCollection = await VaultCollections.members(c); } catch { /* shown empty */ }
+  const rerender = () => renderTeamPanel();
+  body.innerHTML = '';
+  for (const m of inCollection) {
+    const el = document.createElement('div');
+    el.className = 'coll-member';
+    el.dataset.uid = m.user_id;
+    const you = m.user_id === myId;
+    el.innerHTML = `<span class="who">${esc(m.email || m.user_id)}${you ? ' (you)' : ''}</span>`;
+    if (manage && !you) {
+      const sel = document.createElement('select');
+      sel.className = 'coll-role';
+      for (const r of ['view', 'edit', 'manage']) sel.add(new Option(ROLE_LABELS[r], r, false, r === m.role));
+      sel.addEventListener('change', async () => {
+        try { await VaultCollections.setRole(c, m.user_id, sel.value); setStatus('Role updated'); } catch { setStatus('Could not change the role', false); rerender(); }
+      });
+      const rm = document.createElement('button');
+      rm.className = 'coll-link danger coll-remove';
+      rm.textContent = 'Remove';
+      rm.addEventListener('click', async () => {
+        if (!confirm(`Remove ${m.email || 'this teammate'} from "${c.name}"?`)) return;
+        try {
+          await VaultCollections.removeMember(c, m.user_id);
+          el.remove();
+          await showRotationAdvice(body, c, m.email);
+        } catch { setStatus('Could not remove them', false); }
+      });
+      el.append(sel, rm);
+    } else {
+      el.insertAdjacentHTML('beforeend', `<span class="coll-meta">${esc(ROLE_LABELS[m.role] || m.role)}</span>`);
+    }
+    body.appendChild(el);
+  }
+
+  if (manage && c.key) {
+    const candidates = teamMembers.filter(t => !inCollection.some(m => m.user_id === t.user_id));
+    if (candidates.length) {
+      const add = document.createElement('div');
+      add.className = 'coll-add';
+      const who = document.createElement('select');
+      who.className = 'who';
+      for (const t of candidates) who.add(new Option(`${t.email || t.user_id}${t.public_key ? '' : ' (not signed in yet)'}`, t.user_id));
+      const role = document.createElement('select');
+      role.className = 'coll-new-role';
+      for (const r of ['view', 'edit', 'manage']) role.add(new Option(ROLE_LABELS[r], r, false, r === 'edit'));
+      const btn = document.createElement('button');
+      btn.className = 'btn-crypto-ok coll-add-btn';
+      btn.textContent = 'Add';
+      btn.addEventListener('click', async () => {
+        const user = candidates.find(t => t.user_id === who.value);
+        btn.disabled = true;
+        try { await VaultCollections.addMember(c, user, role.value); setStatus(`Added ${user.email || 'teammate'}`); rerender(); }
+        catch (e) { setStatus(e.message || 'Could not add them', false); btn.disabled = false; }
+      });
+      add.append(who, role, btn);
+      body.appendChild(add);
+    }
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'coll-actions';
+  if (manage && c.key) {
+    const rename = document.createElement('button');
+    rename.className = 'coll-link coll-rename';
+    rename.textContent = 'Rename';
+    rename.addEventListener('click', async () => {
+      const name = prompt('New name', c.name || '')?.trim();
+      if (!name) return;
+      try { await VaultCollections.rename(c, name); await refreshSharedItems(); rerender(); } catch { setStatus('Could not rename it', false); }
+    });
+    const del = document.createElement('button');
+    del.className = 'coll-link danger coll-delete';
+    del.textContent = 'Delete collection';
+    del.addEventListener('click', async () => {
+      if (!confirm(`Delete "${c.name}" and everything in it, for everyone?`)) return;
+      try { await VaultCollections.remove(c); _openCollectionId = null; await refreshSharedItems(); rerender(); } catch { setStatus('Could not delete it', false); }
+    });
+    actions.append(rename, del);
+  }
+  const leave = document.createElement('button');
+  leave.className = 'coll-link danger coll-leave';
+  leave.textContent = 'Leave';
+  leave.addEventListener('click', async () => {
+    if (!confirm(`Leave "${c.name}"? Its items disappear from your vault (yours are untouched).`)) return;
+    try { await VaultCollections.removeMember(c, myId); await VaultCollections.forget(c.id); await refreshSharedItems(); rerender(); }
+    catch { setStatus('Could not leave it', false); }
+  });
+  actions.append(leave);
+  body.appendChild(actions);
+}
+
+// Someone removed from a collection may have copied what they saw: suggest
+// changing the passwords they had access to.
+async function showRotationAdvice(body, c, who) {
+  const note = document.createElement('div');
+  note.className = 'coll-note rotate-advice';
+  let titles;
+  try {
+    await VaultCollections.pull(c); // what's in it now, not what this popup saw
+    titles = (await VaultCollections.items(c)).filter(i => Vault.getValue(i, 'password') || Vault.getValue(i, 'clientSecret') || Vault.getValue(i, 'apiKey')).map(i => i.title);
+  } catch { titles = null; }
+  if (titles === null) {
+    note.textContent = `${who || 'They'} could see everything in "${c.name}". Consider changing the passwords and keys kept there.`;
+  } else if (!titles.length) {
+    return;
+  } else {
+    note.textContent = `${who || 'They'} could see ${titles.length} secret${titles.length === 1 ? '' : 's'} here: ${titles.slice(0, 5).join(', ')}${titles.length > 5 ? '…' : ''}. Consider changing ${titles.length === 1 ? 'it' : 'them'}.`;
+  }
+  body.prepend(note);
 }
 
 // ── Team shared codes ("Shared with you") ──────────────────────────────────────

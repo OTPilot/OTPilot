@@ -78,11 +78,11 @@ export default function Hero() {
         {/* Badge */}
         <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-teal-500/20 bg-teal-500/5 text-teal-400 text-xs font-medium mb-8">
           <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
-          Now with Cloud Sync — Early Adopter pricing available
+          New in 2.0 — passwords, secure notes and team sharing
         </div>
 
         <h1 className="text-5xl md:text-7xl font-bold text-white tracking-tight mb-6 leading-[1.05]">
-          Your 2FA codes,{' '}
+          Your passwords and 2FA,{' '}
           <span className="bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent">
             everywhere
           </span>
@@ -90,8 +90,8 @@ export default function Hero() {
         </h1>
 
         <p className="text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto mb-10 leading-relaxed">
-          OTPilot auto-fills TOTP codes on any site. End-to-end encrypted, open source,
-          and now synced across all your devices.
+          OTPilot is a password manager with built-in 2FA: it fills your password and your code on
+          any site. End-to-end encrypted, open source, and synced across all your devices.
         </p>
 
         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">

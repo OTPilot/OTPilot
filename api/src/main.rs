@@ -3,6 +3,8 @@ mod email;
 mod error;
 mod middleware;
 mod routes;
+#[cfg(all(test, feature = "db-tests"))]
+mod test_support;
 
 use axum::{http::Method, Router};
 use std::collections::HashMap;
@@ -17,8 +19,13 @@ pub struct AppState {
     /// kid → DecodingKey, built from Supabase JWKS at startup
     pub jwt_keys: Arc<HashMap<String, jsonwebtoken::DecodingKey>>,
     pub stripe_secret_key: String,
+    /// https://api.stripe.com (tests point it at a local stand-in).
+    pub stripe_api_base: String,
+    /// Supabase admin API base, normally `supabase_url` (tests: a stand-in).
+    pub supabase_admin_base: String,
     pub stripe_webhook_secret: String,
-    pub stripe_personal_price_id: String,
+    pub stripe_personal_monthly_price_id: String,
+    pub stripe_personal_annual_price_id: String,
     pub stripe_team_lite_monthly_price_id: String,
     pub stripe_team_lite_annual_price_id: String,
     pub stripe_extra_seat_price_id: String,
@@ -89,8 +96,12 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("STRIPE_SECRET_KEY").expect("STRIPE_SECRET_KEY must be set");
     let stripe_webhook_secret =
         std::env::var("STRIPE_WEBHOOK_SECRET").expect("STRIPE_WEBHOOK_SECRET must be set");
-    let stripe_personal_price_id =
-        std::env::var("STRIPE_PERSONAL_PRICE_ID").expect("STRIPE_PERSONAL_PRICE_ID must be set");
+    // Personal subscription prices (2.0). Optional so a deploy without them
+    // still starts; checkout then answers 503 until they're set.
+    let stripe_personal_monthly_price_id =
+        std::env::var("STRIPE_PERSONAL_MONTHLY_PRICE_ID").unwrap_or_default();
+    let stripe_personal_annual_price_id =
+        std::env::var("STRIPE_PERSONAL_ANNUAL_PRICE_ID").unwrap_or_default();
     // Team plan prices are optional (feature unconfigured → empty string).
     let stripe_team_lite_monthly_price_id =
         std::env::var("STRIPE_TEAM_LITE_MONTHLY_PRICE_ID").unwrap_or_default();
@@ -118,8 +129,11 @@ async fn main() -> anyhow::Result<()> {
         db,
         jwt_keys: Arc::new(jwt_keys),
         stripe_secret_key,
+        stripe_api_base: "https://api.stripe.com".into(),
+        supabase_admin_base: supabase_url.clone(),
         stripe_webhook_secret,
-        stripe_personal_price_id,
+        stripe_personal_monthly_price_id,
+        stripe_personal_annual_price_id,
         stripe_team_lite_monthly_price_id,
         stripe_team_lite_annual_price_id,
         stripe_extra_seat_price_id,
@@ -147,6 +161,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::billing::router())
         .merge(routes::devices::router())
         .merge(routes::icons::router())
+        .merge(routes::vault::router())
+        .merge(routes::collections::router())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

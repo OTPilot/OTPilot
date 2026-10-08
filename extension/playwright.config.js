@@ -7,6 +7,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   testDir: './tests',
   timeout: 30000,
+  // Locally, many headed Chromium instances at once (the default is half the
+  // CPU cores) intermittently hang on context teardown ("Tearing down context
+  // exceeded the test timeout"); 2 workers ran the full suite clean. CI keeps
+  // Playwright's default.
+  workers: process.env.CI ? undefined : 2,
   globalSetup:    './tests/global-setup.js',
   globalTeardown: './tests/global-teardown.js',
   // Extensions require headed Chrome; use --headless=new for CI

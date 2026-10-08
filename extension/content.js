@@ -1,12 +1,19 @@
 // Runs on every page; bails out immediately unless an account URL matches.
 
-function isSessionLocked() {
-  return new Promise(r =>
-    chrome.storage.local.get(['auth', 'sessionExpiry'], d => {
-      if (!d.auth) { r(false); return; }
-      r(!d.sessionExpiry || Date.now() >= d.sessionExpiry);
-    })
-  );
+// The unlocked vault key lives in chrome.storage.session, which content
+// scripts can't read, so the background worker answers: 'setup' (no master
+// password yet) | 'locked' | 'unlocked'. Anything unexpected reads as locked.
+function vaultState() {
+  return new Promise(r => {
+    try {
+      chrome.runtime.sendMessage({ action: 'vaultState' }, res =>
+        r(chrome.runtime.lastError ? 'locked' : (res?.state ?? 'locked')));
+    } catch { r('locked'); }
+  });
+}
+
+async function isSessionLocked() {
+  return (await vaultState()) === 'locked';
 }
 
 function matchesPattern(pattern, hostname) {
@@ -40,18 +47,25 @@ function findAllMatchingAccounts(accounts, hostname) {
   return accounts.filter(acc => accountMatchesHostname(acc, hostname));
 }
 
-function getActiveAccount(overrideIndex) {
-  return new Promise(r =>
-    chrome.storage.local.get(['accounts', 'activeIndex'], d => {
-      const accs = d.accounts || [];
-      // 1. Try URL-based match first
-      const byUrlIdx = accs.findIndex(acc => accountMatchesHostname(acc, location.hostname.toLowerCase()));
-      if (byUrlIdx !== -1) { r({ acc: accs[byUrlIdx], idx: byUrlIdx }); return; }
-      // 2. Fall back to the account selected in the popup (or override from message)
-      const idx = overrideIndex ?? d.activeIndex ?? 0;
-      r({ acc: accs[idx] || null, idx });
-    })
-  );
+// Accounts come from the background worker, which holds the vault key.
+// Unlocked: the decrypted list. Locked: only { name, urls, autofill } per
+// account (the plaintext index), enough to say "Unlock to auto-fill <name>".
+async function getVaultAccounts() {
+  try {
+    const res = await chrome.runtime.sendMessage({ action: 'vaultAccounts' });
+    if (res) return res;
+  } catch { /* extension reloaded or worker unavailable */ }
+  return { locked: true, activeIndex: 0, accounts: [] };
+}
+
+async function getActiveAccount(overrideIndex) {
+  const { accounts: accs, activeIndex } = await getVaultAccounts();
+  // 1. Try URL-based match first
+  const byUrlIdx = accs.findIndex(acc => accountMatchesHostname(acc, location.hostname.toLowerCase()));
+  if (byUrlIdx !== -1) return { acc: accs[byUrlIdx], idx: byUrlIdx };
+  // 2. Fall back to the account selected in the popup (or override from message)
+  const idx = overrideIndex ?? activeIndex ?? 0;
+  return { acc: accs[idx] || null, idx };
 }
 
 const OTP_SELECTORS = [
@@ -115,19 +129,117 @@ function findOTPInput() {
   return null;
 }
 
+// ── Theme ───────────────────────────────────────────────────────────────────
+// In-page UI follows the user's theme (Settings → Appearance). Colors below
+// are written as var(--token, <default theme's value>); the active theme's
+// tokens (from theme.css, via the background) are set on each OTPilot root
+// element, so it renders in the default colors until they arrive.
+// The default theme's tokens (theme.css :root — tests/overlayTheme.spec.js
+// keeps this copy equal to it). Set on every root right away, so variables
+// the host page defines (--surface, --bg…) never show through while the
+// chosen theme loads, or if it can't be loaded.
+const DEFAULT_THEME_VARS = {
+  '--bg': '#0f172a', '--surface': '#1e293b', '--surface-2': '#334155', '--border': '#1e3a5f',
+  '--ink-0': '#f1f5f9', '--ink-1': '#e2e8f0', '--ink-2': '#cbd5e1',
+  '--ink-3': '#94a3b8', '--ink-4': '#64748b', '--ink-5': '#475569',
+  '--accent': '#0ea5e9', '--accent-2': '#38bdf8', '--on-accent': '#ffffff',
+  '--danger': '#f87171', '--warning': '#f59e0b', '--success': '#4ade80',
+  '--font-ui': "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+};
+
+let _themeVars = null;
+let _themeLoad = null;
+let _themeStale = false; // the theme changed and the new one hasn't loaded yet
+
+// A failed request (the service worker still starting, typically) is retried
+// a few times; when one succeeds, every open OTPilot element gets the theme.
+let _themeRetries = 0;
+function retryThemeLoad() {
+  if (_themeRetries >= 5) return;
+  _themeRetries++;
+  setTimeout(() => {
+    if (!chrome.runtime?.id || (_themeVars && !_themeStale)) return;
+    loadThemeVars().then(vars => { if (vars) document.querySelectorAll('[data-otpilot-ui]').forEach(applyThemeVars); });
+  }, 300 * _themeRetries);
+}
+
+function loadThemeVars() {
+  _themeLoad ??= new Promise(resolve => {
+    let settled = false;
+    const failed = () => {
+      if (settled) return;
+      settled = true;
+      _themeLoad = null;
+      resolve(null);
+      retryThemeLoad();
+    };
+    // A request can get no answer at all (the worker restarting under
+    // load); without this the pending promise would hold every later overlay.
+    const timer = setTimeout(failed, 2000);
+    try {
+      chrome.runtime.sendMessage({ action: 'themeVars' }, vars => {
+        clearTimeout(timer);
+        if (settled) return;
+        if (chrome.runtime.lastError || !vars || !Object.keys(vars).length) { failed(); return; }
+        settled = true;
+        _themeVars = vars;
+        _themeStale = false;
+        _themeRetries = 0;
+        resolve(vars);
+      });
+    } catch { failed(); }
+  });
+  return _themeLoad;
+}
+
+function applyThemeVars(el) {
+  for (const [name, value] of Object.entries({ ...DEFAULT_THEME_VARS, ...(_themeVars || {}) })) el.style.setProperty(name, value, 'important');
+}
+
+// Inside OTPilot UI every token is inherited from its root, even where a
+// page rule (`* { --surface: … }`) matches the inner elements directly. A
+// page could still out-specify this; hosting the UI in a shadow root or an
+// extension iframe would close that, as for the outside-click issue below.
+function guardThemeTokens() {
+  if (document.getElementById('otpilot-theme-guard')) return;
+  const style = document.createElement('style');
+  style.id = 'otpilot-theme-guard';
+  style.textContent = `[data-otpilot-ui] * { ${Object.keys(DEFAULT_THEME_VARS).map(n => `${n}: inherit !important;`).join(' ')} }`;
+  (document.head || document.documentElement).appendChild(style);
+}
+
+// Marks `el` as an OTPilot root and gives it the theme: the default tokens
+// now, the chosen theme's once loaded.
+function themeUi(el) {
+  guardThemeTokens();
+  el.dataset.otpilotUi = '';
+  applyThemeVars(el);
+  if (!_themeVars || _themeStale) loadThemeVars().then(vars => { if (vars) applyThemeVars(el); });
+  return el;
+}
+
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.theme || !chrome.runtime?.id) return;
+    _themeLoad = null;
+    _themeStale = true; // until it loads, the next overlay retries
+    loadThemeVars().then(vars => { if (vars) document.querySelectorAll('[data-otpilot-ui]').forEach(applyThemeVars); });
+  });
+} catch { /* extension context gone */ }
+
 function showToast(text, ok = true) {
   const el = document.createElement('div');
   Object.assign(el.style, {
     position: 'fixed', top: '20px', right: '20px', zIndex: '2147483647',
     display: 'flex', alignItems: 'center', gap: '10px',
     padding: '10px 14px',
-    background: '#1e293b',
-    border: '1px solid #334155',
-    borderLeft: `3px solid ${ok ? '#22c55e' : '#ef4444'}`,
+    background: 'var(--surface, #1e293b)',
+    border: '1px solid var(--surface-2, #334155)',
+    borderLeft: `3px solid ${ok ? 'var(--success, #22c55e)' : 'var(--danger, #ef4444)'}`,
     borderRadius: '8px',
     boxShadow: '0 4px 20px rgba(0,0,0,.4)',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    fontSize: '13px', color: '#e2e8f0',
+    fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif)',
+    fontSize: '13px', color: 'var(--ink-1, #e2e8f0)',
     pointerEvents: 'none',
     maxWidth: '280px',
     transform: 'translateX(120%)',
@@ -137,7 +249,7 @@ function showToast(text, ok = true) {
   const icon = document.createElement('span');
   icon.textContent = ok ? '✓' : '✕';
   Object.assign(icon.style, {
-    color: ok ? '#22c55e' : '#ef4444',
+    color: ok ? 'var(--success, #22c55e)' : 'var(--danger, #ef4444)',
     fontWeight: '700', fontSize: '14px', flexShrink: '0',
   });
 
@@ -146,6 +258,7 @@ function showToast(text, ok = true) {
 
   el.appendChild(icon);
   el.appendChild(msg);
+  themeUi(el);
   document.body.appendChild(el);
 
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -238,17 +351,18 @@ function showEmailOtpBanner(code, input, onClose) {
 
   const banner = document.createElement('div');
   banner.id = 'otpilot-email-banner';
+  themeUi(banner);
   Object.assign(banner.style, {
     position: 'fixed', top: '20px', left: '50%', transform: 'translateX(-50%)',
     zIndex: '2147483647', display: 'flex', alignItems: 'center', gap: '10px',
     padding: '10px 14px',
-    background: '#1e293b',
-    border: '1px solid #334155',
-    borderLeft: '3px solid #38bdf8',
+    background: 'var(--surface, #1e293b)',
+    border: '1px solid var(--surface-2, #334155)',
+    borderLeft: '3px solid var(--accent-2, #38bdf8)',
     borderRadius: '8px',
     boxShadow: '0 4px 20px rgba(0,0,0,.4)',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    fontSize: '13px', color: '#e2e8f0',
+    fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif)',
+    fontSize: '13px', color: 'var(--ink-1, #e2e8f0)',
     maxWidth: '320px',
   });
 
@@ -258,7 +372,7 @@ function showEmailOtpBanner(code, input, onClose) {
   const btn = document.createElement('button');
   btn.textContent = 'Fill';
   Object.assign(btn.style, {
-    padding: '4px 10px', background: '#38bdf8', color: '#0f172a',
+    padding: '4px 10px', background: 'var(--accent-2, #38bdf8)', color: 'var(--bg, #0f172a)',
     border: 'none', borderRadius: '5px', fontSize: '12px',
     fontWeight: '700', cursor: 'pointer', flexShrink: '0',
   });
@@ -271,7 +385,7 @@ function showEmailOtpBanner(code, input, onClose) {
   const close = document.createElement('button');
   close.textContent = '✕';
   Object.assign(close.style, {
-    background: 'none', border: 'none', color: '#64748b',
+    background: 'none', border: 'none', color: 'var(--ink-4, #64748b)',
     fontSize: '13px', cursor: 'pointer', padding: '0 2px', flexShrink: '0',
   });
   close.addEventListener('click', () => { dismiss(); banner.remove(); });
@@ -421,6 +535,8 @@ async function fillOTPWithAccount(acc) {
   try { code = await generateTOTP(acc.secret); }
   catch (e) { return { ok: false, msg: 'Invalid secret: ' + e.message }; }
   fillInputValue(input, code);
+  // Filling a code counts as activity for the vault's inactivity auto-lock.
+  try { chrome.runtime.sendMessage({ action: 'vaultTouch' }, () => void chrome.runtime.lastError); } catch {}
   return { ok: true, code, input };
 }
 
@@ -453,63 +569,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   }
 });
 
-function b64dec(str) {
-  return Uint8Array.from(atob(str), c => c.charCodeAt(0)).buffer;
-}
-
-async function verifyInContent(password, auth) {
-  try {
-    const raw = await crypto.subtle.importKey(
-      'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']
-    );
-    const key = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: b64dec(auth.salt), hash: 'SHA-256', iterations: 200000 },
-      raw, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
-    );
-    const plain = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: b64dec(auth.iv) }, key, b64dec(auth.data)
-    );
-    return new TextDecoder().decode(plain) === 'otpilot-auth-ok';
-  } catch { return false; }
-}
-
 function showLockOverlay(accountName, onUnlock, onDismiss) {
   if (document.getElementById('otpilot-lock')) return;
 
   const el = document.createElement('div');
   el.id = 'otpilot-lock';
+  themeUi(el);
   Object.assign(el.style, {
     position: 'fixed', top: '16px', right: '16px', zIndex: '2147483647',
-    width: '260px', background: '#1e293b', border: '1px solid #1e3a5f',
+    width: '260px', background: 'var(--surface, #1e293b)', border: '1px solid var(--border, #1e3a5f)',
     borderRadius: '10px', boxShadow: '0 4px 20px rgba(0,0,0,.5)',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif)',
     overflow: 'hidden',
   });
 
-  const safeName = accountName.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  el.innerHTML = `${OVERLAY_HEADER}
-    <div style="padding:12px 14px;">
-      <div style="color:#cbd5e1;font-size:12px;margin-bottom:10px;">
-        Unlock to auto-fill <strong style="color:#f1f5f9;">${safeName}</strong>
-      </div>
-      ${PW_FIELD_HTML}
-      <div style="display:flex;gap:8px;">
-        <button class="otpilot-primary" style="flex:1;padding:7px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Unlock</button>
-        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid #334155;border-radius:6px;color:#64748b;font-size:12px;cursor:pointer;">Not now</button>
-      </div>
-    </div>`;
-
+  el.innerHTML = OVERLAY_HEADER;
   document.body.appendChild(el);
 
-  const close      = () => { el.remove(); onDismiss?.(); };
-  const primaryBtn = el.querySelector('.otpilot-primary');
-
+  let stopListening = () => {};
+  const close = () => { stopListening(); el.remove(); onDismiss?.(); };
   el.querySelector('.otpilot-overlay-close').onclick = close;
-  el.querySelector('.otpilot-secondary').onclick     = close;
 
   const defaultOnUnlock = () => { el.remove(); fillAndSubmit(undefined, false); };
-  wirePwField(el, primaryBtn, 'Unlock', onUnlock || defaultOnUnlock);
+  stopListening = mountUnlockFrame(el, { name: accountName, action: 'Unlock' }, onUnlock || defaultOnUnlock, close);
 }
 
 // ── Detect 2FA setup pages ───────────────────────────────────────────────────
@@ -781,39 +863,28 @@ function parseOtpAuthUri(uri) {
 }
 
 const OVERLAY_HEADER = `
-  <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#0f172a;border-bottom:1px solid #1e3a5f;">
+  <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg, #0f172a);border-bottom:1px solid var(--border, #1e3a5f);">
     <svg width="16" height="16" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
-      <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" fill="#1e3a5f"/>
-      <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" fill="none" stroke="#38bdf8" stroke-width="4.5" stroke-linejoin="round"/>
-      <circle cx="64" cy="68" r="20" fill="#0f172a" stroke="#38bdf8" stroke-width="4"/>
-      <line x1="64" y1="68" x2="57" y2="54" stroke="#38bdf8" stroke-width="4" stroke-linecap="round"/>
-      <line x1="64" y1="68" x2="78" y2="72" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/>
-      <circle cx="64" cy="68" r="3" fill="#38bdf8"/>
+      <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" style="fill:var(--border, #1e3a5f)"/>
+      <path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" style="fill:none;stroke:var(--accent-2, #38bdf8)" stroke-width="4.5" stroke-linejoin="round"/>
+      <circle cx="64" cy="68" r="20" style="fill:var(--bg, #0f172a);stroke:var(--accent-2, #38bdf8)" stroke-width="4"/>
+      <line x1="64" y1="68" x2="57" y2="54" style="stroke:var(--accent-2, #38bdf8)" stroke-width="4" stroke-linecap="round"/>
+      <line x1="64" y1="68" x2="78" y2="72" style="stroke:var(--accent-2, #38bdf8)" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="64" cy="68" r="3" style="fill:var(--accent-2, #38bdf8)"/>
     </svg>
-    <span style="color:#f1f5f9;font-size:13px;font-weight:700;flex:1;">OTPilot</span>
-    <button class="otpilot-overlay-close" style="background:none;border:none;color:#475569;cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button>
+    <span style="color:var(--ink-0, #f1f5f9);font-size:13px;font-weight:700;flex:1;">OTPilot</span>
+    <button class="otpilot-overlay-close" style="background:none;border:none;color:var(--ink-5, #475569);cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button>
   </div>`;
-
-const PW_FIELD_HTML = `
-  <div style="position:relative;margin-bottom:6px;">
-    <input class="otpilot-pw" type="password" placeholder="Master password" autocomplete="current-password"
-      style="width:100%;padding:8px 32px 8px 10px;background:#0f172a;border:1px solid #1e3a5f;
-             border-radius:6px;color:#e2e8f0;font-size:12px;font-family:monospace;
-             outline:none;box-sizing:border-box;">
-    <button class="otpilot-pw-eye" tabindex="-1"
-      style="position:absolute;right:7px;top:50%;transform:translateY(-50%);
-             background:none;border:none;color:#475569;cursor:pointer;font-size:12px;padding:0;line-height:1;">👁</button>
-  </div>
-  <div class="otpilot-pw-err" style="color:#f87171;font-size:11px;min-height:14px;margin-bottom:6px;"></div>`;
 
 function makeOverlay(id) {
   const el = document.createElement('div');
   el.id = id;
+  themeUi(el);
   Object.assign(el.style, {
     position: 'fixed', top: '16px', right: '16px', zIndex: '2147483647',
-    width: '260px', background: '#1e293b', border: '1px solid #1e3a5f',
+    width: '260px', background: 'var(--surface, #1e293b)', border: '1px solid var(--border, #1e3a5f)',
     borderRadius: '10px', boxShadow: '0 4px 20px rgba(0,0,0,.5)',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    fontFamily: 'var(--font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif)',
     overflow: 'hidden',
   });
   // Isolate the overlay from the host page's global handlers. Many sites close
@@ -834,45 +905,34 @@ function makeOverlay(id) {
   return el;
 }
 
-function wirePwField(el, primaryBtn, primaryLabel, onSuccess) {
-  const pwInput = el.querySelector('.otpilot-pw');
-  const errEl   = el.querySelector('.otpilot-pw-err');
+// The master password is typed into an extension-origin iframe (unlock.html),
+// never into the host page's DOM, where the page's own scripts could read it.
+// The frame's "unlocked" message is only a hint: the page can post the same
+// message, so the real lock state is re-checked with the background first.
+// Returns a function that stops listening.
+function mountUnlockFrame(container, { name, intro, action }, onUnlocked, onDismiss) {
+  const frame = document.createElement('iframe');
+  const query = new URLSearchParams({ name, action, ...(intro ? { intro } : {}) });
+  frame.src = `${chrome.runtime.getURL('unlock.html')}?${query}`;
+  frame.title = 'Unlock OTPilot';
+  Object.assign(frame.style, { display: 'block', width: '100%', height: '148px', border: '0' });
+  container.appendChild(frame);
 
-  el.querySelector('.otpilot-pw-eye').onclick = () => {
-    pwInput.type = pwInput.type === 'password' ? 'text' : 'password';
+  // Only the extension's own unlock page counts: the page owns the <iframe>
+  // and can navigate it to its own content (which then is the frame's
+  // contentWindow too), e.g. once the vault was unlocked elsewhere. unlock.js
+  // only says "unlocked" after the user unlocked in it.
+  // (With use_dynamic_url the frame's URL carries a per-session id; its
+  // document's origin is the extension's.)
+  const origins = new Set([new URL(frame.src).origin, `chrome-extension://${chrome.runtime.id}`]);
+  const onMessage = async e => {
+    if (e.source !== frame.contentWindow || !origins.has(e.origin) || e.data?.source !== 'otpilot-unlock') return;
+    if (e.data.result === 'dismissed') { stop(); onDismiss(); return; }
+    if (e.data.result === 'unlocked' && !(await isSessionLocked())) { stop(); onUnlocked(); }
   };
-
-  async function attempt() {
-    const password = pwInput.value;
-    if (!password) { errEl.textContent = 'Enter your password'; return; }
-    errEl.textContent = '';
-    primaryBtn.disabled = true;
-    primaryBtn.textContent = 'Verifying…';
-
-    try {
-      const { auth, sessionDuration } = await new Promise(r =>
-        chrome.storage.local.get(['auth', 'sessionDuration'], r)
-      );
-      if (await verifyInContent(password, auth)) {
-        const dur = sessionDuration || 86400000;
-        await new Promise(r => chrome.storage.local.set({ sessionExpiry: Date.now() + dur }, r));
-        onSuccess();
-      } else {
-        errEl.textContent = 'Incorrect password';
-        primaryBtn.disabled = false;
-        primaryBtn.textContent = primaryLabel;
-        pwInput.select();
-      }
-    } catch {
-      errEl.textContent = 'An error occurred';
-      primaryBtn.disabled = false;
-      primaryBtn.textContent = primaryLabel;
-    }
-  }
-
-  primaryBtn.onclick = attempt;
-  pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') attempt(); });
-  setTimeout(() => pwInput.focus(), 100);
+  const stop = () => window.removeEventListener('message', onMessage);
+  window.addEventListener('message', onMessage);
+  return stop;
 }
 
 function showCodeRevealOverlay(name, code) {
@@ -882,10 +942,10 @@ function showCodeRevealOverlay(name, code) {
   const formatted = code.slice(0, 3) + ' ' + code.slice(3);
   el.innerHTML = `${OVERLAY_HEADER}
     <div style="padding:12px 14px;">
-      <div style="color:#94a3b8;font-size:11px;margin-bottom:6px;">${safeName} added — copy your code:</div>
+      <div style="color:var(--ink-3, #94a3b8);font-size:11px;margin-bottom:6px;">${safeName} added — copy your code:</div>
       <div style="display:flex;align-items:center;gap:8px;">
-        <span class="otpilot-reveal-code" style="flex:1;font-size:22px;font-weight:700;letter-spacing:3px;color:#f1f5f9;font-family:monospace;">${formatted}</span>
-        <button class="otpilot-copy-code" style="padding:6px 12px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Copy</button>
+        <span class="otpilot-reveal-code" style="flex:1;font-size:22px;font-weight:700;letter-spacing:3px;color:var(--ink-0, #f1f5f9);font-family:monospace;">${formatted}</span>
+        <button class="otpilot-copy-code" style="padding:6px 12px;background:var(--accent, #0ea5e9);border:none;border-radius:6px;color:var(--on-accent, #fff);font-size:12px;font-weight:600;cursor:pointer;">Copy</button>
       </div>
     </div>`;
   document.body.appendChild(el);
@@ -924,29 +984,27 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
 
   el.innerHTML = `${OVERLAY_HEADER}
     <div style="padding:12px 14px;">
-      <div style="color:#cbd5e1;font-size:12px;margin-bottom:10px;">
-        Save <strong style="color:#f1f5f9;">${safeName}</strong> to OTPilot?
+      <div style="color:var(--ink-2, #cbd5e1);font-size:12px;margin-bottom:10px;">
+        Save <strong style="color:var(--ink-0, #f1f5f9);">${safeName}</strong> to OTPilot?
       </div>
-      ${locked ? PW_FIELD_HTML : ''}
-      <div style="display:flex;gap:8px;">
-        <button class="otpilot-primary" style="flex:1;padding:7px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">${locked ? 'Unlock & Add' : 'Add account'}</button>
-        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid #334155;border-radius:6px;color:#64748b;font-size:12px;cursor:pointer;">Not now</button>
-      </div>
+      ${locked ? '' : `<div style="display:flex;gap:8px;">
+        <button class="otpilot-primary" style="flex:1;padding:7px;background:var(--accent, #0ea5e9);border:none;border-radius:6px;color:var(--on-accent, #fff);font-size:12px;font-weight:600;cursor:pointer;">Add account</button>
+        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid var(--surface-2, #334155);border-radius:6px;color:var(--ink-4, #64748b);font-size:12px;cursor:pointer;">Not now</button>
+      </div>`}
     </div>`;
 
   document.body.appendChild(el);
 
-  const close      = () => { _dismissedSecrets.add(secret); el.remove(); };
-  const primaryBtn = el.querySelector('.otpilot-primary');
-
+  let stopListening = () => {};
+  const close = () => { stopListening(); _dismissedSecrets.add(secret); el.remove(); };
   el.querySelector('.otpilot-overlay-close').onclick = close;
-  el.querySelector('.otpilot-secondary').onclick     = close;
 
   async function addAccount() {
-    const d = await new Promise(r => chrome.storage.local.get('accounts', r));
-    const accs = d.accounts || [];
-    accs.push({ name, secret, urls: location.hostname, autofill: true, email, domain: location.hostname });
-    await new Promise(r => chrome.storage.local.set({ accounts: accs, activeIndex: accs.length - 1 }, r));
+    const res = await chrome.runtime.sendMessage({
+      action: 'vaultAddAccount',
+      account: { name, secret, urls: location.hostname, autofill: true, email, domain: location.hostname },
+    }).catch(() => null);
+    if (!res?.ok) { showToast('Could not save — unlock OTPilot and try again', false); return; }
     _dismissedSecrets.add(secret);
     // Capture the site's icon now, passing the page's declared favicon as a hint.
     requestSiteIcon(location.hostname);
@@ -961,9 +1019,10 @@ function showSuggestionOverlay(name, secret, email = '', locked = false) {
   }
 
   if (locked) {
-    wirePwField(el, primaryBtn, 'Unlock & Add', addAccount);
+    stopListening = mountUnlockFrame(el, { name, intro: 'Unlock to save ', action: 'Unlock & Add' }, addAccount, close);
   } else {
-    primaryBtn.onclick = addAccount;
+    el.querySelector('.otpilot-primary').onclick = addAccount;
+    el.querySelector('.otpilot-secondary').onclick = close;
   }
 }
 
@@ -1016,12 +1075,12 @@ function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
 
   el.innerHTML = `${OVERLAY_HEADER}
     <div style="padding:12px 14px;">
-      <div style="color:#cbd5e1;font-size:12px;margin-bottom:10px;">
-        Save <strong style="color:#f1f5f9;">${safeHost}</strong> to <strong style="color:#f1f5f9;">${safeName}</strong>? It'll auto-fill here next time.
+      <div style="color:var(--ink-2, #cbd5e1);font-size:12px;margin-bottom:10px;">
+        Save <strong style="color:var(--ink-0, #f1f5f9);">${safeHost}</strong> to <strong style="color:var(--ink-0, #f1f5f9);">${safeName}</strong>? It'll auto-fill here next time.
       </div>
       <div style="display:flex;gap:8px;">
-        <button class="otpilot-primary" style="flex:1;padding:7px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
-        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid #334155;border-radius:6px;color:#64748b;font-size:12px;cursor:pointer;">Not now</button>
+        <button class="otpilot-primary" style="flex:1;padding:7px;background:var(--accent, #0ea5e9);border:none;border-radius:6px;color:var(--on-accent, #fff);font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid var(--surface-2, #334155);border-radius:6px;color:var(--ink-4, #64748b);font-size:12px;cursor:pointer;">Not now</button>
       </div>
     </div>`;
 
@@ -1043,36 +1102,17 @@ function showSaveUrlOverlay(acc, idx, hostname, onResolve) {
   el.querySelector('.otpilot-overlay-close').onclick = close;
   el.querySelector('.otpilot-secondary').onclick = () => { _dismissedUrlPrompts.add(dismissKey); close(); };
   el.querySelector('.otpilot-primary').onclick = async () => {
-    const d = await new Promise(r => chrome.storage.local.get('accounts', r));
-    const accs = d.accounts || [];
-    // Prefer the index we resolved the account at — fast path, correct as
-    // long as nothing reordered the list while the prompt sat open. A secret
-    // match alone isn't enough to trust it (two accounts can share a secret,
-    // and a reorder could put a different one at this exact index), so
-    // compare the full record. If it no longer matches there, fall back to a
-    // full-list search by the same full-record identity, and only write if
-    // that's unambiguous — guessing between duplicates risks tagging the
-    // wrong account.
-    const matchesFully = a => a && a.secret === acc.secret && a.name === acc.name
-      && a.urls === acc.urls && a.email === acc.email;
-    let targetIdx = matchesFully(accs[idx]) ? idx : -1;
-    if (targetIdx === -1) {
-      const matches = accs.map((a, i) => matchesFully(a) ? i : -1).filter(i => i !== -1);
-      if (matches.length === 1) targetIdx = matches[0];
-    }
-    let saved = false;
-    if (targetIdx !== -1) {
-      const existing = (accs[targetIdx].urls || '').trim();
-      accs[targetIdx] = {
-        ...accs[targetIdx],
-        urls: existing ? existing + '\n' + hostname : hostname,
-        domain: hostname,
-        _updatedAt: new Date().toISOString(),
-      };
-      saved = await new Promise(resolve =>
-        chrome.storage.local.set({ accounts: accs }, () => resolve(!chrome.runtime.lastError))
-      );
-    }
+    // The background updates the account only if it still matches what this
+    // prompt was showing; if it changed or disappeared meanwhile, nothing is
+    // written rather than guessing (two accounts can share a secret).
+    const existing = (acc.urls || '').trim();
+    const res = await chrome.runtime.sendMessage({
+      action: 'vaultUpdateAccount',
+      id: acc._id,
+      expected: { name: acc.name, secret: acc.secret, urls: acc.urls, email: acc.email },
+      patch: { urls: existing ? existing + '\n' + hostname : hostname, domain: hostname },
+    }).catch(() => null);
+    const saved = !!res?.ok;
     if (saved) {
       requestSiteIcon(hostname);
       showToast(`Saved — ${acc.name} will auto-fill here next time`);
@@ -1096,24 +1136,24 @@ function showAccountPickerOverlay(matchingAccounts, onClose) {
     const safeName  = acc.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const safeEmail = (acc.email || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const emailHtml = safeEmail
-      ? `<span style="display:block;color:#64748b;font-size:10px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeEmail}</span>`
+      ? `<span style="display:block;color:var(--ink-4, #64748b);font-size:10px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeEmail}</span>`
       : '';
     return `
       <div class="otpilot-picker-row" style="display:flex;align-items:center;gap:8px;
-           padding:8px 14px;border-bottom:1px solid #1e3a5f;">
+           padding:8px 14px;border-bottom:1px solid var(--border, #1e3a5f);">
         <div style="flex:1;min-width:0;">
-          <span style="display:block;color:#e2e8f0;font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeName}</span>
+          <span style="display:block;color:var(--ink-1, #e2e8f0);font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeName}</span>
           ${emailHtml}
         </div>
-        <button class="otpilot-fill-btn" style="padding:5px 10px;background:#0ea5e9;border:none;
-                border-radius:5px;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">Fill</button>
-        <button class="otpilot-copy-btn" style="padding:5px 10px;background:transparent;border:1px solid #334155;
-                border-radius:5px;color:#94a3b8;font-size:11px;cursor:pointer;">Copy</button>
+        <button class="otpilot-fill-btn" style="padding:5px 10px;background:var(--accent, #0ea5e9);border:none;
+                border-radius:5px;color:var(--on-accent, #fff);font-size:11px;font-weight:600;cursor:pointer;">Fill</button>
+        <button class="otpilot-copy-btn" style="padding:5px 10px;background:transparent;border:1px solid var(--surface-2, #334155);
+                border-radius:5px;color:var(--ink-3, #94a3b8);font-size:11px;cursor:pointer;">Copy</button>
       </div>`;
   }).join('');
 
   el.innerHTML = `${OVERLAY_HEADER}
-    <div style="padding:8px 14px 4px;color:#94a3b8;font-size:11px;">Multiple accounts for this site</div>
+    <div style="padding:8px 14px 4px;color:var(--ink-3, #94a3b8);font-size:11px;">Multiple accounts for this site</div>
     ${rows}`;
 
   document.body.appendChild(el);
@@ -1149,17 +1189,15 @@ async function runDetection() {
     const parsed = uri ? parseOtpAuthUri(uri) : findPlainTextSecret();
     if (!parsed) return false;
 
-    return await new Promise(resolve => {
-      chrome.storage.local.get(['accounts', 'auth', 'sessionExpiry'], d => {
-        if (!d.auth) { resolve(false); return; }
-        if (_dismissedSecrets.has(parsed.secret)) { resolve(false); return; }
-        const exists = (d.accounts || []).some(a => a.secret === parsed.secret);
-        if (exists)  { resolve(false); return; }
-        const locked = !d.sessionExpiry || Date.now() >= d.sessionExpiry;
-        showSuggestionOverlay(parsed.name, parsed.secret, parsed.email || '', locked);
-        resolve(true);
-      });
-    });
+    const state = await vaultState();
+    if (state === 'setup') return false; // no master password yet: nothing to save into
+    if (_dismissedSecrets.has(parsed.secret)) return false;
+    // Unlocked: skip a secret that's already saved. Locked, secrets can't be
+    // compared; the background skips a duplicate when it's added after unlock.
+    const { accounts = [] } = await getVaultAccounts();
+    if (accounts.some(a => a.secret && a.secret === parsed.secret)) return false;
+    showSuggestionOverlay(parsed.name, parsed.secret, parsed.email || '', state === 'locked');
+    return true;
   } finally {
     _detectionInFlight = false;
   }
@@ -1304,7 +1342,7 @@ async function runDetection() {
   async function tryAutoFill() {
     if (isEnrollmentPage()) return;
 
-    const { accounts = [] } = await new Promise(r => chrome.storage.local.get('accounts', r));
+    const { accounts = [] } = await getVaultAccounts();
     const hostname = location.hostname.toLowerCase();
     const matching = findAllMatchingAccounts(accounts, hostname).filter(a => a.autofill !== false);
 
@@ -1357,10 +1395,13 @@ async function runDetection() {
       if (await isSessionLocked()) {
         if (_lockDismissed && input === _lockDismissedFor) return;
         const onLockDismiss = () => { _lockDismissed = true; _lockDismissedFor = input; };
-        showLockOverlay('OTPilot', () => {
+        showLockOverlay('OTPilot', async () => {
           document.getElementById('otpilot-lock')?.remove();
           _lockDismissed = false;
-          showAccountPickerOverlay(matching, onClose);
+          // `matching` came from the locked index (no secrets): fetch the
+          // decrypted accounts now that the vault is open.
+          const { accounts: unlocked = [] } = await getVaultAccounts();
+          showAccountPickerOverlay(findAllMatchingAccounts(unlocked, hostname).filter(a => a.autofill !== false), onClose);
         }, onLockDismiss);
         return;
       }

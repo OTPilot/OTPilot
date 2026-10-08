@@ -100,6 +100,24 @@ pub async fn send_welcome_email(enabled: bool, api_key: Option<&str>, from: &str
 }
 
 /// Sent when a user upgrades to the Personal (cloud sync) plan.
+pub async fn send_personal_subscription_email(
+    enabled: bool,
+    api_key: Option<&str>,
+    from: &str,
+    to: &str,
+) {
+    let subject = "You're on OTPilot Personal ✅";
+    let body = "Thanks for subscribing to OTPilot Personal!\n\n\
+        Your vault now syncs — end-to-end encrypted — across all your devices, with no limit on \
+        passwords and notes. Sign in to the extension on any browser and it follows you.\n\n\
+        Manage your devices: https://otpilot.app/dashboard/devices\n\
+        Billing, receipts and cancellation: https://otpilot.app/dashboard/billing\n\n\
+        Your subscription renews automatically; you can cancel anytime from the billing page.\n\n\
+        Questions? Just reply to this email.";
+    send(enabled, api_key, from, to, subject, body).await;
+}
+
+/// 1.x one-time purchase (a checkout started before 2.0 can still complete).
 pub async fn send_personal_upgrade_email(
     enabled: bool,
     api_key: Option<&str>,
@@ -130,7 +148,7 @@ pub async fn send_new_device_email(
         (
             "A new device connected to your OTPilot account".to_string(),
             format!(
-                "A new browser just connected to your OTPilot account: {}.\n\nWith the Personal plan you can sync your TOTP accounts across all your devices — it's a one-time $15 payment, no subscription.\n\nUpgrade here: https://otpilot.app/dashboard/billing",
+                "A new browser just connected to your OTPilot account: {}.\n\nWith the Personal plan your vault syncs across all your devices, end-to-end encrypted — $3/month or $30/year.\n\nUpgrade here: https://otpilot.app/dashboard/billing",
                 device_name
             ),
         )

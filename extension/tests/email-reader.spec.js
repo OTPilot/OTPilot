@@ -1,17 +1,16 @@
-import { test, expect, FAKE_AUTH, SESSION_24H } from './fixtures.js';
+import { test, expect, seedUnlocked } from './fixtures.js';
 
 // Helper: open popup and seed unlocked storage with no TOTP accounts
-async function seedUnlocked(context, extensionId) {
+async function openUnlockedPopup(context, extensionId) {
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
-  await popup.evaluate(([auth, expiry]) => {
+  await seedUnlocked(popup);
+  await popup.evaluate(() => {
     return new Promise(r => chrome.storage.local.set({
-      auth,
-      sessionExpiry: expiry,
       accounts: [],
       emailAutoFill: true,
     }, r));
-  }, [FAKE_AUTH, SESSION_24H()]);
+  });
   return popup;
 }
 
@@ -41,7 +40,7 @@ async function scanEmailTab(popup, tabId, expectedLength) {
 // ── Per-provider scan tests ──────────────────────────────────────────────────
 
 test('Gmail: detects code from Spanish subject line', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-gmail.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -49,7 +48,7 @@ test('Gmail: detects code from Spanish subject line', async ({ context, extensio
 });
 
 test('Gmail: returns first code when multiple OTP emails present', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-gmail.html');
 
   // email-gmail.html has 338226 in row1 and 112233 in row2 — should return row1
@@ -58,7 +57,7 @@ test('Gmail: returns first code when multiple OTP emails present', async ({ cont
 });
 
 test('Outlook: detects code from inbox row', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'outlook', 'email-outlook.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -66,7 +65,7 @@ test('Outlook: detects code from inbox row', async ({ context, extensionId }) =>
 });
 
 test('Yahoo: detects code from inbox row', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'yahoo', 'email-yahoo.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -74,7 +73,7 @@ test('Yahoo: detects code from inbox row', async ({ context, extensionId }) => {
 });
 
 test('Proton: detects code from inbox row', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'proton', 'email-proton.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -82,7 +81,7 @@ test('Proton: detects code from inbox row', async ({ context, extensionId }) => 
 });
 
 test('Fastmail: detects code from inbox row', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'fastmail', 'email-fastmail.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -90,7 +89,7 @@ test('Fastmail: detects code from inbox row', async ({ context, extensionId }) =
 });
 
 test('Zoho: detects code from inbox row', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'zoho', 'email-zoho.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -98,7 +97,7 @@ test('Zoho: detects code from inbox row', async ({ context, extensionId }) => {
 });
 
 test('returns null when inbox has no digit codes', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-empty.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -110,7 +109,7 @@ test('returns null when inbox has no digit codes', async ({ context, extensionId
 // distractor numbers (a year, an order/ticket reference) the scanner must skip.
 
 test('Gmail: detects code in opened email body', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-gmail-body.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -118,7 +117,7 @@ test('Gmail: detects code in opened email body', async ({ context, extensionId }
 });
 
 test('Outlook: detects code in opened email body', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'outlook', 'email-outlook-body.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -126,7 +125,7 @@ test('Outlook: detects code in opened email body', async ({ context, extensionId
 });
 
 test('Yahoo: detects code in opened email body', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'yahoo', 'email-yahoo-body.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -134,7 +133,7 @@ test('Yahoo: detects code in opened email body', async ({ context, extensionId }
 });
 
 test('Proton: detects code in opened email body', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'proton', 'email-proton-body.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -142,7 +141,7 @@ test('Proton: detects code in opened email body', async ({ context, extensionId 
 });
 
 test('Fastmail: detects code in opened email body', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'fastmail', 'email-fastmail-body.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -150,7 +149,7 @@ test('Fastmail: detects code in opened email body', async ({ context, extensionI
 });
 
 test('Zoho: detects code in opened email body', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   const { tabId } = await openEmailPage(context, popup, 'zoho', 'email-zoho-body.html');
 
   const result = await scanEmailTab(popup, tabId);
@@ -158,7 +157,7 @@ test('Zoho: detects code in opened email body', async ({ context, extensionId })
 });
 
 test('keyword proximity: picks the OTP over distractor numbers in the body', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   // email-gmail-body.html has the year 2026 and order ref 90014772 alongside the
   // real code 672880, which sits next to "Code will expire" — proximity must win.
   const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-gmail-body.html');
@@ -171,7 +170,7 @@ test('keyword proximity: picks the OTP over distractor numbers in the body', asy
 // ── Confidence gate / length / recency ───────────────────────────────────────
 
 test('returns null when numbers are present but no OTP keyword is near them', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   // Distractor numbers (order #, price, counts, year) with no OTP keyword nearby.
   const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-no-keyword.html');
 
@@ -180,7 +179,7 @@ test('returns null when numbers are present but no OTP keyword is near them', as
 });
 
 test('expectedLength selects the matching-length code', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   // email-lengths.html has "code: 1234" (4-digit) and "code is 654321" (6-digit).
   const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-lengths.html');
 
@@ -189,7 +188,7 @@ test('expectedLength selects the matching-length code', async ({ context, extens
 });
 
 test('skips a stale OTP row and uses the recent one', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
   // Row 1 (code 111111) has a 2020 timestamp → skipped; row 2 (222222) wins.
   const { tabId } = await openEmailPage(context, popup, 'gmail', 'email-recency.html');
 
@@ -200,7 +199,7 @@ test('skips a stale OTP row and uses the recent one', async ({ context, extensio
 // ── Split input fill test ────────────────────────────────────────────────────
 
 test('fills split OTP inputs (one digit per box) correctly', async ({ context, extensionId }) => {
-  const popup = await seedUnlocked(context, extensionId);
+  const popup = await openUnlockedPopup(context, extensionId);
 
   // Open Gmail mock so email-reader.js detects a code passively and background caches it
   await openEmailPage(context, popup, 'gmail', 'email-gmail.html');

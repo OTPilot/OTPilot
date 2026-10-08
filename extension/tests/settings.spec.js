@@ -1,4 +1,4 @@
-import { test, expect, FAKE_AUTH, SESSION_24H, TEST_SECRET } from './fixtures.js';
+import { test, expect, readAccounts, seedUnlocked, TEST_SECRET, TEST_PASSWORD } from './fixtures.js';
 
 // ── Google Authenticator migration protobuf helpers (test-side encoder — the
 // extension only ever needs to decode, so there's no encoder in the codebase) ──
@@ -41,9 +41,10 @@ function buildMigrationUri({ otpParams, version = 1, batchSize = 1, batchIndex =
 }
 
 async function unlock(page, accounts = [], extra = {}) {
-  await page.evaluate(([auth, expiry, accs, extraData]) => new Promise(r =>
-    chrome.storage.local.set({ auth, sessionExpiry: expiry, accounts: accs, ...extraData }, r)
-  ), [FAKE_AUTH, SESSION_24H(), accounts, extra]);
+  await seedUnlocked(page);
+  await page.evaluate(([accs, extraData]) => new Promise(r =>
+    chrome.storage.local.set({ accounts: accs, ...extraData }, r)
+  ), [accounts, extra]);
   await page.reload();
 }
 
@@ -142,9 +143,7 @@ test('saving deselects the account and shows a confirmation message instead of r
   // identical to having never opened anything.
   await expect(page.locator('#acc-detail .dc-empty')).toContainText('Saved');
 
-  const stored = await page.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('accounts', d => r(d.accounts))));
-  expect(stored[0].email).toBe('me@example.com');
+  await expect.poll(async () => (await readAccounts(page))[0]?.email).toBe('me@example.com');
 });
 
 test('saving keeps an active search filter instead of clearing it', async ({ context, extensionId }) => {
@@ -157,6 +156,7 @@ test('saving keeps an active search filter instead of clearing it', async ({ con
   ]);
 
   await page.click('#nav-settings');
+  await expect(page.locator('.acc-row')).toHaveCount(3); // loaded from the vault
   await page.fill('#acc-search', 'git');
   // .acc-head, not .acc-row: the filter hides rows via style.display on the
   // wrapping .acc-row, but accounts sort alphabetically (Dropbox first in the
@@ -166,12 +166,10 @@ test('saving keeps an active search filter instead of clearing it', async ({ con
   await page.click('#btn-save-all');
 
   await expect(page.locator('#acc-search')).toHaveValue('git');
-  const { visibleCount, visibleName } = await page.locator('.acc-row').evaluateAll(els => {
+  await expect.poll(() => page.locator('.acc-row').evaluateAll(els => {
     const visible = els.filter(el => el.style.display !== 'none');
-    return { visibleCount: visible.length, visibleName: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '' };
-  });
-  expect(visibleCount).toBe(1);
-  expect(visibleName).toBe('GitHub');
+    return { count: visible.length, name: visible[0]?.querySelector('.acc-head-name')?.textContent ?? '' };
+  })).toEqual({ count: 1, name: 'GitHub' });
 });
 
 // ── Change master password ──────────────────────────────────────────────────
@@ -180,7 +178,6 @@ test('change master password: rejects wrong current password and mismatched conf
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
   await unlock(page);
-  await page.evaluate(() => createAuth('oldpass123'));
   await page.click('#nav-config');
   await page.click('#row-settings-password');
 
@@ -190,7 +187,7 @@ test('change master password: rejects wrong current password and mismatched conf
   await page.click('#change-pw-submit');
   await expect(page.locator('#change-pw-err')).toHaveText('Current password is incorrect.');
 
-  await page.fill('#change-pw-current', 'oldpass123');
+  await page.fill('#change-pw-current', TEST_PASSWORD);
   await page.fill('#change-pw-confirm', 'doesnotmatch');
   await page.click('#change-pw-submit');
   await expect(page.locator('#change-pw-err')).toHaveText('New passwords do not match.');
@@ -200,11 +197,10 @@ test('change master password: successful change invalidates the old password and
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
   await unlock(page);
-  await page.evaluate(() => createAuth('oldpass123'));
   await page.click('#nav-config');
   await page.click('#row-settings-password');
 
-  await page.fill('#change-pw-current', 'oldpass123');
+  await page.fill('#change-pw-current', TEST_PASSWORD);
   await page.fill('#change-pw-new', 'newpass456');
   await page.fill('#change-pw-confirm', 'newpass456');
   await page.click('#change-pw-submit');
@@ -213,42 +209,35 @@ test('change master password: successful change invalidates the old password and
   await expect(page.locator('#settings-list')).toBeVisible();
   await expect(page.locator('#status-msg')).toHaveText('Master password updated');
 
-  const { oldWorks, newWorks } = await page.evaluate(async () => {
-    const { auth } = await loadAuthState();
-    return {
-      oldWorks: await verifyMasterPassword('oldpass123', auth),
-      newWorks: await verifyMasterPassword('newpass456', auth),
-    };
-  });
-  expect(oldWorks).toBe(false);
-  expect(newWorks).toBe(true);
+  const result = await page.evaluate(async oldPw => {
+    const key = await VaultKeys.getKey();
+    await VaultKeys.lock();
+    const oldWorks = await VaultKeys.unlock(oldPw);
+    const newWorks = await VaultKeys.unlock('newpass456');
+    return { oldWorks, newWorks, sameKey: (await VaultKeys.getKey()) === key };
+  }, TEST_PASSWORD);
+  // The password changed; the vault key it wraps did not.
+  expect(result).toEqual({ oldWorks: false, newWorks: true, sameKey: true });
 });
 
-test('regression: a successful password change renews the session instead of keeping the old near-expiry', async ({ context, extensionId }) => {
+test('a password change counts as activity and pushes the auto-lock deadline out', async ({ context, extensionId }) => {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
-  await unlock(page);
-  await page.evaluate(() => createAuth('oldpass123'));
+  await unlock(page, [], { autoLockMinutes: 15 });
 
-  // Session about to expire in 5 seconds — changing the password should
-  // renew it, not leave this stale near-expiry in place (setup/login both
-  // renew on successful auth; this flow just verified the current password
-  // too, so it should behave the same way).
-  const almostExpired = Date.now() + 5000;
-  await page.evaluate(exp => new Promise(r =>
-    chrome.storage.local.set({ sessionExpiry: exp, sessionDuration: 86400000 }, r)), almostExpired);
+  const almostDue = Date.now() + 5000;
+  await page.evaluate(t => chrome.storage.session.set({ vaultLockAt: t }), almostDue);
 
   await page.click('#nav-config');
   await page.click('#row-settings-password');
-  await page.fill('#change-pw-current', 'oldpass123');
+  await page.fill('#change-pw-current', TEST_PASSWORD);
   await page.fill('#change-pw-new', 'newpass456');
   await page.fill('#change-pw-confirm', 'newpass456');
   await page.click('#change-pw-submit');
   await expect(page.locator('#status-msg')).toHaveText('Master password updated');
 
-  const { sessionExpiry } = await page.evaluate(() =>
-    new Promise(r => chrome.storage.local.get('sessionExpiry', r)));
-  expect(sessionExpiry).toBeGreaterThan(almostExpired);
+  const { vaultLockAt } = await page.evaluate(() => chrome.storage.session.get('vaultLockAt'));
+  expect(vaultLockAt).toBeGreaterThan(almostDue + 10 * 60000);
 });
 
 // ── Google Authenticator migration import ───────────────────────────────────

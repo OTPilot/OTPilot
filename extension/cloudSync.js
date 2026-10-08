@@ -7,7 +7,12 @@
 
 const CloudSync = (() => {
   const API_URL  = CONFIG.API_URL;
-  const KEY_STORE      = 'syncKey';
+  // v1 stored the key in plaintext under `syncKey`, and its mere presence
+  // meant "sync is set up". In 2.0 the key is the vault key (VaultKeys, which
+  // can be wrapped by the master password) and `syncEnabled` is the flag.
+  const LEGACY_KEY     = 'syncKey';
+  const ENABLED        = 'syncEnabled';
+  const SYNC_STATE     = 'vaultSyncState'; // VaultSync's progress (see vaultSync.js)
   const DEVICE_ID_KEY  = 'deviceId';
 
   // ── Device identity ────────────────────────────────────────────────────────
@@ -49,25 +54,55 @@ const CloudSync = (() => {
 
   // ── Sync key ───────────────────────────────────────────────────────────────
 
-  function getSyncKey() {
-    return new Promise(r =>
-      chrome.storage.local.get([KEY_STORE], d => r(d[KEY_STORE] ?? null))
-    );
+  // One-time move of a v1 plaintext syncKey into the vault key. Idempotent and
+  // safe to race: adoptKey serializes on VaultKeys' lock, and every context
+  // adopts the same key before the legacy copy is removed.
+  async function convertLegacyKey() {
+    const { [LEGACY_KEY]: legacy } = await chrome.storage.local.get(LEGACY_KEY);
+    if (!legacy) return;
+    await VaultKeys.adoptKey(legacy);
+    await chrome.storage.local.set({ [ENABLED]: true });
+    await chrome.storage.local.remove(LEGACY_KEY);
   }
 
+  async function isSyncEnabled() {
+    await convertLegacyKey();
+    return !!(await chrome.storage.local.get(ENABLED))[ENABLED];
+  }
+
+  // The recovery key (= the vault key) when sync is set up and the vault is
+  // available; null otherwise.
+  async function getSyncKey() {
+    if (!(await isSyncEnabled())) return null;
+    return VaultKeys.getKey();
+  }
+
+  // Turns sync on with this device's vault key (creating it if needed) — the
+  // local vault is already encrypted with it, so it becomes the recovery key.
   async function generateSyncKey() {
-    const raw    = crypto.getRandomValues(new Uint8Array(32));
-    const keyB64 = enc(raw);
-    await new Promise(r => chrome.storage.local.set({ [KEY_STORE]: keyB64 }, r));
-    return keyB64;
+    await convertLegacyKey();
+    const key = await VaultKeys.init();
+    if (!key) throw new Error('vault is locked');
+    await chrome.storage.local.set({ [ENABLED]: true });
+    return key;
   }
 
-  function saveSyncKey(keyB64) {
-    return new Promise(r => chrome.storage.local.set({ [KEY_STORE]: keyB64 }, r));
+  // Turns sync on with a recovery key from another device. Callers validate it
+  // first (pull(keyB64) decrypts the server's data with it); local vault items
+  // are re-wrapped to it.
+  async function saveSyncKey(keyB64, password) {
+    await convertLegacyKey();
+    await VaultKeys.adoptKey(keyB64, password);
+    await chrome.storage.local.set({ [ENABLED]: true });
+    await chrome.storage.local.remove(SYNC_STATE); // re-pair items from scratch
   }
 
-  function deleteSyncKey() {
-    return new Promise(r => chrome.storage.local.remove([KEY_STORE], r));
+  // Turns sync off. The key stays: it also encrypts the local vault.
+  async function deleteSyncKey() {
+    // Also forget per-item sync progress, here rather than via VaultSync so it
+    // happens in every context (the background worker runs remote
+    // 'disconnect' commands and doesn't load vaultSync.js).
+    await chrome.storage.local.remove([ENABLED, LEGACY_KEY, SYNC_STATE]);
   }
 
   // ── Encrypt / decrypt ──────────────────────────────────────────────────────
@@ -93,7 +128,9 @@ const CloudSync = (() => {
     );
     const parsed = JSON.parse(new TextDecoder().decode(plain));
     if (Array.isArray(parsed)) return { accounts: parsed, tombstones: {}, teamKey: null };
-    return { accounts: parsed.accounts ?? [], tombstones: parsed.tombstones ?? {}, teamKey: parsed.teamKey ?? null };
+    // `writer: 'v2'` marks a blob written by a 2.0 device (inside the
+    // ciphertext, so the server can't change it); 1.x devices don't set it.
+    return { accounts: parsed.accounts ?? [], tombstones: parsed.tombstones ?? {}, teamKey: parsed.teamKey ?? null, writer: parsed.writer ?? null };
   }
 
   // Adopt the team keypair carried in a decrypted vault, so every device of this
@@ -152,8 +189,10 @@ const CloudSync = (() => {
   }
 
   // Pull + decrypt. Returns { accounts, tombstones } or null if server has no data.
-  async function pull() {
-    const keyB64 = await getSyncKey();
+  // `keyB64` overrides the stored key, to validate a recovery key before
+  // adopting it.
+  async function pull(keyB64 = null) {
+    keyB64 = keyB64 || await getSyncKey();
     if (!keyB64) throw new Error('No sync key');
     const res  = await apiFetch('/accounts');
     if (!res.ok) throw new Error(`pull ${res.status}`);
@@ -179,9 +218,9 @@ const CloudSync = (() => {
       return command ? { accounts: [], tombstones: {}, updatedAt: null, command } : null;
     }
 
-    const { accounts, tombstones, teamKey } = await decrypt(body.encrypted_blob, keyB64);
+    const { accounts, tombstones, teamKey, writer } = await decrypt(body.encrypted_blob, keyB64);
     await adoptTeamKey(teamKey);
-    return { accounts, tombstones, updatedAt: body.updated_at, command };
+    return { accounts, tombstones, writer, updatedAt: body.updated_at, command };
   }
 
   // Execute a pending command from the server ({ action, nonce }).
@@ -195,6 +234,7 @@ const CloudSync = (() => {
     if (!ackRes.ok) return; // nonce mismatch or already acked — don't act
     if (action === 'erase') {
       await chrome.storage.local.clear();
+      await chrome.storage.session.clear(); // an unlocked vault key lives here
     } else if (action === 'disconnect') {
       await deleteSyncKey();
     }
@@ -202,21 +242,27 @@ const CloudSync = (() => {
 
   // Encrypt + push { accounts, tombstones, teamKey } to server. The team private
   // key rides inside the E2E blob so it's portable across the user's devices.
-  async function push(accounts, tombstones, updatedAt) {
+  // `writer` = 'v2' from 2.0 devices (see decrypt).
+  async function push(accounts, tombstones, updatedAt, writer = null) {
     const keyB64        = await getSyncKey();
     if (!keyB64) throw new Error('No sync key');
     let teamKey = null;
     if (typeof TeamKeys !== 'undefined') {
       try { teamKey = await TeamKeys.exportPrivJwk(); } catch { /* ignore */ }
     }
-    const encrypted_blob = await encrypt({ accounts, tombstones, teamKey }, keyB64);
+    // Passwords never go into the v1 blob (1.x devices don't know them, and
+    // the per-item vault sync carries them); only the v1 fields do. Logins
+    // without a 2FA secret don't go at all: on 1.x they'd be empty 2FA
+    // entries, and deleting one there would tombstone the login by name.
+    const v1Accounts = accounts.filter(a => a.secret).map(({ password, ...rest }) => rest);
+    const encrypted_blob = await encrypt({ accounts: v1Accounts, tombstones, teamKey, ...(writer ? { writer } : {}) }, keyB64);
     const devicePayload  = await getDevicePayload();
     const res = await apiFetch('/accounts', {
       method: 'PUT',
       body: JSON.stringify({
         encrypted_blob,
         updated_at: updatedAt,
-        accounts_count: accounts.length,
+        accounts_count: v1Accounts.length,
         ...devicePayload,
       }),
     });
@@ -304,8 +350,9 @@ const CloudSync = (() => {
   }
 
   return {
-    getSyncKey, generateSyncKey, saveSyncKey, deleteSyncKey,
+    getSyncKey, generateSyncKey, saveSyncKey, deleteSyncKey, isSyncEnabled,
     serverHasData, syncUser, pull, push, mergeWithTombstones,
     getServerMeta, executeCommand, leaveDevice,
+    api: apiFetch, // authenticated API call, for vaultSync.js
   };
 })();
