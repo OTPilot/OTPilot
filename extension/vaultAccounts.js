@@ -113,6 +113,29 @@ const VaultAccounts = (() => {
     return (await readLogins(key)).items;
   }
 
+  // Runs `fn(tx, logins)` with the read, the checks and the writes under one
+  // vault lock, so a sync, another writer or a vault key change can't land in
+  // between (a write with a replaced key would leave an unreadable record).
+  // `key` must still be the vault key once the lock is held — otherwise
+  // (re-keyed, or locked) nothing is written and this throws.
+  async function locked(key, fn) {
+    await VaultMigration.migrate();
+    return VaultStore.transaction(async tx => {
+      if ((await VaultKeys.getKey()) !== key) throw new Error('the vault key changed');
+      const items = [], failed = new Set();
+      for (const [id, rec] of Object.entries(await tx.listRecords())) {
+        try { items.push(await VaultCrypto.decryptItem(rec, key)); } catch { failed.add(id); }
+      }
+      return fn(tx, { items: items.filter(i => i.type === 'login').sort(byPosition), failed });
+    });
+  }
+
+  async function putItems(tx, items, key) {
+    const entries = [];
+    for (const item of items) entries.push([item.id, await VaultCrypto.encryptItem(item, key)]);
+    if (entries.length) await tx.putMany(entries);
+  }
+
   // The account list, in the user's order.
   async function load(key) {
     return (await loginItems(key)).map(toAccount);
@@ -134,10 +157,13 @@ const VaultAccounts = (() => {
   // account added meanwhile elsewhere (a page's "Add to OTPilot") is kept.
   // Assigns `_id` to new accounts in place.
   async function save(accounts, key, knownIds = new Set()) {
-    const { changed, removed, ids } = await planSave(accounts, key, knownIds);
-    ids.forEach((id, i) => { if (id) accounts[i]._id = id; });
-    if (changed.length) await VaultStore.save(changed, key);
-    if (removed.length) await VaultStore.remove(removed);
+    await locked(key, async (tx, logins) => {
+      const { changed, removed, ids } = planFrom(accounts, logins, knownIds);
+      await putItems(tx, changed, key);
+      const deletedAt = new Date().toISOString();
+      for (const id of removed) await tx.remove(id, deletedAt);
+      ids.forEach((id, i) => { if (id) accounts[i]._id = id; });
+    });
     await rebuildIndex(key);
     return accounts;
   }
@@ -145,7 +171,10 @@ const VaultAccounts = (() => {
   // What save() would write: the items to store, the ids to delete, and the
   // item id of each account (null for an unreadable one, left alone).
   async function planSave(accounts, key, knownIds) {
-    const { items, failed } = await readLogins(key);
+    return planFrom(accounts, await readLogins(key), knownIds);
+  }
+
+  function planFrom(accounts, { items, failed }, knownIds) {
     const existing = new Map(items.map(i => [i.id, i]));
     // Accounts from the v1 sync blob carry no _id, or another device's: pair
     // them with the local item they correspond to instead of replacing it
@@ -212,31 +241,35 @@ const VaultAccounts = (() => {
   // One account from a page ("Add to OTPilot"). Skips a secret already saved.
   // Returns the account's position in the list.
   async function add(acc, key) {
-    const items = await loginItems(key);
-    const dup = items.findIndex(i => i.totp?.secret && i.totp.secret === acc.secret);
-    if (dup !== -1) return dup;
-    const position = items.length ? (items[items.length - 1].position ?? items.length - 1) + 1 : 0;
-    const item = applyAccount(Vault.newItem('login'), acc, position);
-    item.updatedAt = new Date().toISOString();
-    await VaultStore.save(item, key);
+    const index = await locked(key, async (tx, { items }) => {
+      const dup = items.findIndex(i => i.totp?.secret && i.totp.secret === acc.secret);
+      if (dup !== -1) return dup;
+      const position = items.length ? (items[items.length - 1].position ?? items.length - 1) + 1 : 0;
+      const item = applyAccount(Vault.newItem('login'), acc, position);
+      item.updatedAt = new Date().toISOString();
+      await putItems(tx, [item], key);
+      return items.length;
+    });
     await rebuildIndex(key);
-    return items.length;
+    return index;
   }
 
   // Updates one account if it still matches `expected` (the v1 fields the
   // caller saw). Returns false if it changed or disappeared meanwhile.
   async function update(id, expected, patch, key) {
-    const items = await loginItems(key);
-    const item = items.find(i => i.id === id);
-    if (!item) return false;
-    const current = toAccount(item);
-    const same = ['name', 'secret', 'urls', 'email'].every(k => (current[k] ?? '') === (expected[k] ?? ''));
-    if (!same) return false;
-    const next = applyAccount(item, { ...current, ...patch }, item.position ?? 0);
-    next.updatedAt = new Date().toISOString();
-    await VaultStore.save(next, key);
-    await rebuildIndex(key);
-    return true;
+    const ok = await locked(key, async (tx, { items }) => {
+      const item = items.find(i => i.id === id);
+      if (!item) return false;
+      const current = toAccount(item);
+      const same = ['name', 'secret', 'urls', 'email'].every(k => (current[k] ?? '') === (expected[k] ?? ''));
+      if (!same) return false;
+      const next = applyAccount(item, { ...current, ...patch }, item.position ?? 0);
+      next.updatedAt = new Date().toISOString();
+      await putItems(tx, [next], key);
+      return true;
+    });
+    if (ok) await rebuildIndex(key);
+    return ok;
   }
 
   return { load, loadOthers, save, exceedsFreeLimit, add, update, writeIndex, rebuildIndex, readIndex, toAccount, normalizeTags };
