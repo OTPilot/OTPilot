@@ -59,3 +59,21 @@ test('no suggestion on a sign-in password field', async ({ context, extensionId 
   await site.waitForTimeout(800);
   await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
 });
+
+test('the suggestion opens under the new-password field, and its badge brings it back after closing', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/signup-confirm.html`);
+  await site.focus('input[name="pw"]');
+  const offer = site.locator('#otpilot-password-suggest');
+  await expect(offer).toBeVisible();
+  const field = await site.locator('input[name="pw"]').boundingBox();
+  const box = await offer.boundingBox();
+  expect(Math.abs(box.y - (field.y + field.height + 6))).toBeLessThan(2);
+  await site.screenshot({ path: test.info().outputPath('suggest.png') });
+
+  await offer.locator('.otpilot-overlay-close').click();
+  await expect(offer).toHaveCount(0);
+  await site.locator('.otpilot-field-badge[data-kind="generate"]').first().click();
+  await expect(offer).toBeVisible();
+});
