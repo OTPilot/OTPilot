@@ -237,8 +237,10 @@ async function planPendingLogin({ host, username, password }) {
   // A team collection already has this login: never offer a personal copy.
   // (A changed password there is updated from the popup, which writes to the
   // collection; the background doesn't.)
-  if (!match) {
-    const shared = (await sharedLogins()).filter(i => Vault.loginCoversHost(i.urls, host));
+  // Compared by username only when one was captured: without one, the
+  // personal logins below are still offered.
+  const shared = match ? [] : (await sharedLogins()).filter(i => Vault.loginCoversHost(i.urls, host));
+  if (!match && username) {
     const sharedLoose = shared.filter(i => userOf(i).toLowerCase() === username.toLowerCase());
     if (shared.some(i => userOf(i) === username) || sharedLoose.length === 1) return { kind: 'none' };
   }
@@ -248,7 +250,9 @@ async function planPendingLogin({ host, username, password }) {
   else if (username) candidates = covering.filter(i => !userOf(i)).sort(newest);
   else candidates = covering.filter(i => Vault.getValue(i, 'password') !== password).sort(newest);
   if (!candidates.length) {
-    if (!username && covering.length) return { kind: 'none' }; // already saved on one of them
+    // No username and nothing personal to update: already saved on one of
+    // the site's logins, or the site's login is a shared one.
+    if (!username && (covering.length || shared.length)) return { kind: 'none' };
     return { kind: 'new', limit: newLimit, newLimit };
   }
   const withLimit = candidates.map(item => {

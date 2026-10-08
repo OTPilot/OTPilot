@@ -481,3 +481,24 @@ test('a change-password form (no username) on a site with named and unnamed logi
   const options = await offer.locator('.otpilot-save-target option').allTextContents();
   expect(options.map(o => o.split(' ')[0]).sort()).toEqual(['Unnamed', 'Work']);
 });
+
+test('a change-password form (no username) still offers the personal login when a team collection has an unnamed one too', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ name: 'Mine', email: '', secret: '', urls: 'localhost', password: 'm1' }]);
+  await popup.evaluate(async () => {
+    const cid = crypto.randomUUID();
+    const ck = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const item = Vault.newItem('login', { title: 'Shared', urls: ['localhost'] });
+    Vault.getField(item, 'password').value = 'team-pass';
+    await chrome.storage.local.set({ [`cr:${cid}:${item.id}`]: await VaultCrypto.encryptItem(item, ck) });
+    await chrome.storage.session.set({ collectionKeys: { [cid]: ck } });
+  });
+  const site = await context.newPage();
+  await site.goto(`${SITE}/change-password.html`);
+  await site.fill('input[name="current"]', 'm1');
+  await site.fill('input[name="next"]', 'm2');
+  await site.click('button');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update the password for Mine?');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup)).map(l => l.password)).toEqual(['m2']);
+});

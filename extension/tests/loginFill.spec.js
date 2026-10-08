@@ -302,3 +302,22 @@ test('a dropdown closed while its logins were still loading does not appear', as
   await site.waitForTimeout(800);
   await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0);
 });
+
+test('locked: a long list after unlocking in the dropdown can still scroll to every login', async ({ context, extensionId }) => {
+  const many = Array.from({ length: 10 }, (_, i) => ({ ...github, name: `Login ${i}`, email: `u${i}@example.com` }));
+  const page = await vaultWith(context, extensionId, many);
+  await page.evaluate(() => VaultLock.lock());
+  const site = await context.newPage();
+  await site.setViewportSize({ width: 800, height: 360 });
+  await site.goto(`${SITE}/login.html`);
+  await site.focus('input[name="email"]');
+  const frame = site.frameLocator('#otpilot-login-dropdown iframe');
+  await frame.locator('#pw').fill(TEST_PASSWORD);
+  await frame.locator('#unlock').click();
+  const drop = site.locator('#otpilot-login-dropdown');
+  await expect(drop.locator('.otpilot-login-choice')).toHaveCount(10);
+  expect(await drop.evaluate(el => getComputedStyle(el).overflowY)).toBe('auto');
+  await drop.locator('.otpilot-login-choice').last().scrollIntoViewIfNeeded();
+  await drop.locator('.otpilot-login-choice').last().click();
+  await expect(site.locator('input[name="email"]')).toHaveValue('u9@example.com');
+});

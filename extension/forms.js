@@ -429,7 +429,9 @@
     const above = h > roomBelow && roomAbove > roomBelow;
     const room = Math.max(80, above ? roomAbove : roomBelow);
     el.style.maxHeight = `${room}px`;
-    el.style.overflowY = h > room ? 'auto' : 'hidden';
+    // Always scrollable within that room: the content can grow later (the
+    // unlock frame replaced by the login choices).
+    el.style.overflowY = 'auto';
     el.style.top = `${above ? r.top - 6 - Math.min(h, room) : r.bottom + 6}px`;
   }
 
