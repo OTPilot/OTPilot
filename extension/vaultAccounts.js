@@ -78,8 +78,10 @@ const VaultAccounts = (() => {
   function indexEntry(item) {
     return {
       id: item.id, name: item.title || '', urls: (item.urls || []).join('\n'), autofill: item.autofill !== false,
-      // Whether it can fill a sign-in form (never the password itself).
+      // Whether it can fill a sign-in form / a 2FA code (never the password
+      // or the secret itself).
       hasPassword: !!Vault.getValue(item, 'password'),
+      hasTotp: !!item.totp?.secret,
     };
   }
 

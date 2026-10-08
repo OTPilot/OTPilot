@@ -564,10 +564,26 @@
     const f = e.target;
     if (_filling || !(f instanceof HTMLInputElement) || !isVisible(f) || f.value) return;
     if (isNewPassword(f)) { suggestPassword(f); return; }
-    if (!_pageLogins?.logins.length || _anchor?.field === f) return;
+    // Not waiting for the page's first check: focusing the field before the
+    // background answered still opens (openLogins asks, and shows only if the
+    // site has logins). Once that check found none, focusing doesn't ask again.
+    if (_anchor?.field === f || _pendingField === f) return;
+    if (_pageLogins && !_pageLogins.logins.length) return;
     const login = findLoginFields();
     if (login && (f === login.username || f === login.password)) openLogins(f);
   }, true);
+
+  // The vault's logins changed (saved or imported in the popup, synced, a
+  // lock or unlock rewrites the index): forget the page's last answer and
+  // check again, so a login added meanwhile is offered without a reload.
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes.vaultIndex || !chrome.runtime?.id) return;
+      _pageLogins = null;
+      _checkedFor = null;
+      if (!_dismissed) check();
+    });
+  } catch { /* extension context gone */ }
 
   // Sign-in forms often appear after load (SPAs, modals).
   let timer;

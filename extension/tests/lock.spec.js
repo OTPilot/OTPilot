@@ -159,10 +159,12 @@ test('on a page, a locked vault is unlocked from the overlay and the code is fil
   await expect(site.locator('#otpilot-lock')).toBeVisible();
   const frame = site.frameLocator('#otpilot-lock iframe');
 
+  await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill('wrong');
   await frame.locator('#unlock').click();
   await expect(frame.locator('#err')).toHaveText('Incorrect password');
 
+  await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
   await expect(site.locator('input[name="otp_token"]')).toHaveValue(/^\d{6}$/);
@@ -367,4 +369,29 @@ test('a long account name stays on one line in the unlock frame', async ({ conte
   await expect(frame.locator('#unlock')).toBeInViewport();
   const lines = await frame.locator('#label').evaluate(el => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)));
   expect(lines).toBe(1);
+});
+
+test('a password-only login of the site is not offered for the 2FA code (unlocked and locked)', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  await writeAccounts(page, [
+    { name: 'TestApp', email: 'me@example.com', secret: TEST_SECRET, urls: 'localhost' },
+    { name: 'TestApp web', email: 'me@example.com', secret: '', urls: 'localhost', password: 'pw' },
+  ]);
+  const site = await context.newPage();
+  await site.goto('http://localhost:8765/test/autofill.html');
+  // Only one account has a code: filled directly, no picker.
+  await expect(site.locator('input[name="otp_token"]')).toHaveValue(/^\d{6}$/);
+  await expect(site.locator('#otpilot-picker')).toHaveCount(0);
+
+  // Locked: the index knows which one has a code — "Unlock to auto-fill TestApp".
+  await page.evaluate(() => VaultLock.lock());
+  const again = await context.newPage();
+  await again.goto('http://localhost:8765/test/autofill.html');
+  const frame = again.frameLocator('#otpilot-lock iframe');
+  await expect(frame.locator('#label')).toContainText('TestApp');
+  await expect(frame.locator('#label')).not.toContainText('OTPilot');
+  expect((await page.evaluate(() => VaultAccounts.readIndex())).map(e => [e.name, e.hasTotp]))
+    .toEqual([['TestApp', true], ['TestApp web', false]]);
 });

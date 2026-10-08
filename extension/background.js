@@ -82,6 +82,26 @@ function senderHost(sender) {
   } catch { return null; }
 }
 
+// Saved logins without a 2FA code for the sender page's site — a URL of
+// theirs on this host, a parent or a subdomain (digitalocean.com ⇄
+// cloud.digitalocean.com) — that a 2FA code set up on this page can be added
+// to instead of a new account. The one whose username is the code's label
+// first. Unlocked only; [{ id, name, username }] (nothing secret).
+async function attachCandidates(sender, email = '') {
+  const host = senderHost(sender);
+  if (!host || (await VaultLock.state()) !== 'unlocked') return [];
+  const page = host.replace(/^www\./, '');
+  const hostOf = u => String(u).trim().toLowerCase()
+    .replace(/^[a-z]+:\/\//, '').replace(/^\*\./, '').replace(/^www\./, '').split(/[/:?#]/)[0];
+  const { items } = await VaultStore.readAll(await VaultKeys.getKey());
+  const label = String(email || '').trim().toLowerCase();
+  return items
+    .filter(i => i.type === 'login' && !i.totp?.secret
+      && (i.urls || []).some(u => { const h = hostOf(u); return h && relatedHost(h, page); }))
+    .map(i => ({ id: i.id, name: i.title || '', username: Vault.getValue(i, 'username') }))
+    .sort((a, b) => (b.username.toLowerCase() === label) - (a.username.toLowerCase() === label));
+}
+
 // Logins that can fill the sender page's sign-in form: unlocked, those with a
 // password whose URLs cover the host ({ id, name, username }); locked, the
 // same from the plaintext index ({ id, name }), to offer an unlock.
@@ -568,10 +588,41 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   // "Add to OTPilot" from a 2FA setup page (after any in-page unlock).
+  if (msg.action === 'vaultAttachCandidates') {
+    attachCandidates(_sender, msg.email).then(logins => sendResponse({ logins })).catch(() => sendResponse({ logins: [] }));
+    return true;
+  }
+
   if (msg.action === 'vaultAddAccount') {
     (async () => {
       if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
-      const index = await VaultAccounts.add(msg.account, await VaultKeys.getKey());
+      const vk = await VaultKeys.getKey();
+      // The code goes to an existing login of this site: only one of the
+      // candidates for this sender, re-checked now (still without a code).
+      if (typeof msg.attachTo === 'string') {
+        if (!(await attachCandidates(_sender)).some(c => c.id === msg.attachTo)) return { ok: false };
+        const accounts = await VaultAccounts.load(vk);
+        const index = accounts.findIndex(a => a._id === msg.attachTo);
+        const current = accounts[index];
+        const secret = String(msg.account?.secret || '');
+        // Another tab may have added a code meanwhile: never replace one (the
+        // write itself also re-checks the login is still as loaded).
+        if (!current || !secret || current.secret) return { ok: false };
+        // The page's host joins the login's URLs, so the code auto-fills here
+        // (the OTP matcher doesn't treat a saved www. host as its subdomains').
+        const host = senderHost(_sender);
+        const urls = String(current.urls || '').split('\n').map(u => u.trim()).filter(Boolean);
+        const patch = {
+          secret,
+          ...(!current.email && msg.account.email ? { email: String(msg.account.email) } : {}),
+          ...(host && !urls.some(u => u.toLowerCase() === host) ? { urls: [...urls, host].join('\n') } : {}),
+        };
+        if (!(await VaultAccounts.update(current._id, current, patch, vk))) return { ok: false };
+        await chrome.storage.local.set({ activeIndex: index });
+        vaultChangedByPage();
+        return { ok: true, index, attached: true, name: current.name };
+      }
+      const index = await VaultAccounts.add(msg.account, vk);
       await chrome.storage.local.set({ activeIndex: index });
       vaultChangedByPage();
       return { ok: true, index };

@@ -55,9 +55,9 @@ test('v1 accounts become encrypted vault items; the plaintext list goes, an encr
   // The locked-vault index: names, URL patterns, autofill and whether a
   // password exists (v1 accounts have none), in v1 order.
   expect(result.index.map(({ id, ...rest }) => rest)).toEqual([
-    { name: 'GitHub', urls: 'github.com', autofill: true, hasPassword: false },
-    { name: 'GitHub', urls: 'github.com', autofill: true, hasPassword: false },
-    { name: 'Namecheap', urls: '', autofill: false, hasPassword: false },
+    { name: 'GitHub', urls: 'github.com', autofill: true, hasPassword: false, hasTotp: true },
+    { name: 'GitHub', urls: 'github.com', autofill: true, hasPassword: false, hasTotp: true },
+    { name: 'Namecheap', urls: '', autofill: false, hasPassword: false, hasTotp: true },
   ]);
   expect(JSON.stringify(result.index)).not.toContain('JBSWY3DP');
   expect(result.backup.tombstones).toEqual(V1_TOMBSTONES);

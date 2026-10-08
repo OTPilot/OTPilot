@@ -98,6 +98,7 @@ test('locked: the offer unlocks in the extension frame, then fills', async ({ co
   await expect(overlay).toBeVisible();
   const frame = site.frameLocator('#otpilot-login-fill iframe');
   await expect(frame.locator('#label')).toContainText('GitHub');
+  await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
 
@@ -266,6 +267,7 @@ test('locked: the dropdown unlocks in the extension frame, then fills', async ({
   await site.goto(`${SITE}/login.html`);
   await site.focus('input[name="password"]');
   const frame = site.frameLocator('#otpilot-login-dropdown iframe');
+  await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
   await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
@@ -312,6 +314,7 @@ test('locked: a long list after unlocking in the dropdown can still scroll to ev
   await site.goto(`${SITE}/login.html`);
   await site.focus('input[name="email"]');
   const frame = site.frameLocator('#otpilot-login-dropdown iframe');
+  await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
   const drop = site.locator('#otpilot-login-dropdown');
@@ -320,4 +323,38 @@ test('locked: a long list after unlocking in the dropdown can still scroll to ev
   await drop.locator('.otpilot-login-choice').last().scrollIntoViewIfNeeded();
   await drop.locator('.otpilot-login-choice').last().click();
   await expect(site.locator('input[name="email"]')).toHaveValue('u9@example.com');
+});
+
+test('focusing the field before the page check answered still opens the dropdown', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const [worker] = context.serviceWorkers();
+  // Hold the background's answer to the page's first check.
+  await worker.evaluate(() => {
+    const real = loginsForPage;
+    globalThis.releaseCheck = null;
+    const gate = new Promise(r => { globalThis.releaseCheck = r; });
+    globalThis.loginsForPage = async (...a) => { await gate; return real(...a); };
+  });
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await site.locator('input[name="email"]').focus();
+  await site.waitForTimeout(300);
+  await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0); // still waiting
+  await worker.evaluate(() => releaseCheck());
+  await expect(site.locator('#otpilot-login-dropdown')).toBeVisible();
+});
+
+test('a login added in the popup after the page found none is offered without a reload', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ ...github, urls: 'elsewhere.example' }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await site.focus('input[name="email"]');
+  await site.waitForTimeout(600);
+  await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0);
+  await site.locator('input[name="email"]').blur();
+  // The user saves a login for this site in the popup.
+  await writeAccounts(popup, [{ ...github, urls: 'elsewhere.example' }, { ...github, name: 'Local', urls: 'localhost' }]);
+  await expect(site.locator('#otpilot-login-fill')).toBeVisible();
+  await site.focus('input[name="email"]');
+  await expect(site.locator('#otpilot-login-dropdown .otpilot-login-choice')).toHaveCount(1);
 });

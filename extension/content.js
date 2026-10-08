@@ -43,8 +43,13 @@ function findAccount(accounts, hostname) {
   return accounts.find(acc => accountMatchesHostname(acc, hostname)) || null;
 }
 
+// Only accounts that hold a 2FA code can fill one: a password-only login of
+// the site is left out. Unlocked accounts carry `secret`; the locked index
+// says `hasTotp` (an index from before it did counts as yes).
+const hasTotpCode = acc => (acc.secret !== undefined ? !!acc.secret : acc.hasTotp !== false);
+
 function findAllMatchingAccounts(accounts, hostname) {
-  return accounts.filter(acc => accountMatchesHostname(acc, hostname));
+  return accounts.filter(acc => hasTotpCode(acc) && accountMatchesHostname(acc, hostname));
 }
 
 // Accounts come from the background worker, which holds the vault key.
@@ -61,7 +66,7 @@ async function getVaultAccounts() {
 async function getActiveAccount(overrideIndex) {
   const { accounts: accs, activeIndex } = await getVaultAccounts();
   // 1. Try URL-based match first
-  const byUrlIdx = accs.findIndex(acc => accountMatchesHostname(acc, location.hostname.toLowerCase()));
+  const byUrlIdx = accs.findIndex(acc => hasTotpCode(acc) && accountMatchesHostname(acc, location.hostname.toLowerCase()));
   if (byUrlIdx !== -1) return { acc: accs[byUrlIdx], idx: byUrlIdx };
   // 2. Fall back to the account selected in the popup (or override from message)
   const idx = overrideIndex ?? activeIndex ?? 0;
@@ -976,53 +981,84 @@ function requestSiteIcon(hostname) {
   try { chrome.runtime.sendMessage({ action: 'resolveIcons', domains: [hostname], hints }); } catch { /* ignore */ }
 }
 
+// Offers to save a 2FA code found on this page. When the site already has
+// logins without a code (saved for this host, a parent or a subdomain), the
+// code is offered to one of them first ("Add to <login>"), with "Save as new"
+// as the alternative — instead of always creating a second account.
 function showSuggestionOverlay(name, secret, email = '', locked = false) {
   if (document.getElementById('otpilot-suggestion')) return;
 
   const el = makeOverlay('otpilot-suggestion');
-  const safeName = name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const btn = (cls, label, primary) => `<button class="${cls}" style="${primary ? 'flex:1;' : ''}padding:7px 10px;${primary
+    ? 'background:var(--accent, #0ea5e9);border:none;color:var(--on-accent, #fff);font-weight:600;'
+    : 'background:transparent;border:1px solid var(--surface-2, #334155);color:var(--ink-4, #64748b);'}border-radius:6px;font-size:12px;cursor:pointer;">${label}</button>`;
 
-  el.innerHTML = `${OVERLAY_HEADER}
-    <div style="padding:12px 14px;">
-      <div style="color:var(--ink-2, #cbd5e1);font-size:12px;margin-bottom:10px;">
-        Save <strong style="color:var(--ink-0, #f1f5f9);">${safeName}</strong> to OTPilot?
-      </div>
-      ${locked ? '' : `<div style="display:flex;gap:8px;">
-        <button class="otpilot-primary" style="flex:1;padding:7px;background:var(--accent, #0ea5e9);border:none;border-radius:6px;color:var(--on-accent, #fff);font-size:12px;font-weight:600;cursor:pointer;">Add account</button>
-        <button class="otpilot-secondary" style="padding:7px 10px;background:transparent;border:1px solid var(--surface-2, #334155);border-radius:6px;color:var(--ink-4, #64748b);font-size:12px;cursor:pointer;">Not now</button>
-      </div>`}
-    </div>`;
-
+  el.innerHTML = `${OVERLAY_HEADER}<div class="otpilot-suggest-body" style="padding:12px 14px;"></div>`;
+  const body = el.querySelector('.otpilot-suggest-body');
   document.body.appendChild(el);
 
   let stopListening = () => {};
   const close = () => { stopListening(); _dismissedSecrets.add(secret); el.remove(); };
   el.querySelector('.otpilot-overlay-close').onclick = close;
 
-  async function addAccount() {
+  async function candidates() {
+    try { return (await chrome.runtime.sendMessage({ action: 'vaultAttachCandidates', email }))?.logins || []; } catch { return []; }
+  }
+
+  async function addAccount(attachTo) {
     const res = await chrome.runtime.sendMessage({
       action: 'vaultAddAccount',
       account: { name, secret, urls: location.hostname, autofill: true, email, domain: location.hostname },
+      ...(attachTo ? { attachTo } : {}),
     }).catch(() => null);
     if (!res?.ok) { showToast('Could not save — unlock OTPilot and try again', false); return; }
     _dismissedSecrets.add(secret);
     // Capture the site's icon now, passing the page's declared favicon as a hint.
     requestSiteIcon(location.hostname);
     el.remove();
+    const shown = res.attached ? (res.name || name) : name;
     let code = '';
     try { code = await generateTOTP(secret); } catch {}
     if (code) {
-      showCodeRevealOverlay(name, code);
+      showCodeRevealOverlay(shown, code);
     } else {
-      showToast(`${name} added to OTPilot`);
+      showToast(res.attached ? `2FA code added to ${shown}` : `${shown} added to OTPilot`);
     }
   }
 
+  function showNew() {
+    body.innerHTML = `<div style="color:var(--ink-2, #cbd5e1);font-size:12px;margin-bottom:10px;">
+        Save <strong style="color:var(--ink-0, #f1f5f9);">${esc(name)}</strong> to OTPilot?</div>
+      <div style="display:flex;gap:8px;">${btn('otpilot-primary', 'Add account', true)}${btn('otpilot-secondary', 'Not now')}</div>`;
+    body.querySelector('.otpilot-primary').onclick = () => addAccount();
+    body.querySelector('.otpilot-secondary').onclick = close;
+  }
+
+  function showAttach(list) {
+    const one = list.length === 1 ? list[0] : null;
+    const label = c => (c.username ? `${c.name || location.hostname} — ${c.username}` : (c.name || location.hostname));
+    body.innerHTML = `<div style="color:var(--ink-2, #cbd5e1);font-size:12px;margin-bottom:8px;">
+        Add this 2FA code to ${one ? `<strong style="color:var(--ink-0, #f1f5f9);">${esc(label(one))}</strong>` : 'one of your logins for this site'}?</div>
+      ${one ? '' : `<select class="otpilot-attach-target" style="width:100%;margin:0 0 10px;padding:6px 8px;border-radius:7px;font:inherit;font-size:12px;background:var(--bg, #0f172a);color:var(--ink-0, #f1f5f9);border:1px solid var(--border, #1e3a5f);">
+        ${list.map(c => `<option value="${esc(c.id)}">${esc(label(c))}</option>`).join('')}</select>`}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">${btn('otpilot-primary otpilot-attach', 'Add to login', true)}${btn('otpilot-save-new', 'Save as new')}${btn('otpilot-secondary', 'Not now')}</div>`;
+    const target = () => one?.id || body.querySelector('.otpilot-attach-target').value;
+    body.querySelector('.otpilot-attach').onclick = () => addAccount(target());
+    body.querySelector('.otpilot-save-new').onclick = () => addAccount();
+    body.querySelector('.otpilot-secondary').onclick = close;
+  }
+
   if (locked) {
-    stopListening = mountUnlockFrame(el, { name, intro: 'Unlock to save ', action: 'Unlock & Add' }, addAccount, close);
+    // After unlocking: a login to add the code to is offered first; with
+    // none, the code is saved as a new account right away (as before).
+    stopListening = mountUnlockFrame(body, { name, intro: 'Unlock to save ', action: 'Unlock & Add' }, async () => {
+      const list = await candidates();
+      if (list.length) showAttach(list); else addAccount();
+    }, close);
   } else {
-    el.querySelector('.otpilot-primary').onclick = addAccount;
-    el.querySelector('.otpilot-secondary').onclick = close;
+    // Which question to ask is known before any button shows.
+    candidates().then(list => { if (el.isConnected) { if (list.length) showAttach(list); else showNew(); } });
   }
 }
 

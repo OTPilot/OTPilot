@@ -63,7 +63,7 @@ const VaultLock = (() => {
     // or when it was written before it carried `hasPassword` (early 2.0
     // builds: it can't offer "Unlock & fill").
     if (typeof VaultAccounts !== 'undefined' &&
-        ((await VaultAccounts.indexIsStale()) || (await VaultAccounts.readIndex()).some(e => !('hasPassword' in e)))) {
+        ((await VaultAccounts.indexIsStale()) || (await VaultAccounts.readIndex()).some(e => !('hasPassword' in e) || !('hasTotp' in e)))) {
       const key = await VaultKeys.getKey();
       if (key) await VaultAccounts.rebuildIndex(key);
     }
