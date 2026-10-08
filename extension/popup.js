@@ -837,6 +837,7 @@ function syncOpenAccToDraft() {
       if (field) field.value = inp.value;
     });
     entry.item.notes = body.querySelector('.item-notes').value;
+    entry.item = VaultAccounts.withCustomFields(entry.item, readCustomFields(body));
     entry.email = itemSummary(entry.item);
     return;
   }
@@ -846,6 +847,8 @@ function syncOpenAccToDraft() {
   draft[openAccIdx].secret   = body.querySelector('.acc-secret').value.trim();
   draft[openAccIdx].urls     = body.querySelector('.acc-urls').value.trim();
   draft[openAccIdx].autofill = body.querySelector('.acc-autofill').checked;
+  draft[openAccIdx].notes    = body.querySelector('.acc-notes').value;
+  draft[openAccIdx].customFields = readCustomFields(body);
 }
 
 function updateVaultCount() {
@@ -1011,6 +1014,13 @@ function renderAccDetail() {
       <textarea class="acc-urls" placeholder="*.example.com&#10;staging.myapp.io">
 ${esc(acc.urls || '')}</textarea>
     </div>`;
+  const notesField = `
+    <div class="acc-field">
+      <label>Notes</label>
+      <textarea class="acc-notes" placeholder="Anything else worth keeping: recovery codes, security answers…">
+${esc(acc.notes || '')}</textarea>
+    </div>`;
+  const extras = notesField + customFieldsHTML(acc.customFields);
   const body = document.createElement('div');
   body.className = 'acc-body open';
   body.innerHTML = `
@@ -1019,8 +1029,8 @@ ${esc(acc.urls || '')}</textarea>
       <button class="btn-del" title="Delete account">✕ Delete</button>
     </div>
     ${compact
-      ? nameField + secretField + userField + urlsField + passwordField + tagFieldsHTML(acc)
-      : nameField + userField + passwordField + tagFieldsHTML(acc) + secretField + urlsField}
+      ? nameField + secretField + userField + urlsField + passwordField + tagFieldsHTML(acc) + extras
+      : nameField + userField + passwordField + tagFieldsHTML(acc) + secretField + urlsField + extras}
     <label class="toggle">
       <input type="checkbox" class="acc-autofill" ${acc.autofill !== false ? 'checked' : ''}>
       <span class="toggle-track"></span>
@@ -1068,7 +1078,8 @@ ${esc(acc.urls || '')}</textarea>
     renderAccDetail();
   });
 
-  body.querySelectorAll('.btn-eye:not(.btn-gen-password)').forEach(b => b.addEventListener('click', e => {
+  // Custom-field rows wire their own buttons (mountCustomFields).
+  body.querySelectorAll('.btn-eye:not(.btn-gen-password)').forEach(b => !b.closest('.cf-row') && b.addEventListener('click', e => {
     const btn = e.currentTarget;
     const inp = btn.parentElement.querySelector('input');
     const reveal = inp.type === 'password';
@@ -1102,9 +1113,88 @@ ${esc(acc.urls || '')}</textarea>
   });
 
   mountCategoryChooser(body);
+  mountCustomFields(body);
 
   container.innerHTML = '';
   container.appendChild(body);
+}
+
+// ── Custom fields (every editor) ──
+// The user's own label + value rows on an item; "Hidden" ones are masked with
+// show/copy. Read back with readCustomFields().
+// The field's kind is kept as it is (hidden, multiline, a newer version's…)
+// unless the user switches it with the 🔒 button (then text ⇄ password).
+function customFieldRowHTML(f = {}) {
+  const kind = f.kind || 'text';
+  const hidden = Vault.SECRET_KINDS.includes(kind);
+  const value = esc(f.value ?? '');
+  // A new row gets its id now: reading the form twice (Save re-reads it)
+  // must give the same fields.
+  return `<div class="cf-row" data-id="${esc(f.id || `c-${crypto.randomUUID()}`)}" data-kind="${esc(kind)}">
+    <input class="cf-label" type="text" placeholder="Label" value="${esc(f.label || '')}" maxlength="60">
+    <div class="field-row">
+      ${kind === 'multiline'
+        ? `<textarea class="cf-value" placeholder="Value">
+${value}</textarea>`
+        : `<input class="cf-value" type="${hidden ? 'password' : 'text'}" placeholder="Value" value="${value}" autocomplete="off">`}
+      ${hidden ? `<button type="button" class="btn-eye cf-eye" title="Show/hide">${SVG_EYE}</button>` : ''}
+      <button type="button" class="btn-eye cf-copy" title="Copy">⧉</button>
+      <button type="button" class="btn-eye cf-hide${hidden ? ' on' : ''}" title="${hidden ? 'Hidden — click to show it as plain text' : 'Plain text — click to hide it'}">${hidden ? '🔒' : '🔓'}</button>
+      <button type="button" class="btn-eye cf-del" title="Remove">✕</button>
+    </div>
+  </div>`;
+}
+
+function customFieldsHTML(fields, readOnly = false) {
+  return `<div class="acc-field cf-section">
+    <label>Custom fields</label>
+    <div class="cf-list">${(fields || []).map(customFieldRowHTML).join('')}</div>
+    ${readOnly ? '' : '<button type="button" class="coll-link cf-add">+ Add field</button>'}
+  </div>`;
+}
+
+function readCustomFields(body) {
+  return [...body.querySelectorAll('.cf-row')].map(row => ({
+    id: row.dataset.id,
+    label: row.querySelector('.cf-label').value.trim(),
+    value: row.querySelector('.cf-value').value,
+    kind: row.dataset.kind || 'text',
+  })).filter(f => f.label || f.value);
+}
+
+function mountCustomFields(body) {
+  const list = body.querySelector('.cf-list');
+  if (!list) return;
+  const wire = row => {
+    row.querySelector('.cf-eye')?.addEventListener('click', e => {
+      const inp = row.querySelector('.cf-value');
+      const reveal = inp.type === 'password';
+      inp.type = reveal ? 'text' : 'password';
+      e.currentTarget.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
+    });
+    row.querySelector('.cf-copy')?.addEventListener('click', async () => {
+      if (await copyText(row.querySelector('.cf-value').value)) setStatus('Copied');
+    });
+    row.querySelector('.cf-hide')?.addEventListener('click', () => {
+      const f = { id: row.dataset.id, label: row.querySelector('.cf-label').value, value: row.querySelector('.cf-value').value };
+      f.kind = Vault.SECRET_KINDS.includes(row.dataset.kind) ? 'text' : 'password';
+      const tmp = document.createElement('template');
+      tmp.innerHTML = customFieldRowHTML(f);
+      const next = tmp.content.firstElementChild;
+      row.replaceWith(next);
+      wire(next);
+    });
+    row.querySelector('.cf-del')?.addEventListener('click', () => row.remove());
+  };
+  list.querySelectorAll('.cf-row').forEach(wire);
+  body.querySelector('.cf-add')?.addEventListener('click', () => {
+    const tmp = document.createElement('template');
+    tmp.innerHTML = customFieldRowHTML();
+    const row = tmp.content.firstElementChild;
+    list.appendChild(row);
+    wire(row);
+    row.querySelector('.cf-label').focus();
+  });
 }
 
 // The category (first tag) chooser plus "More tags", shared by every editor.
@@ -1195,7 +1285,7 @@ ${val}</textarea>`;
       <label>Name</label>
       <input class="item-title" type="text" placeholder="${esc(typeLabel(entry.type))} name" value="${esc(entry.name)}">
     </div>
-    ${(item.fields || []).map(fieldHTML).join('')}
+    ${(item.fields || []).filter(f => !f.custom).map(fieldHTML).join('')}
     ${Vault.TYPES[entry.type]?.urls ? `
     <div class="acc-field">
       <label>2FA secret (optional, base32 or hex)</label>
@@ -1214,6 +1304,7 @@ ${esc((item.urls || []).join('\n'))}</textarea>
       <textarea class="item-notes" placeholder="${entry.type === 'note' ? 'Write your note' : 'Anything else worth keeping'}">
 ${esc(item.notes || '')}</textarea>
     </div>
+    ${customFieldsHTML(VaultAccounts.customFieldsOf(item), isSharedEntry(entry) && entry.role === 'view')}
     ${tagFieldsHTML(entry)}
     ${collectionControlsHTML(entry)}`;
 
@@ -1224,7 +1315,7 @@ ${esc(item.notes || '')}</textarea>
     if (entry.role === 'view') {
       body.querySelectorAll('input, textarea').forEach(el => { el.readOnly = true; });
       body.querySelectorAll('.cat-choice').forEach(el => { el.disabled = true; });
-      body.querySelectorAll('.btn-gen-password, .btn-del').forEach(el => el.remove());
+      body.querySelectorAll('.btn-gen-password, .btn-del, .cf-del, .cf-hide, .cf-add').forEach(el => el.remove());
     }
   }
   body.querySelector('.item-totp')?.addEventListener('input', e => { e.target.dataset.dirty = '1'; });
@@ -1253,7 +1344,7 @@ ${esc(item.notes || '')}</textarea>
     applyVaultSearch();
     renderAccDetail();
   });
-  body.querySelectorAll('.btn-eye:not(.btn-gen-password):not(.btn-copy-field):not(.btn-eye-totp)').forEach(b => b.addEventListener('click', e => {
+  body.querySelectorAll('.btn-eye:not(.btn-gen-password):not(.btn-copy-field):not(.btn-eye-totp)').forEach(b => !b.closest('.cf-row') && b.addEventListener('click', e => {
     const btn = e.currentTarget;
     const inp = btn.parentElement.querySelector('.item-field');
     const reveal = inp.type === 'password';
@@ -1276,6 +1367,7 @@ ${esc(item.notes || '')}</textarea>
     if (head) head.textContent = e.target.value.trim() || `Untitled ${typeLabel(entry.type).toLowerCase()}`;
   });
   mountCategoryChooser(body);
+  mountCustomFields(body);
   container.innerHTML = '';
   container.appendChild(body);
 }
@@ -1610,7 +1702,9 @@ async function saveAccounts(intended) {
       old.email !== acc.email || old.autofill !== acc.autofill ||
       (old.password || '') !== (acc.password || '') ||
       (old.category || '') !== (acc.category || '') ||
-      JSON.stringify(old.moreTags || []) !== JSON.stringify(acc.moreTags || []);
+      JSON.stringify(old.moreTags || []) !== JSON.stringify(acc.moreTags || []) ||
+      (old.notes || '') !== (acc.notes || '') ||
+      JSON.stringify(old.customFields || []) !== JSON.stringify(acc.customFields || []);
     acc._updatedAt = changed ? now : (old._updatedAt ?? now);
   }
 

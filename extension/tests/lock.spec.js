@@ -395,3 +395,14 @@ test('a password-only login of the site is not offered for the 2FA code (unlocke
   expect((await page.evaluate(() => VaultAccounts.readIndex())).map(e => [e.name, e.hasTotp]))
     .toEqual([['TestApp', true], ['TestApp web', false]]);
 });
+
+test("content scripts never receive a login's notes or custom fields", async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await seedUnlocked(page);
+  await page.reload();
+  await writeAccounts(page, [{ name: 'TestApp', email: '', secret: TEST_SECRET, urls: 'localhost', notes: 'n0tes', customFields: [{ label: 'PIN', value: 'p1n-secret', kind: 'password' }] }]);
+  const [worker] = context.serviceWorkers();
+  const sent = await worker.evaluate(async () => JSON.stringify(await accountsForContent()));
+  expect(sent).not.toContain('n0tes');
+  expect(sent).not.toContain('p1n-secret');
+});
