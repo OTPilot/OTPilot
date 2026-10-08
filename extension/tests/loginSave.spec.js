@@ -124,6 +124,7 @@ test('locked: the offer unlocks in the extension frame, then saves', async ({ co
   const site = await context.newPage();
   await signIn(site, 'late@example.com', 'l4te');
   const frame = site.frameLocator('#otpilot-login-save iframe');
+  await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
   const offer = site.locator('#otpilot-login-save');

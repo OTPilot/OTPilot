@@ -159,10 +159,12 @@ test('on a page, a locked vault is unlocked from the overlay and the code is fil
   await expect(site.locator('#otpilot-lock')).toBeVisible();
   const frame = site.frameLocator('#otpilot-lock iframe');
 
+  await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill('wrong');
   await frame.locator('#unlock').click();
   await expect(frame.locator('#err')).toHaveText('Incorrect password');
 
+  await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
   await expect(site.locator('input[name="otp_token"]')).toHaveValue(/^\d{6}$/);

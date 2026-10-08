@@ -573,6 +573,18 @@
     if (login && (f === login.username || f === login.password)) openLogins(f);
   }, true);
 
+  // The vault's logins changed (saved or imported in the popup, synced, a
+  // lock or unlock rewrites the index): forget the page's last answer and
+  // check again, so a login added meanwhile is offered without a reload.
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes.vaultIndex || !chrome.runtime?.id) return;
+      _pageLogins = null;
+      _checkedFor = null;
+      if (!_dismissed) check();
+    });
+  } catch { /* extension context gone */ }
+
   // Sign-in forms often appear after load (SPAs, modals).
   let timer;
   const observer = new MutationObserver(() => {

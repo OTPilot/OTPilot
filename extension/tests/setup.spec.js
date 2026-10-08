@@ -270,6 +270,7 @@ test('locked: after unlocking, the code is offered to the existing login', async
   const page = await context.newPage();
   await page.goto('http://localhost:8765/test/qr-anchor.html');
   const frame = page.frameLocator('#otpilot-suggestion iframe');
+  await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
   const overlay = page.locator('#otpilot-suggestion');

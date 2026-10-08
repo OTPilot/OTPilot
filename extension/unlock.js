@@ -50,4 +50,7 @@
     pw.type = pw.type === 'password' ? 'text' : 'password';
   });
   pw.focus();
+  // Wired up: a click or Enter from now on is handled (tests wait for this;
+  // the button and field exist in the HTML before this script runs).
+  document.body.dataset.ready = '1';
 })();
