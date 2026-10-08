@@ -324,6 +324,10 @@ async fn delete_collection(
     // The collection's write lock first (as item writes take it), then the
     // member row: never the reverse order, so no deadlock with a write.
     let mut tx = begin_collection_tx(&state, cid).await?;
+    // Deleting it drops the share grants to it (and shares left without
+    // grants, by trigger): the team lock first, as share writes take it
+    // before a share row.
+    lock_team(&mut tx, team_id).await?;
     allowed(&role_locked(&mut tx, cid, auth.id).await?, &["manage"])?;
     sqlx::query("DELETE FROM collections WHERE id = $1")
         .bind(cid)

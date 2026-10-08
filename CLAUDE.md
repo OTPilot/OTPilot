@@ -84,6 +84,8 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 | `vault_items` | `id` (client uuid), `owner_id`, `collection_id`, `encrypted_item`, `counts_for_limit`, `revision`, `deleted_at` | 2.0 vault, one row per encrypted item; `revision` from a global sequence for incremental pull; deletes are tombstones (empty `encrypted_item`) |
 | `collections` | `id` (client uuid), `team_id`, `encrypted_name`, `created_by` | 2.0 team collections ("share everything", E2E); name encrypted under the collection key |
 | `collection_members` | `collection_id`, `user_id`, `role`, `wrapped_key` | `role` = manage/edit/view; `wrapped_key` = collection key wrapped to the member's ECDH public key |
+| `shares` | `id` (client uuid), `team_id`, `owner_id`, `item_id`, `whole`, `encrypted_item`, `revision` | 2.0 sharing (docs/sharing.md): a copy of one of the owner's items (whole, or chosen fields) under a share key the server never sees; deleted with the item, on team departure / dissolution |
+| `share_grants` | `share_id`, `user_id` or `collection_id`, `role` (`view`/`edit`, edit only for `whole`), `wrapped_key` | Who can open a share: a teammate (share key wrapped to their public key) or a collection (share key under the collection key); a collection member's role caps the grant |
 | `domain_icons` | `domain` (PK), `status`, `storage_key`, `fetched_at` | Shared favicon cache, one row per domain; `status='none'` is a negative cache. Bytes live in S3/R2 |
 
 ### Extension JS modules
@@ -163,6 +165,10 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | PUT/DELETE | `/collections/:cid/members/:uid` | Add (team member + wrapped key) or change role / remove (`manage`; anyone can leave). Always keeps a manager; the last member leaving deletes it |
 | GET | `/collections/:cid/items?since=N` | Pull a collection's items (any member), same paging/revisions as `/vault/items` |
 | PUT/DELETE | `/collections/:cid/items/:id` | Write / delete with `base_revision` (`edit`/`manage`). Personal `/vault/items` never lists or touches collection items, and vice versa |
+| POST | `/shares` | Share one of my items: `{ id, item_id, whole, record, grants: [{ user_id \| collection_id, role, wrapped_key }] }` (teammates / my team's collections I can edit) |
+| PUT/DELETE | `/shares/:id` | Rewrite the copy (owner, or an `edit` grantee of a whole share; `base_revision`, 409 + current) / delete it (owner) |
+| PUT/DELETE | `/shares/:id/grants` | Add or change a grant (owner) / remove one (owner, or a grantee leaving their direct grant); the share goes with its last grant |
+| GET | `/shares/mine`, `/shares/with-me` | My shares with their grants / every share I can open (direct or via a collection), whole list each time with revisions, my effective role and the wrapped key(s) |
 | POST | `/icons/resolve` | Resolve favicons for a batch of domains; fetches + stores any missing in S3/R2, returns `{domain: {status, url?}}` (**public** — so free / not-signed-in users get icons; abuse bounded by SSRF guards, 50-domain cap, negative cache, and a global fetch semaphore) |
 | POST/GET | `/teams` | Create (idempotent, team plan) / get the user's team |
 | GET/PATCH/DELETE | `/teams/:id` | Detail (members + seats) / rename / delete (downgrades all) |

@@ -287,6 +287,20 @@ pub(crate) async fn remove_member_atomic(
     .bind(team_id)
     .execute(&mut *tx)
     .await?;
+    // 2.0 shares: what they shared in this team, and their grants to others'.
+    sqlx::query("DELETE FROM shares WHERE owner_id = $1 AND team_id = $2")
+        .bind(user_id)
+        .bind(team_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "DELETE FROM share_grants WHERE user_id = $1
+         AND share_id IN (SELECT id FROM shares WHERE team_id = $2)",
+    )
+    .bind(user_id)
+    .bind(team_id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query(
         r#"
         DELETE FROM share_access
