@@ -424,7 +424,8 @@
     el.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
     const roomBelow = window.innerHeight - r.bottom - 6 - 8;
     const roomAbove = r.top - 6 - 8;
-    el.style.maxHeight = 'none';
+    // scrollHeight is the content's full height whatever the cap: no need to
+    // lift it (that would reset the dropdown's own scroll position).
     const h = el.scrollHeight || 160;
     const above = h > roomBelow && roomAbove > roomBelow;
     const room = Math.max(80, above ? roomAbove : roomBelow);
@@ -533,7 +534,9 @@
   }
 
   let _placing = false;
-  const reposition = () => {
+  const reposition = e => {
+    // Scrolling inside the dropdown itself moves nothing.
+    if (e?.target instanceof Node && _anchor?.el.contains(e.target)) return;
     if (_placing) return;
     _placing = true;
     requestAnimationFrame(() => {

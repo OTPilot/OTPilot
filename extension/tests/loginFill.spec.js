@@ -358,3 +358,17 @@ test('a login added in the popup after the page found none is offered without a 
   await site.focus('input[name="email"]');
   await expect(site.locator('#otpilot-login-dropdown .otpilot-login-choice')).toHaveCount(1);
 });
+
+test('scrolling inside a long dropdown keeps its position', async ({ context, extensionId }) => {
+  const many = Array.from({ length: 10 }, (_, i) => ({ ...github, name: `Login ${i}`, email: `u${i}@example.com` }));
+  await vaultWith(context, extensionId, many);
+  const site = await context.newPage();
+  await site.setViewportSize({ width: 800, height: 320 });
+  await site.goto(`${SITE}/login.html`);
+  await site.focus('input[name="email"]');
+  const drop = site.locator('#otpilot-login-dropdown');
+  await expect(drop.locator('.otpilot-login-choice')).toHaveCount(10);
+  await drop.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await site.waitForTimeout(300); // a repositioning frame
+  expect(await drop.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+});
