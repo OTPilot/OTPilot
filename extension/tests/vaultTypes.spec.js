@@ -322,3 +322,58 @@ test('a page or a 1.x device saving the login keeps its notes and custom fields'
   const i = (await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items))[0];
   expect([i.title, i.notes, i.fields.filter(f => f.custom).map(f => f.label)]).toEqual(['Site (renamed)', 'keep', ['PIN']]);
 });
+
+test('editing only notes or custom fields still stamps the login as changed (sync keeps this edit)', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{ name: 'Site', email: 'me', secret: TEST_SECRET, urls: 'site.example' }] });
+  const before = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items[0].updatedAt);
+  await page.waitForTimeout(20);
+  await page.locator('.acc-head', { hasText: 'Site' }).click();
+  await page.fill('#acc-detail .acc-notes', 'only the notes changed');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items[0].notes)).toBe('only the notes changed');
+  const after = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items[0].updatedAt);
+  expect(after > before).toBe(true);
+});
+
+test('existing custom fields keep their kind and line breaks when the login is saved', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{ name: 'Site', email: 'me', secret: TEST_SECRET, urls: 'site.example' }] });
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const [i] = (await VaultStore.readAll(key)).items;
+    i.fields.push({ id: 'c-h', label: 'Answer', value: 'blue', kind: 'hidden', custom: true });
+    i.fields.push({ id: 'c-m', label: 'Codes', value: 'a1\nb2', kind: 'multiline', custom: true });
+    await VaultStore.save(i, key);
+  });
+  await page.reload();
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Site' }).click();
+  await expect(page.locator('#acc-detail .cf-row[data-id="c-h"] .cf-value')).toHaveAttribute('type', 'password');
+  await page.fill('#acc-detail .acc-name', 'Site renamed');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items[0]
+    .fields.filter(f => f.custom).map(f => [f.label, f.value, f.kind]))).toEqual([['Answer', 'blue', 'hidden'], ['Codes', 'a1\nb2', 'multiline']]);
+});
+
+test('custom-field buttons do only their own job (no errors, copy does not unmask)', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { items: [['server', { title: 'Prod DB' }, { host: 'db.internal' }]] });
+  // A custom field already on the item when the editor opens.
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const [i] = (await VaultStore.readAll(key)).items;
+    i.fields.push({ id: 'c-t', label: 'Token', value: 't0k3n', kind: 'password', custom: true });
+    await VaultStore.save(i, key);
+  });
+  await page.reload();
+  await page.click('#nav-settings');
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.locator('.acc-head', { hasText: 'Prod DB' }).click();
+  const value = page.locator('#acc-detail .cf-row .cf-value');
+  await page.locator('#acc-detail .cf-row .cf-copy').click();
+  await expect(value).toHaveAttribute('type', 'password');
+  await page.locator('#acc-detail .cf-row .cf-eye').click();
+  await expect(value).toHaveAttribute('type', 'text');
+  await page.locator('#acc-detail .cf-row .cf-del').click();
+  await expect(page.locator('#acc-detail .cf-row')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

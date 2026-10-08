@@ -1078,7 +1078,8 @@ ${esc(acc.notes || '')}</textarea>
     renderAccDetail();
   });
 
-  body.querySelectorAll('.btn-eye:not(.btn-gen-password)').forEach(b => b.addEventListener('click', e => {
+  // Custom-field rows wire their own buttons (mountCustomFields).
+  body.querySelectorAll('.btn-eye:not(.btn-gen-password)').forEach(b => !b.closest('.cf-row') && b.addEventListener('click', e => {
     const btn = e.currentTarget;
     const inp = btn.parentElement.querySelector('input');
     const reveal = inp.type === 'password';
@@ -1121,14 +1122,21 @@ ${esc(acc.notes || '')}</textarea>
 // ── Custom fields (every editor) ──
 // The user's own label + value rows on an item; "Hidden" ones are masked with
 // show/copy. Read back with readCustomFields().
+// The field's kind is kept as it is (hidden, multiline, a newer version's…)
+// unless the user switches it with the 🔒 button (then text ⇄ password).
 function customFieldRowHTML(f = {}) {
-  const hidden = f.kind === 'password';
+  const kind = f.kind || 'text';
+  const hidden = Vault.SECRET_KINDS.includes(kind);
+  const value = esc(f.value ?? '');
   // A new row gets its id now: reading the form twice (Save re-reads it)
   // must give the same fields.
-  return `<div class="cf-row" data-id="${esc(f.id || `c-${crypto.randomUUID()}`)}">
+  return `<div class="cf-row" data-id="${esc(f.id || `c-${crypto.randomUUID()}`)}" data-kind="${esc(kind)}">
     <input class="cf-label" type="text" placeholder="Label" value="${esc(f.label || '')}" maxlength="60">
     <div class="field-row">
-      <input class="cf-value" type="${hidden ? 'password' : 'text'}" placeholder="Value" value="${esc(f.value ?? '')}" autocomplete="off">
+      ${kind === 'multiline'
+        ? `<textarea class="cf-value" placeholder="Value">
+${value}</textarea>`
+        : `<input class="cf-value" type="${hidden ? 'password' : 'text'}" placeholder="Value" value="${value}" autocomplete="off">`}
       ${hidden ? `<button type="button" class="btn-eye cf-eye" title="Show/hide">${SVG_EYE}</button>` : ''}
       <button type="button" class="btn-eye cf-copy" title="Copy">⧉</button>
       <button type="button" class="btn-eye cf-hide${hidden ? ' on' : ''}" title="${hidden ? 'Hidden — click to show it as plain text' : 'Plain text — click to hide it'}">${hidden ? '🔒' : '🔓'}</button>
@@ -1150,7 +1158,7 @@ function readCustomFields(body) {
     id: row.dataset.id,
     label: row.querySelector('.cf-label').value.trim(),
     value: row.querySelector('.cf-value').value,
-    kind: row.querySelector('.cf-hide').classList.contains('on') ? 'password' : 'text',
+    kind: row.dataset.kind || 'text',
   })).filter(f => f.label || f.value);
 }
 
@@ -1169,7 +1177,7 @@ function mountCustomFields(body) {
     });
     row.querySelector('.cf-hide')?.addEventListener('click', () => {
       const f = { id: row.dataset.id, label: row.querySelector('.cf-label').value, value: row.querySelector('.cf-value').value };
-      f.kind = row.querySelector('.cf-hide').classList.contains('on') ? 'text' : 'password';
+      f.kind = Vault.SECRET_KINDS.includes(row.dataset.kind) ? 'text' : 'password';
       const tmp = document.createElement('template');
       tmp.innerHTML = customFieldRowHTML(f);
       const next = tmp.content.firstElementChild;
@@ -1336,7 +1344,7 @@ ${esc(item.notes || '')}</textarea>
     applyVaultSearch();
     renderAccDetail();
   });
-  body.querySelectorAll('.btn-eye:not(.btn-gen-password):not(.btn-copy-field):not(.btn-eye-totp)').forEach(b => b.addEventListener('click', e => {
+  body.querySelectorAll('.btn-eye:not(.btn-gen-password):not(.btn-copy-field):not(.btn-eye-totp)').forEach(b => !b.closest('.cf-row') && b.addEventListener('click', e => {
     const btn = e.currentTarget;
     const inp = btn.parentElement.querySelector('.item-field');
     const reveal = inp.type === 'password';
@@ -1694,7 +1702,9 @@ async function saveAccounts(intended) {
       old.email !== acc.email || old.autofill !== acc.autofill ||
       (old.password || '') !== (acc.password || '') ||
       (old.category || '') !== (acc.category || '') ||
-      JSON.stringify(old.moreTags || []) !== JSON.stringify(acc.moreTags || []);
+      JSON.stringify(old.moreTags || []) !== JSON.stringify(acc.moreTags || []) ||
+      (old.notes || '') !== (acc.notes || '') ||
+      JSON.stringify(old.customFields || []) !== JSON.stringify(acc.customFields || []);
     acc._updatedAt = changed ? now : (old._updatedAt ?? now);
   }
 
