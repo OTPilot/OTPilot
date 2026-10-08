@@ -6,8 +6,47 @@ importScripts(
   // which content scripts can't read, so they ask this worker (vaultState /
   // vaultUnlock below).
   'vaultCrypto.js', 'vaultKeys.js', 'vaultStore.js', 'vault.js', 'vaultMigration.js',
-  'vaultAccounts.js', 'cloudSync.js', 'vaultLock.js',
+  'vaultAccounts.js', 'cloudSync.js', 'vaultLock.js', 'vaultSync.js',
 );
+
+// Per-item sync (/vault/items) from the worker: after a page saved or changed
+// an item, and on the poll alarm — so those changes reach the server (and
+// other devices' changes arrive) with the popup closed. Needs a session, sync
+// turned on, a plan that syncs and an unlocked vault; otherwise it waits for
+// the popup. One run at a time; a request during a run runs it once more.
+let _vaultSyncRun = null, _vaultSyncAgain = false;
+async function vaultSyncReady() {
+  if (!(await SupabaseAuth.getSession())) return false;
+  const { syncEnabled, userPlan } = await chrome.storage.local.get(['syncEnabled', 'userPlan']);
+  if (!syncEnabled || !['personal', 'team_lite', 'team_pro'].includes(userPlan)) return false;
+  return (await VaultLock.state()) === 'unlocked';
+}
+function queueVaultSync() {
+  if (_vaultSyncRun) { _vaultSyncAgain = true; return _vaultSyncRun; }
+  _vaultSyncRun = (async () => {
+    do {
+      _vaultSyncAgain = false;
+      try {
+        if (!(await vaultSyncReady())) return;
+        const key = await VaultKeys.getKey();
+        if (!key) return;
+        const stats = await VaultSync.sync(key);
+        // Something came in: an open popup redraws (its sync reloads the list).
+        if (stats.pulled || stats.deleted || Object.keys(stats.remapped).length) {
+          await VaultAccounts.rebuildIndex(key);
+          chrome.runtime.sendMessage({ action: 'serverDataChanged' }).catch(() => {});
+        }
+      } catch { /* offline or signed out: the next save, alarm or popup retries */ }
+    } while (_vaultSyncAgain);
+  })().finally(() => { _vaultSyncRun = null; });
+  return _vaultSyncRun;
+}
+
+// A page changed the vault: upload it, and let an open popup redraw.
+function vaultChangedByPage() {
+  chrome.runtime.sendMessage({ action: 'serverDataChanged' }).catch(() => {});
+  queueVaultSync();
+}
 
 // Accounts for content scripts. Unlocked: the decrypted list. Locked: only the
 // plaintext index (name, URL patterns, autofill — no secrets), or, for a v1
@@ -237,6 +276,7 @@ async function resolvePendingLogin(sender, id, choice) {
       if (!(await VaultAccounts.update(plan.item.id, current, { password: pending.password }, vk))) return { ok: false };
     }
     await dropPendingLogin(key, id);
+    vaultChangedByPage();
     return { ok: true, kind: plan.kind };
   });
 }
@@ -484,6 +524,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
       const index = await VaultAccounts.add(msg.account, await VaultKeys.getKey());
       await chrome.storage.local.set({ activeIndex: index });
+      vaultChangedByPage();
       return { ok: true, index };
     })().then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
@@ -494,7 +535,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === 'vaultUpdateAccount') {
     (async () => {
       if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
-      return { ok: await VaultAccounts.update(msg.id, msg.expected, msg.patch, await VaultKeys.getKey()) };
+      const ok = await VaultAccounts.update(msg.id, msg.expected, msg.patch, await VaultKeys.getKey());
+      if (ok) vaultChangedByPage();
+      return { ok };
     })().then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
@@ -738,6 +781,7 @@ chrome.alarms.onAlarm.addListener(async alarm => {
     chrome.storage.local.get(['syncEnabled', 'syncKey', 'lastSyncedAt'], r)
   );
   if (!stored.syncEnabled && !stored.syncKey) return;
+  queueVaultSync(); // items: pushed and pulled here (unlocked vault only)
 
   try {
     const token = await SupabaseAuth.getAccessToken();
