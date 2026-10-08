@@ -43,7 +43,7 @@ const faqs = [
   },
   {
     q: 'Can I use OTPilot on multiple devices without paying?',
-    a: 'Yes. On the free plan you can move your vault between devices manually with the encrypted backup (export on one browser, import on another). Automatic, real-time sync is part of the Personal plan.',
+    a: 'Yes. On the free plan you can move your logins and 2FA codes between devices manually with the encrypted backup (export on one browser, import on another). CSV export and import can also move your secure notes. CSV exports include servers and API credentials too, but OTPilot cannot yet import those items back from CSV. Automatic, real-time sync of everything is part of the Personal plan.',
   },
   {
     q: "I'm currently using Google Authenticator, can I switch?",

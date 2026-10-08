@@ -11,7 +11,7 @@ const rights = [
   },
   {
     title: 'Right to data portability (Art. 20)',
-    description: 'Your whole vault can be exported from the extension at any time, as an encrypted backup file or as a CSV that other password managers can import. These files are yours and work independently of our service.',
+    description: 'Your whole vault can be exported from the extension at any time as a CSV that other password managers can import, and your logins and 2FA codes also as an encrypted backup file. These files are yours and work independently of our service.',
   },
   {
     title: 'Right to rectification (Art. 16)',
