@@ -755,10 +755,11 @@ const parseTags = text => VaultAccounts.normalizeTags(String(text || '').split('
 
 // ── Team collections in the vault ──
 let collections = [];  // VaultCollections.list()
-let sharedItems = [];  // [{ collection, item }]
+let sharedItems = [];  // [{ collection, item, revision }]
 
-function sharedEntryOf({ collection, item }) {
-  return { ...entryOf(item), _kind: 'shared', cid: collection.id, collectionName: collection.name || 'Shared', role: collection.role };
+// `_baseRev`: the revision this entry shows, which its save is based on.
+function sharedEntryOf({ collection, item, revision }) {
+  return { ...entryOf(item), _kind: 'shared', cid: collection.id, collectionName: collection.name || 'Shared', role: collection.role, _baseRev: revision };
 }
 
 // Pulls every collection this user is in and redraws (team plans only; a
@@ -772,7 +773,7 @@ async function refreshSharedItems() {
   for (const c of list) {
     if (!c.key) continue;
     try { await VaultCollections.pull(c); } catch { /* offline: local copy */ }
-    for (const item of await VaultCollections.items(c)) out.push({ collection: c, item });
+    for (const { item, revision } of await VaultCollections.snapshot(c)) out.push({ collection: c, item, revision });
   }
   collections = list;
   sharedItems = out;
@@ -1327,7 +1328,7 @@ async function saveSharedEntry(entry) {
   if (!c?.key) { setStatus('This collection is not available on this device', false); return; }
   if (!entry.name) { setStatus('It needs a name', false); return; }
   let res;
-  try { res = await VaultCollections.save(c, itemOfEntry(entry)); } catch { setStatus('Could not save — check your connection', false); return; }
+  try { res = await VaultCollections.save(c, itemOfEntry(entry), entry._baseRev); } catch { setStatus('Could not save — check your connection', false); return; }
   if (res.conflict) setStatus('Someone changed this meanwhile — showing their version', false);
   else setStatus(`Saved to ${c.name}`);
   sharedItems = await sharedItemsFromLocal();
@@ -1339,7 +1340,7 @@ async function deleteSharedEntry(entry) {
   const c = collections.find(x => x.id === entry.cid);
   if (!c?.key) return;
   let res;
-  try { res = await VaultCollections.deleteItem(c, entry._id); } catch { setStatus('Could not delete — check your connection', false); return; }
+  try { res = await VaultCollections.deleteItem(c, entry._id, entry._baseRev); } catch { setStatus('Could not delete — check your connection', false); return; }
   if (res.conflict) setStatus('Someone changed this meanwhile — not deleted', false);
   sharedItems = await sharedItemsFromLocal();
   patchEntries([entry._id], sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf));
@@ -1349,7 +1350,7 @@ async function sharedItemsFromLocal() {
   const out = [];
   for (const c of collections) {
     if (!c.key) continue;
-    for (const item of await VaultCollections.items(c)) out.push({ collection: c, item });
+    for (const { item, revision } of await VaultCollections.snapshot(c)) out.push({ collection: c, item, revision });
   }
   return out;
 }

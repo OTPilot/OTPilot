@@ -181,3 +181,22 @@ test('a collection created here and removed before any item was saved leaves no 
   });
   expect(r).toBe(false);
 });
+
+test('an editor saving against the revision it opened does not overwrite a teammate change pulled meanwhile', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Shared');
+    const item = Vault.newItem('note', { title: 'Runbook', notes: 'v1' });
+    await VaultCollections.save(c, item);
+    const [{ revision: opened }] = await VaultCollections.snapshot(c); // the editor opens v1
+    // A teammate changes it, and another popup's refresh pulls that change.
+    const theirs = await VaultCrypto.encryptItem({ ...item, notes: 'v2 (teammate)' }, c.key);
+    fake.items.set(item.id, { ...fake.items.get(item.id), record: theirs, revision: ++fake.rev });
+    await VaultCollections.pull(c);
+    const saved = await VaultCollections.save(c, { ...item, notes: 'v1 edited (me)' }, opened);
+    const server = await VaultCrypto.decryptItem(fake.items.get(item.id).record, c.key);
+    const deleted = await VaultCollections.deleteItem(c, item.id, opened);
+    return { saved, server: server.notes, deleted, stillThere: !fake.items.get(item.id).deleted };
+  });
+  expect(r).toEqual({ saved: { conflict: true }, server: 'v2 (teammate)', deleted: { conflict: true }, stillThere: true });
+});

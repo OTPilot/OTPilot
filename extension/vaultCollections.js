@@ -212,17 +212,29 @@ const VaultCollections = (() => {
     return out.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
   }
 
-  // Saves one item to the collection (create, or update from the revision
-  // this device last pulled). Returns { ok: true } or, when someone else
-  // changed it meanwhile, { conflict: true } after pulling their version.
-  function save(c, item) {
-    return serial(c.id, () => saveNow(c, item));
+  // The collection's items with the revision each one was read at, read
+  // together (no pull lands in between): an editor keeps that revision with
+  // its draft and saves against it.
+  function snapshot(c) {
+    return serial(c.id, async () => {
+      const { revs } = await loadState(c.id);
+      return (await items(c)).map(item => ({ item, revision: revs[item.id] }));
+    });
   }
 
-  async function saveNow(c, item) {
+  // Saves one item to the collection: a create, or an update from `baseRevision`
+  // — the revision the editor opened (snapshot), so a teammate's change pulled
+  // while it was open is a conflict, not overwritten; without one, the
+  // revision this device last pulled. Returns { ok: true } or, when someone
+  // else changed it meanwhile, { conflict: true } after pulling their version.
+  function save(c, item, baseRevision) {
+    return serial(c.id, () => saveNow(c, item, baseRevision));
+  }
+
+  async function saveNow(c, item, baseRevision) {
     const state = await loadState(c.id);
     const record = await VaultCrypto.encryptItem({ ...item, updatedAt: new Date().toISOString() }, c.key);
-    const base = state.revs[item.id];
+    const base = baseRevision ?? state.revs[item.id];
     const { status, body } = await api(`/collections/${c.id}/items/${item.id}`, {
       method: 'PUT',
       body: JSON.stringify({ record, ...(base !== undefined ? { base_revision: base } : {}) }),
@@ -234,13 +246,14 @@ const VaultCollections = (() => {
     return { ok: true };
   }
 
-  function deleteItem(c, id) {
-    return serial(c.id, () => deleteNow(c, id));
+  // Same as save: from the revision the editor showed, when given.
+  function deleteItem(c, id, baseRevision) {
+    return serial(c.id, () => deleteNow(c, id, baseRevision));
   }
 
-  async function deleteNow(c, id) {
+  async function deleteNow(c, id, baseRevision) {
     const state = await loadState(c.id);
-    const base = state.revs[id];
+    const base = baseRevision ?? state.revs[id];
     if (base === undefined) return { ok: false };
     const { status } = await api(`/collections/${c.id}/items/${id}?base_revision=${base}`, { method: 'DELETE' });
     if (status === 409) { await pullNow(c); return { conflict: true }; }
@@ -285,6 +298,6 @@ const VaultCollections = (() => {
 
   return {
     list, create, rename, remove, members, addMember, setRole, removeMember,
-    pull, items, save, deleteItem, moveIn, forget, forgetKeys,
+    pull, items, snapshot, save, deleteItem, moveIn, forget, forgetKeys,
   };
 })();
