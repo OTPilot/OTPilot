@@ -46,3 +46,31 @@ test('vault rows render the cached favicon as <img>', async ({ context, extensio
   await expect(page.locator('.acc-head img.acc-av')).toHaveCount(1);
   await expect(page.locator('.acc-head span.acc-av')).toHaveCount(1);
 });
+
+test('a cached "no icon" is asked again when the page sends a hint, and expires after a day', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  const r = await worker.evaluate(async dataUrl => {
+    const now = Date.now();
+    await chrome.storage.local.set({ iconCache: {
+      'hinted.test': { dataUrl: null, fetchedAt: now },
+      'old.test': { dataUrl: null, fetchedAt: now - 2 * 24 * 3600 * 1000 },
+      'recent.test': { dataUrl: null, fetchedAt: now },
+    } });
+    const asked = [];
+    const png = await (await fetch(dataUrl)).arrayBuffer();
+    globalThis.fetch = async (url, opts) => {
+      if (String(url).endsWith('/icons/resolve')) {
+        const { domains } = JSON.parse(opts.body);
+        asked.push(...domains);
+        return new Response(JSON.stringify(Object.fromEntries(domains.map(d => [d, { status: 'ok', url: `https://cdn.test/${d}.png` }]))), { status: 200 });
+      }
+      return new Response(png, { status: 200, headers: { 'content-type': 'image/png' } });
+    };
+    await handleResolveIcons(['hinted.test', 'old.test', 'recent.test'], { 'hinted.test': 'https://hinted.test/icon.png' }, false);
+    const { iconCache } = await chrome.storage.local.get('iconCache');
+    return { asked: asked.sort(), got: Object.keys(iconCache).filter(d => iconCache[d].dataUrl).sort() };
+  }, PNG_DATA_URL);
+  expect(r).toEqual({ asked: ['hinted.test', 'old.test'], got: ['hinted.test', 'old.test'] });
+});

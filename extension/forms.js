@@ -252,6 +252,9 @@
       save.disabled = true;
       const res = await resolve(offer, 'save');
       closeSave();
+      // Its site icon, from this page's own <link rel=icon> (content.js), as
+      // a 2FA account added from a page gets.
+      if (res?.ok) requestSiteIcon(location.hostname);
       showToast(res?.ok ? (offer.kind === 'update' ? 'Password updated in OTPilot' : 'Login saved to OTPilot') : 'OTPilot could not save this login', !!res?.ok);
     }));
     const later = saveButton('Not now');

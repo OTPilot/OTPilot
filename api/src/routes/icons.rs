@@ -171,7 +171,10 @@ async fn resolve(
         .fetch_optional(&state.db)
         .await?
         {
-            if row.fresh {
+            // A fresh `none` is still retried when the page sent a hint: the
+            // blind fetch can be bot-blocked where the page's own link works.
+            let hinted = body.hints.contains_key(raw) || body.hints.contains_key(&domain);
+            if row.fresh && !(row.status == "none" && hinted) {
                 out.insert(raw.clone(), result_for(&store, &domain, &row.status));
                 continue;
             }

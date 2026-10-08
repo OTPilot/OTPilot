@@ -635,6 +635,7 @@ const POLL_MINUTES       = 5;
 // ── Domain favicon resolution + local cache ───────────────────────────────────
 
 const ICON_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const ICON_NONE_TTL_MS = 24 * 60 * 60 * 1000;
 
 // Mirror of the backend's domain normalization (api/src/routes/icons.rs).
 function normalizeIconDomain(input) {
@@ -715,18 +716,23 @@ async function handleResolveIcons(rawDomains, hints, prune) {
     }
   }
 
-  const now = Date.now();
-  const need = domains.filter(d => {
-    const e = iconCache[d];
-    return !e || (now - e.fetchedAt) > ICON_TTL_MS;
-  });
-
   // Remap hints onto normalized domains.
   const normHints = {};
   for (const [k, v] of Object.entries(hints || {})) {
     const nd = normalizeIconDomain(k);
     if (nd && v) normHints[nd] = v;
   }
+
+  // A "no icon" answer is kept for less time than an icon, and asked again
+  // right away when the page itself says where its icon is (a hint): the
+  // server's blind fetch may have been blocked where the page's link works.
+  const now = Date.now();
+  const need = domains.filter(d => {
+    const e = iconCache[d];
+    if (!e) return true;
+    if (!e.dataUrl) return !!normHints[d] || (now - e.fetchedAt) > ICON_NONE_TTL_MS;
+    return (now - e.fetchedAt) > ICON_TTL_MS;
+  });
 
   const updated = {};
   if (need.length) {
