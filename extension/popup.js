@@ -4077,6 +4077,25 @@ async function collectionItemsSection(c) {
         ? rows.map((r, i) => `<div class="share-grant"><span><b>${esc(r.title || 'Untitled')}</b> · ${esc(r.by)}</span>${r.share ? `<button type="button" class="btn-del coll-unshare" data-i="${i}">Remove from collection</button>` : ''}</div>`).join('')
         : (mineFailed ? '' : '<div class="coll-meta">Nothing here yet. Share items into it from their editor in the Vault (Share…).</div>'));
     box.querySelector('.coll-items-retry')?.addEventListener('click', async () => box.replaceWith(await collectionItemsSection(c)));
+    // Items stored in the collection (the older model): a manager converts
+    // them into shares of items of their own.
+    const older = rows.filter(r => r.by === 'the collection').length;
+    if (older && c.role === 'manage') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'coll-link coll-convert';
+      btn.textContent = `Convert ${older} older item${older === 1 ? '' : 's'}`;
+      btn.title = 'They become items of yours, shared back to this collection (teammates keep seeing and editing them)';
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Convert ${older} item${older === 1 ? '' : 's'} stored in "${c.name}"?\n\nThey move into your vault and are shared back to "${c.name}" — teammates keep seeing and editing them. If you leave the team, they leave the collection with you.`)) return;
+        btn.disabled = true;
+        const res = await convertCollectionItems(c);
+        setStatus(res.failed ? `Converted ${res.done} of ${res.done + res.failed} — check your connection and try again` : `Converted ${res.done} item${res.done === 1 ? '' : 's'}`, !res.failed);
+        await refreshSharedItems();
+        box.replaceWith(await collectionItemsSection(c));
+      });
+      box.appendChild(btn);
+    }
     box.querySelectorAll('.coll-unshare').forEach(btn => btn.addEventListener('click', async () => {
       const r = rows[+btn.dataset.i];
       btn.disabled = true;
@@ -4091,6 +4110,40 @@ async function collectionItemsSection(c) {
     }));
   })();
   return box;
+}
+
+// The older model's items of collection `c` become shares (docs/sharing.md):
+// each one is copied into my vault (a new id), uploaded, shared back to the
+// collection as a whole copy with edit access, and only then deleted from the
+// collection. Stops at the first failure ({ done, failed }).
+async function convertCollectionItems(c) {
+  const key = await VaultKeys.getKey();
+  const older = await VaultCollections.snapshot(c);
+  let done = 0;
+  for (const { item, revision } of older) {
+    try {
+      // A retry after a failure part-way reuses the copy it already made
+      // (marked with where it came from) instead of making another.
+      const personal = (await VaultStore.readAll(key)).items;
+      let mine = personal.find(i => i.convertedFrom === item.id);
+      if (!mine) {
+        mine = { ...item, id: crypto.randomUUID(), tags: item.tags || [], convertedFrom: item.id, updatedAt: item.updatedAt || new Date().toISOString() };
+        delete mine.shares;
+        await VaultStore.save(mine, key);
+      }
+      await VaultSync.sync(key); // the item has to be on the server to be shared
+      const shared = await VaultShares.share(mine, null, [{ collection: c, role: 'edit' }]);
+      await VaultShares.attach(mine.id, shared.shares, key);
+      await VaultSync.sync(key);
+      const del = await VaultCollections.deleteItem(c, item.id, revision);
+      if (!del.ok) throw new Error('changed meanwhile');
+      done++;
+    } catch {
+      return { done, failed: older.length - done };
+    }
+  }
+  await reloadFromVault(key);
+  return { done, failed: 0 };
 }
 
 async function renderCollectionBody(body, c, team, teamMembers, myId) {

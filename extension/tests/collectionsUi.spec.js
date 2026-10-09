@@ -322,3 +322,36 @@ test("a collection opened while shared items still load lists them once they arr
   await expect(after.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/, /Mine to share · you/]);
   await expect(after.locator('.coll-items-error')).toHaveCount(0);
 });
+
+test("a manager converts the collection's older items into shares of their own items; a retry after a failure makes no duplicate", async ({ context, extensionId }) => {
+  const { installFakeShares } = await import('./fakeShares.js');
+  const page = await teamPopup(context, extensionId);
+  await installFakeShares(page);
+  await page.evaluate(async team => {
+    Sharing.getMyTeam = async () => team;
+    const c = await VaultCollections.create('team-1', 'Infra');
+    for (const t of ['Old runbook', 'Old wifi']) await VaultCollections.save(c, Vault.newItem('note', { title: t, notes: t }));
+    // The first conversion fails part-way (deleting the second older item).
+    const del = VaultCollections.deleteItem;
+    let calls = 0;
+    VaultCollections.deleteItem = async (...a) => (++calls === 2 ? { ok: false } : del(...a));
+    window._restoreDelete = () => { VaultCollections.deleteItem = del; };
+    await refreshSharedItems();
+  }, TEAM);
+  await openTeam(page);
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click();
+  const items = () => page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
+  page.on('dialog', d => d.accept());
+  await items().locator('.coll-convert').click();
+  await expect(page.locator('#status-msg')).toContainText('Converted 1 of 2');
+  await page.evaluate(() => window._restoreDelete());
+  await items().locator('.coll-convert').click();
+  await expect(page.locator('#status-msg')).toContainText('Converted 1 item');
+  await expect(items().locator('.share-grant')).toHaveText([/Old runbook · you/, /Old wifi · you/]);
+  const r = await page.evaluate(async () => ({
+    personal: (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => i.title).sort(),
+    left: [...fake.items.values()].filter(i => !i.deleted).length,
+    shares: [...fakeShares.shares.values()].map(s => [s.whole, s.grants[0].role]),
+  }));
+  expect(r).toEqual({ personal: ['Old runbook', 'Old wifi'], left: 0, shares: [[true, 'edit'], [true, 'edit']] });
+});

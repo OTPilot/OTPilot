@@ -83,6 +83,8 @@ the others can edit.
 3. Collections as groups: grant shares to collections; Team tab lists a
    collection's items; Vault shows where an item is shared.
 4. Field selection (partial copies) end to end.
-5. Migration: today's collection items become shares owned by whoever moved
-   them in (or by the collection's creator), then the old collection-item
-   routes go; decide the 2-of-2 codes' place.
+5. Migration: a collection's manager converts its stored items ("Convert N
+   older items"): each becomes an item of theirs (marked `convertedFrom`, so a
+   retry never duplicates it), shared back to the collection whole with edit
+   access, then deleted from the collection. The old collection-item routes
+   go once no collection holds items; the 2-of-2 codes' place is still open.
