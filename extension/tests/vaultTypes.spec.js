@@ -668,3 +668,125 @@ test('arrowing through a long merge list keeps the highlighted login visible and
   await page.keyboard.press('Enter');
   await expect(page.locator('#acc-detail .merge-picked')).toContainText('Site 12');
 });
+
+// ── Related items ────────────────────────────────────────────────────────────
+
+const storedItems = page => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
+  .map(i => ({ id: i.id, type: i.type, title: i.title, notes: i.notes || '', links: i.links || [] })));
+
+test('a note created from a login links back to it, and each shows the other as related', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{ name: 'Bank', email: 'me@example.com', secret: '', urls: 'bank.example', password: 'pw' }] });
+  await page.locator('.acc-head', { hasText: 'Bank' }).click();
+  await expect(page.locator('#acc-detail .rel-row')).toHaveCount(0);
+  await page.click('#acc-detail .rel-new-note');
+  // The new note is open, titled after the login.
+  await expect(page.locator('#acc-detail .item-title')).toHaveValue('Bank notes');
+  await expect(page.locator('#acc-detail .item-notes')).toBeFocused();
+  await page.fill('#acc-detail .item-notes', 'First pet: Rex');
+  await expect(page.locator('#acc-detail .rel-row')).toHaveText(/Bank/);
+  await page.click('#btn-save-all');
+
+  await expect.poll(async () => {
+    const items = await storedItems(page);
+    const login = items.find(i => i.type === 'login');
+    const note = items.find(i => i.type === 'note');
+    return note && { title: note.title, notes: note.notes, linksLogin: note.links.includes(login.id) && note.links.length === 1, loginLinks: login.links };
+  }).toEqual({ title: 'Bank notes', notes: 'First pet: Rex', linksLogin: true, loginLinks: [] });
+
+  // From the login: the note is related; opening it shows the login.
+  await page.reload();
+  await page.click('#nav-settings');
+  await page.locator('.acc-head').filter({ has: page.locator('.acc-head-name', { hasText: /^Bank$/ }) }).click();
+  await expect(page.locator('#acc-detail .rel-section label')).toHaveText('Related · 1');
+  await page.locator('#acc-detail .rel-row .rel-open', { hasText: 'Bank notes' }).click();
+  await expect(page.locator('#acc-detail .item-title')).toHaveValue('Bank notes');
+  await expect(page.locator('#acc-detail .rel-row')).toHaveText(/Bank/);
+});
+
+test('a note created under a tag filter takes the login\'s tags and stays in view', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{ name: 'Bank', email: 'me@example.com', secret: '', urls: 'bank.example', password: 'pw', category: 'Personal', moreTags: ['Work'] }] });
+  await page.locator('#vault-cat-bar .cat-pill', { hasText: 'Work' }).click();
+  await page.locator('.acc-head', { hasText: 'Bank' }).click();
+  await page.click('#acc-detail .rel-new-note');
+  await expect(page.locator('.acc-row:visible .acc-head', { hasText: 'Bank notes' })).toHaveCount(1);
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items))
+    .find(i => i.type === 'note')?.tags).toEqual(['Personal', 'Work']);
+  await expect(page.locator('.acc-row:visible .acc-head', { hasText: 'Bank notes' })).toHaveCount(1);
+});
+
+test('linking an existing item from the search, and unlinking it from either side', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, {
+    accounts: [{ name: 'Bank', email: 'me@example.com', secret: '', urls: 'bank.example', password: 'pw' }],
+    items: [['note', { title: 'Card PINs', notes: '1234' }], ['note', { title: 'Wifi', notes: 'x' }]],
+  });
+  await page.locator('.acc-head', { hasText: 'Bank' }).click();
+  await page.click('#acc-detail .rel-link');
+  await expect(page.locator('#acc-detail .rel-search')).toBeFocused();
+  await expect(page.locator('#acc-detail .rel-option')).toHaveCount(2);
+  await page.fill('#acc-detail .rel-search', 'pin');
+  await expect(page.locator('#acc-detail .rel-option')).toHaveCount(1);
+  await page.press('#acc-detail .rel-search', 'Enter');
+  await expect(page.locator('#acc-detail .rel-row')).toHaveCount(1);
+  await expect(page.locator('#acc-detail .rel-row')).toContainText('Card PINs');
+  // Already related: not offered again.
+  await page.click('#acc-detail .rel-link');
+  await expect(page.locator('#acc-detail .rel-option')).toHaveCount(1);
+  await expect(page.locator('#acc-detail .rel-option')).toContainText('Wifi');
+  await page.click('#btn-save-all');
+
+  const linksOfLogin = async () => {
+    const items = await storedItems(page);
+    const pins = items.find(i => i.title === 'Card PINs');
+    return items.find(i => i.type === 'login').links.map(id => (id === pins.id ? 'Card PINs' : id));
+  };
+  await expect.poll(linksOfLogin).toEqual(['Card PINs']);
+
+  // Unlinked from the note's side: the link stored on the login goes; both items stay.
+  await page.locator('.acc-head', { hasText: 'Card PINs' }).click();
+  await expect(page.locator('#acc-detail .rel-row')).toContainText('Bank');
+  await page.click('#acc-detail .rel-unlink');
+  await expect(page.locator('#acc-detail .rel-row')).toHaveCount(0);
+  await page.click('#btn-save-all');
+  await expect.poll(linksOfLogin).toEqual([]);
+  expect((await storedItems(page)).length).toBe(3);
+});
+
+test('a login not saved yet asks to be saved before linking', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId);
+  await page.click('#btn-add');
+  await page.click('[data-add-type="login"]');
+  await expect(page.locator('#acc-detail .rel-section')).toContainText('Save this login first');
+  await expect(page.locator('#acc-detail .rel-link')).toHaveCount(0);
+});
+
+test('merging two logins keeps both sides\' related items', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, {
+    accounts: [
+      { name: 'Bank', email: 'me@example.com', secret: '', urls: 'bank.example', password: 'pw' },
+      { name: 'Bank old', email: 'me@example.com', secret: '', urls: 'bank.example', password: 'pw' },
+    ],
+    items: [['note', { title: 'Old bank PINs', notes: '1' }]],
+  });
+  // The note links the login that goes away in the merge.
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const { items } = await VaultStore.readAll(key);
+    const old = items.find(i => i.title === 'Bank old');
+    const note = items.find(i => i.type === 'note');
+    await VaultStore.save([{ ...note, links: [old.id] }], key);
+  });
+  await page.reload();
+  await page.click('#nav-settings');
+  await page.locator('.acc-head').filter({ has: page.locator('.acc-head-name', { hasText: /^Bank$/ }) }).click();
+  await page.click('#acc-detail .btn-merge');
+  await page.locator('#acc-detail .merge-option', { hasText: 'Bank old' }).click();
+  await page.click('#acc-detail .merge-actions .btn-crypto-ok');
+  await expect(page.locator('#acc-detail .rel-row')).toContainText('Old bank PINs');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => {
+    const items = await storedItems(page);
+    const login = items.find(i => i.type === 'login');
+    return items.filter(i => i.type === 'login').length === 1 && items.find(i => i.type === 'note').links[0] === login.id;
+  }).toBe(true);
+});

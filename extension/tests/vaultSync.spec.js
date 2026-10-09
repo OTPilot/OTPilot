@@ -227,6 +227,36 @@ test('the same login migrated on two devices ends up as one item', async ({ cont
   expect(result.server).toEqual([result.twinId]);
 });
 
+test('pairing a login with its server twin keeps related items linked, on both sides', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [ACC('GitHub', 'JBSWY3DPEHPK3PXP')]);
+  const r = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const [login] = (await VaultStore.readAll(key)).items;
+    // Linked here before the first sync: a note that links the login, and
+    // the login links another note.
+    const linking = Vault.newItem('note', { title: 'Recovery codes', links: [login.id] });
+    const linked = Vault.newItem('note', { title: 'Security questions' });
+    await VaultStore.save([linking, linked, { ...login, links: [linked.id] }], key);
+    // The other device migrated the same login under its own id, uploaded first.
+    const twin = Vault.fromV1Account({ name: 'GitHub', email: '', secret: 'JBSWY3DPEHPK3PXP', urls: '' }, 0);
+    await fakeServer.remoteSave(twin);
+    const stats = await VaultSync.sync(key);
+    const items = (await VaultStore.readAll(key)).items;
+    const byTitle = t => items.find(i => i.title === t);
+    return {
+      remapped: stats.remapped[login.id] === twin.id,
+      noteLinks: byTitle('Recovery codes').links,
+      loginLinks: byTitle('GitHub').links,
+      serverNoteLinks: (await fakeServer.read(linking.id)).links,
+      twinId: twin.id, linkedId: linked.id,
+    };
+  });
+  expect(r.remapped).toBe(true);
+  expect(r.noteLinks).toEqual([r.twinId]);
+  expect(r.serverNoteLinks).toEqual([r.twinId]);
+  expect(r.loginLinks).toEqual([r.linkedId]);
+});
+
 test('records this device cannot decrypt are not stored', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
   const stats = await page.evaluate(async () => {
