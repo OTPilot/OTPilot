@@ -284,3 +284,34 @@ test("a collection lists what's shared into it: mine (removable), teammates', an
   await expect(items.locator('.share-grant', { hasText: 'Mine to share' })).toHaveCount(0);
   expect(await page.evaluate(() => [...fakeShares.shares.values()].filter(s => s.owner === 'user-me').length)).toBe(0);
 });
+
+test("a collection opened while shared items still load lists them once they arrive; a failed load says so and retries", async ({ context, extensionId }) => {
+  const { installFakeShares } = await import('./fakeShares.js');
+  const page = await teamPopup(context, extensionId);
+  await installFakeShares(page);
+  await page.evaluate(async team => {
+    Sharing.getMyTeam = async () => team;
+    const c = await VaultCollections.create('team-1', 'Infra');
+    await fakeShares.shareFromBob(Vault.newItem('login', { title: "Bob's DB" }), 'view', c);
+    // A slow refresh in flight when the collection is opened.
+    const refresh = VaultShares.refresh;
+    VaultShares.refresh = async () => { await new Promise(r => setTimeout(r, 1500)); return refresh(); };
+    refreshSharedItems();
+  }, TEAM);
+  await openTeam(page);
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click();
+  const items = page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
+  await expect(items.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/], { timeout: 8000 });
+
+  // My items can't be loaded: it says so, and Retry works once they can.
+  await page.evaluate(() => {
+    window._mine = VaultShares.mine;
+    VaultShares.mine = async () => { throw new Error('offline'); };
+  });
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click(); // close
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click(); // reopen
+  await expect(items.locator('.coll-items-error')).toContainText('could not be loaded');
+  await page.evaluate(() => { VaultShares.mine = window._mine; });
+  await items.locator('.coll-items-retry').click();
+  await expect(page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items-error')).toHaveCount(0);
+});

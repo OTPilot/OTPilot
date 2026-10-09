@@ -781,7 +781,14 @@ async function sharedWithMe(fresh) {
 // Pulls every collection this user is in and redraws (team plans only; a
 // failure, e.g. offline, keeps what was shown).
 let _teamPlan = false;
-async function refreshSharedItems() {
+// The refresh in flight (what the Team tab's collection lists wait for).
+let _sharedItemsLoad = null;
+function refreshSharedItems() {
+  _sharedItemsLoad = refreshSharedItemsNow();
+  return _sharedItemsLoad;
+}
+
+async function refreshSharedItemsNow() {
   const { userPlan } = await chrome.storage.local.get('userPlan');
   _teamPlan = ['team_lite', 'team_pro'].includes(userPlan);
   if (!_teamPlan) { collections = []; sharedItems = []; return; }
@@ -4050,20 +4057,26 @@ async function collectionItemsSection(c) {
   box.className = 'coll-items';
   box.innerHTML = '<div class="share-title">Items</div><div class="coll-meta">Loading…</div>';
   (async () => {
+    // Teammates' items come from the shared items being loaded: wait for them.
+    await _sharedItemsLoad?.catch(() => {});
     const rows = [];
+    let mineFailed = false;
     try {
       const mine = (await VaultShares.mine()).filter(s => s.grants.some(g => g.collection_id === c.id));
       const titles = new Map([...accounts.map(a => [a._id, a.name]), ...otherItems.map(i => [i.id, i.title])]);
       for (const s of mine) rows.push({ title: titles.get(s.item_id) || 'An item of yours', by: 'you', share: s });
-    } catch { /* offline: only what's known locally */ }
+    } catch { mineFailed = true; }
     for (const x of sharedItems) {
       if (x.share && (x.share.via || []).some(v => v.collection_id === c.id)) rows.push({ title: x.item.title, by: x.share.owner?.email || 'a teammate' });
       if (x.collection?.id === c.id) rows.push({ title: x.item.title, by: 'the collection' });
     }
     rows.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
-    box.innerHTML = '<div class="share-title">Items</div>' + (rows.length
-      ? rows.map((r, i) => `<div class="share-grant"><span><b>${esc(r.title || 'Untitled')}</b> · ${esc(r.by)}</span>${r.share ? `<button type="button" class="btn-del coll-unshare" data-i="${i}">Remove from collection</button>` : ''}</div>`).join('')
-      : '<div class="coll-meta">Nothing here yet. Share items into it from their editor in the Vault (Share…).</div>');
+    box.innerHTML = '<div class="share-title">Items</div>'
+      + (mineFailed ? '<div class="coll-meta coll-items-error">Your items in it could not be loaded. <button type="button" class="coll-link coll-items-retry">Retry</button></div>' : '')
+      + (rows.length
+        ? rows.map((r, i) => `<div class="share-grant"><span><b>${esc(r.title || 'Untitled')}</b> · ${esc(r.by)}</span>${r.share ? `<button type="button" class="btn-del coll-unshare" data-i="${i}">Remove from collection</button>` : ''}</div>`).join('')
+        : (mineFailed ? '' : '<div class="coll-meta">Nothing here yet. Share items into it from their editor in the Vault (Share…).</div>'));
+    box.querySelector('.coll-items-retry')?.addEventListener('click', async () => box.replaceWith(await collectionItemsSection(c)));
     box.querySelectorAll('.coll-unshare').forEach(btn => btn.addEventListener('click', async () => {
       const r = rows[+btn.dataset.i];
       btn.disabled = true;
