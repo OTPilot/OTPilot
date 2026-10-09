@@ -41,6 +41,22 @@ export function installFakeCollections(page) {
         const list = [...S.items.values()].filter(i => i.cid === c.id && i.revision > since).sort((a, b) => a.revision - b.revision);
         return reply(200, { items: list.map(i => ({ id: i.id, record: i.deleted ? null : i.record, revision: i.revision, deleted: !!i.deleted })), revision: list.length ? list[list.length - 1].revision : since, more: false });
       }
+      // A manager's atomic conversion (collections.rs convert_item).
+      if (parts[2] === 'items' && parts[4] === 'convert' && method === 'POST') {
+        await S.beforeConvert?.(parts[3]);
+        const cur = S.items.get(parts[3]);
+        if (!cur || cur.deleted) return reply(404, {});
+        if (body.base_revision !== cur.revision) return reply(409, { item: { id: cur.id, record: cur.record, revision: cur.revision } });
+        S.items.set(parts[3], { ...cur, record: null, deleted: true, revision: ++S.rev });
+        (S.converted ||= []).push(body);
+        if (window.fakeShares) {
+          // The new personal item is on my server vault now (sync brings it).
+          window.fakeShares.vault.push({ id: body.item.id, record: body.item.record, revision: ++window.fakeShares.rev });
+          window.fakeShares.shares.set(body.share.id, { id: body.share.id, owner: S.me, item_id: body.item.id, whole: true, record: body.share.record,
+            revision: ++window.fakeShares.rev, grants: [{ collection_id: c.id, role: 'edit', wrapped_key: body.share.wrapped_key }] });
+        }
+        return reply(200, { item_revision: S.rev, share_revision: S.rev });
+      }
       if (parts[2] === 'items' && parts[3]) {
         const cur = S.items.get(parts[3]);
         if (method === 'PUT') {

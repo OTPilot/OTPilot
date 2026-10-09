@@ -113,11 +113,21 @@ async fn begin_owner_tx(
     owner: Uuid,
 ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
     let mut owner_tx = state.db.begin().await?;
+    lock_owner(&mut owner_tx, owner).await?;
+    Ok(owner_tx)
+}
+
+/// The same per-owner lock, inside a transaction that also writes elsewhere
+/// (a collection item's conversion).
+pub(crate) async fn lock_owner(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    owner: Uuid,
+) -> Result<()> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('vault_items'), hashtext($1::text))")
         .bind(owner)
-        .execute(&mut *owner_tx)
+        .execute(&mut **tx)
         .await?;
-    Ok(owner_tx)
+    Ok(())
 }
 
 /// Marks the user as on the 2.0 vault, inside the write's transaction so the

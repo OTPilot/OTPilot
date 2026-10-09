@@ -169,10 +169,16 @@ const VaultSync = (() => {
           stats.remapped[twinId] = r.id; // so open editors can follow the item
           const ours = await decryptOrNull(local[twinId], key);
           await tx.drop(twinId);
+          // Both sides' shares stay (their keys live only in the item —
+          // docs/sharing.md), whichever version's content wins.
+          const shares = [...(theirs.shares || []), ...(ours?.shares || []).filter(s => !(theirs.shares || []).some(t => t.id === s.id))];
           if (ours && (ours.updatedAt || '') > (theirs.updatedAt || '')) {
-            const rec = await VaultCrypto.encryptItem({ ...ours, id: r.id }, key);
+            const rec = await VaultCrypto.encryptItem({ ...ours, id: r.id, ...(shares.length ? { shares } : {}) }, key);
             await tx.put(r.id, rec);
             state.synced[r.id] = { rev: r.revision, fp: null }; // pushes ours
+          } else if (shares.length > (theirs.shares || []).length) {
+            await tx.put(r.id, await VaultCrypto.encryptItem({ ...theirs, shares }, key));
+            state.synced[r.id] = { rev: r.revision, fp: null }; // pushes the merged shares
           } else {
             await tx.put(r.id, r.record);
             state.synced[r.id] = { rev: r.revision, fp: fp(r.record) };

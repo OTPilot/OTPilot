@@ -11,7 +11,8 @@ export function installFakeShares(page) {
       public_key: VaultCrypto.b64e(await crypto.subtle.exportKey('raw', kp.publicKey)),
       jwk: await crypto.subtle.exportKey('jwk', kp.privateKey),
     };
-    const S = window.fakeShares = { rev: 100, shares: new Map(), me: 'user-me', bob, calls: [] };
+    // `vault`: my personal items on the server ({ id, record, revision }), as /vault/items lists them.
+    const S = window.fakeShares = { rev: 100, shares: new Map(), me: 'user-me', bob, calls: [], vault: [] };
     const reply = (status, body) => ({ status, ok: status === 200, json: async () => body });
     const prev = CloudSync.api;
     CloudSync.api = async (path, opts = {}) => {
@@ -20,7 +21,11 @@ export function installFakeShares(page) {
       const body = opts.body ? JSON.parse(opts.body) : null;
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'vault') {
-        if (method === 'GET') return reply(200, { items: [], revision: 0, more: false });
+        if (method === 'GET') {
+          const since = Number(url.searchParams.get('since') || 0);
+          const items = S.vault.filter(i => i.revision > since).sort((a, b) => a.revision - b.revision);
+          return reply(200, { items: items.map(i => ({ id: i.id, record: i.record, revision: i.revision, deleted: false })), revision: items.length ? items[items.length - 1].revision : since, more: false });
+        }
         if (parts[2] === 'batch') return reply(200, { created: body.items.map(i => ({ id: i.id, revision: ++S.rev })), conflicts: [] });
         return reply(200, { id: parts[2], revision: ++S.rev });
       }

@@ -51,6 +51,10 @@ pub fn router() -> Router<AppState> {
             "/collections/{cid}/items/{id}",
             put(put_item).delete(delete_item),
         )
+        .route(
+            "/collections/{cid}/items/{id}/convert",
+            axum::routing::post(convert_item),
+        )
 }
 
 fn opaque(field: &str, value: &str) -> Result<()> {
@@ -678,6 +682,125 @@ async fn delete_item(
     .await?;
     tx.commit().await?;
     Ok(Json(json!({ "id": id, "revision": revision })).into_response())
+}
+
+#[derive(Deserialize)]
+struct ConvertItem {
+    id: Uuid,
+    record: Value,
+    #[serde(default = "default_counts")]
+    counts_for_limit: bool,
+}
+
+fn default_counts() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct ConvertShare {
+    id: Uuid,
+    record: Value,
+    wrapped_key: String,
+}
+
+#[derive(Deserialize)]
+struct ConvertRequest {
+    base_revision: i64,
+    /// The manager's new personal item (it carries the share key itself).
+    item: ConvertItem,
+    /// Its whole copy, granted back to this collection with edit access
+    /// (`wrapped_key`: the share key under the collection key).
+    share: ConvertShare,
+}
+
+/// Turns an item stored in the collection (the model before shares) into an
+/// item of the caller's — a manager — shared back to the collection, in one
+/// transaction: the source must still be at `base_revision` (409 + current
+/// otherwise), then the personal item, its share and the collection grant are
+/// created and the source is deleted. A retry after a lost answer finds the
+/// source gone (404); two managers converting at once can't both succeed.
+async fn convert_item(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((cid, id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<ConvertRequest>,
+) -> Result<Response> {
+    crate::routes::accounts::require_cloud_plan(&state, auth.id).await?;
+    let item_record = validate_record(&body.item.record)?;
+    let share_record = validate_record(&body.share.record)?;
+    opaque("wrapped_key", &body.share.wrapped_key)?;
+    let team_id = team_of(&state.db, cid).await?;
+    // Lock order: the collection's items lock, the team lock (as collection
+    // deletion), the member row (role_locked), then the owner's vault lock.
+    let mut tx = begin_collection_tx(&state, cid).await?;
+    lock_team(&mut tx, team_id).await?;
+    allowed(&role_locked(&mut tx, cid, auth.id).await?, &["manage"])?;
+    crate::routes::vault::lock_owner(&mut tx, auth.id).await?;
+    let source = sqlx::query_as::<_, LockedItem>(
+        "SELECT collection_id, revision FROM vault_items WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match source {
+        Some(row) if row.collection_id == Some(cid) => {
+            if row.revision != body.base_revision {
+                let current = current_item(&mut tx, id).await?;
+                return Ok(conflict(current.as_ref()));
+            }
+        }
+        _ => return Err(ApiError::NotFound), // gone (converted, deleted) or not this collection's
+    }
+    let created: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO vault_items (id, owner_id, encrypted_item, counts_for_limit)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING RETURNING revision",
+    )
+    .bind(body.item.id)
+    .bind(auth.id)
+    .bind(&item_record)
+    .bind(body.item.counts_for_limit)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(item_revision) = created else {
+        return Err(ApiError::BadRequest("that item id is taken".into()));
+    };
+    let share_revision: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO shares (id, team_id, owner_id, item_id, whole, encrypted_item)
+         VALUES ($1, $2, $3, $4, true, $5) ON CONFLICT (id) DO NOTHING RETURNING revision",
+    )
+    .bind(body.share.id)
+    .bind(team_id)
+    .bind(auth.id)
+    .bind(body.item.id)
+    .bind(&share_record)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(share_revision) = share_revision else {
+        return Err(ApiError::BadRequest("that share id is taken".into()));
+    };
+    sqlx::query(
+        "INSERT INTO share_grants (share_id, collection_id, role, wrapped_key, granted_by)
+         VALUES ($1, $2, 'edit', $3, $4)",
+    )
+    .bind(body.share.id)
+    .bind(cid)
+    .bind(&body.share.wrapped_key)
+    .bind(auth.id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE vault_items SET encrypted_item = '', deleted_at = NOW(),
+             revision = nextval('vault_revision_seq'), updated_at = NOW()
+         WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(
+        Json(json!({ "item_revision": item_revision, "share_revision": share_revision }))
+            .into_response(),
+    )
 }
 
 #[cfg(all(test, feature = "db-tests"))]
@@ -1343,5 +1466,95 @@ mod db_tests {
         assert_eq!(role.as_deref(), Some("manage"));
         write.commit().await.unwrap();
         assert_eq!(removing.await.unwrap(), StatusCode::OK);
+    }
+    #[tokio::test]
+    async fn a_manager_converts_a_collection_item_atomically_and_only_once() {
+        let g = test_db().await;
+        let db = g.pool.clone();
+        let app = router()
+            .merge(crate::routes::teams::router())
+            .merge(crate::routes::vault::router())
+            .merge(crate::routes::shares::router())
+            .with_state(test_state(db.clone()));
+        let (owner, bob, viewer) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        let t = team(&db, owner, &[bob, viewer]).await;
+        let cid = new_collection(&app, owner, t).await;
+        call(
+            &app,
+            owner,
+            Method::PUT,
+            &format!("/collections/{cid}/members/{viewer}"),
+            Some(json!({ "role": "view", "wrapped_key": "k" })),
+        )
+        .await;
+        let src = Uuid::new_v4();
+        let (_, put) = call(
+            &app,
+            owner,
+            Method::PUT,
+            &format!("/collections/{cid}/items/{src}"),
+            Some(json!({ "record": record("old") })),
+        )
+        .await;
+        let rev = put["revision"].as_i64().unwrap();
+        let body = |base: i64| {
+            json!({
+                "base_revision": base,
+                "item": { "id": Uuid::new_v4(), "record": record("mine"), "counts_for_limit": true },
+                "share": { "id": Uuid::new_v4(), "record": record("copy"), "wrapped_key": "sk-under-ck" },
+            })
+        };
+        let url = format!("/collections/{cid}/items/{src}/convert");
+        // Only a manager; a stale base gets the current item back.
+        assert_eq!(
+            call(&app, viewer, Method::POST, &url, Some(body(rev)))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        let (s, b) = call(&app, owner, Method::POST, &url, Some(body(rev - 1))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert_eq!(b["item"]["revision"], json!(rev));
+        // Converted: personal item + share + edit grant to the collection; source gone.
+        let ok = body(rev);
+        let (s, _) = call(&app, owner, Method::POST, &url, Some(ok.clone())).await;
+        assert_eq!(s, StatusCode::OK);
+        let owner_of: Option<Uuid> =
+            sqlx::query_scalar("SELECT owner_id FROM vault_items WHERE id = $1")
+                .bind(Uuid::parse_str(ok["item"]["id"].as_str().unwrap()).unwrap())
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(owner_of, Some(owner));
+        let (role, coll): (String, Option<Uuid>) =
+            sqlx::query_as("SELECT role, collection_id FROM share_grants")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!((role.as_str(), coll), ("edit", Some(cid)));
+        let deleted: bool =
+            sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM vault_items WHERE id = $1")
+                .bind(src)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert!(deleted);
+        // A retry (lost answer) or another manager: the source is gone, nothing more is created.
+        let (s, _) = call(&app, owner, Method::POST, &url, Some(body(rev))).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let shares: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM shares")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(shares, 1);
+        // A view member opens it through the collection, as view only.
+        let (_, with_me) = call(&app, viewer, Method::GET, "/shares/with-me", None).await;
+        assert_eq!(with_me["shares"][0]["role"], "view");
+        let (_, none) = call(&app, bob, Method::GET, "/shares/with-me", None).await;
+        assert_eq!(none["shares"], json!([])); // not a member of the collection
     }
 }

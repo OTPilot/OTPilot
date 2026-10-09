@@ -4077,6 +4077,43 @@ async function collectionItemsSection(c) {
         ? rows.map((r, i) => `<div class="share-grant"><span><b>${esc(r.title || 'Untitled')}</b> · ${esc(r.by)}</span>${r.share ? `<button type="button" class="btn-del coll-unshare" data-i="${i}">Remove from collection</button>` : ''}</div>`).join('')
         : (mineFailed ? '' : '<div class="coll-meta">Nothing here yet. Share items into it from their editor in the Vault (Share…).</div>'));
     box.querySelector('.coll-items-retry')?.addEventListener('click', async () => box.replaceWith(await collectionItemsSection(c)));
+    if (_convertNotSynced) {
+      const note = document.createElement('div');
+      note.className = 'coll-meta coll-items-error coll-convert-sync';
+      note.innerHTML = 'Converted items haven\'t reached this device yet. <button type="button" class="coll-link coll-sync-now">Sync now</button>';
+      note.querySelector('.coll-sync-now').addEventListener('click', async () => {
+        try {
+          const key = await VaultKeys.getKey();
+          await VaultSync.sync(key);
+          await reloadFromVault(key);
+          _convertNotSynced = false;
+          setStatus('Synced');
+        } catch { setStatus('Sync failed — check your connection', false); }
+        box.replaceWith(await collectionItemsSection(c));
+      });
+      box.prepend(note);
+    }
+    // Items stored in the collection (the older model): a manager converts
+    // them into shares of items of their own.
+    const older = rows.filter(r => r.by === 'the collection').length;
+    if (older && c.role === 'manage') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'coll-link coll-convert';
+      btn.textContent = `Convert ${older} older item${older === 1 ? '' : 's'}`;
+      btn.title = 'They become items of yours, shared back to this collection (teammates keep seeing and editing them)';
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Convert ${older} item${older === 1 ? '' : 's'} stored in "${c.name}"?\n\nThey move into your vault and are shared back to "${c.name}" — teammates keep seeing and editing them. If you leave the team, they leave the collection with you.`)) return;
+        btn.disabled = true;
+        const res = await convertCollectionItems(c);
+        setStatus(res.failed ? `Converted ${res.done}; ${res.failed} could not be — check your connection and try again`
+          : !res.refreshed ? `Converted ${res.done}, but they haven't reached this device yet — use Sync now`
+          : `Converted ${res.done} item${res.done === 1 ? '' : 's'}`, !res.failed && res.refreshed);
+        await refreshSharedItems();
+        box.replaceWith(await collectionItemsSection(c));
+      });
+      box.appendChild(btn);
+    }
     box.querySelectorAll('.coll-unshare').forEach(btn => btn.addEventListener('click', async () => {
       const r = rows[+btn.dataset.i];
       btn.disabled = true;
@@ -4091,6 +4128,63 @@ async function collectionItemsSection(c) {
     }));
   })();
   return box;
+}
+
+// The older model's items of collection `c` become shares (docs/sharing.md).
+// Each conversion is one server transaction (POST …/items/:id/convert): my
+// new personal item — carrying its share key — its whole copy and the
+// collection's edit grant are created and the source deleted together, only
+// if the source is still the revision read here. A 409 (a teammate changed
+// it) is retried once with their version; a 404 means it's already
+// converted (an answer lost, or another manager) and counts as done.
+// Returns { done, failed }.
+async function convertCollectionItems(c) {
+  const key = await VaultKeys.getKey();
+  let done = 0, failed = 0;
+  for (const { item, revision } of await VaultCollections.snapshot(c)) {
+    let res = await convertOne(c, item, revision, key);
+    if (res === 'conflict') {
+      await VaultCollections.pull(c).catch(() => {});
+      const fresh = (await VaultCollections.snapshot(c)).find(x => x.item.id === item.id);
+      res = fresh ? await convertOne(c, fresh.item, fresh.revision, key) : 'gone';
+    }
+    if (res === 'ok') done++;
+    else if (res !== 'gone') failed++;
+  }
+  // My new items (with their share keys) come in through sync; the sources
+  // leave the collection's local copy. Reloaded whatever happened; a failed
+  // sync is reported (the items are on the server, not here yet).
+  let refreshed = true;
+  try { await VaultSync.sync(key); } catch { refreshed = false; }
+  await VaultCollections.pull(c).catch(() => {});
+  await reloadFromVault(key);
+  _convertNotSynced = !refreshed && done > 0;
+  return { done, failed, refreshed };
+}
+
+// Converted items that haven't reached this device (its sync failed after
+// the conversion): the collection's Items offer to sync again.
+let _convertNotSynced = false;
+
+async function convertOne(c, source, revision, key) {
+  const s = { id: crypto.randomUUID(), sk: VaultCrypto.b64e(VaultCrypto.generateKey()), whole: true, parts: null };
+  const mine = { ...source, id: crypto.randomUUID(), tags: source.tags || [], shares: [s], updatedAt: source.updatedAt || new Date().toISOString() };
+  let status;
+  try {
+    ({ status } = await CloudSync.api(`/collections/${c.id}/items/${source.id}/convert`, {
+      method: 'POST',
+      body: JSON.stringify({
+        base_revision: revision,
+        item: { id: mine.id, record: await VaultCrypto.encryptItem(mine, key), counts_for_limit: Vault.countsForLimit(mine) },
+        share: {
+          id: s.id,
+          record: await VaultCrypto.encryptItem(VaultShares.project(mine, s), s.sk),
+          wrapped_key: await VaultCrypto.encryptName(s.sk, c.key, s.id),
+        },
+      }),
+    }));
+  } catch { return 'error'; }
+  return status === 200 ? 'ok' : status === 409 ? 'conflict' : status === 404 ? 'gone' : 'error';
 }
 
 async function renderCollectionBody(body, c, team, teamMembers, myId) {
