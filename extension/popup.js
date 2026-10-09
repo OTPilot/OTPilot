@@ -1202,8 +1202,9 @@ function mergeLogins(a, b, choice = {}, { stored } = {}) {
   const tags = [...new Set([a.category, ...(a.moreTags || []), b.category, ...(b.moreTags || [])].map(t => String(t || '').trim()).filter(Boolean))];
   const custom = [...(a.customFields || [])];
   for (const f of b.customFields || []) {
-    // The same field on both: one copy, hidden if either side hid it.
-    const same = custom.find(c => c.label === f.label && c.value === f.value);
+    // The same field (in the same section) on both: one copy, hidden if
+    // either side hid it.
+    const same = custom.find(c => c.label === f.label && c.value === f.value && (c.section || '') === (f.section || ''));
     if (!same) custom.push({ ...f, id: undefined });
     else if (Vault.SECRET_KINDS.includes(f.kind) && !Vault.SECRET_KINDS.includes(same.kind)) custom[custom.indexOf(same)] = { ...same, kind: f.kind };
   }
@@ -1369,51 +1370,89 @@ function openMergePanel(body, idx) {
 }
 
 // ── Custom fields (every editor) ──
-// The user's own label + value rows on an item; "Hidden" ones are masked with
-// show/copy. Read back with readCustomFields().
+// The user's own label + value rows on an item, one compact row each, grouped
+// in sections: the default "Custom fields" one, plus named ones ("Bank
+// details") — a field's `section`. "Hidden" ones are masked with show/copy.
+// Read back with readCustomFields().
 // The field's kind is kept as it is (hidden, multiline, a newer version's…)
 // unless the user switches it with the 🔒 button (then text ⇄ password).
+const CF_ADD_KINDS = [
+  { kind: 'text', label: 'Text' },
+  { kind: 'password', label: 'Hidden' },
+  { kind: 'email', label: 'Email' },
+  { kind: 'date', label: 'Date' },
+  { kind: 'multiline', label: 'Multi-line' },
+];
+const CF_PLACEHOLDER = { email: 'name@example.com', date: 'YYYY-MM-DD', url: 'https://…', phone: '+1 555 0100' };
+
 function customFieldRowHTML(f = {}) {
   const kind = f.kind || 'text';
   const hidden = Vault.SECRET_KINDS.includes(kind);
   const value = esc(f.value ?? '');
+  const placeholder = CF_PLACEHOLDER[kind] || 'Value';
   // A new row gets its id now: reading the form twice (Save re-reads it)
   // must give the same fields.
   return `<div class="cf-row" data-id="${esc(f.id || `c-${crypto.randomUUID()}`)}" data-kind="${esc(kind)}">
-    <input class="cf-label" type="text" placeholder="Label" value="${esc(f.label || '')}" maxlength="60">
-    <div class="field-row">
-      ${kind === 'multiline'
-        ? `<textarea class="cf-value" placeholder="Value">
+    <input class="cf-label" type="text" placeholder="Label" value="${esc(f.label || '')}" maxlength="60" aria-label="Field label">
+    ${kind === 'multiline'
+      ? `<textarea class="cf-value" placeholder="Value" aria-label="Field value">
 ${value}</textarea>`
-        : `<input class="cf-value" type="${hidden ? 'password' : 'text'}" placeholder="Value" value="${value}" autocomplete="off">`}
+      : `<input class="cf-value" type="${hidden ? 'password' : 'text'}" placeholder="${placeholder}" value="${value}" autocomplete="off" aria-label="Field value">`}
+    <span class="cf-actions">
       ${hidden ? `<button type="button" class="btn-eye cf-eye" title="Show/hide">${SVG_EYE}</button>` : ''}
       <button type="button" class="btn-eye cf-copy" title="Copy">⧉</button>
       <button type="button" class="btn-eye cf-hide${hidden ? ' on' : ''}" title="${hidden ? 'Hidden — click to show it as plain text' : 'Plain text — click to hide it'}">${hidden ? '🔒' : '🔓'}</button>
       <button type="button" class="btn-eye cf-del" title="Remove">✕</button>
-    </div>
+    </span>
   </div>`;
 }
 
+function customSectionHTML(name, fields, readOnly) {
+  const named = name !== '';
+  return `<div class="cf-section${named ? ' cf-named' : ''}">
+    <div class="cf-head">
+      ${named
+        ? `<input class="cf-section-name" type="text" value="${esc(name)}" placeholder="Section name" maxlength="60" aria-label="Section name">
+           ${readOnly ? '' : '<button type="button" class="cf-section-del" title="Remove this section and its fields">✕</button>'}`
+        : '<label>Custom fields</label>'}
+    </div>
+    <div class="cf-list">${fields.map(customFieldRowHTML).join('')}</div>
+    ${readOnly ? '' : `<div class="cf-add-bar">${CF_ADD_KINDS.map(k =>
+      `<button type="button" class="cf-add-kind${k.kind === 'text' ? ' cf-add' : ''}" data-kind="${k.kind}">+ ${k.label}</button>`).join('')}</div>`}
+  </div>`;
+}
+
+// The default section first, then named ones in the order their first field
+// comes.
 function customFieldsHTML(fields, readOnly = false) {
-  return `<div class="acc-field cf-section">
-    <label>Custom fields</label>
-    <div class="cf-list">${(fields || []).map(customFieldRowHTML).join('')}</div>
-    ${readOnly ? '' : '<button type="button" class="coll-link cf-add">+ Add field</button>'}
+  const groups = new Map([['', []]]);
+  for (const f of fields || []) {
+    const name = (f.section || '').trim();
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(f);
+  }
+  return `<div class="acc-field cf-fields">
+    ${[...groups].map(([name, list]) => customSectionHTML(name, list, readOnly)).join('')}
+    ${readOnly ? '' : '<button type="button" class="coll-link cf-new-section">+ New section</button>'}
   </div>`;
 }
 
 function readCustomFields(body) {
-  return [...body.querySelectorAll('.cf-row')].map(row => ({
-    id: row.dataset.id,
-    label: row.querySelector('.cf-label').value.trim(),
-    value: row.querySelector('.cf-value').value,
-    kind: row.dataset.kind || 'text',
-  })).filter(f => f.label || f.value);
+  return [...body.querySelectorAll('.cf-row')].map(row => {
+    const section = row.closest('.cf-section')?.querySelector('.cf-section-name')?.value.trim() || '';
+    return {
+      id: row.dataset.id,
+      label: row.querySelector('.cf-label').value.trim(),
+      value: row.querySelector('.cf-value').value,
+      kind: row.dataset.kind || 'text',
+      ...(section ? { section } : {}),
+    };
+  }).filter(f => f.label || f.value);
 }
 
 function mountCustomFields(body) {
-  const list = body.querySelector('.cf-list');
-  if (!list) return;
+  const root = body.querySelector('.cf-fields');
+  if (!root) return;
   const wire = row => {
     row.querySelector('.cf-eye')?.addEventListener('click', e => {
       const inp = row.querySelector('.cf-value');
@@ -1435,14 +1474,37 @@ function mountCustomFields(body) {
     });
     row.querySelector('.cf-del')?.addEventListener('click', () => row.remove());
   };
-  list.querySelectorAll('.cf-row').forEach(wire);
-  body.querySelector('.cf-add')?.addEventListener('click', () => {
+  const addRow = (section, kind) => {
     const tmp = document.createElement('template');
-    tmp.innerHTML = customFieldRowHTML();
+    tmp.innerHTML = customFieldRowHTML({ kind });
     const row = tmp.content.firstElementChild;
-    list.appendChild(row);
+    section.querySelector('.cf-list').appendChild(row);
     wire(row);
     row.querySelector('.cf-label').focus();
+  };
+  const wireSection = section => {
+    section.querySelectorAll('.cf-row').forEach(wire);
+    section.querySelectorAll('.cf-add-kind').forEach(btn => btn.addEventListener('click', () => addRow(section, btn.dataset.kind)));
+    section.querySelector('.cf-section-del')?.addEventListener('click', () => {
+      const name = section.querySelector('.cf-section-name').value.trim() || 'this section';
+      const filled = [...section.querySelectorAll('.cf-row')].some(r => r.querySelector('.cf-label').value.trim() || r.querySelector('.cf-value').value);
+      if (filled && !confirm(`Remove "${name}" and its fields?`)) return;
+      section.remove();
+    });
+  };
+  root.querySelectorAll('.cf-section').forEach(wireSection);
+  // A new section starts with one empty row; one left with no filled field
+  // isn't saved (its name lives on its fields).
+  root.querySelector('.cf-new-section')?.addEventListener('click', e => {
+    const tmp = document.createElement('template');
+    tmp.innerHTML = customSectionHTML('New section', [], false);
+    const section = tmp.content.firstElementChild;
+    e.currentTarget.before(section);
+    wireSection(section);
+    addRow(section, 'text');
+    const name = section.querySelector('.cf-section-name');
+    name.focus();
+    name.select();
   });
 }
 
@@ -1564,7 +1626,7 @@ ${esc(item.notes || '')}</textarea>
     if (entry.role === 'view') {
       body.querySelectorAll('input, textarea').forEach(el => { el.readOnly = true; });
       body.querySelectorAll('.cat-choice').forEach(el => { el.disabled = true; });
-      body.querySelectorAll(`.btn-gen-password, .cf-del, .cf-hide, .cf-add${entry.share ? '' : ', .btn-del'}`).forEach(el => el.remove());
+      body.querySelectorAll(`.btn-gen-password, .cf-del, .cf-hide, .cf-add-kind, .cf-new-section, .cf-section-del${entry.share ? '' : ', .btn-del'}`).forEach(el => el.remove());
     }
   }
   body.querySelector('.item-totp')?.addEventListener('input', e => { e.target.dataset.dirty = '1'; });

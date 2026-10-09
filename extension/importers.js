@@ -171,7 +171,7 @@ const Importers = (() => {
     return parts[parts.length - 1] || '';
   }
 
-  // OTPilot's `fields` cell: a JSON list of { id, label, value, kind, custom }
+  // OTPilot's `fields` cell: a JSON list of { id, label, value, kind, custom, section? }
   // (lossless), or — from an earlier export — "Label: value" lines.
   function parseFieldsCell(text) {
     const t = String(text || '').trim();
@@ -183,6 +183,7 @@ const Importers = (() => {
           return list.filter(f => f && (f.label || f.id)).map(f => ({
             id: String(f.id || ''), label: String(f.label || ''), value: String(f.value ?? ''),
             kind: Vault.FIELD_KINDS.includes(f.kind) ? f.kind : 'text', custom: !!f.custom,
+            ...(f.section ? { section: String(f.section).slice(0, 60) } : {}),
           }));
         }
       } catch { /* not JSON: lines below */ }
@@ -341,15 +342,15 @@ const Importers = (() => {
 
   // Puts an entry's fields on an item: into the type's template field with
   // the same id or label, else as a custom field (kept hidden if it was).
-  // Custom fields already on the item (same label and value) aren't repeated.
+  // Custom fields already on the item (same label, value and section) aren't repeated.
   function withFields(item, fields) {
     const next = { ...item, fields: (item.fields || []).map(f => ({ ...f })) };
     for (const f of fields || []) {
       if (!f.label && !f.id) continue;
       const tpl = !f.custom && next.fields.find(t => !t.custom && (t.id === f.id || (f.label && (t.label || '').toLowerCase() === f.label.toLowerCase())));
       if (tpl) { tpl.value = f.value; continue; }
-      if (next.fields.some(t => t.custom && t.label === f.label && t.value === f.value)) continue;
-      next.fields.push({ id: `c-${crypto.randomUUID()}`, label: f.label || f.id, value: f.value, kind: f.kind || 'text', custom: true });
+      if (next.fields.some(t => t.custom && t.label === f.label && t.value === f.value && (t.section || '') === (f.section || ''))) continue;
+      next.fields.push({ id: `c-${crypto.randomUUID()}`, label: f.label || f.id, value: f.value, kind: f.kind || 'text', custom: true, ...(f.section ? { section: f.section } : {}) });
     }
     return next;
   }
@@ -419,7 +420,7 @@ const Importers = (() => {
         const known = new Set(['username', 'password']);
         const extra = (item.fields || [])
           .filter(f => !(item.type === 'login' && !f.custom && known.has(f.id)) && (f.custom || String(f.value ?? '') !== ''))
-          .map(f => ({ id: f.id, label: f.label || f.id, value: f.value, kind: f.kind, ...(f.custom ? { custom: true } : {}) }));
+          .map(f => ({ id: f.id, label: f.label || f.id, value: f.value, kind: f.kind, ...(f.custom ? { custom: true } : {}), ...(f.section ? { section: f.section } : {}) }));
         return [
           item.type,
           item.title || '',

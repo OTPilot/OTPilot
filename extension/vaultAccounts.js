@@ -46,14 +46,20 @@ const VaultAccounts = (() => {
   // The user's own fields on an item (label + value; `kind` 'password' when
   // hidden), after the type's template fields.
   function customFieldsOf(item) {
-    return (item.fields || []).filter(f => f.custom).map(f => ({ id: f.id, label: f.label || '', value: f.value ?? '', kind: f.kind || 'text' }));
+    return (item.fields || []).filter(f => f.custom).map(f => ({
+      id: f.id, label: f.label || '', value: f.value ?? '', kind: f.kind || 'text', ...(f.section ? { section: f.section } : {}),
+    }));
   }
 
   // Replaces an item's custom fields (template fields untouched). Empty rows
-  // (no label and no value) are dropped.
+  // (no label and no value) are dropped. `section` groups fields under a
+  // heading in the editor (none = the default "Custom fields" group).
   function withCustomFields(item, list) {
     const custom = (list || [])
-      .map(f => ({ id: f.id || `c-${crypto.randomUUID()}`, label: String(f.label || '').trim(), value: String(f.value ?? ''), kind: f.kind || 'text', custom: true }))
+      .map(f => {
+        const section = String(f.section || '').trim().slice(0, 60);
+        return { id: f.id || `c-${crypto.randomUUID()}`, label: String(f.label || '').trim(), value: String(f.value ?? ''), kind: f.kind || 'text', custom: true, ...(section ? { section } : {}) };
+      })
       .filter(f => f.label || f.value);
     return { ...item, fields: [...(item.fields || []).filter(f => !f.custom), ...custom] };
   }

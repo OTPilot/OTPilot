@@ -296,6 +296,87 @@ test('a login gets notes and custom fields (hidden ones masked), saved on the it
     .fields.filter(f => f.custom).map(f => f.label)).toEqual(['API token']);
 });
 
+test('custom fields go in named sections, added by kind, kept on save and reopen', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{ name: 'Bank', email: 'me@example.com', secret: '', urls: 'bank.example', password: 'pw' }] });
+  await page.locator('.acc-head', { hasText: 'Bank' }).click();
+  await page.click('#acc-detail .cf-new-section');
+  const section = page.locator('#acc-detail .cf-section.cf-named');
+  await expect(section.locator('.cf-section-name')).toBeFocused();
+  await section.locator('.cf-section-name').fill('Bank details');
+  // The new section starts with a row; a Hidden one is added from its chips.
+  await section.locator('.cf-row').first().locator('.cf-label').fill('CBU');
+  await section.locator('.cf-row').first().locator('.cf-value').fill('0070089020004021339812');
+  await section.locator('.cf-add-kind[data-kind="password"]').click();
+  await expect(section.locator('.cf-row').last().locator('.cf-label')).toBeFocused();
+  await section.locator('.cf-row').last().locator('.cf-label').fill('Phone PIN');
+  await section.locator('.cf-row').last().locator('.cf-value').fill('4321');
+  await expect(section.locator('.cf-row').last().locator('.cf-value')).toHaveAttribute('type', 'password');
+  // One in the default section too.
+  await page.locator('#acc-detail .cf-section:not(.cf-named) .cf-add').click();
+  await page.locator('#acc-detail .cf-section:not(.cf-named) .cf-row .cf-label').fill('Branch');
+  await page.locator('#acc-detail .cf-section:not(.cf-named) .cf-row .cf-value').fill('Palermo');
+  await page.click('#btn-save-all');
+
+  // Stored in the order shown: the default section first.
+  const stored = () => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items[0].fields
+    .filter(f => f.custom).map(f => [f.section || '', f.label, f.value, f.kind]));
+  await expect.poll(stored).toEqual([
+    ['', 'Branch', 'Palermo', 'text'],
+    ['Bank details', 'CBU', '0070089020004021339812', 'text'],
+    ['Bank details', 'Phone PIN', '4321', 'password'],
+  ]);
+
+  await page.reload();
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Bank' }).click();
+  // The default section comes first, then the named one with its fields.
+  await expect(page.locator('#acc-detail .cf-section')).toHaveCount(2);
+  await expect(page.locator('#acc-detail .cf-section').first().locator('.cf-label')).toHaveValue('Branch');
+  await expect(page.locator('#acc-detail .cf-section.cf-named .cf-section-name')).toHaveValue('Bank details');
+  await expect(page.locator('#acc-detail .cf-section.cf-named .cf-row')).toHaveCount(2);
+
+  // Renaming a section renames it on every field; removing it removes them.
+  await page.locator('#acc-detail .cf-section-name').fill('Galicia');
+  await page.click('#btn-save-all');
+  await expect.poll(stored).toEqual([
+    ['', 'Branch', 'Palermo', 'text'],
+    ['Galicia', 'CBU', '0070089020004021339812', 'text'],
+    ['Galicia', 'Phone PIN', '4321', 'password'],
+  ]);
+  await page.locator('.acc-head', { hasText: 'Bank' }).click();
+  page.once('dialog', d => d.accept());
+  await page.click('#acc-detail .cf-section-del');
+  await page.click('#btn-save-all');
+  await expect.poll(stored).toEqual([['', 'Branch', 'Palermo', 'text']]);
+});
+
+test('merging keeps the same field in two sections as two fields', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId);
+  const fields = await page.evaluate(() => mergeLogins(
+    { name: 'A', customFields: [{ label: 'Email', value: 'me@example.com', kind: 'text', section: 'Billing' }] },
+    { name: 'A', customFields: [{ label: 'Email', value: 'me@example.com', kind: 'text', section: 'Support' }] },
+  ).customFields.map(f => f.section));
+  expect(fields).toEqual(['Billing', 'Support']);
+});
+
+test('a field section survives the CSV export and import', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId);
+  const out = await page.evaluate(async () => {
+    const item = Vault.newItem('login', { title: 'Bank', urls: ['bank.example'] });
+    const withFields = VaultAccounts.withCustomFields(item, [
+      { label: 'CBU', value: '123', kind: 'text', section: 'Bank details' },
+      { label: 'Email', value: 'me@example.com', kind: 'text', section: 'Billing' },
+      { label: 'Email', value: 'me@example.com', kind: 'text', section: 'Support' },
+    ]);
+    const csv = Importers.toCsv([withFields]);
+    const { entries } = Importers.parse(csv);
+    const [restored] = Importers.toItems(entries, Importers.plan(entries, []), []);
+    return restored.fields.filter(f => f.custom).map(f => [f.label, f.value, f.section || '']);
+  });
+  // The same label and value in two sections are two fields.
+  expect(out).toEqual([['CBU', '123', 'Bank details'], ['Email', 'me@example.com', 'Billing'], ['Email', 'me@example.com', 'Support']]);
+});
+
 test('custom fields on other item types too', async ({ context, extensionId }) => {
   const page = await vault(context, extensionId, { items: [['server', { title: 'Prod DB' }, { host: 'db.internal' }]] });
   await page.locator('.acc-head', { hasText: 'Prod DB' }).click();
