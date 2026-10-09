@@ -386,6 +386,38 @@ const items = page => page.evaluate(async () => (await VaultStore.readAll(await 
   history: (i.passwordHistory || []).map(h => h.value),
 })));
 
+// Picks the other login in the merge panel's search.
+async function pickMerge(page, text) {
+  await page.fill('#acc-detail .merge-search', text);
+  await page.locator('#acc-detail .merge-option', { hasText: text }).first().click();
+}
+
+test('the merge panel starts with nothing chosen; the search finds the other login and Change goes back', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [
+    { name: 'DigitalOcean', email: 'me', secret: '', urls: 'digitalocean.com', password: 'p' },
+    { name: 'AWS', email: 'root', secret: '', urls: 'aws.amazon.com', password: 'q' },
+    { name: 'DO 2FA', email: 'me', secret: TEST_SECRET, urls: 'cloud.digitalocean.com' },
+  ] });
+  await page.locator('.acc-head', { hasText: 'DigitalOcean' }).click();
+  await page.click('#acc-detail .btn-merge');
+  await expect(page.locator('#acc-detail .merge-search')).toBeFocused();
+  await expect(page.locator('#acc-detail .merge-apply')).toBeDisabled();
+  await expect(page.locator('#acc-detail .merge-row')).toHaveCount(0);
+  await expect(page.locator('#acc-detail .merge-option')).toHaveCount(2);
+  // A subdomain of this login's site comes first, marked as the same site.
+  await expect(page.locator('#acc-detail .merge-option').first()).toContainText('DO 2FA');
+  await expect(page.locator('#acc-detail .merge-option').first().locator('.merge-same')).toHaveText('Same site');
+  await page.fill('#acc-detail .merge-search', 'amazon');
+  await expect(page.locator('#acc-detail .merge-option')).toHaveText([/AWS/]);
+  await page.fill('#acc-detail .merge-search', 'do');
+  await page.keyboard.press('Enter'); // the first match
+  await expect(page.locator('#acc-detail .merge-picked')).toContainText('DO 2FA');
+  await expect(page.locator('#acc-detail .merge-apply')).toBeEnabled();
+  await page.click('#acc-detail .merge-change');
+  await expect(page.locator('#acc-detail .merge-apply')).toBeDisabled();
+  await expect(page.locator('#acc-detail .merge-search')).toBeVisible();
+});
+
 test('merging a 2FA-only login into the password login of the same account: one login with both', async ({ context, extensionId }) => {
   const page = await vault(context, extensionId, { accounts: [
     { name: 'DigitalOcean', email: 'me@example.com', secret: '', urls: 'digitalocean.com', password: 'pw', category: 'Infra' },
@@ -393,6 +425,7 @@ test('merging a 2FA-only login into the password login of the same account: one 
   ] });
   await page.locator('.acc-head').first().click();
   await page.click('#acc-detail .btn-merge');
+  await pickMerge(page, 'cloud.digitalocean');
   await expect(page.locator('#acc-detail .merge-hint')).toContainText('Nothing conflicts');
   await page.click('#acc-detail .merge-apply');
   await expect(page.locator('.acc-row')).toHaveCount(1);
@@ -411,6 +444,7 @@ test('merge conflicts are chosen per field; the password left behind goes to the
   await page.locator('.acc-head').first().click(); // "Work" (the list is sorted by name)
   await expect(page.locator('#acc-detail .acc-name')).toHaveValue('Work');
   await page.click('#acc-detail .btn-merge');
+  await pickMerge(page, 'Work (2)');
   const rows = page.locator('#acc-detail .merge-row');
   await expect(rows).toHaveCount(3); // name, password, notes
   await rows.filter({ hasText: 'Password' }).locator('input[value="b"]').check();
@@ -429,6 +463,7 @@ test('keeping this login\'s password still keeps the other one in the history', 
   ] });
   await page.locator('.acc-head', { hasText: 'A' }).first().click();
   await page.click('#acc-detail .btn-merge');
+  await pickMerge(page, 'B');
   await page.click('#acc-detail .merge-apply');
   await page.click('#btn-save-all');
   await expect.poll(async () => (await items(page)).map(i => [i.title, i.password, i.history])).toEqual([['A', 'keep', ['drop']]]);
@@ -452,7 +487,7 @@ test('two merges before Save keep every password left behind, and the other logi
   await page.locator('.acc-head').first().click(); // A
   for (const other of ['B', 'C']) {
     await page.click('#acc-detail .btn-merge');
-    await page.locator('#acc-detail .merge-target').selectOption({ label: `${other} — u` });
+    await pickMerge(page, other);
     await page.locator('#acc-detail .merge-row', { hasText: 'Password' }).locator('input[value="b"]').check();
     await page.click('#acc-detail .merge-apply');
   }
@@ -468,6 +503,7 @@ test('a password of only spaces is a password: merging with a login without one 
   ] });
   await page.locator('.acc-head').first().click();
   await page.click('#acc-detail .btn-merge');
+  await pickMerge(page, 'B');
   await expect(page.locator('#acc-detail .merge-row', { hasText: 'Password' })).toHaveCount(0);
   await page.click('#acc-detail .merge-apply');
   await page.click('#btn-save-all');
@@ -481,6 +517,7 @@ test('the merge panel can show the passwords it asks to choose between', async (
   ] });
   await page.locator('.acc-head').first().click();
   await page.click('#acc-detail .btn-merge');
+  await pickMerge(page, 'B');
   const row = page.locator('#acc-detail .merge-row', { hasText: 'Password' });
   await expect(row.locator('.merge-secret')).toHaveText(['••••••••••', '••••••••••']);
   await row.locator('.merge-reveal').click();
@@ -496,6 +533,7 @@ test('a conflict created in the editor while the merge panel is open is asked ab
   await page.locator('.acc-head').first().click();
   if (await page.locator('#acc-detail .acc-secret').inputValue()) await page.locator('.acc-head').nth(1).click();
   await page.click('#acc-detail .btn-merge');
+  await pickMerge(page, 'Same');
   await expect(page.locator('#acc-detail .merge-hint')).toContainText('Nothing conflicts');
   await page.fill('#acc-detail .acc-secret', 'GEZDGNBVGY3TQOJQ'); // a different secret, typed meanwhile
   await page.click('#acc-detail .merge-apply');
@@ -513,6 +551,7 @@ test('a merge that only sets a password aside still stamps the login as changed'
   await page.waitForTimeout(20);
   await page.locator('.acc-head').first().click(); // A: keeps its name and password (the defaults)
   await page.click('#acc-detail .btn-merge');
+  await pickMerge(page, 'A2');
   await page.click('#acc-detail .merge-apply');
   await page.click('#btn-save-all');
   await expect.poll(async () => (await items(page)).map(i => [i.title, i.password, i.history])).toEqual([['A', 'keep', ['other']]]);
@@ -527,8 +566,24 @@ test('a custom field hidden on either side stays hidden after the merge', async 
   ] });
   await page.locator('.acc-head').first().click();
   await page.click('#acc-detail .btn-merge');
+  await pickMerge(page, 'B');
   await page.click('#acc-detail .merge-apply');
   await page.click('#btn-save-all');
   await expect.poll(async () => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
     .flatMap(i => i.fields.filter(f => f.custom).map(f => [f.label, f.kind])))).toEqual([['PIN', 'password']]);
+});
+
+test('arrowing through a long merge list keeps the highlighted login visible and announced', async ({ context, extensionId }) => {
+  const many = Array.from({ length: 14 }, (_, i) => ({ name: `Site ${String(i).padStart(2, '0')}`, email: 'u', secret: '', urls: `s${i}.example`, password: 'p' }));
+  const page = await vault(context, extensionId, { accounts: many });
+  await page.locator('.acc-head').first().click();
+  await page.click('#acc-detail .btn-merge');
+  for (let i = 0; i < 11; i++) await page.keyboard.press('ArrowDown');
+  const active = page.locator('#acc-detail .merge-option.active');
+  await expect(active).toContainText('Site 12');
+  await expect(active).toBeInViewport();
+  await expect(page.locator('#acc-detail .merge-search')).toHaveAttribute('aria-activedescendant', await active.getAttribute('id'));
+  await expect(active).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#acc-detail .merge-picked')).toContainText('Site 12');
 });

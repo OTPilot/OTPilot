@@ -1227,20 +1227,89 @@ function openMergePanel(body, idx) {
   const others = draft.filter((e, i) => i !== idx && isLoginEntry(e) && e._id && _draftBase.some(b => b._id === e._id));
   if (!others.length) { setStatus('There is no other login to merge with', false); return; }
   const dom = accountIconDomain(a);
-  others.sort((x, y) => (accountIconDomain(y) === dom) - (accountIconDomain(x) === dom) || (x.name || '').localeCompare(y.name || ''));
+  // Same site: the same host, or one a subdomain of the other
+  // (cloud.digitalocean.com and digitalocean.com).
+  const sameSite = o => {
+    const d = accountIconDomain(o);
+    return !!d && !!dom && (d === dom || d.endsWith(`.${dom}`) || dom.endsWith(`.${d}`));
+  };
+  others.sort((x, y) => sameSite(y) - sameSite(x) || (x.name || '').localeCompare(y.name || ''));
   body.querySelector('.merge-panel')?.remove();
   const panel = document.createElement('div');
   panel.className = 'merge-panel';
   panel.innerHTML = `
     <div class="merge-title">Merge another login into this one</div>
-    <select class="merge-target">${others.map(o => `<option value="${esc(o._id)}">${esc(o.name || 'Untitled')}${o.email ? ` — ${esc(o.email)}` : ''}</option>`).join('')}</select>
+    <div class="merge-pick">
+      <input class="merge-search" type="text" placeholder="Search a login by name, username or site" autocomplete="off"
+        role="combobox" aria-expanded="true" aria-controls="merge-results" aria-autocomplete="list" aria-label="Login to merge into this one">
+      <div class="merge-results" id="merge-results" role="listbox"></div>
+    </div>
+    <div class="merge-picked" style="display:none"></div>
     <div class="merge-conflicts"></div>
     <div class="merge-actions">
-      <button type="button" class="btn-crypto-ok merge-apply">Merge</button>
+      <button type="button" class="btn-crypto-ok merge-apply" disabled>Merge</button>
       <button type="button" class="btn-del merge-cancel">Cancel</button>
     </div>`;
   body.querySelector('.acc-body-head').after(panel);
-  const target = () => others.find(o => o._id === panel.querySelector('.merge-target').value);
+  // Nothing is chosen until the user picks a login from the search.
+  let picked = null;
+  const target = () => picked;
+  const siteOf = o => accountIconDomain(o) || '';
+  const search = panel.querySelector('.merge-search');
+  const results = panel.querySelector('.merge-results');
+  let active = 0;
+  const matches = () => {
+    const q = search.value.trim().toLowerCase();
+    return others.filter(o => !q || [o.name, o.email, o.urls].some(v => String(v || '').toLowerCase().includes(q)));
+  };
+  const renderResults = () => {
+    const list = matches();
+    active = Math.min(active, Math.max(list.length - 1, 0));
+    results.innerHTML = list.length ? list.map((o, i) => `
+      <button type="button" class="merge-option${i === active ? ' active' : ''}" data-id="${esc(o._id)}" role="option"
+        id="merge-opt-${i}" aria-selected="${i === active}" tabindex="-1">
+        ${avatarHTML(o, 'acc-av-sm')}
+        <span class="merge-option-text">
+          <span class="merge-option-name">${esc(o.name || 'Untitled')}${sameSite(o) ? ' <span class="merge-same">Same site</span>' : ''}</span>
+          <span class="merge-option-sub">${esc([o.email, siteOf(o)].filter(Boolean).join(' · '))}</span>
+        </span>
+      </button>`).join('') : '<div class="merge-hint">No login matches.</div>';
+    results.querySelectorAll('.merge-option').forEach(btn => btn.addEventListener('click', () => pick(btn.dataset.id)));
+    // The highlighted login stays visible and is the one announced.
+    const current = results.querySelector('.merge-option.active');
+    if (current) {
+      search.setAttribute('aria-activedescendant', current.id);
+      current.scrollIntoView({ block: 'nearest' });
+    } else search.removeAttribute('aria-activedescendant');
+  };
+  const pick = id => {
+    picked = others.find(o => o._id === id) || null;
+    if (!picked) return;
+    panel.querySelector('.merge-pick').style.display = 'none';
+    const box = panel.querySelector('.merge-picked');
+    box.style.display = '';
+    box.innerHTML = `${avatarHTML(picked, 'acc-av-sm')}
+      <span class="merge-option-text"><span class="merge-option-name">${esc(picked.name || 'Untitled')}</span>
+      <span class="merge-option-sub">${esc([picked.email, siteOf(picked)].filter(Boolean).join(' · '))}</span></span>
+      <button type="button" class="coll-link merge-change">Change</button>`;
+    box.querySelector('.merge-change').addEventListener('click', () => {
+      picked = null;
+      box.style.display = 'none';
+      panel.querySelector('.merge-pick').style.display = '';
+      panel.querySelector('.merge-conflicts').innerHTML = '';
+      panel.querySelector('.merge-apply').disabled = true;
+      search.focus();
+    });
+    panel.querySelector('.merge-apply').disabled = false;
+    renderConflicts();
+  };
+  search.addEventListener('input', () => { active = 0; renderResults(); });
+  search.addEventListener('keydown', e => {
+    const list = matches();
+    if (e.key === 'ArrowDown') { active = Math.min(active + 1, list.length - 1); renderResults(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { active = Math.max(active - 1, 0); renderResults(); e.preventDefault(); }
+    else if (e.key === 'Enter' && list[active]) { pick(list[active]._id); e.preventDefault(); }
+  });
   const show = (f, v) => (f.key === 'autofill' ? (v !== false ? 'On' : 'Off') : String(v ?? ''));
   const cell = (f, v) => (f.secret
     ? `<span class="merge-secret" data-value="${esc(show(f, v))}">${'•'.repeat(10)}</span>`
@@ -1271,11 +1340,11 @@ function openMergePanel(body, idx) {
       btn.closest('.merge-row').querySelectorAll('.merge-secret').forEach(s => { s.textContent = shown ? '•'.repeat(10) : s.dataset.value; });
     }));
   };
-  panel.querySelector('.merge-target').addEventListener('change', renderConflicts);
   panel.querySelector('.merge-cancel').addEventListener('click', () => panel.remove());
   panel.querySelector('.merge-apply').addEventListener('click', () => {
     syncOpenAccToDraft();
     const b = target();
+    if (!b) return;
     if (conflictKey(mergeConflicts(draft[idx], b)) !== shownFor) {
       // Something changed in the editor since the choices were shown.
       renderConflicts();
@@ -1295,7 +1364,8 @@ function openMergePanel(body, idx) {
     renderAccDetail();
     setStatus(`Merged "${b.name || 'login'}" into "${merged.name || 'login'}" — Save to keep it`);
   });
-  renderConflicts();
+  renderResults();
+  search.focus();
 }
 
 // ── Custom fields (every editor) ──
