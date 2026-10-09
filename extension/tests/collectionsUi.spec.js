@@ -258,3 +258,67 @@ test('reading a shared note that starts with a newline is not an edit; viewers n
   await expect(page.locator('#status-msg')).toHaveText('Saved');
 });
 
+
+test("a collection lists what's shared into it: mine (removable), teammates', and its own items", async ({ context, extensionId }) => {
+  const { installFakeShares } = await import('./fakeShares.js');
+  const page = await teamPopup(context, extensionId, [{ name: 'Mine to share', email: 'me', secret: TEST_SECRET, urls: 'a.example', password: 'pw' }]);
+  await installFakeShares(page); // on top of the collections fake
+  await page.evaluate(async team => {
+    Sharing.getMyTeam = async () => team; // fakeShares replaced the team lookups
+    const c = await VaultCollections.create('team-1', 'Infra');
+    await VaultCollections.save(c, Vault.newItem('note', { title: 'Old runbook' })); // stored in the collection
+    const key = await VaultKeys.getKey();
+    const [mine] = (await VaultStore.readAll(key)).items;
+    const next = await VaultShares.share(mine, null, [{ collection: c, role: 'view' }]);
+    await VaultShares.attach(mine.id, next.shares, key);
+    const theirs = Vault.newItem('login', { title: "Bob's DB" });
+    await fakeShares.shareFromBob(theirs, 'view', c);
+    await refreshSharedItems();
+  }, TEAM);
+  await openTeam(page);
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click();
+  const items = page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
+  await expect(items.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/, /Mine to share · you/, /Old runbook · the collection/]);
+  await items.locator('.coll-unshare').click();
+  await expect(page.locator('#status-msg')).toContainText('no longer shared in "Infra"');
+  await expect(items.locator('.share-grant', { hasText: 'Mine to share' })).toHaveCount(0);
+  expect(await page.evaluate(() => [...fakeShares.shares.values()].filter(s => s.owner === 'user-me').length)).toBe(0);
+});
+
+test("a collection opened while shared items still load lists them once they arrive; a failed load says so and retries", async ({ context, extensionId }) => {
+  const { installFakeShares } = await import('./fakeShares.js');
+  const page = await teamPopup(context, extensionId, [{ name: 'Mine to share', email: 'me', secret: TEST_SECRET, urls: 'a.example', password: 'pw' }]);
+  await installFakeShares(page);
+  await page.evaluate(async team => {
+    Sharing.getMyTeam = async () => team;
+    const c = await VaultCollections.create('team-1', 'Infra');
+    await fakeShares.shareFromBob(Vault.newItem('login', { title: "Bob's DB" }), 'view', c);
+    const key = await VaultKeys.getKey();
+    const [mine] = (await VaultStore.readAll(key)).items;
+    await VaultShares.attach(mine.id, (await VaultShares.share(mine, null, [{ collection: c, role: 'view' }])).shares, key);
+    // A slow refresh in flight when the collection is opened.
+    const refresh = VaultShares.refresh;
+    VaultShares.refresh = async () => { await new Promise(r => setTimeout(r, 1500)); return refresh(); };
+    refreshSharedItems();
+  }, TEAM);
+  await openTeam(page);
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click();
+  const items = page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
+  await expect(items.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/, /Mine to share · you/], { timeout: 8000 });
+
+  // My items can't be loaded: it says so, and Retry works once they can.
+  await page.evaluate(() => {
+    window._mine = VaultShares.mine;
+    VaultShares.mine = async () => { throw new Error('offline'); };
+  });
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click(); // close
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click(); // reopen
+  await expect(items.locator('.coll-items-error')).toContainText('could not be loaded');
+  await page.evaluate(() => { VaultShares.mine = window._mine; });
+  await expect(items.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/]); // mine missing meanwhile
+  await items.locator('.coll-items-retry').click();
+  // The retry really loaded them: my row is back, no error.
+  const after = page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
+  await expect(after.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/, /Mine to share · you/]);
+  await expect(after.locator('.coll-items-error')).toHaveCount(0);
+});
