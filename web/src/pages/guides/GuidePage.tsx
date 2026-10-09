@@ -48,6 +48,9 @@ export default function GuidePage({ guide }: { guide: Guide }) {
                   {s.steps.map((st) => <li key={st}>{st}</li>)}
                 </ol>
               )}
+              {s.after?.map((p) => (
+                <p key={p} className="text-zinc-400 leading-relaxed mb-4">{p}</p>
+              ))}
               {s.bullets && (
                 <ul className="space-y-3 mb-4">
                   {s.bullets.map((b) => (

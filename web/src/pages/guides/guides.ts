@@ -13,6 +13,8 @@ export type Guide = {
     h2: string
     paragraphs?: string[]
     steps?: string[]
+    /** Shown after the steps (a caveat about them). */
+    after?: string[]
     bullets?: { title: string; text: string }[]
     table?: { head: string[]; rows: string[][] }
   }[]
@@ -41,9 +43,11 @@ export const GUIDES: Guide[] = [
         steps: [
           'In Google Authenticator, open the ⋮ menu → Transfer accounts → Export accounts, and select the accounts.',
           'Take a screenshot of each QR code it shows.',
-          'In OTPilot, open Settings → From Google Authenticator and select the screenshots.',
-          'Your time-based 2FA codes are in OTPilot, ready to fill.',
+          'In OTPilot, open Settings → From Google Authenticator, click Select screenshots… and choose them.',
+          'Check the accounts to bring over and click Import selected.',
+          'Google Authenticator doesn\'t record which website each code belongs to, so link each one the first time: on the site\'s 2FA page, open the OTPilot popup, pick the account and click Fill Page. OTPilot asks to save the site ("It\'ll auto-fill here next time"): click Save. From then on the code fills on its own.',
         ],
+        after: ['OTPilot supports the codes almost every site uses: six digits, changing every 30 seconds. Accounts with other settings are skipped and listed when you import.'],
       },
       {
         h2: 'What changes when your codes are in the browser',
@@ -139,7 +143,7 @@ export const GUIDES: Guide[] = [
       {
         h2: 'How it works',
         steps: [
-          'Save the account: OTPilot detects the 2FA setup QR code on the page, or you paste the setup key, or import from Google Authenticator.',
+          'Save the account: OTPilot detects the 2FA setup QR code on the page, or you paste the setup key, or import from Google Authenticator (imported accounts are linked to their site the first time you use Fill Page there).',
           'Sign in: OTPilot offers your saved login in the username field and fills the password.',
           'The code field appears: OTPilot fills the current code and submits the form.',
           'Several accounts on that site? Pick one in the prompt. Vault locked? Unlock it right on the page.',
@@ -162,7 +166,7 @@ export const GUIDES: Guide[] = [
     ],
     faq: [
       { q: 'Does autofilling 2FA codes make 2FA useless?', a: 'It keeps your second factor in the same vault as your password, which is a trade-off. You still get what most people need 2FA for: a leaked password alone does not get anyone in, and codes are only filled on the sites they belong to.' },
-      { q: 'Which sites does it work with?', a: 'Any site that offers an authenticator app (TOTP) for 2FA, plus email codes from the supported webmails.' },
+      { q: 'Which sites does it work with?', a: 'Sites that use standard authenticator-app codes: six digits, changing every 30 seconds (TOTP with SHA-1), which is what almost every site uses. Plus email codes from the supported webmails.' },
       { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
     ],
   },
