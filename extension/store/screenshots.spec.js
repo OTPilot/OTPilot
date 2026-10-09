@@ -3,7 +3,8 @@
 //   npx playwright test -c store/playwright.config.js
 // Writes store/screenshots/<n>-<name>.png, plus the store's small promo tile
 // (store/promo-tile.png, 440×280), the marquee promo tile (store/marquee.png,
-// 1400×560) and the X header (store/x-header.png, 1500×500). The demo site is a fictional
+// 1400×560), the X header (store/x-header.png, 1500×500) and the website's
+// Open Graph image (web/public/og.png, 1200×630). The demo site is a fictional
 // "Northwind" (store/pages), served as northwind.example.
 import { test as base, chromium, expect } from '@playwright/test';
 import path from 'path';
@@ -228,6 +229,18 @@ test('promo tiles and X header', async ({ context, extensionId }) => {
       box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.06); }`,
     `<div class="copy"><div class="brand">OTPilot</div><h1>${HEADLINE}</h1>
       <p>Fills your password and your 2FA code on any login page. End&#8209;to&#8209;end encrypted, synced across devices.</p></div>
+     <img src="${shot}">`);
+
+  // The website's Open Graph image (1200×630), shared links on X, Slack, etc.
+  await banner(context, '../../web/public/og.png', 1200, 630, `
+    .copy { position: absolute; left: 70px; top: 50%; transform: translateY(-50%); width: 520px; }
+    .brand { font-size: 20px; margin-bottom: 18px; }
+    h1 { font-size: 54px; margin-bottom: 18px; }
+    p { font-size: 21px; }
+    img { position: absolute; right: -40px; top: 50%; transform: translateY(-50%); height: 520px; border-radius: 14px;
+      box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.06); }`,
+    `<div class="copy"><div class="brand">OTPilot</div><h1>${HEADLINE}</h1>
+      <p>Fills your password and your 2FA code on any login page. End&#8209;to&#8209;end encrypted.</p></div>
      <img src="${shot}">`);
 
   // X header (1500×500). The avatar covers the bottom-left corner: the copy

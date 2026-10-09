@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Head } from 'vite-react-ssg'
 
 const faqs = [
   {
@@ -56,6 +57,13 @@ export default function FAQ() {
 
   return (
     <section id="faq" className="py-24 px-6 border-t border-white/5">
+      <Head>
+        <script type="application/ld+json">{JSON.stringify({
+          '@context': 'https://schema.org',
+          '@type': 'FAQPage',
+          mainEntity: faqs.map(f => ({ '@type': 'Question', name: f.q, acceptedAnswer: { '@type': 'Answer', text: f.a } })),
+        })}</script>
+      </Head>
       <div className="max-w-3xl mx-auto">
         <div className="text-center mb-12">
           <h2 className="text-3xl md:text-4xl font-bold text-white mb-4 tracking-tight">
@@ -71,6 +79,7 @@ export default function FAQ() {
             >
               <button
                 onClick={() => setOpen(open === i ? null : i)}
+                aria-expanded={open === i}
                 className="w-full flex items-center justify-between px-5 py-4 text-left"
               >
                 <span className="text-sm font-medium text-zinc-200">{faq.q}</span>
@@ -81,11 +90,10 @@ export default function FAQ() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
-              {open === i && (
-                <div className="px-5 pb-4">
-                  <p className="text-sm text-zinc-400 leading-relaxed">{faq.a}</p>
-                </div>
-              )}
+              {/* Always in the HTML (search engines read it), shown when open. */}
+              <div className="px-5 pb-4" hidden={open !== i}>
+                <p className="text-sm text-zinc-400 leading-relaxed">{faq.a}</p>
+              </div>
             </div>
           ))}
         </div>

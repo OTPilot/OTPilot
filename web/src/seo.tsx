@@ -2,7 +2,7 @@ import { Head } from 'vite-react-ssg'
 
 export const SITE = 'https://otpilot.app'
 const DEFAULT_IMG = `${SITE}/og.png`
-const DEFAULT_IMG_ALT = 'OTPilot shield logo with the tagline "Auto-fill 2FA codes on any login page"'
+const DEFAULT_IMG_ALT = 'OTPilot — Password manager with built-in 2FA, next to the extension showing a 2FA code'
 
 /** Per-page head: title, description, canonical, Open Graph and Twitter. Rendered
  * into the static HTML at build (vite-react-ssg) and updated on the client. Every

@@ -2,6 +2,7 @@ import { useCrisp } from '../lib/useCrisp'
 import { Seo } from '../seo'
 import Navbar from '../components/Navbar'
 import Hero from '../components/Hero'
+import Showcase from '../components/Showcase'
 import Features from '../components/Features'
 import HowItWorks from '../components/HowItWorks'
 import Pricing from '../components/Pricing'
@@ -19,6 +20,7 @@ export default function Landing() {
       />
       <Navbar />
       <Hero />
+      <Showcase />
       <Features />
       <HowItWorks />
       <Pricing />

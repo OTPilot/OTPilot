@@ -32,9 +32,10 @@ export default defineConfig({
   ssgOptions: {
     // Clean URLs: "/" only, output stays dist/index.html regardless.
     dirStyle: 'nested',
-    // Prerender the landing page only — dashboard/auth/legal stay a
-    // client-only SPA, served through the app-shell fallback below.
-    includedRoutes: () => ['/'],
+    // Prerender the public pages (indexed by search engines); dashboard,
+    // auth and support stay a client-only SPA, served through the
+    // app-shell fallback below. Keep in sync with public/sitemap.xml.
+    includedRoutes: () => ['/', '/security', '/privacy', '/tos', '/gdpr', '/refunds'],
     onFinished: () => {
       writeAppShell()
     },

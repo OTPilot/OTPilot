@@ -1,3 +1,4 @@
+import { Seo } from '../../seo'
 import { Link } from 'react-router-dom'
 
 const rights = [
@@ -61,6 +62,11 @@ const processors = [
 export default function Gdpr() {
   return (
     <div className="min-h-screen bg-[#0a0a0f] px-6 py-16">
+      <Seo
+        title="GDPR | OTPilot"
+        description="How OTPilot handles personal data under the GDPR, and how to exercise your rights."
+        path="/gdpr"
+      />
       <div className="max-w-2xl mx-auto">
         <Link to="/" className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors mb-8 inline-block">
           ← Back to home
