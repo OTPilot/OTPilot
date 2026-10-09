@@ -84,7 +84,9 @@ the others can edit.
    collection's items; Vault shows where an item is shared.
 4. Field selection (partial copies) end to end.
 5. Migration: a collection's manager converts its stored items ("Convert N
-   older items"): each becomes an item of theirs (marked `convertedFrom`, so a
-   retry never duplicates it), shared back to the collection whole with edit
-   access, then deleted from the collection. The old collection-item routes
+   older items"): each becomes an item of theirs, shared back to the
+   collection whole with edit access, and the source is deleted — in one
+   server transaction (`POST /collections/:cid/items/:id/convert`, checked
+   against the source's revision), so a lost answer, a teammate's edit or a
+   second manager can't leave duplicates or stale content. The old collection-item routes
    go once no collection holds items; the 2-of-2 codes' place is still open.

@@ -323,35 +323,47 @@ test("a collection opened while shared items still load lists them once they arr
   await expect(after.locator('.coll-items-error')).toHaveCount(0);
 });
 
-test("a manager converts the collection's older items into shares of their own items; a retry after a failure makes no duplicate", async ({ context, extensionId }) => {
+test("a manager converts the collection's older items: one atomic request each, a teammate's edit meanwhile is kept, one already converted is skipped", async ({ context, extensionId }) => {
   const { installFakeShares } = await import('./fakeShares.js');
   const page = await teamPopup(context, extensionId);
   await installFakeShares(page);
   await page.evaluate(async team => {
     Sharing.getMyTeam = async () => team;
     const c = await VaultCollections.create('team-1', 'Infra');
-    for (const t of ['Old runbook', 'Old wifi']) await VaultCollections.save(c, Vault.newItem('note', { title: t, notes: t }));
-    // The first conversion fails part-way (deleting the second older item).
-    const del = VaultCollections.deleteItem;
-    let calls = 0;
-    VaultCollections.deleteItem = async (...a) => (++calls === 2 ? { ok: false } : del(...a));
-    window._restoreDelete = () => { VaultCollections.deleteItem = del; };
+    window.coll = c;
+    const a = Vault.newItem('note', { title: 'Old runbook', notes: 'v1' });
+    const b = Vault.newItem('note', { title: 'Old wifi', notes: 'w' });
+    await VaultCollections.save(c, a);
+    await VaultCollections.save(c, b);
+    // While converting: a teammate edits the runbook (first request → 409),
+    // and another manager already converted the wifi (→ 404).
+    let first = true;
+    fake.beforeConvert = async id => {
+      if (id === a.id && first) {
+        first = false;
+        const cur = fake.items.get(id);
+        fake.items.set(id, { ...cur, record: await VaultCrypto.encryptItem({ ...a, notes: 'v2 (teammate)' }, c.key), revision: ++fake.rev });
+      }
+      if (id === b.id) fake.items.set(id, { ...fake.items.get(id), deleted: true, record: null });
+    };
     await refreshSharedItems();
   }, TEAM);
   await openTeam(page);
   await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click();
-  const items = () => page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
   page.on('dialog', d => d.accept());
-  await items().locator('.coll-convert').click();
-  await expect(page.locator('#status-msg')).toContainText('Converted 1 of 2');
-  await page.evaluate(() => window._restoreDelete());
-  await items().locator('.coll-convert').click();
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-convert').click();
   await expect(page.locator('#status-msg')).toContainText('Converted 1 item');
-  await expect(items().locator('.share-grant')).toHaveText([/Old runbook · you/, /Old wifi · you/]);
-  const r = await page.evaluate(async () => ({
-    personal: (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => i.title).sort(),
-    left: [...fake.items.values()].filter(i => !i.deleted).length,
-    shares: [...fakeShares.shares.values()].map(s => [s.whole, s.grants[0].role]),
-  }));
-  expect(r).toEqual({ personal: ['Old runbook', 'Old wifi'], left: 0, shares: [[true, 'edit'], [true, 'edit']] });
+  const r = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const [conv] = fake.converted;
+    const mine = await VaultCrypto.decryptItem(conv.item.record, key);
+    const share = fakeShares.shares.get(conv.share.id);
+    const sk = await VaultCrypto.decryptName(share.grants[0].wrapped_key, coll.key, share.id);
+    const copy = await VaultCrypto.decryptItem(share.record, sk);
+    return {
+      requests: fake.converted.length, mineNotes: mine.notes, keyInItem: mine.shares[0].sk === sk,
+      copyNotes: copy.notes, grant: share.grants[0].role, left: [...fake.items.values()].filter(i => !i.deleted).length,
+    };
+  });
+  expect(r).toEqual({ requests: 1, mineNotes: 'v2 (teammate)', keyInItem: true, copyNotes: 'v2 (teammate)', grant: 'edit', left: 0 });
 });
