@@ -30,9 +30,9 @@ export default function Navbar() {
         </a>
 
         <div className="hidden md:flex items-center gap-8">
-          <a href="#features" className="text-sm text-zinc-400 hover:text-white transition-colors">Features</a>
-          <a href="#pricing" className="text-sm text-zinc-400 hover:text-white transition-colors">Pricing</a>
-          <a href="#faq" className="text-sm text-zinc-400 hover:text-white transition-colors">FAQ</a>
+          <a href="/#features" className="text-sm text-zinc-400 hover:text-white transition-colors">Features</a>
+          <a href="/#pricing" className="text-sm text-zinc-400 hover:text-white transition-colors">Pricing</a>
+          <a href="/#faq" className="text-sm text-zinc-400 hover:text-white transition-colors">FAQ</a>
         </div>
 
         <div className="flex items-center gap-3">

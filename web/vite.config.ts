@@ -35,7 +35,11 @@ export default defineConfig({
     // Prerender the public pages (indexed by search engines); dashboard,
     // auth and support stay a client-only SPA, served through the
     // app-shell fallback below. Keep in sync with public/sitemap.xml.
-    includedRoutes: () => ['/', '/security', '/privacy', '/tos', '/gdpr', '/refunds'],
+    includedRoutes: () => [
+      '/', '/security', '/privacy', '/tos', '/gdpr', '/refunds',
+      // src/pages/guides/guides.ts
+      '/google-authenticator-for-chrome', '/authy-alternative', '/autofill-2fa-codes-chrome',
+    ],
     onFinished: () => {
       writeAppShell()
     },
