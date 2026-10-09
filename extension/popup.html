@@ -600,7 +600,19 @@
     .acc-head-actions { display: flex; gap: 6px; }
     .merge-panel { border: 1px solid var(--accent-2); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: var(--bg); }
     .merge-title { font-size: 12px; font-weight: 700; color: var(--ink-0); margin-bottom: 6px; }
-    .merge-panel select { width: 100%; margin-bottom: 8px; padding: 6px 8px; border-radius: 6px; font: inherit; font-size: 12px; background: var(--surface); color: var(--ink-0); border: 1px solid var(--border); }
+    .merge-actions .btn-crypto-ok:disabled { opacity: .4; cursor: default; }
+    .merge-search { width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 7px; font: inherit; font-size: 12px; background: var(--surface); color: var(--ink-0); border: 1px solid var(--border); margin-bottom: 6px; }
+    .merge-search:focus { outline: none; border-color: var(--accent-2); }
+    .merge-results { max-height: 196px; overflow-y: auto; border: 1px solid var(--border); border-radius: 7px; margin-bottom: 8px; background: var(--surface); }
+    .merge-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; background: none; border: 0; border-bottom: 1px solid var(--border); text-align: left; cursor: pointer; font: inherit; color: var(--ink-1); }
+    .merge-option:last-child { border-bottom: 0; }
+    .merge-option:hover, .merge-option.active { background: var(--surface-2); }
+    .merge-option-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+    .merge-option-name { font-size: 12px; font-weight: 600; color: var(--ink-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .merge-option-sub { font-size: 11px; color: var(--ink-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .merge-same { font-size: 9px; font-weight: 600; color: var(--accent-2); border: 1px solid var(--accent-2); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+    .merge-picked { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--accent-2); border-radius: 7px; margin-bottom: 8px; background: var(--surface); }
+    .acc-av.acc-av-sm { width: 20px; height: 20px; font-size: 9px; flex: 0 0 auto; }
     .merge-hint { font-size: 11px; color: var(--ink-4); margin-bottom: 6px; }
     .merge-row { border-top: 1px solid var(--border); padding: 6px 0; font-size: 12px; color: var(--ink-1); }
     .merge-row label { display: flex; gap: 6px; align-items: center; margin: 2px 0; cursor: pointer; overflow: hidden; }
