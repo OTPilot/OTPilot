@@ -34,6 +34,8 @@ const VaultAccounts = (() => {
       password: Vault.getValue(item, 'password'),
       notes: item.notes || '',
       customFields: customFieldsOf(item),
+      // Ids of related items (notes, cards…) linked from this one.
+      links: [...(item.links || [])],
       // Earlier passwords (newest first), read-only here: a merge keeps the
       // other login's in this one's history.
       _history: (item.passwordHistory || []).map(h => h.value).filter(Boolean),
@@ -97,6 +99,12 @@ const VaultAccounts = (() => {
     if (Array.isArray(acc.extraPasswordHistory) && acc.extraPasswordHistory.length) {
       const now = new Date().toISOString();
       next.passwordHistory = [...acc.extraPasswordHistory.filter(Boolean).map(value => ({ value, changedAt: now })), ...(next.passwordHistory || [])].slice(0, 5);
+    }
+    // Related items: only when the caller has them (a page or a 1.x device
+    // leaves them as they are).
+    if (Array.isArray(acc.links)) {
+      const links = [...new Set(acc.links.filter(id => typeof id === 'string' && id && id !== next.id))];
+      if (links.length) next.links = links; else delete next.links;
     }
     const out = Array.isArray(acc.customFields) ? withCustomFields(next, acc.customFields) : next;
     out.position = position;

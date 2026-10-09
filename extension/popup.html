@@ -643,6 +643,26 @@
     .cf-row:hover .cf-hide, .cf-row:hover .cf-del, .cf-row:focus-within .cf-hide, .cf-row:focus-within .cf-del { opacity: 1; }
     .cf-add-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
     .cf-add-kind { height: 22px; padding: 0 7px; border-radius: 12px; border: 1px dashed var(--border); background: none; color: var(--ink-2); font: inherit; font-size: 11px; cursor: pointer; }
+    .rel-head { display: flex; align-items: center; justify-content: space-between; }
+    .rel-head label { margin: 0; }
+    .rel-hint { font-size: 11px; color: var(--ink-4); padding: 4px 0; }
+    .rel-list { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+    .rel-list:empty { display: none; }
+    .rel-row { display: flex; align-items: center; gap: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding-right: 4px; }
+    .rel-open, .rel-option { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 6px 8px; background: none; border: 0; text-align: left; cursor: pointer; font: inherit; color: var(--ink-1); }
+    .rel-open:hover .rel-name { color: var(--accent-2); }
+    .rel-text { display: flex; flex-direction: column; min-width: 0; }
+    .rel-name { font-size: 12px; font-weight: 600; color: var(--ink-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rel-sub { font-size: 11px; color: var(--ink-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rel-unlink { background: none; border: 0; color: var(--ink-4); cursor: pointer; font-size: 11px; padding: 4px; }
+    .rel-unlink:hover { color: var(--danger); }
+    .rel-picker { margin: 6px 0; }
+    .rel-search { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
+    .rel-results { max-height: 180px; overflow-y: auto; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); }
+    .rel-option { width: 100%; border-bottom: 1px solid var(--border); }
+    .rel-option:last-child { border-bottom: 0; }
+    .rel-option:hover, .rel-option:focus { background: var(--surface-2); outline: none; }
+    .rel-results .rel-hint { padding: 6px 8px; }
     .cf-add-kind:hover { border-color: var(--accent-2); color: var(--accent-2); }
     .cf-add-kind.cf-add { border-color: var(--accent-2); color: var(--accent-2); }
     .add-type-menu-down { top: calc(100% + 8px); bottom: auto; left: auto; right: -6px; }

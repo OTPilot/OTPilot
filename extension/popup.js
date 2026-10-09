@@ -1051,7 +1051,7 @@ ${esc(acc.urls || '')}</textarea>
       <textarea class="acc-notes" placeholder="Anything else worth keeping: recovery codes, security answers…">
 ${esc(acc.notes || '')}</textarea>
     </div>`;
-  const extras = notesField + customFieldsHTML(acc.customFields);
+  const extras = notesField + customFieldsHTML(acc.customFields) + relatedHTML(acc);
   const body = document.createElement('div');
   body.className = 'acc-body open';
   body.innerHTML = `
@@ -1150,6 +1150,7 @@ ${esc(acc.notes || '')}</textarea>
 
   mountCategoryChooser(body);
   mountCustomFields(body);
+  mountRelated(body, acc);
 
   container.innerHTML = '';
   container.appendChild(body);
@@ -1216,6 +1217,7 @@ function mergeLogins(a, b, choice = {}, { stored } = {}) {
     name: pick('name'), email: pick('email'), password, secret: pick('secret'), notes: pick('notes'),
     autofill: pick('autofill'), urls: urls.join('\n'), category, moreTags: tags.filter(t => t !== category),
     customFields: custom, domain: a.domain || b.domain,
+    links: [...new Set([...(a.links || []), ...(b.links || [])])].filter(id => id !== a._id && id !== b._id),
     extraPasswordHistory: left,
   };
 }
@@ -1357,6 +1359,8 @@ function openMergePanel(body, idx) {
     const bIdx = draft.indexOf(b);
     draft[idx] = merged;
     draft.splice(bIdx, 1);
+    // Items that linked the other login link this one now.
+    if (b._id) for (const d of draft) if (d !== merged && linksOf(d).includes(b._id)) setLinks(d, linksOf(d).map(id => (id === b._id ? merged._id : id)));
     openAccIdx = draft.indexOf(merged);
     rebuildAccountsDOM();
     renderVaultTypeBar();
@@ -1508,6 +1512,145 @@ function mountCustomFields(body) {
   });
 }
 
+// ── Related items (every personal editor) ──
+// An item links others by id (`links`: a login's v1 account carries them,
+// other items keep them on `entry.item`). A link shows on both sides: an
+// item's related list is what it links plus what links it. Only personal,
+// saved items take part (a new login has no id until it's saved).
+const linksOf = e => (e._kind ? e.item?.links : e.links) || [];
+
+function setLinks(e, list) {
+  const links = [...new Set(list)].filter(id => id && id !== e._id);
+  if (!e._kind) { e.links = links; return; }
+  if (links.length) e.item.links = links; else delete e.item.links;
+}
+
+const linkable = e => !!e && !isSharedEntry(e) && !!e._id;
+
+function relatedEntries(entry) {
+  if (!linkable(entry)) return [];
+  const out = new Map();
+  for (const id of linksOf(entry)) {
+    const e = draft.find(d => d._id === id);
+    if (linkable(e) && e !== entry) out.set(id, e);
+  }
+  for (const d of draft) if (d !== entry && linkable(d) && linksOf(d).includes(entry._id)) out.set(d._id, d);
+  return [...out.values()];
+}
+
+function unlinkEntries(a, b) {
+  setLinks(a, linksOf(a).filter(id => id !== b._id));
+  setLinks(b, linksOf(b).filter(id => id !== a._id));
+}
+
+const relatedLabel = e => e.name || (e._kind ? `Untitled ${typeLabel(e.type).toLowerCase()}` : 'Untitled login');
+const relatedSub = e => [e._kind ? typeLabel(e.type) : 'Login', e.email].filter(Boolean).join(' · ');
+
+function relatedHTML(entry) {
+  if (isSharedEntry(entry)) return '';
+  if (!entry._id) {
+    return `<div class="acc-field rel-section"><label>Related</label>
+      <div class="rel-hint">Save this login first, then link notes and other items to it.</div></div>`;
+  }
+  const list = relatedEntries(entry);
+  return `<div class="acc-field rel-section">
+    <div class="rel-head">
+      <label>Related${list.length ? ` · ${list.length}` : ''}</label>
+      <button type="button" class="coll-link rel-link" aria-expanded="false">+ Link item</button>
+    </div>
+    <div class="rel-picker" hidden>
+      <input class="rel-search" type="text" placeholder="Search your vault…" aria-label="Search items to link" autocomplete="off">
+      <div class="rel-results"></div>
+    </div>
+    <div class="rel-list">${list.map(e => `
+      <div class="rel-row" data-id="${esc(e._id)}">
+        <button type="button" class="rel-open" title="Open">
+          ${avatarHTML(e, 'acc-av-sm')}
+          <span class="rel-text"><span class="rel-name">${esc(relatedLabel(e))}</span><span class="rel-sub">${esc(relatedSub(e))}</span></span>
+        </button>
+        <button type="button" class="rel-unlink" title="Unlink (keeps both items)" aria-label="Unlink ${esc(relatedLabel(e))}">✕</button>
+      </div>`).join('')}</div>
+    <button type="button" class="coll-link rel-new-note">+ New note linked here</button>
+  </div>`;
+}
+
+// Opens another draft entry in the editor (what a click on its list row does).
+function openDraftEntry(target) {
+  const i = draft.indexOf(target);
+  if (i < 0) return;
+  openAccIdx = i;
+  rebuildAccountsDOM();
+  renderVaultTypeBar();
+  renderVaultCatBar();
+  applyVaultSearch();
+  renderAccDetail();
+}
+
+function mountRelated(body, entry) {
+  const section = body.querySelector('.rel-section');
+  if (!section || !entry._id) return;
+  const byId = id => draft.find(d => d._id === id);
+  section.querySelectorAll('.rel-row').forEach(row => {
+    const target = byId(row.dataset.id);
+    row.querySelector('.rel-open').addEventListener('click', () => {
+      syncOpenAccToDraft();
+      openDraftEntry(target);
+    });
+    row.querySelector('.rel-unlink').addEventListener('click', () => {
+      syncOpenAccToDraft();
+      unlinkEntries(entry, target);
+      renderAccDetail();
+    });
+  });
+
+  const picker = section.querySelector('.rel-picker');
+  const search = section.querySelector('.rel-search');
+  const results = section.querySelector('.rel-results');
+  const showResults = () => {
+    const q = search.value.trim().toLowerCase();
+    const related = new Set(relatedEntries(entry));
+    const matches = draft
+      .filter(d => d !== entry && linkable(d) && !related.has(d))
+      .filter(d => !q || `${d.name || ''} ${d.email || ''}`.toLowerCase().includes(q))
+      .sort((a, b) => relatedLabel(a).localeCompare(relatedLabel(b)))
+      .slice(0, 8);
+    results.innerHTML = matches.length
+      ? matches.map(d => `<button type="button" class="rel-option" data-id="${esc(d._id)}">
+          ${avatarHTML(d, 'acc-av-sm')}
+          <span class="rel-text"><span class="rel-name">${esc(relatedLabel(d))}</span><span class="rel-sub">${esc(relatedSub(d))}</span></span>
+        </button>`).join('')
+      : `<div class="rel-hint">${q ? 'Nothing matches' : 'Nothing else to link yet'}</div>`;
+    results.querySelectorAll('.rel-option').forEach(btn => btn.addEventListener('click', () => {
+      syncOpenAccToDraft();
+      setLinks(entry, [...linksOf(entry), btn.dataset.id]);
+      renderAccDetail();
+    }));
+  };
+  section.querySelector('.rel-link').addEventListener('click', e => {
+    const open = picker.hidden;
+    picker.hidden = !open;
+    e.currentTarget.setAttribute('aria-expanded', String(open));
+    if (open) { showResults(); search.focus(); }
+  });
+  search.addEventListener('input', showResults);
+  search.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { picker.hidden = true; section.querySelector('.rel-link').setAttribute('aria-expanded', 'false'); }
+    if (e.key === 'Enter') { e.preventDefault(); results.querySelector('.rel-option')?.click(); }
+  });
+
+  // A new note that links back here, opened to be written.
+  section.querySelector('.rel-new-note').addEventListener('click', () => {
+    syncOpenAccToDraft();
+    const note = entryOf(Vault.newItem('note', { title: entry.name ? `${entry.name} notes` : '' }));
+    note.category = entry.category || '';
+    setLinks(note, [entry._id]);
+    draft.push(note);
+    if (typeFilter && typeFilter !== 'note') typeFilter = '';
+    openDraftEntry(note);
+    document.querySelector('#acc-detail .item-notes')?.focus();
+  });
+}
+
 // The category (first tag) chooser plus "More tags", shared by every editor.
 function tagFieldsHTML(entry) {
   const cat = (entry.category || '').trim();
@@ -1616,6 +1759,7 @@ ${esc((item.urls || []).join('\n'))}</textarea>
 ${esc(item.notes || '')}</textarea>
     </div>
     ${customFieldsHTML(VaultAccounts.customFieldsOf(item), isSharedEntry(entry) && entry.role === 'view')}
+    ${relatedHTML(entry)}
     ${tagFieldsHTML(entry)}
     ${collectionControlsHTML(entry)}`;
 
@@ -1699,6 +1843,7 @@ ${esc(item.notes || '')}</textarea>
   });
   mountCategoryChooser(body);
   mountCustomFields(body);
+  mountRelated(body, entry);
   container.innerHTML = '';
   container.appendChild(body);
 }
@@ -2098,6 +2243,7 @@ async function saveAccounts(intended) {
       JSON.stringify(old.moreTags || []) !== JSON.stringify(acc.moreTags || []) ||
       (old.notes || '') !== (acc.notes || '') ||
       JSON.stringify(old.customFields || []) !== JSON.stringify(acc.customFields || []) ||
+      JSON.stringify(old.links || []) !== JSON.stringify(acc.links || []) ||
       (acc.extraPasswordHistory || []).length > 0; // a merge set passwords aside
     acc._updatedAt = changed ? now : (old._updatedAt ?? now);
   }

@@ -65,7 +65,7 @@ async function accountsForContent() {
   if ((await VaultLock.state()) === 'unlocked') {
     // No passwords, notes or custom fields: content scripts only fill 2FA
     // codes from this list, so they don't get them.
-    const accounts = (await VaultAccounts.load(await VaultKeys.getKey())).map(({ password, notes, customFields, _history, ...acc }) => acc);
+    const accounts = (await VaultAccounts.load(await VaultKeys.getKey())).map(({ password, notes, customFields, links, _history, ...acc }) => acc);
     // Logins shared with me (collections, shares) that carry a 2FA code fill
     // it too — after mine, so activeIndex still points at my own list.
     for (const item of await sharedLogins()) {
