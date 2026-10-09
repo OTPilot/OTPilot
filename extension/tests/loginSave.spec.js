@@ -626,3 +626,23 @@ test('one form with a hidden password step keeps the username typed before it', 
   const offer = site.locator('#otpilot-login-save');
   await expect(offer).toContainText('Update the password for Work?');
 });
+
+test('a settled two-step sign-in does not lend its username to a later password-only form', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [
+    { name: 'Alice', email: 'a@example.com', secret: '', urls: 'localhost', password: 'a-old' },
+    { name: 'Bob', email: 'b@example.com', secret: '', urls: 'localhost', password: 'b-old' },
+  ]);
+  const site = await context.newPage();
+  await twoStepSignIn(site, 'a@example.com', 'a-new');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update the password for Alice?');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect(offer).toHaveCount(0);
+  // Then a password change for another account, with no username field.
+  await site.goto(`${SITE}/change-password.html`);
+  await site.fill('input[name="current"]', 'b-old');
+  await site.fill('input[name="next"]', 'b-new');
+  await site.click('button');
+  await expect(site).toHaveURL(/welcome\.html/);
+  await expect(offer.locator('.otpilot-save-title')).toContainText('Update a login for localhost?');
+});

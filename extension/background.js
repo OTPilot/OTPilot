@@ -252,7 +252,8 @@ async function captureUsername(sender, msg) {
 }
 
 // Kept until it expires, a new username step or a form with its own username
-// replaces it: a rejected password retried on the same page needs it again.
+// replaces it, or the sign-in's save offer is settled: a rejected password
+// retried on the same page needs it again.
 async function pendingUsernameFor(tabId, host) {
   const key = pendingUsernameKey(tabId);
   const pending = (await chrome.storage.session.get(key))[key];
@@ -346,7 +347,12 @@ async function pendingLoginOffer(sender) {
   if (state === 'setup') { await dropPendingLogin(key, pending.id); return null; }
   if (state === 'locked') return { ...offer, kind: 'locked' };
   const plan = await planPendingLogin(pending);
-  if (plan.kind === 'none') { await dropPendingLogin(key, pending.id); return null; }
+  if (plan.kind === 'none') {
+    // Already saved as is: the sign-in went through, its flow is over.
+    await dropPendingLogin(key, pending.id);
+    await chrome.storage.session.remove(pendingUsernameKey(sender.tab.id));
+    return null;
+  }
   return {
     ...offer, kind: plan.kind, name: plan.item?.title || '', limit: !!plan.limit, newLimit: !!plan.newLimit,
     // What an update could apply to (names and usernames only), so the page
@@ -367,6 +373,9 @@ async function resolvePendingLogin(sender, id, choice, target) {
   const found = await readPendingLogin(sender);
   if (!found || typeof id !== 'string' || found.pending.id !== id) return { ok: false };
   const { key, pending } = found;
+  // The sign-in is settled (saved, dismissed or never): its username step
+  // ends with it, so a later password-only form doesn't inherit it.
+  await chrome.storage.session.remove(pendingUsernameKey(sender.tab.id));
   if (choice === 'never') {
     const never = (await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE] || [];
     await chrome.storage.local.set({ [NEVER_SAVE]: [...new Set([...never, pending.host])] });
