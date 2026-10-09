@@ -506,3 +506,58 @@ test('a change-password form (no username) still offers the personal login when 
   await offer.locator('.otpilot-save-confirm').click();
   await expect.poll(async () => (await logins(popup)).map(l => l.password)).toEqual(['m2']);
 });
+
+// Two-step sign-ins: the username on one page, the password on the next.
+async function twoStepSignIn(site, username, password, first = 'login-step1.html', field = 'input[name="identifier"]') {
+  await site.goto(`${SITE}/${first}`);
+  await site.fill(field, username);
+  await site.click('button');
+  await expect(site).toHaveURL(/login-step2\.html/);
+  await site.fill('input[name="password"]', password);
+  await site.click('button');
+  await expect(site).toHaveURL(/welcome\.html/);
+}
+
+test('a two-step sign-in is saved with the username from the first step', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await twoStepSignIn(site, 'two@example.com', 'tw0-step!');
+
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Save this login for localhost?');
+  await expect(offer).toContainText('two@example.com');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(() => logins(popup)).toEqual([
+    { title: 'localhost', urls: ['localhost'], username: 'two@example.com', password: 'tw0-step!', history: [] },
+  ]);
+});
+
+test('a two-step sign-in updates the login with that username, and offers saving as new', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [
+    { name: 'Work', email: 'work@example.com', secret: '', urls: 'localhost', password: 'work-old' },
+    { name: 'Home', email: 'home@example.com', secret: '', urls: 'localhost', password: 'home-old' },
+  ]);
+  const site = await context.newPage();
+  await twoStepSignIn(site, 'home@example.com', 'home-new');
+
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update the password for Home?');
+  await expect(offer.locator('.otpilot-save-new')).toBeVisible();
+  await expect(offer.locator('select')).toHaveCount(0); // the username picks the login: no choice to make
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup)).map(l => [l.username, l.password]).sort()).toEqual([
+    ['home@example.com', 'home-new'], ['work@example.com', 'work-old'],
+  ]);
+});
+
+test('a search box is not taken for the username step', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [
+    { name: 'Work', email: 'work@example.com', secret: '', urls: 'localhost', password: 'work-old' },
+  ]);
+  const site = await context.newPage();
+  await twoStepSignIn(site, 'work@example.com', 'work-new', 'search-then-login.html', 'input[name="q"]');
+  const offer = site.locator('#otpilot-login-save');
+  // No username captured: the offer names no username (the site's login is a candidate as before).
+  await expect(offer).toContainText('Update the password for Work?');
+  await expect(offer).not.toContainText('work@example.com');
+});

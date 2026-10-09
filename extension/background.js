@@ -230,9 +230,30 @@ async function storeCapture(sender, msg) {
   const password = typeof msg.password === 'string' ? msg.password : '';
   if (!host || !password || password.length > 1024) return;
   if ((await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE]?.includes(host)) return;
-  const username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
+  let username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
+  if (!username) username = await takePendingUsername(sender.tab.id, host);
   const id = crypto.randomUUID(); // offers and choices name the capture they're about
   await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { id, host, username, password, at: Date.now() } });
+}
+
+// Two-step sign-ins (username page, then password page): the username step's
+// value waits here for the password step in the same tab, on a related host.
+const PENDING_USERNAME_TTL = 5 * 60 * 1000;
+const pendingUsernameKey = tabId => `pendingUsername:${tabId}`;
+
+async function captureUsername(sender, msg) {
+  const host = senderHost(sender);
+  const username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
+  if (!host || !username || sender.tab?.id === undefined) return;
+  await chrome.storage.session.set({ [pendingUsernameKey(sender.tab.id)]: { host, username, at: Date.now() } });
+}
+
+async function takePendingUsername(tabId, host) {
+  const key = pendingUsernameKey(tabId);
+  const pending = (await chrome.storage.session.get(key))[key];
+  if (!pending) return '';
+  await chrome.storage.session.remove(key);
+  return Date.now() - pending.at <= PENDING_USERNAME_TTL && relatedHost(pending.host, host) ? pending.username : '';
 }
 
 // Removes the tab's capture only if it is still `id` (a newer sign-in may
@@ -377,7 +398,7 @@ async function resolvePendingLogin(sender, id, choice, target) {
   });
 }
 
-chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove(pendingLoginKey(tabId)); });
+chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove([pendingLoginKey(tabId), pendingUsernameKey(tabId)]); });
 
 // The custom properties of the active theme, from theme.css (the single
 // definition of every theme): ":root" is the default, the rest are
@@ -686,6 +707,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // Saving a submitted sign-in (forms.js): capture, then ask on the next page.
   if (msg.action === 'vaultCaptureLogin') {
     captureLogin(_sender, msg).finally(() => sendResponse({}));
+    return true;
+  }
+
+  if (msg.action === 'vaultCaptureUsername') {
+    captureUsername(_sender, msg).finally(() => sendResponse({}));
     return true;
   }
 

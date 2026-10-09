@@ -175,6 +175,28 @@
     setTimeout(offerSave, 2000);
   }
 
+  // Two-step sign-ins ask for the username on one page and the password on
+  // the next. A submitted username-only step is kept by the background for
+  // this tab, so the password step's capture gets its username.
+  const USERNAME_HINT = /user|e-?mail|login|identifier|account|usuario|correo/i;
+  function findUsernameStep(root = document) {
+    if (root.querySelector('input[type="password"]')) return null;
+    const filled = [...root.querySelectorAll('input')].filter(el =>
+      ['text', 'email', 'tel'].includes(el.type) && el.value.trim() && isVisible(el)
+      && !autocompleteOf(el).includes('one-time-code'));
+    if (filled.length !== 1) return null;
+    const el = filled[0];
+    const looksLikeUsername = /\b(username|email)\b/.test(autocompleteOf(el)) || el.type === 'email'
+      || USERNAME_HINT.test(`${el.name} ${el.id}`);
+    return looksLikeUsername ? el.value.trim() : null;
+  }
+
+  function captureUsername(root) {
+    if (!chrome.runtime?.id) return;
+    const username = findUsernameStep(root);
+    if (username) chrome.runtime.sendMessage({ action: 'vaultCaptureUsername', username }).catch(() => {});
+  }
+
   // A click counts as submitting a sign-in only on a submit button (a
   // <button> with no type is one, inside a form) or a control that reads
   // like one — never Cancel, Back, Show/Hide password, Forgot password.
@@ -187,16 +209,21 @@
     return LOOKS_SUBMIT.test(text);
   }
 
-  document.addEventListener('submit', e => capture(e.target instanceof HTMLFormElement ? e.target : document), true);
+  document.addEventListener('submit', e => {
+    const scope = e.target instanceof HTMLFormElement ? e.target : document;
+    if (scope.querySelector('input[type="password"]')) capture(scope); else captureUsername(scope);
+  }, true);
   document.addEventListener('click', e => {
     if (e.target.closest?.(`#${OVERLAY_ID}, #${SAVE_ID}, #${DROP_ID}, #otpilot-password-suggest, .${BADGE_CLASS}`)) return; // our own UI
     const btn = e.target.closest?.('button, input[type="submit"], [role="button"]');
     if (!btn || !isSubmitControl(btn)) return;
     const scope = btn.form || btn.closest('form') || document;
-    if (scope.querySelector('input[type="password"]')) capture(scope);
+    if (scope.querySelector('input[type="password"]')) capture(scope); else captureUsername(scope);
   }, true);
   document.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type === 'password') capture(e.target.form || document);
+    if (e.key !== 'Enter' || !(e.target instanceof HTMLInputElement)) return;
+    if (e.target.type === 'password') capture(e.target.form || document);
+    else if (['text', 'email', 'tel'].includes(e.target.type)) captureUsername(e.target.form || document);
   }, true);
 
   const passwordFormShowing = () => [...document.querySelectorAll('input[type="password"]')].some(isVisible);
