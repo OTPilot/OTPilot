@@ -1212,7 +1212,7 @@ ${esc(acc.notes || '')}</textarea>
     </label>
     <div class="acc-share">
       <button type="button" class="btn-share-team" title="Teammates get live codes; the 2FA secret itself is never revealed">↗ Share 2FA code only</button>
-      <div class="share-hint share-hint-codes">Teammates get live codes only, never the secret. Each use is logged, and when you revoke it they can't make codes anymore.</div>
+      <div class="share-hint share-hint-codes">Teammates get live codes only, never the secret. Copies, fills and refreshes are logged (just viewing, at most every 10 minutes), and when you revoke it they can't make codes anymore.</div>
       <div class="share-picker" style="display:none"></div>
     </div>
     ${collectionControlsHTML(acc)}`;
