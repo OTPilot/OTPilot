@@ -2,7 +2,8 @@
 // with demo data. Run from extension/:
 //   npx playwright test -c store/playwright.config.js
 // Writes store/screenshots/<n>-<name>.png, plus the store's small promo tile
-// (store/promo-tile.png, 440×280) and the X header (store/x-header.png, 1500×500). The demo site is a fictional
+// (store/promo-tile.png, 440×280), the marquee promo tile (store/marquee.png,
+// 1400×560) and the X header (store/x-header.png, 1500×500). The demo site is a fictional
 // "Northwind" (store/pages), served as northwind.example.
 import { test as base, chromium, expect } from '@playwright/test';
 import path from 'path';
@@ -100,6 +101,7 @@ async function seed(context, extensionId) {
   });
   await page.reload();
   await waitForVault(page);
+  await page.addStyleTag({ content: '::-webkit-scrollbar { display: none; }' }); // no scrollbars in the images
   return page;
 }
 
@@ -198,11 +200,11 @@ test('store screenshots', async ({ context, extensionId }) => {
   await popup.locator('.acc-head', { hasText: 'Production database' }).click();
   await popup.waitForTimeout(300);
   await compose(context, '5-vault', 'Not just passwords',
-    'Secure notes, servers and API keys, each with its own fields. Import from Chrome, 1Password, Bitwarden and more.',
+    'Secure notes, servers and API keys, each with its own fields. Bring everything over from your browser or another password manager.',
     await popup.screenshot());
 });
 
-test('promo tile and X header', async ({ context, extensionId }) => {
+test('promo tiles and X header', async ({ context, extensionId }) => {
   const popup = await seed(context, extensionId);
   await popup.locator('#home-list .lc-row', { hasText: 'Stripe' }).click();
   await popup.locator('#home-detail').evaluate(el => { el.scrollTop = 0; });
@@ -215,6 +217,18 @@ test('promo tile and X header', async ({ context, extensionId }) => {
     .brand { font-size: 15px; margin-bottom: 14px; }
     h1 { font-size: 38px; }`,
     `<div class="brand">OTPilot</div><h1>${HEADLINE}</h1>`);
+
+  // Marquee promo tile (1400×560): headline and sentence, the popup beside them.
+  await banner(context, 'marquee.png', 1400, 560, `
+    .copy { position: absolute; left: 90px; top: 50%; transform: translateY(-50%); width: 600px; }
+    .brand { font-size: 20px; margin-bottom: 20px; }
+    h1 { font-size: 60px; margin-bottom: 20px; }
+    p { font-size: 22px; }
+    img { position: absolute; right: 80px; top: 50%; transform: translateY(-50%); height: 470px; border-radius: 14px;
+      box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.06); }`,
+    `<div class="copy"><div class="brand">OTPilot</div><h1>${HEADLINE}</h1>
+      <p>Fills your password and your 2FA code on any login page. End&#8209;to&#8209;end encrypted, synced across devices.</p></div>
+     <img src="${shot}">`);
 
   // X header (1500×500). The avatar covers the bottom-left corner: the copy
   // sits higher up, the popup on the right.
