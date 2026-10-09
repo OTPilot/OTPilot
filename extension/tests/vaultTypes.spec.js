@@ -572,3 +572,18 @@ test('a custom field hidden on either side stays hidden after the merge', async 
   await expect.poll(async () => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
     .flatMap(i => i.fields.filter(f => f.custom).map(f => [f.label, f.kind])))).toEqual([['PIN', 'password']]);
 });
+
+test('arrowing through a long merge list keeps the highlighted login visible and announced', async ({ context, extensionId }) => {
+  const many = Array.from({ length: 14 }, (_, i) => ({ name: `Site ${String(i).padStart(2, '0')}`, email: 'u', secret: '', urls: `s${i}.example`, password: 'p' }));
+  const page = await vault(context, extensionId, { accounts: many });
+  await page.locator('.acc-head').first().click();
+  await page.click('#acc-detail .btn-merge');
+  for (let i = 0; i < 11; i++) await page.keyboard.press('ArrowDown');
+  const active = page.locator('#acc-detail .merge-option.active');
+  await expect(active).toContainText('Site 12');
+  await expect(active).toBeInViewport();
+  await expect(page.locator('#acc-detail .merge-search')).toHaveAttribute('aria-activedescendant', await active.getAttribute('id'));
+  await expect(active).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#acc-detail .merge-picked')).toContainText('Site 12');
+});

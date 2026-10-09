@@ -1240,8 +1240,9 @@ function openMergePanel(body, idx) {
   panel.innerHTML = `
     <div class="merge-title">Merge another login into this one</div>
     <div class="merge-pick">
-      <input class="merge-search" type="text" placeholder="Search a login by name, username or site" autocomplete="off">
-      <div class="merge-results" role="listbox"></div>
+      <input class="merge-search" type="text" placeholder="Search a login by name, username or site" autocomplete="off"
+        role="combobox" aria-expanded="true" aria-controls="merge-results" aria-autocomplete="list" aria-label="Login to merge into this one">
+      <div class="merge-results" id="merge-results" role="listbox"></div>
     </div>
     <div class="merge-picked" style="display:none"></div>
     <div class="merge-conflicts"></div>
@@ -1265,7 +1266,8 @@ function openMergePanel(body, idx) {
     const list = matches();
     active = Math.min(active, Math.max(list.length - 1, 0));
     results.innerHTML = list.length ? list.map((o, i) => `
-      <button type="button" class="merge-option${i === active ? ' active' : ''}" data-id="${esc(o._id)}" role="option">
+      <button type="button" class="merge-option${i === active ? ' active' : ''}" data-id="${esc(o._id)}" role="option"
+        id="merge-opt-${i}" aria-selected="${i === active}" tabindex="-1">
         ${avatarHTML(o, 'acc-av-sm')}
         <span class="merge-option-text">
           <span class="merge-option-name">${esc(o.name || 'Untitled')}${sameSite(o) ? ' <span class="merge-same">Same site</span>' : ''}</span>
@@ -1273,6 +1275,12 @@ function openMergePanel(body, idx) {
         </span>
       </button>`).join('') : '<div class="merge-hint">No login matches.</div>';
     results.querySelectorAll('.merge-option').forEach(btn => btn.addEventListener('click', () => pick(btn.dataset.id)));
+    // The highlighted login stays visible and is the one announced.
+    const current = results.querySelector('.merge-option.active');
+    if (current) {
+      search.setAttribute('aria-activedescendant', current.id);
+      current.scrollIntoView({ block: 'nearest' });
+    } else search.removeAttribute('aria-activedescendant');
   };
   const pick = id => {
     picked = others.find(o => o._id === id) || null;
