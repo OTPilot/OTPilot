@@ -14,7 +14,7 @@ export default function Landing() {
     <div className="min-h-screen bg-[#0a0a0f]">
       <Seo
         title="OTPilot — Password manager with built-in 2FA"
-        description="Password manager with built-in 2FA for Chrome: fills your password and your 2FA code on any login page. End-to-end encrypted, open source, synced across devices. Free to start."
+        description="Password manager with built-in 2FA for Chrome. Fills your password and your 2FA code on any login page. End-to-end encrypted, synced across devices, free to start."
         path="/"
       />
       <Navbar />
