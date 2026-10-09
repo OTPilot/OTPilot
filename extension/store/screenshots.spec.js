@@ -200,7 +200,7 @@ test('store screenshots', async ({ context, extensionId }) => {
   await popup.locator('.acc-head', { hasText: 'Production database' }).click();
   await popup.waitForTimeout(300);
   await compose(context, '5-vault', 'Not just passwords',
-    'Secure notes, servers and API keys, each with its own fields. Import from Chrome, 1Password, Bitwarden and more.',
+    'Secure notes, servers and API keys, each with its own fields. Bring everything over from your browser or another password manager.',
     await popup.screenshot());
 });
 
