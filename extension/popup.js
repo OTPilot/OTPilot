@@ -1202,8 +1202,9 @@ function mergeLogins(a, b, choice = {}, { stored } = {}) {
   const tags = [...new Set([a.category, ...(a.moreTags || []), b.category, ...(b.moreTags || [])].map(t => String(t || '').trim()).filter(Boolean))];
   const custom = [...(a.customFields || [])];
   for (const f of b.customFields || []) {
-    // The same field on both: one copy, hidden if either side hid it.
-    const same = custom.find(c => c.label === f.label && c.value === f.value);
+    // The same field (in the same section) on both: one copy, hidden if
+    // either side hid it.
+    const same = custom.find(c => c.label === f.label && c.value === f.value && (c.section || '') === (f.section || ''));
     if (!same) custom.push({ ...f, id: undefined });
     else if (Vault.SECRET_KINDS.includes(f.kind) && !Vault.SECRET_KINDS.includes(same.kind)) custom[custom.indexOf(same)] = { ...same, kind: f.kind };
   }

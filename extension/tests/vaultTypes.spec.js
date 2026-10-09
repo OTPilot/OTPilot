@@ -290,7 +290,6 @@ test('a login gets notes and custom fields (hidden ones masked), saved on the it
   await page.locator('.acc-head', { hasText: 'DigitalOcean' }).click();
   await expect(page.locator('#acc-detail .acc-notes')).toHaveValue('Billing contact: ops@team');
   await expect(page.locator('#acc-detail .cf-row')).toHaveCount(2);
-  await page.locator('#acc-detail .cf-row').first().hover(); // remove shows on the row being worked on
   await page.locator('#acc-detail .cf-row').first().locator('.cf-del').click();
   await page.click('#btn-save-all');
   await expect.poll(async () => (await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items))[0]
@@ -351,16 +350,31 @@ test('custom fields go in named sections, added by kind, kept on save and reopen
   await expect.poll(stored).toEqual([['', 'Branch', 'Palermo', 'text']]);
 });
 
+test('merging keeps the same field in two sections as two fields', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId);
+  const fields = await page.evaluate(() => mergeLogins(
+    { name: 'A', customFields: [{ label: 'Email', value: 'me@example.com', kind: 'text', section: 'Billing' }] },
+    { name: 'A', customFields: [{ label: 'Email', value: 'me@example.com', kind: 'text', section: 'Support' }] },
+  ).customFields.map(f => f.section));
+  expect(fields).toEqual(['Billing', 'Support']);
+});
+
 test('a field section survives the CSV export and import', async ({ context, extensionId }) => {
   const page = await vault(context, extensionId);
   const out = await page.evaluate(async () => {
     const item = Vault.newItem('login', { title: 'Bank', urls: ['bank.example'] });
-    const withFields = VaultAccounts.withCustomFields(item, [{ label: 'CBU', value: '123', kind: 'text', section: 'Bank details' }]);
+    const withFields = VaultAccounts.withCustomFields(item, [
+      { label: 'CBU', value: '123', kind: 'text', section: 'Bank details' },
+      { label: 'Email', value: 'me@example.com', kind: 'text', section: 'Billing' },
+      { label: 'Email', value: 'me@example.com', kind: 'text', section: 'Support' },
+    ]);
     const csv = Importers.toCsv([withFields]);
     const { entries } = Importers.parse(csv);
-    return entries[0].fields.map(f => [f.label, f.section || '']);
+    const [restored] = Importers.toItems(entries, Importers.plan(entries, []), []);
+    return restored.fields.filter(f => f.custom).map(f => [f.label, f.value, f.section || '']);
   });
-  expect(out).toEqual([['CBU', 'Bank details']]);
+  // The same label and value in two sections are two fields.
+  expect(out).toEqual([['CBU', '123', 'Bank details'], ['Email', 'me@example.com', 'Billing'], ['Email', 'me@example.com', 'Support']]);
 });
 
 test('custom fields on other item types too', async ({ context, extensionId }) => {

@@ -342,14 +342,14 @@ const Importers = (() => {
 
   // Puts an entry's fields on an item: into the type's template field with
   // the same id or label, else as a custom field (kept hidden if it was).
-  // Custom fields already on the item (same label and value) aren't repeated.
+  // Custom fields already on the item (same label, value and section) aren't repeated.
   function withFields(item, fields) {
     const next = { ...item, fields: (item.fields || []).map(f => ({ ...f })) };
     for (const f of fields || []) {
       if (!f.label && !f.id) continue;
       const tpl = !f.custom && next.fields.find(t => !t.custom && (t.id === f.id || (f.label && (t.label || '').toLowerCase() === f.label.toLowerCase())));
       if (tpl) { tpl.value = f.value; continue; }
-      if (next.fields.some(t => t.custom && t.label === f.label && t.value === f.value)) continue;
+      if (next.fields.some(t => t.custom && t.label === f.label && t.value === f.value && (t.section || '') === (f.section || ''))) continue;
       next.fields.push({ id: `c-${crypto.randomUUID()}`, label: f.label || f.id, value: f.value, kind: f.kind || 'text', custom: true, ...(f.section ? { section: f.section } : {}) });
     }
     return next;

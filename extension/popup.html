@@ -638,15 +638,13 @@
     .cf-actions { display: flex; align-items: center; gap: 1px; }
     .cf-actions .btn-eye { width: 22px; height: 22px; padding: 0; border: 0; background: none; font-size: 12px; }
     .cf-actions .btn-eye svg { width: 14px; height: 14px; }
-    /* Hide / remove only on the row being worked on: room for the value. */
-    .cf-row .cf-hide, .cf-row .cf-del { display: none; }
-    .cf-row:hover .cf-hide, .cf-row:hover .cf-del, .cf-row:focus-within .cf-hide, .cf-row:focus-within .cf-del { display: inline-flex; }
+    /* Hide / remove stay quiet until the row is worked on. */
+    .cf-row .cf-hide, .cf-row .cf-del { opacity: .35; }
+    .cf-row:hover .cf-hide, .cf-row:hover .cf-del, .cf-row:focus-within .cf-hide, .cf-row:focus-within .cf-del { opacity: 1; }
     .cf-add-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
     .cf-add-kind { height: 22px; padding: 0 7px; border-radius: 12px; border: 1px dashed var(--border); background: none; color: var(--ink-2); font: inherit; font-size: 11px; cursor: pointer; }
     .cf-add-kind:hover { border-color: var(--accent-2); color: var(--accent-2); }
     .cf-add-kind.cf-add { border-color: var(--accent-2); color: var(--accent-2); }
-    .cf-hide { font-size: 12px; opacity: .55; }
-    .cf-hide.on { opacity: 1; }
     .add-type-menu-down { top: calc(100% + 8px); bottom: auto; left: auto; right: -6px; }
     .add-type {
       text-align: left; background: none; border: 0; color: var(--ink-1); font: inherit; font-size: 12px;
