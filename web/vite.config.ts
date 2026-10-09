@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { GUIDES } from './src/pages/guides/guides'
 
 /** Neutral SPA fallback shell for every route besides "/" (dashboard, auth,
  * legal, support — none of that needs to be crawlable, see vercel.json's
@@ -35,11 +36,7 @@ export default defineConfig({
     // Prerender the public pages (indexed by search engines); dashboard,
     // auth and support stay a client-only SPA, served through the
     // app-shell fallback below. Keep in sync with public/sitemap.xml.
-    includedRoutes: () => [
-      '/', '/security', '/privacy', '/tos', '/gdpr', '/refunds',
-      // src/pages/guides/guides.ts
-      '/google-authenticator-for-chrome', '/authy-alternative', '/autofill-2fa-codes-chrome',
-    ],
+    includedRoutes: () => ['/', '/security', '/privacy', '/tos', '/gdpr', '/refunds', ...GUIDES.map(g => g.path)],
     onFinished: () => {
       writeAppShell()
     },

@@ -4,6 +4,10 @@
 
 export type Guide = {
   path: string
+  /** 'compare': an alternative / comparison page; 'guide': how to do something. */
+  kind: 'compare' | 'guide'
+  /** Short link text (footer, "more" lists). */
+  nav: string
   title: string
   description: string
   h1: string
@@ -29,6 +33,8 @@ const FILL_SHOT = {
 export const GUIDES: Guide[] = [
   {
     path: '/google-authenticator-for-chrome',
+    kind: 'compare',
+    nav: 'Google Authenticator for Chrome',
     title: 'Google Authenticator for Chrome: your 2FA codes, filled in | OTPilot',
     description:
       'Use your Google Authenticator codes in Chrome without reaching for your phone. OTPilot imports your accounts and fills the 2FA code on the login page. Free.',
@@ -81,6 +87,8 @@ export const GUIDES: Guide[] = [
   },
   {
     path: '/authy-alternative',
+    kind: 'compare',
+    nav: 'Authy alternative',
     title: 'Authy alternative for your computer: 2FA codes in the browser | OTPilot',
     description:
       'Authy no longer has desktop apps. OTPilot puts your 2FA codes in Chrome, fills them on the login page and syncs them end-to-end encrypted. Free to start.',
@@ -132,6 +140,8 @@ export const GUIDES: Guide[] = [
   },
   {
     path: '/autofill-2fa-codes-chrome',
+    kind: 'guide',
+    nav: 'Autofill 2FA codes in Chrome',
     title: 'Autofill 2FA codes in Chrome | OTPilot',
     description:
       'Stop copying six-digit codes. OTPilot fills your 2FA code on the login page and submits it, on the sites you saved it for. Also reads email codes. Free.',
@@ -167,6 +177,108 @@ export const GUIDES: Guide[] = [
     faq: [
       { q: 'Does autofilling 2FA codes make 2FA useless?', a: 'It keeps your second factor in the same vault as your password, which is a trade-off. You still get what most people need 2FA for: a leaked password alone does not get anyone in, and codes are only filled on the sites they belong to.' },
       { q: 'Which sites does it work with?', a: 'Sites that use standard authenticator-app codes: six digits, changing every 30 seconds (TOTP with SHA-1), which is what almost every site uses. Plus email codes from the supported webmails.' },
+      { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
+    ],
+  },
+  {
+    path: '/microsoft-authenticator-alternative',
+    kind: 'compare',
+    nav: 'Microsoft Authenticator alternative',
+    title: 'Microsoft Authenticator alternative for passwords and 2FA | OTPilot',
+    description: 'Microsoft Authenticator no longer fills passwords. OTPilot keeps your passwords and 2FA codes together in Chrome and fills both on the login page. Free to start.',
+    h1: 'Passwords and 2FA codes together, after Microsoft Authenticator',
+    intro: 'In 2025 Microsoft removed password autofill from Microsoft Authenticator: saved passwords moved to Microsoft Edge, and the app kept 2FA codes and passkeys. OTPilot keeps your passwords and your 2FA codes in one place in your browser, and fills both on the login page.',
+    image: FILL_SHOT,
+    sections: [
+      {
+        h2: 'What changed in Microsoft Authenticator',
+        paragraphs: [
+          'Microsoft stopped password autofill in Authenticator in July 2025 and removed the saved passwords from the app in August 2025; they stay in your Microsoft account and in Edge. The app still generates 2FA codes on your phone.',
+        ],
+      },
+      {
+        h2: 'What OTPilot does instead',
+        bullets: [
+          { title: 'One place for both', text: 'Your password and your 2FA code for a site live in the same login, and are filled one after the other.' },
+          { title: 'No phone at sign-in', text: 'The code is generated in your browser and filled on the page.' },
+          { title: 'Bring your passwords', text: 'Export your passwords from Edge (or any browser) as a CSV and import them in Settings → From a password manager.' },
+          { title: 'Encrypted on your device', text: 'Your vault is encrypted under your master password; sync only ever sends ciphertext.' },
+        ],
+      },
+      {
+        h2: 'Moving your 2FA codes',
+        paragraphs: [
+          'Microsoft Authenticator has no export for other apps, so 2FA accounts are moved one by one: in each site\'s security settings, set up the authenticator app again. OTPilot detects the setup QR code on the page and saves the account in one click. Keep Microsoft Authenticator until every account works in OTPilot.',
+        ],
+      },
+    ],
+    faq: [
+      { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices.' },
+      { q: 'Does OTPilot work in Edge?', a: 'Yes. OTPilot is available for Chrome and Edge, and works in other Chromium browsers.' },
+      { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
+    ],
+  },
+  {
+    path: '/bitwarden-alternative',
+    kind: 'compare',
+    nav: 'Bitwarden alternative',
+    title: 'Bitwarden alternative with free 2FA codes | OTPilot',
+    description: 'Bitwarden\'s built-in authenticator is a Premium feature. OTPilot includes unlimited 2FA codes for free and fills them on the login page, after your password.',
+    h1: 'A password manager with 2FA codes included, free',
+    intro: 'Bitwarden can store your 2FA codes, but its built-in authenticator is part of Premium. In OTPilot, 2FA is the core: unlimited 2FA codes are free, and they are filled on the page right after your password.',
+    image: FILL_SHOT,
+    sections: [
+      {
+        h2: 'OTPilot and Bitwarden side by side',
+        table: {
+          head: ['', 'Bitwarden', 'OTPilot'],
+          rows: [
+            ['Built-in 2FA codes', 'Premium plan', 'Free, unlimited'],
+            ['Email codes from your webmail', 'No', 'Yes'],
+            ['Platforms', 'Desktop, mobile and browser apps', 'Chrome, Edge and other Chromium browsers'],
+            ['End-to-end encrypted', 'Yes', 'Yes'],
+          ],
+        },
+        after: ['Bitwarden is a great open-source password manager with apps everywhere. If you sign in mostly from your computer\'s browser and want 2FA codes without a paid plan, OTPilot is built for that.'],
+      },
+      {
+        h2: 'Switching',
+        steps: [
+          'In Bitwarden, export your vault as a CSV (unencrypted .csv).',
+          'In OTPilot, open Settings → From a password manager and select the file. Passwords and 2FA keys come in together, and logins you already have are matched instead of duplicated.',
+          'Delete the CSV afterwards: it isn\'t encrypted.',
+        ],
+      },
+    ],
+    faq: [
+      { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices.' },
+      { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
+    ],
+  },
+  {
+    path: '/authenticator-extension-chrome',
+    kind: 'compare',
+    nav: 'Authenticator extension for Chrome',
+    title: 'Authenticator extension for Chrome that fills the code | OTPilot',
+    description: 'Most authenticator extensions show a code for you to copy. OTPilot fills the 2FA code on the login page, saves accounts from setup pages, and keeps your passwords too.',
+    h1: 'An authenticator extension that fills the code for you',
+    intro: 'A typical authenticator extension shows a list of codes: you open it, find the account, copy the code and paste it. OTPilot skips all of that: when the site asks for the code, it is already in the field.',
+    image: FILL_SHOT,
+    sections: [
+      {
+        h2: 'What it does that a code list doesn\'t',
+        bullets: [
+          { title: 'Fills and submits', text: 'The current code is filled on the page and the form submitted. On sites that block that, the code is filled and the click is left to you.' },
+          { title: 'Knows the site', text: 'Codes are tied to the sites you saved them for, so the right one is used, and never on a lookalike domain.' },
+          { title: 'Saves accounts from the setup page', text: 'When you turn on 2FA somewhere, OTPilot detects the QR code and saves the account in one click.' },
+          { title: 'Also a password manager', text: 'Username and password first, then the code: the whole sign-in.' },
+          { title: 'Locked when you\'re away', text: 'A master password protects the vault, and it locks itself after the time you choose.' },
+        ],
+      },
+    ],
+    faq: [
+      { q: 'Can I bring my codes from another authenticator?', a: 'From Google Authenticator, yes: screenshot its "Transfer accounts" QR codes and select them. From apps with a CSV export, use Settings → From a password manager. Otherwise, re-add each account from the site\'s 2FA settings.' },
+      { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices.' },
       { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
     ],
   },
