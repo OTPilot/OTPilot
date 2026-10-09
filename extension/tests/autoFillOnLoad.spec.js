@@ -18,5 +18,6 @@ test('a page asking for a 2FA code gets it filled in on load', async ({ context,
 
   const page = await context.newPage();
   await page.goto('http://localhost:8765/test/autofill.html');
-  await expect(page.locator('input[name="otp_token"]')).toHaveValue(/^\d{6}$/, { timeout: 10000 });
+  // Filled, then auto-submitted: the page shows the code it received.
+  await expect(page.locator('#result-code')).toHaveText(/^Code accepted: \d{6}$/, { timeout: 10000 });
 });
