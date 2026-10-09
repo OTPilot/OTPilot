@@ -2289,24 +2289,36 @@ function planBackupItems(items, current) {
 }
 
 // Writes the chosen backup items (new and updated), Free limit permitting —
-// under the shared item-limit lock, like every user-initiated add.
+// under the shared item-limit lock, like every user-initiated add, and with
+// the read, the plan, the limit check and the write in one vault
+// transaction: a sync can't save a newer copy in between and be overwritten.
 async function applyBackupItems(chosen) {
   return navigator.locks.request('otpilot-item-limit', async () => {
     const key = await VaultKeys.getKey();
     if (!key) throw new Error('vault is locked');
-    const current = (await VaultStore.readAll(key)).items;
     const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
-    const plans = planBackupItems(chosen, current);
-    const writes = chosen.filter((_, i) => plans[i] !== 'exists');
-    if (!Vault.PAID_PLANS.includes(userPlan)) {
-      const after = new Map(current.map(i => [i.id, i]));
-      writes.forEach(i => after.set(i.id, i));
-      const count = Vault.countedItems([...after.values()]);
-      if (count > Vault.FREE_ITEM_LIMIT && count > Vault.countedItems(current)) return { limit: true };
-    }
-    if (writes.length) await VaultStore.save(writes, key);
+    const res = await VaultStore.transaction(async tx => {
+      if ((await VaultKeys.getKey()) !== key) throw new Error('the vault key changed');
+      const current = [];
+      for (const rec of Object.values(await tx.listRecords())) {
+        try { current.push(await VaultCrypto.decryptItem(rec, key)); } catch { /* unreadable: left alone */ }
+      }
+      const plans = planBackupItems(chosen, current);
+      const writes = chosen.filter((_, i) => plans[i] !== 'exists');
+      if (!Vault.PAID_PLANS.includes(userPlan)) {
+        const after = new Map(current.map(i => [i.id, i]));
+        writes.forEach(i => after.set(i.id, i));
+        const count = Vault.countedItems([...after.values()]);
+        if (count > Vault.FREE_ITEM_LIMIT && count > Vault.countedItems(current)) return { limit: true };
+      }
+      const records = [];
+      for (const item of writes) records.push([item.id, await VaultCrypto.encryptItem(item, key)]);
+      if (records.length) await tx.putMany(records); // one write: all or nothing
+      return { added: plans.filter(p => p === 'new').length, updated: plans.filter(p => p === 'update').length, skipped: plans.filter(p => p === 'exists').length };
+    });
+    if (res.limit) return res;
     await VaultAccounts.rebuildIndex(key);
-    return { added: plans.filter(p => p === 'new').length, updated: plans.filter(p => p === 'update').length, skipped: plans.filter(p => p === 'exists').length, key };
+    return { ...res, key };
   });
 }
 

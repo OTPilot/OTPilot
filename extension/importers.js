@@ -240,7 +240,8 @@ const Importers = (() => {
       // LastPass marks notes with the URL http://sn; OTPilot's export says so
       // in `type` (a login may well be saved with that URL).
       if (get(row, 'type').toLowerCase() === 'note' || (!own && rawUrl === 'http://sn')) {
-        const note = withTags({ type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: notesOf(row), totp: '', tag: '' }, row);
+        const note = withTags({ type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: notesOf(row), totp: '', tag: '',
+          ...(own ? { fields: parseFieldsCell(raw(row, 'fields')).map(f => ({ ...f, custom: true })) } : {}) }, row);
         if (note.notes || get(row, 'title')) entries.push(note); else invalid++;
         continue;
       }
@@ -296,13 +297,17 @@ const Importers = (() => {
     const taken = new Set();
     const notesPlanned = new Set(); // a note repeated in the same file is added once
     const otherPlanned = new Set();
-    const valuesOf = list => JSON.stringify((list || []).filter(f => String(f.value ?? '') !== '').map(f => [f.label.toLowerCase(), f.value]).sort());
+    const valuesOf = list => JSON.stringify((list || []).filter(f => f.custom || String(f.value ?? '') !== '').map(f => [f.label.toLowerCase(), f.value, !!f.custom]).sort());
+    // Everything the CSV carries for a server, API credential…: the same
+    // only when all of it matches.
+    const contentOf = x => JSON.stringify([x.title, x.notes || '', [...(x.tags || [])].sort(), x.totp?.secret ?? x.totp ?? '', [...(x.urls || [])].sort(), valuesOf(x.fields)]);
+    const entryContent = e => contentOf({ ...e, tags: uniqueTags([e.tag, ...(e.moreTags || [])]) });
     return entries.map(entry => {
       if (entry.type && entry.type !== 'login' && entry.type !== 'note') {
         // A server, API credential…: `exists` when one of that type with the
         // same title and field values is saved (or earlier in the file).
-        const key = `${entry.type}\u0000${entry.title}\u0000${valuesOf(entry.fields)}`;
-        const same = items.find(i => i.type === entry.type && i.title === entry.title && valuesOf(i.fields) === valuesOf(entry.fields));
+        const key = `${entry.type}\u0000${entryContent(entry)}`;
+        const same = items.find(i => i.type === entry.type && contentOf(i) === entryContent(entry));
         if (same) return { action: 'exists', target: same.id };
         if (otherPlanned.has(key)) return { action: 'exists' };
         otherPlanned.add(key);
@@ -344,7 +349,7 @@ const Importers = (() => {
       const tpl = !f.custom && next.fields.find(t => !t.custom && (t.id === f.id || (f.label && (t.label || '').toLowerCase() === f.label.toLowerCase())));
       if (tpl) { tpl.value = f.value; continue; }
       if (next.fields.some(t => t.custom && t.label === f.label && t.value === f.value)) continue;
-      next.fields.push({ id: `c-${crypto.randomUUID()}`, label: f.label || f.id, value: f.value, kind: f.kind === 'password' ? 'password' : 'text', custom: true });
+      next.fields.push({ id: `c-${crypto.randomUUID()}`, label: f.label || f.id, value: f.value, kind: f.kind || 'text', custom: true });
     }
     return next;
   }
@@ -378,7 +383,7 @@ const Importers = (() => {
         continue;
       }
       if (entry.type === 'note') {
-        out.push(Vault.newItem('note', { title: entry.title, notes: entry.notes, tags: uniqueTags([entry.tag, ...(entry.moreTags || [])]) }));
+        out.push(withFields(Vault.newItem('note', { title: entry.title, notes: entry.notes, tags: uniqueTags([entry.tag, ...(entry.moreTags || [])]) }), entry.fields));
         continue;
       }
       const item = Vault.newItem('login', {
@@ -413,7 +418,7 @@ const Importers = (() => {
         const value = id => Vault.getValue(item, id);
         const known = new Set(['username', 'password']);
         const extra = (item.fields || [])
-          .filter(f => !(item.type === 'login' && !f.custom && known.has(f.id)) && String(f.value ?? '') !== '')
+          .filter(f => !(item.type === 'login' && !f.custom && known.has(f.id)) && (f.custom || String(f.value ?? '') !== ''))
           .map(f => ({ id: f.id, label: f.label || f.id, value: f.value, kind: f.kind, ...(f.custom ? { custom: true } : {}) }));
         return [
           item.type,

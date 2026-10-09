@@ -116,3 +116,28 @@ test('a v1 backup (1.x) still imports its accounts', async ({ context, extension
   await expect.poll(async () => page.evaluate(async () => (await VaultAccounts.load(await VaultKeys.getKey())).map(a => [a.name, a.secret])))
     .toEqual([['GitHub', TEST_SECRET]]);
 });
+
+test('a newer copy a sync saves while the backup is being imported is not overwritten', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const item = Vault.newItem('note', { title: 'Doc', notes: 'v1', updatedAt: '2026-01-01T00:00:00.000Z' });
+    await VaultStore.save(item, key);
+    const fromBackup = { ...item, notes: 'v2 (backup)', updatedAt: '2026-02-01T00:00:00.000Z' };
+    // While the import reads the vault, a sync saves a newer v3.
+    const decrypt = VaultCrypto.decryptItem;
+    let syncing = null;
+    VaultCrypto.decryptItem = async (...a) => {
+      if (!syncing) {
+        syncing = VaultStore.save({ ...item, notes: 'v3 (sync)', updatedAt: '2026-03-01T00:00:00.000Z' }, key);
+        await new Promise(res => setTimeout(res, 200));
+      }
+      return decrypt(...a);
+    };
+    await applyBackupItems([fromBackup]);
+    VaultCrypto.decryptItem = decrypt;
+    await syncing;
+    return (await VaultStore.readAll(key)).items[0].notes;
+  });
+  expect(r).toBe('v3 (sync)');
+});

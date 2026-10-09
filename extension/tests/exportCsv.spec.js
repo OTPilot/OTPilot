@@ -246,3 +246,28 @@ test('a CSV from an earlier export ("Label: value" lines) still imports servers 
   });
   expect(r).toEqual(['server', ['Infra'], ['db.internal', '5432', 'secret']]);
 });
+
+test('the CSV keeps notes\' custom fields, field kinds and empty custom fields; distinct servers are not merged', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  const r = await page.evaluate(() => {
+    const note = Vault.newItem('note', { title: 'Recovery', notes: 'keep safe' });
+    note.fields.push({ id: 'c-1', label: 'Codes', value: 'a1\nb2', kind: 'multiline', custom: true });
+    note.fields.push({ id: 'c-2', label: 'Answer', value: 'blue', kind: 'hidden', custom: true });
+    note.fields.push({ id: 'c-3', label: 'Fill me later', value: '', kind: 'text', custom: true });
+    const s1 = Vault.newItem('server', { title: 'DB', notes: 'primary' });
+    Vault.getField(s1, 'host').value = 'db.internal';
+    const s2 = Vault.newItem('server', { title: 'DB', notes: 'replica' });
+    Vault.getField(s2, 'host').value = 'db.internal';
+    const parsed = Importers.parse(Importers.toCsv([note, s1, s2]));
+    const plans = Importers.plan(parsed.entries, []);
+    const back = Importers.toItems(parsed.entries, plans, []);
+    return {
+      plans: plans.map(p => p.action),
+      note: back.find(i => i.type === 'note').fields.filter(f => f.custom).map(f => [f.label, f.value, f.kind]),
+      servers: back.filter(i => i.type === 'server').map(i => i.notes).sort(),
+    };
+  });
+  expect(r.plans).toEqual(['new', 'new', 'new']);
+  expect(r.note).toEqual([['Codes', 'a1\nb2', 'multiline'], ['Answer', 'blue', 'hidden'], ['Fill me later', '', 'text']]);
+  expect(r.servers).toEqual(['primary', 'replica']);
+});
