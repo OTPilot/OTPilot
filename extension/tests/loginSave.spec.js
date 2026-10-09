@@ -646,3 +646,36 @@ test('a settled two-step sign-in does not lend its username to a later password-
   await expect(site).toHaveURL(/welcome\.html/);
   await expect(offer.locator('.otpilot-save-title')).toContainText('Update a login for localhost?');
 });
+
+test('settling an older sign-in keeps a newer username step', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [
+    { name: 'Alice', email: 'a@example.com', secret: '', urls: 'localhost', password: 'a-old' },
+    { name: 'Bob', email: 'b@example.com', secret: '', urls: 'localhost', password: 'b-old' },
+  ]);
+  const site = await context.newPage();
+  // Alice's attempt is rejected and abandoned…
+  await site.goto(`${SITE}/login-step1.html`);
+  await site.fill('input[name="identifier"]', 'a@example.com');
+  await site.click('button');
+  await expect(site).toHaveURL(/login-step2\.html/);
+  await site.goto(`${SITE}/login-step2-retry.html`);
+  await site.fill('input[name="password"]', 'wrong-pass');
+  await site.click('button');
+  await expect(site.locator('#err')).toBeVisible();
+  // …then Bob's username step; Alice's old offer shows up and is dismissed.
+  await site.goto(`${SITE}/login-step1.html`);
+  await site.fill('input[name="identifier"]', 'b@example.com');
+  await site.click('button');
+  await expect(site).toHaveURL(/login-step2\.html/);
+  await site.goto(`${SITE}/welcome.html`);
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Alice');
+  await offer.locator('.otpilot-overlay-close').click();
+  await expect(offer).toHaveCount(0);
+  // Bob's password step still knows his username.
+  await site.goto(`${SITE}/login-step2.html`);
+  await site.fill('input[name="password"]', 'b-new');
+  await site.click('button');
+  await expect(site).toHaveURL(/welcome\.html/);
+  await expect(offer).toContainText('Update the password for Bob?');
+});
