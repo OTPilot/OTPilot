@@ -101,6 +101,7 @@ const Importers = (() => {
     totp: ['login_totp', 'otpauth', 'totp', 'otpsecret', 'otp', 'one-time password'],
     folder: ['folder', 'grouping', 'group', 'category', 'tags'],
     type: ['type'],
+    fields: ['fields'],
   };
 
   function columns(header) {
@@ -170,8 +171,30 @@ const Importers = (() => {
     return parts[parts.length - 1] || '';
   }
 
-  // → { source, entries: [{ type: 'login' | 'note', title, urls, username,
-  //       password, notes, totp, tag }], invalid, unsupportedTotp }
+  // OTPilot's `fields` cell: a JSON list of { id, label, value, kind, custom }
+  // (lossless), or — from an earlier export — "Label: value" lines.
+  function parseFieldsCell(text) {
+    const t = String(text || '').trim();
+    if (!t) return [];
+    if (t.startsWith('[')) {
+      try {
+        const list = JSON.parse(t);
+        if (Array.isArray(list)) {
+          return list.filter(f => f && (f.label || f.id)).map(f => ({
+            id: String(f.id || ''), label: String(f.label || ''), value: String(f.value ?? ''),
+            kind: Vault.FIELD_KINDS.includes(f.kind) ? f.kind : 'text', custom: !!f.custom,
+          }));
+        }
+      } catch { /* not JSON: lines below */ }
+    }
+    return t.split('\n').map(l => /^([^:]+):\s?(.*)$/.exec(l)).filter(Boolean)
+      .map(m => ({ id: '', label: m[1].trim(), value: m[2], kind: 'text', custom: false }));
+  }
+
+  // → { source, entries: [{ type, title, urls, username, password, notes,
+  //       totp, tag, fields? }], invalid, unsupportedTotp, otherTypes }
+  // `type` is 'login' or 'note', or — from OTPilot's own export — any item
+  // type (servers, API credentials…) with its `fields`.
   function parse(text) {
     const rows = parseCsv(text);
     if (rows.length < 2) return { source: 'CSV', entries: [], invalid: 0, unsupportedTotp: 0, otherTypes: 0 };
@@ -199,13 +222,26 @@ const Importers = (() => {
     let invalid = 0, unsupportedTotp = 0, otherTypes = 0;
     for (const row of rows.slice(1)) {
       const rawUrl = get(row, 'url');
-      // OTPilot's export also lists servers, API credentials…: not rebuilt
-      // from CSV yet, reported instead of turned into logins.
-      if (own && !['login', 'note'].includes(get(row, 'type').toLowerCase())) { otherTypes++; continue; }
+      // OTPilot's export also lists servers, API credentials…: rebuilt as
+      // that type with its fields; a type this version doesn't know is
+      // reported instead.
+      const ownType = own ? get(row, 'type').toLowerCase() : '';
+      if (own && !['login', 'note'].includes(ownType)) {
+        if (!Vault.TYPES[ownType]) { otherTypes++; continue; }
+        const totp = parseTotp(get(row, 'totp'), 1);
+        entries.push(withTags({
+          type: ownType, title: get(row, 'title') || `Imported ${Vault.TYPES[ownType].label.toLowerCase()}`,
+          urls: raw(row, 'url').split('\n').map(u => u.trim()).filter(Boolean),
+          username: '', password: '', notes: notesOf(row), totp: totp.secret || '', tag: '',
+          fields: parseFieldsCell(raw(row, 'fields')),
+        }, row));
+        continue;
+      }
       // LastPass marks notes with the URL http://sn; OTPilot's export says so
       // in `type` (a login may well be saved with that URL).
       if (get(row, 'type').toLowerCase() === 'note' || (!own && rawUrl === 'http://sn')) {
-        const note = withTags({ type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: notesOf(row), totp: '', tag: '' }, row);
+        const note = withTags({ type: 'note', title: get(row, 'title') || 'Imported note', urls: [], username: '', password: '', notes: notesOf(row), totp: '', tag: '',
+          ...(own ? { fields: parseFieldsCell(raw(row, 'fields')).map(f => ({ ...f, custom: true })) } : {}) }, row);
         if (note.notes || get(row, 'title')) entries.push(note); else invalid++;
         continue;
       }
@@ -221,6 +257,8 @@ const Importers = (() => {
         notes: notesOf(row),
         totp: totp.secret || '',
         tag: '',
+        // A login's own export carries its custom fields here.
+        ...(own ? { fields: parseFieldsCell(raw(row, 'fields')).map(f => ({ ...f, custom: true })) } : {}),
       };
       withTags(entry, row);
       if (!own && !entry.password && !entry.totp) { invalid++; continue; }
@@ -258,7 +296,23 @@ const Importers = (() => {
     const logins = items.filter(i => i.type === 'login');
     const taken = new Set();
     const notesPlanned = new Set(); // a note repeated in the same file is added once
+    const otherPlanned = new Set();
+    const valuesOf = list => JSON.stringify((list || []).filter(f => f.custom || String(f.value ?? '') !== '').map(f => [f.label.toLowerCase(), f.value, !!f.custom]).sort());
+    // Everything the CSV carries for a server, API credential…: the same
+    // only when all of it matches.
+    const contentOf = x => JSON.stringify([x.title, x.notes || '', [...(x.tags || [])].sort(), x.totp?.secret ?? x.totp ?? '', [...(x.urls || [])].sort(), valuesOf(x.fields)]);
+    const entryContent = e => contentOf({ ...e, tags: uniqueTags([e.tag, ...(e.moreTags || [])]) });
     return entries.map(entry => {
+      if (entry.type && entry.type !== 'login' && entry.type !== 'note') {
+        // A server, API credential…: `exists` when one of that type with the
+        // same title and field values is saved (or earlier in the file).
+        const key = `${entry.type}\u0000${entryContent(entry)}`;
+        const same = items.find(i => i.type === entry.type && contentOf(i) === entryContent(entry));
+        if (same) return { action: 'exists', target: same.id };
+        if (otherPlanned.has(key)) return { action: 'exists' };
+        otherPlanned.add(key);
+        return { action: 'new' };
+      }
       if (entry.type === 'note') {
         // The same note (title and text) already saved: nothing to add.
         const same = items.find(i => i.type === 'note' && i.title === entry.title && (i.notes || '') === entry.notes);
@@ -285,6 +339,21 @@ const Importers = (() => {
     });
   }
 
+  // Puts an entry's fields on an item: into the type's template field with
+  // the same id or label, else as a custom field (kept hidden if it was).
+  // Custom fields already on the item (same label and value) aren't repeated.
+  function withFields(item, fields) {
+    const next = { ...item, fields: (item.fields || []).map(f => ({ ...f })) };
+    for (const f of fields || []) {
+      if (!f.label && !f.id) continue;
+      const tpl = !f.custom && next.fields.find(t => !t.custom && (t.id === f.id || (f.label && (t.label || '').toLowerCase() === f.label.toLowerCase())));
+      if (tpl) { tpl.value = f.value; continue; }
+      if (next.fields.some(t => t.custom && t.label === f.label && t.value === f.value)) continue;
+      next.fields.push({ id: `c-${crypto.randomUUID()}`, label: f.label || f.id, value: f.value, kind: f.kind || 'text', custom: true });
+    }
+    return next;
+  }
+
   // The items to store for `entries` (planned together by plan()).
   function toItems(entries, plans, items) {
     const byId = new Map(items.map(i => [i.id, i]));
@@ -302,11 +371,19 @@ const Importers = (() => {
         if (!next.totp && entry.totp) next.totp = { secret: storableSecret(entry.totp), digits: 6, period: 30, algorithm: 'SHA1' };
         next.tags = uniqueTags([...(next.tags || []), entry.tag, ...(entry.moreTags || [])]);
         next.updatedAt = now;
-        out.push(next);
+        out.push(entry.fields?.length ? withFields(next, entry.fields) : next);
+        continue;
+      }
+      if (entry.type && entry.type !== 'login' && entry.type !== 'note') {
+        out.push(withFields(Vault.newItem(entry.type, {
+          title: entry.title, notes: entry.notes, tags: uniqueTags([entry.tag, ...(entry.moreTags || [])]),
+          ...(Vault.TYPES[entry.type].urls ? { urls: entry.urls } : {}),
+          totp: entry.totp ? { secret: storableSecret(entry.totp), digits: 6, period: 30, algorithm: 'SHA1' } : null,
+        }), entry.fields));
         continue;
       }
       if (entry.type === 'note') {
-        out.push(Vault.newItem('note', { title: entry.title, notes: entry.notes, tags: uniqueTags([entry.tag, ...(entry.moreTags || [])]) }));
+        out.push(withFields(Vault.newItem('note', { title: entry.title, notes: entry.notes, tags: uniqueTags([entry.tag, ...(entry.moreTags || [])]) }), entry.fields));
         continue;
       }
       const item = Vault.newItem('login', {
@@ -317,15 +394,15 @@ const Importers = (() => {
       });
       Vault.getField(item, 'username').value = entry.username;
       Vault.getField(item, 'password').value = entry.password;
-      out.push(item);
+      out.push(entry.fields?.length ? withFields(item, entry.fields) : item);
     }
     return out;
   }
 
   // ── Export ────────────────────────────────────────────────────────────────
   // The vault as CSV, in columns this importer (and most managers' generic
-  // CSV import) reads back: logins and secure notes round-trip; other types
-  // carry their fields as "Label: value" lines in `fields`.
+  // CSV import) reads back. Every type round-trips here: the type's fields
+  // and custom fields go in `fields` as JSON (other managers ignore it).
   const CSV_COLUMNS = ['type', 'name', 'url', 'username', 'password', 'totp', 'notes', 'folder', 'fields'];
 
   const csvCell = v => {
@@ -341,8 +418,8 @@ const Importers = (() => {
         const value = id => Vault.getValue(item, id);
         const known = new Set(['username', 'password']);
         const extra = (item.fields || [])
-          .filter(f => !(item.type === 'login' && known.has(f.id)) && String(f.value ?? '') !== '')
-          .map(f => `${f.label || f.id}: ${f.value}`);
+          .filter(f => !(item.type === 'login' && !f.custom && known.has(f.id)) && (f.custom || String(f.value ?? '') !== ''))
+          .map(f => ({ id: f.id, label: f.label || f.id, value: f.value, kind: f.kind, ...(f.custom ? { custom: true } : {}) }));
         return [
           item.type,
           item.title || '',
@@ -352,7 +429,7 @@ const Importers = (() => {
           item.totp?.secret ? `otpauth://totp/${encodeURIComponent(item.title || 'OTPilot')}?secret=${otpauthSecret(item.totp.secret)}` : '',
           item.notes || '',
           joinTags(item.tags || []),
-          extra.join('\n'),
+          extra.length ? JSON.stringify(extra) : '',
         ];
       });
     return [CSV_COLUMNS, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';

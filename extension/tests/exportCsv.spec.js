@@ -18,7 +18,10 @@ const sample = () => {
   const note = Vault.newItem('note', { title: 'Wifi', notes: 'SSID Home', tags: ['Home'] });
   const server = Vault.newItem('server', { title: 'DB' });
   Vault.getField(server, 'host').value = 'db.internal';
+  Vault.getField(server, 'username').value = 'admin';
   Vault.getField(server, 'password').value = 'secret';
+  login.fields.push({ id: 'c-1', label: 'Recovery codes', value: 'a1\nb2', kind: 'password', custom: true });
+  server.fields.push({ id: 'c-2', label: 'Region', value: 'nyc3', kind: 'text', custom: true });
   return [login, note, server];
 };
 
@@ -34,20 +37,24 @@ test('the CSV escapes what needs it and reads back as the same logins and notes'
       source: parsed.source,
       otherTypes: parsed.otherTypes,
       rows: Importers.parseCsv(csv).length,
-      back: back.map(i => ({ type: i.type, title: i.title, urls: i.urls, tags: i.tags, notes: i.notes, user: Vault.getValue(i, 'username'), pw: Vault.getValue(i, 'password'), totp: i.totp?.secret || '' })),
+      back: back.map(i => ({ type: i.type, title: i.title, urls: i.urls, tags: i.tags, notes: i.notes, user: Vault.getValue(i, 'username'), pw: Vault.getValue(i, 'password'), totp: i.totp?.secret || '',
+        fields: i.fields.filter(f => f.value !== '' && !(i.type === 'login' && ['username', 'password'].includes(f.id))).map(f => [f.label, f.value, f.kind, !!f.custom]) })),
       serverRow: Importers.parseCsv(csv).find(r => r[0] === 'server'),
     };
   }, sample.toString());
   expect(r.header).toBe('type,name,url,username,password,totp,notes,folder,fields');
   expect(r.source).toBe('OTPilot');
-  expect(r.otherTypes).toBe(1); // the server: reported, not imported as a login
+  expect(r.otherTypes).toBe(0);
   expect(r.rows).toBe(4);
   expect(r.back).toEqual([
-    { type: 'login', title: 'GitHub, Inc', urls: ['github.com', 'gist.github.com'], tags: ['Work', 'oss'], notes: 'line 1\nline "2"', user: 'me@x.com', pw: 'p,a"ss', totp: 'JBSWY3DPEHPK3PXP' },
-    { type: 'note', title: 'Wifi', urls: [], tags: ['Home'], notes: 'SSID Home', user: '', pw: '', totp: '' },
+    { type: 'login', title: 'GitHub, Inc', urls: ['github.com', 'gist.github.com'], tags: ['Work', 'oss'], notes: 'line 1\nline "2"', user: 'me@x.com', pw: 'p,a"ss', totp: 'JBSWY3DPEHPK3PXP',
+      fields: [['Recovery codes', 'a1\nb2', 'password', true]] },
+    { type: 'note', title: 'Wifi', urls: [], tags: ['Home'], notes: 'SSID Home', user: '', pw: '', totp: '', fields: [] },
+    { type: 'server', title: 'DB', urls: [], tags: [], notes: '', user: 'admin', pw: 'secret', totp: '',
+      fields: [['Host', 'db.internal', 'text', false], ['Username', 'admin', 'text', false], ['Password', 'secret', 'password', false], ['Region', 'nyc3', 'text', true]] },
   ]);
-  // Other types keep their fields in the `fields` column.
-  expect(r.serverRow[8]).toBe('Host: db.internal\nPassword: secret');
+  // Every type's fields (and custom fields) go in the `fields` column, as JSON.
+  expect(JSON.parse(r.serverRow[8]).map(f => f.label)).toEqual(['Host', 'Username', 'Password', 'Region']);
 });
 
 test('Settings: the export needs the master password and downloads the whole vault', async ({ context, extensionId }) => {
@@ -227,4 +234,40 @@ test('importing the same file twice finds the hex-looking base32 secret already 
     return Importers.plan(again.entries, saved).map(p => p.action);
   });
   expect(plans).toEqual(['exists']);
+});
+
+test('a CSV from an earlier export ("Label: value" lines) still imports servers with their fields', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  const r = await page.evaluate(() => {
+    const csv = 'type,name,url,username,password,totp,notes,folder,fields\r\nserver,DB,,,,,,Infra,"Host: db.internal\nPort: 5432\nPassword: secret"\r\n';
+    const parsed = Importers.parse(csv);
+    const [item] = Importers.toItems(parsed.entries, Importers.plan(parsed.entries, []), []);
+    return [item.type, item.tags, ['host', 'port', 'password'].map(id => Vault.getValue(item, id))];
+  });
+  expect(r).toEqual(['server', ['Infra'], ['db.internal', '5432', 'secret']]);
+});
+
+test('the CSV keeps notes\' custom fields, field kinds and empty custom fields; distinct servers are not merged', async ({ context, extensionId }) => {
+  const page = await lib(context, extensionId);
+  const r = await page.evaluate(() => {
+    const note = Vault.newItem('note', { title: 'Recovery', notes: 'keep safe' });
+    note.fields.push({ id: 'c-1', label: 'Codes', value: 'a1\nb2', kind: 'multiline', custom: true });
+    note.fields.push({ id: 'c-2', label: 'Answer', value: 'blue', kind: 'hidden', custom: true });
+    note.fields.push({ id: 'c-3', label: 'Fill me later', value: '', kind: 'text', custom: true });
+    const s1 = Vault.newItem('server', { title: 'DB', notes: 'primary' });
+    Vault.getField(s1, 'host').value = 'db.internal';
+    const s2 = Vault.newItem('server', { title: 'DB', notes: 'replica' });
+    Vault.getField(s2, 'host').value = 'db.internal';
+    const parsed = Importers.parse(Importers.toCsv([note, s1, s2]));
+    const plans = Importers.plan(parsed.entries, []);
+    const back = Importers.toItems(parsed.entries, plans, []);
+    return {
+      plans: plans.map(p => p.action),
+      note: back.find(i => i.type === 'note').fields.filter(f => f.custom).map(f => [f.label, f.value, f.kind]),
+      servers: back.filter(i => i.type === 'server').map(i => i.notes).sort(),
+    };
+  });
+  expect(r.plans).toEqual(['new', 'new', 'new']);
+  expect(r.note).toEqual([['Codes', 'a1\nb2', 'multiline'], ['Answer', 'blue', 'hidden'], ['Fill me later', '', 'text']]);
+  expect(r.servers).toEqual(['primary', 'replica']);
 });

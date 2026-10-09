@@ -2239,13 +2239,17 @@ async function decryptData(key, ivB64, dataB64) {
   return new TextDecoder().decode(plain);
 }
 
-async function runExport(password, exportAccounts) {
-  if (!exportAccounts.length) throw new Error('No accounts to export');
+// Encrypted backup, v2: the vault's items exactly as stored decrypted —
+// every type, every field (passwords and their history, notes, custom
+// fields, tags, URLs, 2FA), so importing it on another browser restores
+// everything. v1 files (the 1.x account list) can still be imported.
+async function runExport(password, exportItems) {
+  if (!exportItems.length) throw new Error('Nothing to export');
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key  = await deriveKey(password, salt);
-  const { iv, data } = await encryptData(key, JSON.stringify(exportAccounts));
+  const { iv, data } = await encryptData(key, JSON.stringify({ items: exportItems }));
   const blob = new Blob(
-    [JSON.stringify({ v: 1, salt: b64enc(salt), iv, data })],
+    [JSON.stringify({ v: 2, salt: b64enc(salt), iv, data })],
     { type: 'application/json' }
   );
   const a = document.createElement('a');
@@ -2255,14 +2259,67 @@ async function runExport(password, exportAccounts) {
   URL.revokeObjectURL(a.href);
 }
 
+// → { items } for a v2 backup, { accounts } for a v1 one (1.x).
 async function decryptBackup(file, password) {
   const { v, salt, iv, data } = JSON.parse(await file.text());
-  if (v !== 1) throw new Error('Unknown backup format');
+  if (v !== 1 && v !== 2) throw new Error('Unknown backup format');
   const key   = await deriveKey(password, b64dec(salt));
-  const plain = await decryptData(key, iv, data);
-  const imported = JSON.parse(plain);
-  if (!Array.isArray(imported)) throw new Error('Invalid backup data');
-  return imported;
+  const plain = JSON.parse(await decryptData(key, iv, data));
+  if (v === 1) {
+    if (!Array.isArray(plain)) throw new Error('Invalid backup data');
+    return { accounts: plain };
+  }
+  const items = (plain?.items || []).filter(i => i && typeof i.id === 'string' && Vault.TYPES[i.type]);
+  if (!Array.isArray(plain?.items)) throw new Error('Invalid backup data');
+  return { items, unknown: plain.items.length - items.length };
+}
+
+// What importing each backup item does here: `new` (no item with its id),
+// `update` (that item exists, the backup's copy differs and is newer), or
+// `exists` (the same, or this vault's copy is newer).
+function planBackupItems(items, current) {
+  const byId = new Map(current.map(i => [i.id, i]));
+  const same = (a, b) => JSON.stringify({ ...a, updatedAt: null, position: null }) === JSON.stringify({ ...b, updatedAt: null, position: null });
+  return items.map(item => {
+    const cur = byId.get(item.id);
+    if (!cur) return 'new';
+    if (same(item, cur) || (cur.updatedAt || '') >= (item.updatedAt || '')) return 'exists';
+    return 'update';
+  });
+}
+
+// Writes the chosen backup items (new and updated), Free limit permitting —
+// under the shared item-limit lock, like every user-initiated add, and with
+// the read, the plan, the limit check and the write in one vault
+// transaction: a sync can't save a newer copy in between and be overwritten.
+async function applyBackupItems(chosen) {
+  return navigator.locks.request('otpilot-item-limit', async () => {
+    const key = await VaultKeys.getKey();
+    if (!key) throw new Error('vault is locked');
+    const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+    const res = await VaultStore.transaction(async tx => {
+      if ((await VaultKeys.getKey()) !== key) throw new Error('the vault key changed');
+      const current = [];
+      for (const rec of Object.values(await tx.listRecords())) {
+        try { current.push(await VaultCrypto.decryptItem(rec, key)); } catch { /* unreadable: left alone */ }
+      }
+      const plans = planBackupItems(chosen, current);
+      const writes = chosen.filter((_, i) => plans[i] !== 'exists');
+      if (!Vault.PAID_PLANS.includes(userPlan)) {
+        const after = new Map(current.map(i => [i.id, i]));
+        writes.forEach(i => after.set(i.id, i));
+        const count = Vault.countedItems([...after.values()]);
+        if (count > Vault.FREE_ITEM_LIMIT && count > Vault.countedItems(current)) return { limit: true };
+      }
+      const records = [];
+      for (const item of writes) records.push([item.id, await VaultCrypto.encryptItem(item, key)]);
+      if (records.length) await tx.putMany(records); // one write: all or nothing
+      return { added: plans.filter(p => p === 'new').length, updated: plans.filter(p => p === 'update').length, skipped: plans.filter(p => p === 'exists').length };
+    });
+    if (res.limit) return res;
+    await VaultAccounts.rebuildIndex(key);
+    return { ...res, key };
+  });
 }
 
 const normSecret = s => (s || '').replace(/\s+/g, '').toUpperCase();
@@ -2288,15 +2345,26 @@ async function applyImport(selectedAccounts) {
 
 // ── Export picker ─────────────────────────────────────────────────────────────
 
-function showExportPicker() {
+// A row of a backup picker: name, type, and the login's username / item summary.
+function backupRowHTML(item, idx, { disabled = false, note = '' } = {}) {
+  const sub = item.type === 'login' ? Vault.getValue(item, 'username') : itemSummary(item);
+  return `<input type="checkbox" ${disabled ? 'disabled' : 'checked'} data-idx="${idx}">
+      <span class="export-acc-name">${esc(item.title || 'Untitled')}</span>
+      ${item.type !== 'login' ? `<span class="type-tag">${esc(typeLabel(item.type))}</span>` : ''}
+      ${sub ? `<span class="export-acc-email">${esc(sub)}</span>` : ''}
+      ${note ? `<span class="export-acc-exists">${esc(note)}</span>` : ''}`;
+}
+
+let _exportItems = [];
+async function showExportPicker() {
+  const key = await VaultKeys.getKey();
+  _exportItems = key ? (await VaultStore.readAll(key)).items.sort((a, b) => (a.title || '').localeCompare(b.title || '')) : [];
   const list = document.getElementById('export-picker-list');
   list.innerHTML = '';
-  accounts.forEach((acc, i) => {
+  _exportItems.forEach((item, i) => {
     const label = document.createElement('label');
     label.className = 'export-acc-row';
-    label.innerHTML = `<input type="checkbox" checked data-idx="${i}">
-      <span class="export-acc-name">${acc.name}</span>
-      ${acc.email ? `<span class="export-acc-email">${acc.email}</span>` : ''}`;
+    label.innerHTML = backupRowHTML(item, i);
     list.appendChild(label);
   });
   document.getElementById('export-select-all').checked = true;
@@ -2314,8 +2382,8 @@ document.getElementById('export-select-all').addEventListener('change', e => {
 
 document.getElementById('export-picker-confirm').addEventListener('click', () => {
   const selected = [...document.querySelectorAll('#export-picker-list input:checked')]
-    .map(cb => accounts[+cb.dataset.idx]);
-  if (selected.length === 0) { setStatus('Select at least one account', false); return; }
+    .map(cb => _exportItems[+cb.dataset.idx]);
+  if (selected.length === 0) { setStatus('Select at least one item', false); return; }
   hideExportPicker();
   showCryptoForm('export', selected);
 });
@@ -2325,9 +2393,33 @@ document.getElementById('export-picker-cancel').addEventListener('click', hideEx
 // ── Import picker ─────────────────────────────────────────────────────────────
 
 let pendingImportAccounts = null;
+let pendingImportItems = null; // a v2 backup's items (pendingImportAccounts stays null)
+
+async function showItemImportPicker(items, notes = []) {
+  const key = await VaultKeys.getKey();
+  const current = key ? (await VaultStore.readAll(key)).items : [];
+  const plans = planBackupItems(items, current);
+  pendingImportAccounts = null;
+  pendingImportItems = items;
+  const notesEl = document.getElementById('import-picker-notes');
+  notesEl.textContent = notes.join(' · ');
+  notesEl.style.display = notes.length ? '' : 'none';
+  const list = document.getElementById('import-picker-list');
+  list.innerHTML = '';
+  items.forEach((item, i) => {
+    const label = document.createElement('label');
+    const exists = plans[i] === 'exists';
+    label.className = 'export-acc-row' + (exists ? ' disabled' : '');
+    label.innerHTML = backupRowHTML(item, i, { disabled: exists, note: exists ? 'already in vault' : plans[i] === 'update' ? 'newer — will update' : '' });
+    list.appendChild(label);
+  });
+  document.getElementById('import-select-all').checked = plans.some(p => p !== 'exists');
+  document.getElementById('import-picker').style.display = '';
+}
 
 function showImportPicker(importedAccounts, notes = []) {
   pendingImportAccounts = importedAccounts;
+  pendingImportItems = null;
   const notesEl = document.getElementById('import-picker-notes');
   notesEl.textContent = notes.join(' · ');
   notesEl.style.display = notes.length ? '' : 'none';
@@ -2353,6 +2445,7 @@ function hideImportPicker() {
   document.getElementById('import-picker').style.display = 'none';
   document.getElementById('import-picker-notes').style.display = 'none';
   pendingImportAccounts = null;
+  pendingImportItems = null;
 }
 
 document.getElementById('import-select-all').addEventListener('change', e => {
@@ -2361,6 +2454,20 @@ document.getElementById('import-select-all').addEventListener('change', e => {
 });
 
 document.getElementById('import-picker-confirm').addEventListener('click', async () => {
+  if (pendingImportItems) {
+    const chosen = [...document.querySelectorAll('#import-picker-list input:checked:not(:disabled)')]
+      .map(cb => pendingImportItems[+cb.dataset.idx]);
+    if (!chosen.length) { setStatus('Select at least one item', false); return; }
+    let res;
+    try { res = await applyBackupItems(chosen); } catch { setStatus('Import failed', false); return; }
+    if (res.limit) { setStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items — upgrade to import them all`, false); return; }
+    hideImportPicker();
+    await reloadFromVault(res.key);
+    if (res.added || res.updated) { await stampLocalChange(); silentPullSync(); }
+    const parts = [res.added && `${res.added} added`, res.updated && `${res.updated} updated`, res.skipped && `${res.skipped} already present`].filter(Boolean);
+    setStatus(parts.length ? `Imported: ${parts.join(', ')}` : 'Nothing to import');
+    return;
+  }
   const selected = [...document.querySelectorAll('#import-picker-list input:checked')]
     .map(cb => pendingImportAccounts[+cb.dataset.idx]);
   if (selected.length === 0) { setStatus('Select at least one account', false); return; }
@@ -2415,12 +2522,14 @@ async function showCsvReview(file) {
 
   const skipped = [
     parsed.invalid ? `${parsed.invalid} row${parsed.invalid === 1 ? '' : 's'} without a password skipped` : '',
-    parsed.otherTypes ? `${parsed.otherTypes} server/API item${parsed.otherTypes === 1 ? '' : 's'} not imported (not supported from CSV yet)` : '',
+    parsed.otherTypes ? `${parsed.otherTypes} item${parsed.otherTypes === 1 ? '' : 's'} of a type this version doesn't know not imported` : '',
     parsed.unsupportedTotp ? `${parsed.unsupportedTotp} 2FA code${parsed.unsupportedTotp === 1 ? '' : 's'} with unsupported settings (HOTP, 8 digits, SHA256…) not imported` : '',
   ].filter(Boolean);
   const nLogins = parsed.entries.filter(e => e.type === 'login').length;
-  const nNotes = parsed.entries.length - nLogins;
-  const found = `${nLogins} login${nLogins === 1 ? '' : 's'}${nNotes ? ` and ${nNotes} secure note${nNotes === 1 ? '' : 's'}` : ''}`;
+  const nNotes = parsed.entries.filter(e => e.type === 'note').length;
+  const nOthers = parsed.entries.length - nLogins - nNotes;
+  const found = [`${nLogins} login${nLogins === 1 ? '' : 's'}`, nNotes && `${nNotes} secure note${nNotes === 1 ? '' : 's'}`, nOthers && `${nOthers} other item${nOthers === 1 ? '' : 's'}`]
+    .filter(Boolean).join(' and ');
   csvImportStatus([`${parsed.source}: ${found} found`, ...skipped].join(' · '));
   if (!parsed.entries.length) return;
 
@@ -2432,7 +2541,7 @@ async function showCsvReview(file) {
     label.className = 'export-acc-row' + (exists ? ' disabled' : '');
     label.innerHTML = `<input type="checkbox" ${exists ? 'disabled' : 'checked'} data-idx="${i}">
       <span class="export-acc-name">${esc(entry.title)}</span>
-      ${entry.type === 'note' ? '<span class="type-tag">Secure note</span>' : ''}
+      ${entry.type !== 'login' ? `<span class="type-tag">${esc(typeLabel(entry.type))}</span>` : ''}
       ${entry.username ? `<span class="export-acc-email">${esc(entry.username)}</span>` : ''}
       ${exists ? '<span class="export-acc-exists">already in vault</span>' : ''}
       ${p.action === 'merge' ? `<span class="export-acc-exists">adds password to ${esc(names.get(p.target) || 'login')}</span>` : ''}`;
@@ -2693,7 +2802,7 @@ document.getElementById('google-import-file').addEventListener('change', e => {
 
 let cryptoMode          = null; // 'export' | 'import'
 let pendingFile         = null;
-let pendingExportAccounts = null;
+let pendingExportAccounts = null; // the items chosen for export
 
 function showCryptoForm(mode, selectedAccounts = null) {
   cryptoMode            = mode;
@@ -2739,14 +2848,18 @@ document.getElementById('crypto-confirm').addEventListener('click', async () => 
 
   try {
     if (cryptoMode === 'export') {
-      const exportCount = pendingExportAccounts?.length ?? accounts.length;
-      await runExport(password, pendingExportAccounts);
+      const exportCount = pendingExportAccounts?.length ?? 0;
+      await runExport(password, pendingExportAccounts || []);
       hideCryptoForm();
-      setStatus(`Exported ${exportCount} account(s)`);
+      setStatus(`Exported ${exportCount} item(s)`);
     } else {
       const imported = await decryptBackup(pendingFile, password);
       hideCryptoForm();
-      showImportPicker(imported);
+      if (imported.items) {
+        await showItemImportPicker(imported.items, imported.unknown ? [`${imported.unknown} item(s) of a type this version doesn't know were skipped`] : []);
+      } else {
+        showImportPicker(imported.accounts);
+      }
     }
   } catch {
     setStatus(cryptoMode === 'import' ? 'Wrong password or invalid file' : 'Export failed', false);
