@@ -608,7 +608,7 @@ let _homeOpenRelated = new Set(); // related items expanded on Home
 // Every personal item as { id, kind, name, sub, links, acc | item }.
 function homeVaultEntries() {
   return [
-    ...accounts.map((a, i) => ({ id: a._id, kind: 'login', name: a.name || 'Unnamed', sub: a.email || '', links: a.links || [], acc: a, index: i })),
+    ...accounts.map(a => ({ id: a._id, kind: 'login', name: a.name || 'Unnamed', sub: a.email || '', links: a.links || [], acc: a })),
     ...otherItems.map(item => ({ id: item.id, kind: item.type, name: item.title || `Untitled ${typeLabel(item.type).toLowerCase()}`, sub: typeLabel(item.type), links: item.links || [], item })),
   ];
 }
@@ -730,7 +730,10 @@ function renderHomeCreds(acc) {
       btn.querySelector('.home-rel-sub').textContent = r.kind === 'login' ? ['Login', r.sub].filter(Boolean).join(' · ') : r.sub;
       btn.addEventListener('click', () => {
         if (r.kind === 'login') {
-          activeIndex = r.index;
+          // By id now: `accounts` may have been re-sorted since this rendered.
+          const i = accounts.findIndex(a => a._id === r.id);
+          if (i < 0) return;
+          activeIndex = i;
           chrome.storage.local.set({ activeIndex });
           renderAccountBar();
           startTimer();
@@ -962,6 +965,7 @@ function renderAccountsList(openTargetIdx = -1, { preserveSearch = false, openIt
   // A leftover category filter from a previous Accounts-view visit could hide
   // the very row we're jumping to — clear it so the shortcut always lands
   // somewhere visible.
+  if (openAccIdx >= 0 && typeFilter && entryType(draft[openAccIdx]) !== typeFilter) typeFilter = '';
   if (openAccIdx >= 0 && categoryFilter) {
     categoryFilter = '';
     chrome.storage.local.set({ categoryFilter });

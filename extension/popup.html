@@ -89,7 +89,10 @@
     .lc-empty { padding: 20px 12px; text-align: center; font-size: 11px; color: var(--ink-4); line-height: 1.6; }
 
     .dc-col { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
-    #home-detail { justify-content: center; }
+    /* Centered while it fits; once the details overflow, top-aligned so the
+       code (and the icon above it) can always be scrolled back to. */
+    #home-detail::before, #home-detail::after { content: ''; flex: 1 1 0; }
+    #home-detail:has(#account-big-icon img)::before { min-height: 62px; flex-shrink: 0; }
     .dc-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--ink-5); font-size: 12px; padding: 20px; text-align: center; }
     .dc-empty svg { width: 26px; height: 26px; opacity: .5; }
 
@@ -422,7 +425,8 @@
     .home-edit-more { padding: 0 2px; }
     .home-rel-edit:hover, .home-edit-more:hover { text-decoration: underline; }
     /* No 2FA code: the code block and Copy / Fill step aside, details on top. */
-    #home-detail.no-code { justify-content: flex-start; padding-top: 14px; }
+    #home-detail.no-code { padding-top: 14px; }
+    #home-detail.no-code::before, #home-detail.no-code::after { display: none; }
     #home-detail.no-code #otp-display, #home-detail.no-code .countdown,
     #home-detail.no-code .progress-wrap, #home-detail.no-code .actions { display: none; }
     #home-detail.no-code #account-big-icon { position: static; margin: 0 0 8px; }
