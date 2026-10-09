@@ -231,7 +231,10 @@ async function storeCapture(sender, msg) {
   if (!host || !password || password.length > 1024) return;
   if ((await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE]?.includes(host)) return;
   let username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
-  if (!username) username = await takePendingUsername(sender.tab.id, host);
+  // A form with its own username ends any two-step flow in this tab; one
+  // without takes the username step's (kept for a retried password).
+  if (username) await chrome.storage.session.remove(pendingUsernameKey(sender.tab.id));
+  else username = await pendingUsernameFor(sender.tab.id, host);
   const id = crypto.randomUUID(); // offers and choices name the capture they're about
   await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { id, host, username, password, at: Date.now() } });
 }
@@ -248,12 +251,14 @@ async function captureUsername(sender, msg) {
   await chrome.storage.session.set({ [pendingUsernameKey(sender.tab.id)]: { host, username, at: Date.now() } });
 }
 
-async function takePendingUsername(tabId, host) {
+// Kept until it expires, a new username step or a form with its own username
+// replaces it: a rejected password retried on the same page needs it again.
+async function pendingUsernameFor(tabId, host) {
   const key = pendingUsernameKey(tabId);
   const pending = (await chrome.storage.session.get(key))[key];
   if (!pending) return '';
-  await chrome.storage.session.remove(key);
-  return Date.now() - pending.at <= PENDING_USERNAME_TTL && relatedHost(pending.host, host) ? pending.username : '';
+  if (Date.now() - pending.at > PENDING_USERNAME_TTL) { await chrome.storage.session.remove(key); return ''; }
+  return relatedHost(pending.host, host) ? pending.username : '';
 }
 
 // Removes the tab's capture only if it is still `id` (a newer sign-in may

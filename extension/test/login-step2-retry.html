@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in — step 2 (rejects the first try)</title></head>
+<body>
+  <form action="welcome.html" method="get" id="f">
+    <p id="err" hidden>Wrong password</p>
+    <input type="password" name="password" autocomplete="current-password">
+    <button>Sign in</button>
+  </form>
+  <script>
+    // Only "right-pass" gets through; anything else is rejected in place.
+    document.getElementById('f').addEventListener('submit', e => {
+      const pw = e.target.password;
+      if (pw.value === 'right-pass') return;
+      e.preventDefault();
+      pw.value = '';
+      document.getElementById('err').hidden = false;
+    });
+  </script>
+</body></html>

@@ -179,8 +179,12 @@
   // the next. A submitted username-only step is kept by the background for
   // this tab, so the password step's capture gets its username.
   const USERNAME_HINT = /user|e-?mail|login|identifier|account|usuario|correo/i;
+  // A visible password field: the form is past (or on) its password step.
+  // A hidden one is a later step of the same form, still to come.
+  const hasVisiblePassword = root => [...root.querySelectorAll('input[type="password"]')].some(isVisible);
+
   function findUsernameStep(root = document) {
-    if (root.querySelector('input[type="password"]')) return null;
+    if (hasVisiblePassword(root)) return null;
     const filled = [...root.querySelectorAll('input')].filter(el =>
       ['text', 'email', 'tel'].includes(el.type) && el.value.trim() && isVisible(el)
       && !autocompleteOf(el).includes('one-time-code'));
@@ -211,14 +215,14 @@
 
   document.addEventListener('submit', e => {
     const scope = e.target instanceof HTMLFormElement ? e.target : document;
-    if (scope.querySelector('input[type="password"]')) capture(scope); else captureUsername(scope);
+    if (hasVisiblePassword(scope)) capture(scope); else captureUsername(scope);
   }, true);
   document.addEventListener('click', e => {
     if (e.target.closest?.(`#${OVERLAY_ID}, #${SAVE_ID}, #${DROP_ID}, #otpilot-password-suggest, .${BADGE_CLASS}`)) return; // our own UI
     const btn = e.target.closest?.('button, input[type="submit"], [role="button"]');
     if (!btn || !isSubmitControl(btn)) return;
     const scope = btn.form || btn.closest('form') || document;
-    if (scope.querySelector('input[type="password"]')) capture(scope); else captureUsername(scope);
+    if (hasVisiblePassword(scope)) capture(scope); else captureUsername(scope);
   }, true);
   document.addEventListener('keydown', e => {
     if (e.key !== 'Enter' || !(e.target instanceof HTMLInputElement)) return;

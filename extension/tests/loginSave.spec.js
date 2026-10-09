@@ -561,3 +561,68 @@ test('a search box is not taken for the username step', async ({ context, extens
   await expect(offer).toContainText('Update the password for Work?');
   await expect(offer).not.toContainText('work@example.com');
 });
+
+test('a rejected password retried on the second step keeps the username from the first', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [
+    { name: 'Work', email: 'work@example.com', secret: '', urls: 'localhost', password: 'old' },
+    { name: 'Home', email: 'home@example.com', secret: '', urls: 'localhost', password: 'old' },
+  ]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-step1.html`);
+  await site.fill('input[name="identifier"]', 'home@example.com');
+  await site.click('button');
+  await expect(site).toHaveURL(/login-step2\.html/);
+  await site.goto(`${SITE}/login-step2-retry.html`);
+  await site.fill('input[name="password"]', 'wrong-pass');
+  await site.click('button');
+  await expect(site.locator('#err')).toBeVisible();
+  await site.waitForTimeout(1600); // past the duplicate-event window: a new attempt
+  await site.fill('input[name="password"]', 'right-pass');
+  await site.click('button');
+  await expect(site).toHaveURL(/welcome\.html/);
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update the password for Home?');
+  await expect(offer).toContainText('home@example.com');
+});
+
+test('a sign-in with its own username drops an earlier username step', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [
+    { name: 'Alice', email: 'a@example.com', secret: '', urls: 'localhost', password: 'a-old' },
+    { name: 'Bob', email: 'b@example.com', secret: '', urls: 'localhost', password: 'b-old' },
+  ]);
+  const site = await context.newPage();
+  // A two-step flow for Alice, abandoned after the first page…
+  await site.goto(`${SITE}/login-step1.html`);
+  await site.fill('input[name="identifier"]', 'a@example.com');
+  await site.click('button');
+  await expect(site).toHaveURL(/login-step2\.html/);
+  // …then Bob signs in with a full form, and changes his password.
+  await signIn(site, 'b@example.com', 'b-old');
+  await expect(site).toHaveURL(/welcome\.html/);
+  await site.goto(`${SITE}/change-password.html`);
+  await site.fill('input[name="current"]', 'b-old');
+  await site.fill('input[name="next"]', 'b-new');
+  await site.click('button');
+  await expect(site).toHaveURL(/welcome\.html/);
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toBeVisible();
+  // No username known: the user picks; Alice's username isn't assumed.
+  await expect(offer.locator('.otpilot-save-title')).not.toContainText('Alice');
+  await expect(offer.locator('.otpilot-save-title')).toContainText('Update a login for localhost?');
+});
+
+test('one form with a hidden password step keeps the username typed before it', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [
+    { name: 'Work', email: 'work@example.com', secret: '', urls: 'localhost', password: 'old' },
+    { name: 'Home', email: 'home@example.com', secret: '', urls: 'localhost', password: 'old' },
+  ]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-oneform.html`);
+  await site.fill('input[name="identifier"]', 'work@example.com');
+  await site.click('#next');
+  await site.fill('input[name="password"]', 'new-work');
+  await site.click('button:has-text("Sign in")');
+  await expect(site).toHaveURL(/welcome\.html/);
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update the password for Work?');
+});
