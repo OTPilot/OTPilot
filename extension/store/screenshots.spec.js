@@ -1,7 +1,8 @@
 // Chrome Web Store screenshots (1280×800), generated from the real extension
 // with demo data. Run from extension/:
 //   npx playwright test -c store/playwright.config.js
-// Writes store/screenshots/<n>-<name>.png. The demo site is a fictional
+// Writes store/screenshots/<n>-<name>.png, plus the store's small promo tile
+// (store/promo-tile.png, 440×280) and the X header (store/x-header.png, 1500×500). The demo site is a fictional
 // "Northwind" (store/pages), served as northwind.example.
 import { test as base, chromium, expect } from '@playwright/test';
 import path from 'path';
@@ -127,6 +128,24 @@ async function compose(context, name, title, subtitle, png, { width } = {}) {
   await page.close();
 }
 
+// A banner of any size: `body` is its inner HTML, on the screenshots' background.
+async function banner(context, file, width, height, css, body) {
+  const page = await context.newPage();
+  await page.setViewportSize({ width, height });
+  await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>
+    body { margin: 0; width: ${width}px; height: ${height}px; overflow: hidden; box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #f1f5f9;
+      background: radial-gradient(1200px 700px at 85% 50%, #16304f 0%, #0f172a 55%, #0b1222 100%); }
+    .brand { color: #38bdf8; font-weight: 700; letter-spacing: .02em; }
+    h1 { margin: 0; letter-spacing: -.01em; line-height: 1.05; }
+    p { margin: 0; color: #cbd5e1; line-height: 1.4; }
+    ${css}
+  </style></head><body>${body}</body></html>`);
+  await page.evaluate(() => Promise.all([...document.images].map(i => i.decode())));
+  await page.screenshot({ path: path.join(__dirname, file) });
+  await page.close();
+}
+
 test.setTimeout(180000);
 
 test('store screenshots', async ({ context, extensionId }) => {
@@ -181,4 +200,32 @@ test('store screenshots', async ({ context, extensionId }) => {
   await compose(context, '5-vault', 'Not just passwords',
     'Secure notes, servers and API keys, each with its own fields. Import from Chrome, 1Password, Bitwarden and more.',
     await popup.screenshot());
+});
+
+test('promo tile and X header', async ({ context, extensionId }) => {
+  const popup = await seed(context, extensionId);
+  await popup.locator('#home-list .lc-row', { hasText: 'Stripe' }).click();
+  await popup.locator('#home-detail').evaluate(el => { el.scrollTop = 0; });
+  await popup.waitForTimeout(300);
+  const shot = `data:image/png;base64,${(await popup.screenshot()).toString('base64')}`;
+
+  // Small promo tile (440×280): the headline, nothing else to read at that size.
+  await banner(context, 'promo-tile.png', 440, 280, `
+    body { display: flex; flex-direction: column; justify-content: center; padding: 0 34px; }
+    .brand { font-size: 15px; margin-bottom: 14px; }
+    h1 { font-size: 38px; }`,
+    `<div class="brand">OTPilot</div><h1>${HEADLINE}</h1>`);
+
+  // X header (1500×500). The avatar covers the bottom-left corner: the copy
+  // sits higher up, the popup on the right.
+  await banner(context, 'x-header.png', 1500, 500, `
+    .copy { position: absolute; left: 80px; top: 70px; width: 620px; }
+    .brand { font-size: 20px; margin-bottom: 18px; }
+    h1 { font-size: 58px; margin-bottom: 18px; }
+    p { font-size: 22px; }
+    img { position: absolute; right: 90px; top: 40px; height: 420px; border-radius: 14px;
+      box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.06); }`,
+    `<div class="copy"><div class="brand">OTPilot</div><h1>${HEADLINE}</h1>
+      <p>Fills your password and your 2FA code on any login page. End&#8209;to&#8209;end encrypted, synced across devices.</p></div>
+     <img src="${shot}">`);
 });
