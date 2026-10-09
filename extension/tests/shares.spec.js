@@ -264,3 +264,23 @@ test('the owner\'s sync never overwrites a save made while it fetched the shares
   });
   expect(r).toEqual({ first: 'saved-meanwhile', second: 'by-bob' });
 });
+
+test('leaving a direct share keeps the item when a collection still gives access', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await installFakeCollections(page);
+  await installFakeShares(page); // on top of the collections fake
+  await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Infra');
+    const item = Vault.newItem('note', { title: 'Runbook', notes: 'x' });
+    const { id, sk } = await fakeShares.shareFromBob(item, 'view');
+    // The same share also granted to my collection.
+    fakeShares.shares.get(id).grants.push({ collection_id: c.id, role: 'view', wrapped_key: await VaultCrypto.encryptName(sk, c.key, id) });
+    await refreshSharedItems();
+  });
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Runbook' }).click();
+  page.once('dialog', d => d.accept());
+  await page.click('#acc-detail .btn-leave-share');
+  await expect(page.locator('#status-msg')).toContainText('still see it through a collection');
+  await expect(page.locator('.acc-head', { hasText: 'Runbook' })).toHaveCount(1);
+});

@@ -1515,8 +1515,10 @@ ${esc(item.notes || '')}</textarea>
       if (!confirm(`Stop seeing "${draft[idx].name}"? ${entry.collectionName} can share it with you again.`)) return;
       try { await VaultShares.leave(entry.share); } catch { setStatus('Could not leave — check your connection', false); return; }
       sharedItems = [...sharedItems.filter(s => !s.share), ...await sharedWithMe(true)];
-      patchEntries([entry._id], []);
-      setStatus(`You no longer see "${entry.name}"`);
+      // Still reachable through a collection: it stays, and says so.
+      const still = sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf);
+      patchEntries([entry._id], still);
+      setStatus(still.length ? `Your direct access to "${entry.name}" is removed — you still see it through a collection` : `You no longer see "${entry.name}"`);
       return;
     }
     if (shared) {
