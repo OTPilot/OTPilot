@@ -1,0 +1,12 @@
+/* A fictional site ("Northwind") for the store screenshots. */
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f5f7; color: #1d2433; display: flex; align-items: center; justify-content: center; }
+.card { width: 380px; background: #fff; border-radius: 14px; padding: 34px 32px; box-shadow: 0 10px 40px rgba(20, 30, 60, .12); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; margin-bottom: 22px; }
+.logo { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, #4f46e5, #0ea5e9); }
+h1 { font-size: 22px; margin: 0 0 6px; }
+p { margin: 0 0 22px; color: #5b6475; font-size: 14px; }
+label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+input { width: 100%; padding: 11px 12px; margin-bottom: 16px; border: 1px solid #d5d9e2; border-radius: 8px; font-size: 15px; }
+button { width: 100%; padding: 12px; border: 0; border-radius: 8px; background: #4f46e5; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+.otp { letter-spacing: 8px; font-size: 22px; text-align: center; font-family: ui-monospace, Menlo, monospace; }
