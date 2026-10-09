@@ -533,6 +533,7 @@ async function refreshDisplay() {
 
   if (!acc) {
     renderHomeCreds(null);
+    document.getElementById('home-detail').classList.remove('no-code');
     bigIcon.innerHTML = '';
     nameLabel.textContent = '';
     display.textContent = '••• •••';
@@ -549,6 +550,9 @@ async function refreshDisplay() {
 
   nameLabel.innerHTML = esc(acc.name || '') + sharedBadgeHTML(findSharedCode(acc));
   renderHomeCreds(acc);
+  // Without a 2FA code the code block and Copy / Fill step aside: the
+  // account's details are what there is to show.
+  document.getElementById('home-detail').classList.toggle('no-code', !acc.secret);
 
   // Only the real site favicon, never the letter-avatar fallback — this is
   // decorative extra space, not a place to render initials twice.
@@ -592,44 +596,175 @@ async function refreshDisplay() {
   }
 }
 
-// Username and password under the code. Re-rendered only when the account or
-// its values change, not on every timer tick (that would reset Show and eat clicks).
+// The account's details under the code on Home, grouped like the editor:
+// Sign-in (username, password, website), each custom-field section, notes,
+// and related items — a related note / card / server opens in place with its
+// fields, a related login is selected. Re-rendered only when the account or
+// what it shows changes, not on every timer tick (that would reset Show and
+// eat clicks).
 let _homeCredsKey = null;
+let _homeOpenRelated = new Set(); // related items expanded on Home
+
+// Every personal item as { id, kind, name, sub, links, acc | item }.
+function homeVaultEntries() {
+  return [
+    ...accounts.map((a, i) => ({ id: a._id, kind: 'login', name: a.name || 'Unnamed', sub: a.email || '', links: a.links || [], acc: a, index: i })),
+    ...otherItems.map(item => ({ id: item.id, kind: item.type, name: item.title || `Untitled ${typeLabel(item.type).toLowerCase()}`, sub: typeLabel(item.type), links: item.links || [], item })),
+  ];
+}
+
+function homeRelated(acc) {
+  if (!acc?._id) return [];
+  const all = homeVaultEntries();
+  const out = new Map();
+  for (const id of acc.links || []) {
+    const e = all.find(x => x.id === id);
+    if (e && e.id !== acc._id) out.set(id, e);
+  }
+  for (const e of all) if (e.id !== acc._id && e.links.includes(acc._id)) out.set(e.id, e);
+  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function homeCopy(value, label) {
+  try { await navigator.clipboard.writeText(value); setStatus(`${label} copied`); }
+  catch { setStatus('Could not copy — the browser blocked the clipboard', false); }
+}
+
+// One label | value row; secret values masked with Show.
+// No label: the value takes the row (a section's only text, like notes).
+function homeRow({ label, value, secret = false, multiline = false }) {
+  const el = document.createElement('div');
+  el.className = 'home-cred' + (multiline ? ' multiline' : '') + (label ? '' : ' full');
+  el.innerHTML = `<span class="home-cred-label"></span><span class="home-cred-value"></span><span class="home-cred-actions"></span>`;
+  if (label) el.querySelector('.home-cred-label').textContent = label;
+  else el.querySelector('.home-cred-label').remove();
+  const valueEl = el.querySelector('.home-cred-value');
+  const show = shown => { valueEl.textContent = secret && !shown ? '•'.repeat(Math.min(String(value).length, 14)) : value; };
+  show(false);
+  const actions = el.querySelector('.home-cred-actions');
+  if (secret) {
+    const eye = document.createElement('button');
+    eye.className = 'home-cred-btn';
+    eye.textContent = 'Show';
+    let shown = false;
+    eye.addEventListener('click', () => { shown = !shown; show(shown); eye.textContent = shown ? 'Hide' : 'Show'; });
+    actions.appendChild(eye);
+  }
+  const copy = document.createElement('button');
+  copy.className = 'home-cred-btn';
+  copy.textContent = 'Copy';
+  copy.addEventListener('click', () => homeCopy(value, label || 'Text'));
+  actions.appendChild(copy);
+  return el;
+}
+
+function homeSection(title, children, action) {
+  const sec = document.createElement('section');
+  sec.className = 'home-sec';
+  const head = document.createElement('div');
+  head.className = 'home-sec-head';
+  const t = document.createElement('span');
+  t.textContent = title;
+  head.appendChild(t);
+  if (action) head.appendChild(action);
+  const card = document.createElement('div');
+  card.className = 'home-card';
+  children.forEach(c => card.appendChild(c));
+  sec.append(head, card);
+  return sec;
+}
+
+// What a related non-login item shows when opened on Home: its filled fields
+// (the type's and custom ones) and its notes.
+function homeItemRows(item) {
+  const rows = (item.fields || []).filter(f => String(f.value ?? '') !== '').map(f => homeRow({
+    label: f.label || f.id, value: f.value, secret: Vault.SECRET_KINDS.includes(f.kind), multiline: f.kind === 'multiline',
+  }));
+  if (String(item.notes || '').trim()) rows.push(homeRow({ label: item.type === 'note' ? '' : 'Notes', value: item.notes, multiline: true }));
+  return rows;
+}
+
 function renderHomeCreds(acc) {
-  const key = acc ? JSON.stringify([acc._id, acc.email || '', acc.password || '']) : '';
+  const related = homeRelated(acc);
+  const key = acc ? JSON.stringify([acc._id, acc.email || '', acc.password || '', acc.urls || '', acc.notes || '', acc.customFields || [],
+    related.map(r => [r.id, r.name, r.item?.updatedAt || r.acc?._updatedAt || '']), [..._homeOpenRelated]]) : '';
   if (key === _homeCredsKey) return;
   _homeCredsKey = key;
   const box = document.getElementById('home-creds');
   box.innerHTML = '';
-  if (!acc || (!acc.email && !acc.password)) return;
-  const row = (label, value, secret) => {
-    const el = document.createElement('div');
-    el.className = 'home-cred';
-    el.innerHTML = `<div class="home-cred-text"><span class="home-cred-label">${label}</span><span class="home-cred-value"></span></div>`;
-    const valueEl = el.querySelector('.home-cred-value');
-    const show = shown => { valueEl.textContent = secret && !shown ? '•'.repeat(Math.min(value.length, 14)) : value; };
-    show(false);
-    if (secret) {
-      const eye = document.createElement('button');
-      eye.className = 'home-cred-btn';
-      eye.title = 'Show/hide';
-      eye.innerHTML = SVG_EYE;
-      let shown = false;
-      eye.addEventListener('click', () => { shown = !shown; show(shown); eye.innerHTML = shown ? SVG_EYE_OFF : SVG_EYE; });
-      el.appendChild(eye);
-    }
-    const copy = document.createElement('button');
-    copy.className = 'home-cred-btn';
-    copy.textContent = 'Copy';
-    copy.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(value); setStatus(`${label} copied`); }
-      catch { setStatus('Could not copy — the browser blocked the clipboard', false); }
+  if (!acc) return;
+
+  const signIn = [];
+  if (acc.email) signIn.push(homeRow({ label: 'Username', value: acc.email }));
+  if (acc.password) signIn.push(homeRow({ label: 'Password', value: acc.password, secret: true }));
+  const site = String(acc.urls || '').split('\n').map(u => u.trim()).find(Boolean);
+  if (site) signIn.push(homeRow({ label: 'Website', value: site }));
+  if (signIn.length) box.appendChild(homeSection('Sign-in', signIn));
+
+  // Custom fields, by section (the default one first), like the editor.
+  const groups = new Map();
+  for (const f of acc.customFields || []) {
+    if (!f.label && !String(f.value ?? '')) continue;
+    const name = (f.section || '').trim();
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(f);
+  }
+  for (const name of [...groups.keys()].sort((a, b) => (a !== '') - (b !== ''))) { // the default section first
+    box.appendChild(homeSection(name || 'More fields', groups.get(name).map(f => homeRow({
+      label: f.label || 'Field', value: f.value ?? '', secret: Vault.SECRET_KINDS.includes(f.kind), multiline: f.kind === 'multiline',
+    }))));
+  }
+
+  if (String(acc.notes || '').trim()) box.appendChild(homeSection('Notes', [homeRow({ label: '', value: acc.notes, multiline: true })]));
+
+  if (related.length) {
+    const rows = related.map(r => {
+      const wrap = document.createElement('div');
+      wrap.className = 'home-rel';
+      const open = r.kind !== 'login' && _homeOpenRelated.has(r.id);
+      const btn = document.createElement('button');
+      btn.className = 'home-rel-head';
+      btn.setAttribute('aria-expanded', String(open));
+      btn.innerHTML = `${avatarHTML(r.acc || { name: r.name }, 'acc-av-sm')}<span class="home-rel-text"><span class="home-rel-name"></span><span class="home-rel-sub"></span></span><span class="home-rel-chev">${r.kind === 'login' ? '›' : open ? '▾' : '▸'}</span>`;
+      btn.querySelector('.home-rel-name').textContent = r.name;
+      btn.querySelector('.home-rel-sub').textContent = r.kind === 'login' ? ['Login', r.sub].filter(Boolean).join(' · ') : r.sub;
+      btn.addEventListener('click', () => {
+        if (r.kind === 'login') {
+          activeIndex = r.index;
+          chrome.storage.local.set({ activeIndex });
+          renderAccountBar();
+          startTimer();
+          return;
+        }
+        if (open) _homeOpenRelated.delete(r.id); else _homeOpenRelated.add(r.id);
+        _homeCredsKey = null;
+        renderHomeCreds(acc);
+      });
+      wrap.appendChild(btn);
+      if (open) {
+        const body = document.createElement('div');
+        body.className = 'home-rel-body';
+        const rows = homeItemRows(r.item);
+        if (rows.length) rows.forEach(x => body.appendChild(x));
+        else body.innerHTML = '<div class="home-rel-empty">Nothing in it yet</div>';
+        const edit = document.createElement('button');
+        edit.className = 'home-rel-edit';
+        edit.textContent = 'Open in vault';
+        edit.addEventListener('click', () => showView('accounts', { openItemId: r.id }));
+        body.appendChild(edit);
+        wrap.appendChild(body);
+      }
+      return wrap;
     });
-    el.appendChild(copy);
-    box.appendChild(el);
-  };
-  if (acc.email) row('Username', acc.email, false);
-  if (acc.password) row('Password', acc.password, true);
+    box.appendChild(homeSection(`Related · ${related.length}`, rows));
+  }
+
+  // Adding fields, notes or links happens in the editor.
+  const more = document.createElement('button');
+  more.className = 'home-edit-more';
+  more.textContent = '+ Add fields, notes or related items';
+  more.addEventListener('click', () => editAccount(activeIndex));
+  box.appendChild(more);
 }
 
 function startTimer() {
@@ -811,7 +946,7 @@ async function refreshSharedItemsNow() {
   refreshAccountsUI();
 }
 
-function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {}) {
+function renderAccountsList(openTargetIdx = -1, { preserveSearch = false, openItemId = null } = {}) {
   _editSession++;
   const withOrigin = [
     ...accounts.map((a, i) => ({ acc: { ...a }, origIdx: i })),
@@ -821,7 +956,8 @@ function renderAccountsList(openTargetIdx = -1, { preserveSearch = false } = {})
   withOrigin.sort((x, y) => (x.acc.name || '').localeCompare(y.acc.name || ''));
   draft = withOrigin.map(w => w.acc);
   _draftBase = structuredClone(draft);
-  openAccIdx = openTargetIdx >= 0 ? withOrigin.findIndex(w => w.origIdx === openTargetIdx) : -1;
+  openAccIdx = openItemId ? draft.findIndex(d => d._id === openItemId)
+    : openTargetIdx >= 0 ? withOrigin.findIndex(w => w.origIdx === openTargetIdx) : -1;
   if (!preserveSearch) document.getElementById('acc-search').value = '';
   // A leftover category filter from a previous Accounts-view visit could hide
   // the very row we're jumping to — clear it so the shortcut always lands
@@ -2372,7 +2508,7 @@ function showView(view, opts = {}) {
   document.getElementById('nav-config').classList.toggle('active',   view === 'settings');
   document.getElementById('nav-sync').classList.toggle('active',     view === 'sync');
   document.getElementById('nav-team').classList.toggle('active',     view === 'team');
-  if (view === 'accounts') renderAccountsList(opts.openAccountIdx ?? -1, { preserveSearch: opts.preserveSearch });
+  if (view === 'accounts') renderAccountsList(opts.openAccountIdx ?? -1, { preserveSearch: opts.preserveSearch, openItemId: opts.openItemId });
   if (view === 'sync') renderSyncPanel();
   if (view === 'team') renderTeamPanel();
   if (view === 'generate') renderGenerator();
