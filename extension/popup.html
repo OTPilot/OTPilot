@@ -620,8 +620,31 @@
     .merge-row em { color: var(--ink-4); font-size: 11px; }
     .merge-label { font-size: 10px; font-weight: 600; text-transform: uppercase; color: var(--ink-5); }
     .merge-actions { display: flex; gap: 6px; margin-top: 8px; }
-    .cf-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
-    .cf-row .cf-label { font-size: 11px; font-weight: 600; }
+    .cf-section { margin-bottom: 10px; }
+    .cf-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .cf-head label { margin: 0; }
+    .cf-section-name { flex: 1; min-width: 0; padding: 2px 0 !important; background: transparent !important; border: 0 !important; border-bottom: 1px dashed var(--border) !important; border-radius: 0 !important; font-size: 10px !important; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3) !important; }
+    .cf-section-name:focus { outline: none; border-bottom-color: var(--accent-2) !important; color: var(--ink-0) !important; }
+    .cf-section-del { background: none; border: 0; color: var(--ink-4); cursor: pointer; font-size: 11px; padding: 2px 4px; }
+    .cf-section-del:hover { color: var(--danger); }
+    .cf-list { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .cf-list:empty { display: none; }
+    .cf-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+    .cf-row:last-child { border-bottom: 0; }
+    .cf-row .cf-label, .cf-row .cf-value { min-width: 0; padding: 5px 6px !important; font-size: 12px !important; background: transparent !important; border: 1px solid transparent !important; border-radius: 5px !important; }
+    .cf-row .cf-label { color: var(--ink-3) !important; }
+    .cf-row .cf-label:focus, .cf-row .cf-value:focus { outline: none; border-color: var(--accent-2) !important; background: var(--bg) !important; }
+    .cf-row textarea.cf-value { min-height: 44px; resize: vertical; }
+    .cf-actions { display: flex; align-items: center; gap: 1px; }
+    .cf-actions .btn-eye { width: 22px; height: 22px; padding: 0; border: 0; background: none; font-size: 12px; }
+    .cf-actions .btn-eye svg { width: 14px; height: 14px; }
+    /* Hide / remove only on the row being worked on: room for the value. */
+    .cf-row .cf-hide, .cf-row .cf-del { display: none; }
+    .cf-row:hover .cf-hide, .cf-row:hover .cf-del, .cf-row:focus-within .cf-hide, .cf-row:focus-within .cf-del { display: inline-flex; }
+    .cf-add-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .cf-add-kind { height: 22px; padding: 0 7px; border-radius: 12px; border: 1px dashed var(--border); background: none; color: var(--ink-2); font: inherit; font-size: 11px; cursor: pointer; }
+    .cf-add-kind:hover { border-color: var(--accent-2); color: var(--accent-2); }
+    .cf-add-kind.cf-add { border-color: var(--accent-2); color: var(--accent-2); }
     .cf-hide { font-size: 12px; opacity: .55; }
     .cf-hide.on { opacity: 1; }
     .add-type-menu-down { top: calc(100% + 8px); bottom: auto; left: auto; right: -6px; }
