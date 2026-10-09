@@ -43,7 +43,9 @@ test('a password-only login (no 2FA) is fine on Home', async ({ context, extensi
   await writeAccounts(page, [{ name: 'Netflix', email: 'tv@example.com', secret: '', urls: '', password: 'p4ss' }]);
   await page.reload();
   await page.locator('#home-list .lc-row', { hasText: 'Netflix' }).click();
-  await expect(page.locator('#otp-display')).toHaveText('No 2FA code');
+  // No code block or Copy / Fill: the details are what there is.
+  await expect(page.locator('#otp-display')).toBeHidden();
+  await expect(page.locator('#btn-fill')).toBeHidden();
   await expect(page.locator('#home-creds .home-cred')).toHaveCount(2);
 });
 
