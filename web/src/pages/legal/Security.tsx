@@ -1,8 +1,14 @@
+import { Seo } from '../../seo'
 import { Link } from 'react-router-dom'
 
 export default function Security() {
   return (
     <div className="min-h-screen bg-[#0a0a0f] px-6 py-16">
+      <Seo
+        title="Security: how OTPilot protects your passwords and 2FA"
+        description="End-to-end encryption in plain language: what OTPilot stores, what it never sees, and how your vault, sync and team sharing are protected."
+        path="/security"
+      />
       <div className="max-w-2xl mx-auto">
         <Link to="/" className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors mb-8 inline-block">
           ← Back to home

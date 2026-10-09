@@ -1,8 +1,14 @@
+import { Seo } from '../../seo'
 import { Link } from 'react-router-dom'
 
 export default function Tos() {
   return (
     <div className="min-h-screen bg-[#0a0a0f] px-6 py-16">
+      <Seo
+        title="Terms of Service | OTPilot"
+        description="The terms for using the OTPilot browser extension, website and cloud services."
+        path="/tos"
+      />
       <div className="max-w-2xl mx-auto">
         <Link to="/" className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors mb-8 inline-block">
           ← Back to home
