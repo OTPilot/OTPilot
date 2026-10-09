@@ -4042,6 +4042,44 @@ function collectionRow(c, team, members, myId) {
   return row;
 }
 
+// What's in a collection: my items shared there (removable), teammates'
+// items shared there (with their owner), and items stored in the collection
+// itself (shared before items stayed in their owner's vault).
+async function collectionItemsSection(c) {
+  const box = document.createElement('div');
+  box.className = 'coll-items';
+  box.innerHTML = '<div class="share-title">Items</div><div class="coll-meta">Loading…</div>';
+  (async () => {
+    const rows = [];
+    try {
+      const mine = (await VaultShares.mine()).filter(s => s.grants.some(g => g.collection_id === c.id));
+      const titles = new Map([...accounts.map(a => [a._id, a.name]), ...otherItems.map(i => [i.id, i.title])]);
+      for (const s of mine) rows.push({ title: titles.get(s.item_id) || 'An item of yours', by: 'you', share: s });
+    } catch { /* offline: only what's known locally */ }
+    for (const x of sharedItems) {
+      if (x.share && (x.share.via || []).some(v => v.collection_id === c.id)) rows.push({ title: x.item.title, by: x.share.owner?.email || 'a teammate' });
+      if (x.collection?.id === c.id) rows.push({ title: x.item.title, by: 'the collection' });
+    }
+    rows.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    box.innerHTML = '<div class="share-title">Items</div>' + (rows.length
+      ? rows.map((r, i) => `<div class="share-grant"><span><b>${esc(r.title || 'Untitled')}</b> · ${esc(r.by)}</span>${r.share ? `<button type="button" class="btn-del coll-unshare" data-i="${i}">Remove from collection</button>` : ''}</div>`).join('')
+      : '<div class="coll-meta">Nothing here yet. Share items into it from their editor in the Vault (Share…).</div>');
+    box.querySelectorAll('.coll-unshare').forEach(btn => btn.addEventListener('click', async () => {
+      const r = rows[+btn.dataset.i];
+      btn.disabled = true;
+      try {
+        const key = await VaultKeys.getKey();
+        const item = await VaultStore.get(r.share.item_id, key);
+        const next = await VaultShares.unshare(item, r.share.id, { collection_id: c.id });
+        if (next !== item) await VaultShares.attach(item.id, next.shares, key);
+        setStatus(`"${r.title}" is no longer shared in "${c.name}"`);
+      } catch { setStatus('Could not remove it — check your connection', false); }
+      box.replaceWith(await collectionItemsSection(c));
+    }));
+  })();
+  return box;
+}
+
 async function renderCollectionBody(body, c, team, teamMembers, myId) {
   const manage = c.role === 'manage';
   body.innerHTML = '<div class="coll-meta">Loading…</div>';
@@ -4049,6 +4087,7 @@ async function renderCollectionBody(body, c, team, teamMembers, myId) {
   try { inCollection = await VaultCollections.members(c); } catch { /* shown empty */ }
   const rerender = () => renderTeamPanel();
   body.innerHTML = '';
+  if (c.key) body.appendChild(await collectionItemsSection(c));
   for (const m of inCollection) {
     const el = document.createElement('div');
     el.className = 'coll-member';

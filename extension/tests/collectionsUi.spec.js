@@ -258,3 +258,29 @@ test('reading a shared note that starts with a newline is not an edit; viewers n
   await expect(page.locator('#status-msg')).toHaveText('Saved');
 });
 
+
+test("a collection lists what's shared into it: mine (removable), teammates', and its own items", async ({ context, extensionId }) => {
+  const { installFakeShares } = await import('./fakeShares.js');
+  const page = await teamPopup(context, extensionId, [{ name: 'Mine to share', email: 'me', secret: TEST_SECRET, urls: 'a.example', password: 'pw' }]);
+  await installFakeShares(page); // on top of the collections fake
+  await page.evaluate(async team => {
+    Sharing.getMyTeam = async () => team; // fakeShares replaced the team lookups
+    const c = await VaultCollections.create('team-1', 'Infra');
+    await VaultCollections.save(c, Vault.newItem('note', { title: 'Old runbook' })); // stored in the collection
+    const key = await VaultKeys.getKey();
+    const [mine] = (await VaultStore.readAll(key)).items;
+    const next = await VaultShares.share(mine, null, [{ collection: c, role: 'view' }]);
+    await VaultShares.attach(mine.id, next.shares, key);
+    const theirs = Vault.newItem('login', { title: "Bob's DB" });
+    await fakeShares.shareFromBob(theirs, 'view', c);
+    await refreshSharedItems();
+  }, TEAM);
+  await openTeam(page);
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click();
+  const items = page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
+  await expect(items.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/, /Mine to share · you/, /Old runbook · the collection/]);
+  await items.locator('.coll-unshare').click();
+  await expect(page.locator('#status-msg')).toContainText('no longer shared in "Infra"');
+  await expect(items.locator('.share-grant', { hasText: 'Mine to share' })).toHaveCount(0);
+  expect(await page.evaluate(() => [...fakeShares.shares.values()].filter(s => s.owner === 'user-me').length)).toBe(0);
+});
