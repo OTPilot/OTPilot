@@ -287,12 +287,15 @@ test("a collection lists what's shared into it: mine (removable), teammates', an
 
 test("a collection opened while shared items still load lists them once they arrive; a failed load says so and retries", async ({ context, extensionId }) => {
   const { installFakeShares } = await import('./fakeShares.js');
-  const page = await teamPopup(context, extensionId);
+  const page = await teamPopup(context, extensionId, [{ name: 'Mine to share', email: 'me', secret: TEST_SECRET, urls: 'a.example', password: 'pw' }]);
   await installFakeShares(page);
   await page.evaluate(async team => {
     Sharing.getMyTeam = async () => team;
     const c = await VaultCollections.create('team-1', 'Infra');
     await fakeShares.shareFromBob(Vault.newItem('login', { title: "Bob's DB" }), 'view', c);
+    const key = await VaultKeys.getKey();
+    const [mine] = (await VaultStore.readAll(key)).items;
+    await VaultShares.attach(mine.id, (await VaultShares.share(mine, null, [{ collection: c, role: 'view' }])).shares, key);
     // A slow refresh in flight when the collection is opened.
     const refresh = VaultShares.refresh;
     VaultShares.refresh = async () => { await new Promise(r => setTimeout(r, 1500)); return refresh(); };
@@ -301,7 +304,7 @@ test("a collection opened while shared items still load lists them once they arr
   await openTeam(page);
   await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click();
   const items = page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
-  await expect(items.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/], { timeout: 8000 });
+  await expect(items.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/, /Mine to share · you/], { timeout: 8000 });
 
   // My items can't be loaded: it says so, and Retry works once they can.
   await page.evaluate(() => {
@@ -312,6 +315,10 @@ test("a collection opened while shared items still load lists them once they arr
   await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click(); // reopen
   await expect(items.locator('.coll-items-error')).toContainText('could not be loaded');
   await page.evaluate(() => { VaultShares.mine = window._mine; });
+  await expect(items.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/]); // mine missing meanwhile
   await items.locator('.coll-items-retry').click();
-  await expect(page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items-error')).toHaveCount(0);
+  // The retry really loaded them: my row is back, no error.
+  const after = page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
+  await expect(after.locator('.share-grant')).toHaveText([/Bob's DB · bob@team\.test/, /Mine to share · you/]);
+  await expect(after.locator('.coll-items-error')).toHaveCount(0);
 });
