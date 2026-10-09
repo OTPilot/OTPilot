@@ -148,8 +148,12 @@ test('the Share panel: teammates, what to share, Can edit only with everything; 
   await page.evaluate(() => refreshSharedItems());
   await page.click('#nav-settings');
   await page.locator('.acc-head', { hasText: 'DigitalOcean' }).click();
+  // Each way to share says what the teammate gets.
+  await expect(page.locator('#acc-detail .share-hint-codes')).toContainText('never the secret');
+  await expect(page.locator('#acc-detail .share-hint-item')).toContainText('they can keep');
   await page.click('#acc-detail .btn-share-item');
   const panel = page.locator('#acc-detail .share-panel');
+  await expect(panel.locator('.share-hint-totp')).toContainText('gives the secret itself');
   await expect(panel.locator('.share-user')).toHaveCount(2); // Bob, and someone not set up (disabled)
   await expect(panel.locator('.share-user[value="user-new"]')).toBeDisabled();
   await panel.locator('.share-part[value="f:password"]').uncheck();

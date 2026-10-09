@@ -1212,6 +1212,7 @@ ${esc(acc.notes || '')}</textarea>
     </label>
     <div class="acc-share">
       <button type="button" class="btn-share-team" title="Teammates get live codes; the 2FA secret itself is never revealed">↗ Share 2FA code only</button>
+      <div class="share-hint share-hint-codes">Teammates get live codes only, never the secret. Copies, fills and refreshes are logged (just viewing, at most every 10 minutes), and when you revoke it they can't make codes anymore.</div>
       <div class="share-picker" style="display:none"></div>
     </div>
     ${collectionControlsHTML(acc)}`;
@@ -2010,6 +2011,7 @@ function collectionControlsHTML(entry) {
   if (!_teamPlan || !entry._id || !_draftBase.some(b => b._id === entry._id)) return '';
   return `<div class="acc-field share-item-field">
     <button type="button" class="btn-share-team btn-share-item">Share…</button>
+    <div class="share-hint share-hint-item">Teammates get a copy of the item (or the parts you pick), end-to-end encrypted. What they've seen they can keep, even after you stop sharing.</div>
     <div class="share-panel" style="display:none"></div>
   </div>`;
 }
@@ -2066,6 +2068,7 @@ async function renderSharePanel(panel, itemId) {
     <div class="share-section"><div class="share-title">What to share</div>
       <label class="share-recip"><input type="checkbox" class="share-part" value="" checked disabled> Name</label>
       ${parts.map(p => `<label class="share-recip"><input type="checkbox" class="share-part" value="${esc(p.key)}" checked> ${esc(p.label)}</label>`).join('')}
+      ${parts.some(p => p.key === 'totp') ? '<div class="share-hint share-hint-totp">"2FA code" gives the secret itself: they can keep making codes. To give live codes without the secret, use "Share 2FA code only".</div>' : ''}
     </div>
     <div class="share-section field-row">
       <select class="share-role"><option value="view">Can view</option><option value="edit">Can edit</option></select>
