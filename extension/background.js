@@ -6,7 +6,7 @@ importScripts(
   // which content scripts can't read, so they ask this worker (vaultState /
   // vaultUnlock below).
   'vaultCrypto.js', 'vaultKeys.js', 'vaultStore.js', 'vault.js', 'vaultMigration.js',
-  'vaultAccounts.js', 'cloudSync.js', 'vaultLock.js', 'vaultSync.js',
+  'vaultAccounts.js', 'cloudSync.js', 'vaultLock.js', 'vaultSync.js', 'vaultShares.js',
 );
 
 // Per-item sync (/vault/items) from the worker: after a page saved or changed
@@ -33,6 +33,8 @@ function queueVaultSync() {
         let stats;
         try {
           stats = await VaultSync.sync(key);
+          // My shared items' copies follow what a page just saved.
+          await VaultShares.syncOwner(key).catch(() => {});
         } finally {
           // The locked-vault index follows what the pull stored, even when
           // the upload after it failed (the pull's progress is saved, so a
@@ -110,14 +112,16 @@ async function attachCandidates(sender, email = '') {
 // keys in chrome.storage.session `collectionKeys`, cleared on lock; records
 // under cr:<cid>:<id>). Only read here, for filling.
 async function sharedLogins() {
-  const keys = (await chrome.storage.session.get('collectionKeys')).collectionKeys || {};
-  if (!Object.keys(keys).length) return [];
+  const { collectionKeys: keys = {}, shareKeys = {} } = await chrome.storage.session.get(['collectionKeys', 'shareKeys']);
+  if (!Object.keys(keys).length && !Object.keys(shareKeys).length) return [];
   const out = [];
   for (const [k, rec] of Object.entries(await chrome.storage.local.get(null))) {
+    // A collection's item (cr:<cid>:<id>) or a copy shared with me (sr:<id>).
     const m = /^cr:([0-9a-f-]{36}):/.exec(k);
-    if (!m || !keys[m[1]]) continue;
+    const key = m ? keys[m[1]] : (k.startsWith('sr:') ? shareKeys[k.slice(3)] : null);
+    if (!key) continue;
     try {
-      const item = await VaultCrypto.decryptItem(rec, keys[m[1]]);
+      const item = await VaultCrypto.decryptItem(rec, key);
       if (item.type === 'login') out.push(item);
     } catch { /* unreadable: skipped */ }
   }
@@ -127,7 +131,17 @@ async function sharedLogins() {
 // One shared login by id: only that record is decrypted (a direct lookup in
 // each unlocked collection), not every record.
 async function sharedLogin(id) {
-  const keys = (await chrome.storage.session.get('collectionKeys')).collectionKeys || {};
+  const { collectionKeys: keys = {}, shareKeys = {} } = await chrome.storage.session.get(['collectionKeys', 'shareKeys']);
+  // A copy shared with me: its record is stored under the share's id.
+  if (shareKeys[id]) {
+    const rec = (await chrome.storage.local.get(`sr:${id}`))[`sr:${id}`];
+    if (rec) {
+      try {
+        const item = await VaultCrypto.decryptItem(rec, shareKeys[id]);
+        return item.type === 'login' ? item : null;
+      } catch { return null; }
+    }
+  }
   for (const [cid, key] of Object.entries(keys)) {
     const k = `cr:${cid}:${id}`;
     const rec = (await chrome.storage.local.get(k))[k];

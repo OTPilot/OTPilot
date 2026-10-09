@@ -142,6 +142,16 @@
     .btn-share-revoke:hover { background: var(--danger); color: var(--on-accent); }
 
     .share-msg { font-size: 11px; color: var(--ink-4); line-height: 1.5; }
+    .share-panel { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 6px; background: var(--bg); }
+    .share-section { margin-bottom: 8px; }
+    .share-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-5); margin-bottom: 4px; }
+    .share-grant { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; color: var(--ink-2); padding: 3px 0; }
+    .share-panel label.share-recip {
+      display: flex; align-items: center; gap: 6px; margin: 0; padding: 3px 2px;
+      text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 400; color: var(--ink-2);
+    }
+    .share-panel label.share-recip input { margin: 0; width: auto; flex: 0 0 auto; padding: 0; }
+    .share-role { padding: 5px 6px; border-radius: 6px; background: var(--surface); color: var(--ink-0); border: 1px solid var(--border); font: inherit; font-size: 12px; }
     .share-msg a { color: var(--accent-2); text-decoration: none; }
     .share-recip-list { display: flex; flex-direction: column; gap: 2px; }
     .share-recip {
@@ -1609,7 +1619,7 @@
       <input id="collection-new-name" class="sync-input" type="text" placeholder="New collection, e.g. Infra" maxlength="60" autocomplete="off" style="flex:1;">
       <button id="collection-create" class="btn-crypto-ok">Create</button>
     </div>
-    <div style="font-size:11px;color:var(--ink-5);margin-top:12px;">Share codes from the <strong>Accounts</strong> tab (↗ Share with team), or manage everything on the <a id="team-web-link" href="#" target="_blank" style="color:var(--accent-2);text-decoration:none;">web dashboard ↗</a>.</div>
+    <div style="font-size:11px;color:var(--ink-5);margin-top:12px;">Share items from their editor in the <strong>Vault</strong> (Share…), or manage everything on the <a id="team-web-link" href="#" target="_blank" style="color:var(--accent-2);text-decoration:none;">web dashboard ↗</a>.</div>
   </div>
 </div>
 
@@ -1636,6 +1646,7 @@
 <script src="vaultAccounts.js"></script>
 <script src="cloudSync.js"></script>
 <script src="vaultCollections.js"></script>
+<script src="vaultShares.js"></script>
 <script src="vaultSync.js"></script>
 <script src="vaultLock.js"></script>
 <script src="generator.js"></script>

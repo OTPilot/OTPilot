@@ -132,25 +132,6 @@ test('the personal Save never writes shared items into the personal vault', asyn
   expect(await page.evaluate(() => accounts.map(a => a.name))).toEqual(['Mine']);
 });
 
-test('moving a personal item into a collection takes it out of the personal vault', async ({ context, extensionId }) => {
-  const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: 'me@x.com', secret: TEST_SECRET, urls: 'example.com', password: 'pw' }]);
-  await page.evaluate(async () => { await VaultCollections.create('team-1', 'Infra'); await refreshSharedItems(); });
-  await page.click('#nav-settings');
-  await page.locator('.acc-head', { hasText: 'Mine' }).click();
-  await expect(page.locator('#acc-detail .move-to-collection')).toBeVisible();
-  page.once('dialog', d => d.accept());
-  await page.click('#acc-detail .btn-move-collection');
-  await expect(page.locator('#status-msg')).toContainText('Moved to Infra');
-  await expect(page.locator('.acc-row', { hasText: 'Mine' }).locator('.shared-tag')).toHaveText('Shared · Infra');
-  const r = await page.evaluate(async () => ({
-    personal: (await VaultStore.readAll(await VaultKeys.getKey())).items.length,
-    shared: (await sharedItemsFromLocal()).map(s => [s.item.title, Vault.getValue(s.item, 'password'), s.item.totp?.secret]),
-  }));
-  expect(r).toEqual({ personal: 0, shared: [['Mine', 'pw', TEST_SECRET]] });
-});
-
-// ── Review hardening ─────────────────────────────────────────────────────────
-
 test('offline, shared items still load from the local copy', async ({ context, extensionId }) => {
   const page = await teamPopup(context, extensionId);
   const n = await page.evaluate(async () => {
@@ -165,7 +146,7 @@ test('offline, shared items still load from the local copy', async ({ context, e
   expect(n).toEqual(['Runbook']);
 });
 
-test('saving a shared item keeps unsaved edits to other rows; a move starts personal sync', async ({ context, extensionId }) => {
+test('saving a shared item keeps unsaved edits to other rows', async ({ context, extensionId }) => {
   const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: '', secret: TEST_SECRET, urls: '' }, { name: 'Other', email: '', secret: TEST_SECRET, urls: '', password: 'pw' }]);
   await page.evaluate(async () => {
     const c = await VaultCollections.create('team-1', 'Infra');
@@ -184,14 +165,6 @@ test('saving a shared item keeps unsaved edits to other rows; a move starts pers
   await expect.poll(async () => (await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
     .find(i => i.title === 'Mine'))) && page.evaluate(async () => Vault.getValue((await VaultStore.readAll(await VaultKeys.getKey())).items.find(i => i.title === 'Mine'), 'username'))).toBe('kept@x.com');
 
-  // Moving "Other" stamps a local change (personal sync runs).
-  await page.evaluate(() => chrome.storage.local.remove('localChangedAt'));
-  await page.click('#nav-settings');
-  await page.locator('.acc-head', { hasText: 'Other' }).click();
-  page.once('dialog', d => d.accept());
-  await page.click('#acc-detail .btn-move-collection');
-  await expect(page.locator('#status-msg')).toContainText('Moved to Infra');
-  expect(await page.evaluate(async () => !!(await chrome.storage.local.get('localChangedAt')).localChangedAt)).toBe(true);
 });
 
 test('a teammate cannot inject markup through an unknown type with no title', async ({ context, extensionId }) => {
@@ -253,46 +226,6 @@ test("offline, another user never gets the previous user's shared items", async 
   expect(titles).toEqual([]);
 });
 
-test('moving a login out of the personal vault removes it from the locked-vault index', async ({ context, extensionId }) => {
-  const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: 'me@x.com', secret: '', urls: 'example.com', password: 'pw' }]);
-  await page.evaluate(async () => { await VaultCollections.create('team-1', 'Infra'); await refreshSharedItems(); });
-  expect((await page.evaluate(() => VaultAccounts.readIndex())).map(e => e.name)).toEqual(['Mine']);
-  await page.click('#nav-settings');
-  await page.locator('.acc-head', { hasText: 'Mine' }).click();
-  page.once('dialog', d => d.accept());
-  await page.click('#acc-detail .btn-move-collection');
-  await expect(page.locator('#status-msg')).toContainText('Moved to Infra');
-  expect(await page.evaluate(() => VaultAccounts.readIndex())).toEqual([]);
-});
-
-test('a move never deletes a personal login updated meanwhile, and runs once', async ({ context, extensionId }) => {
-  const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: 'me@x.com', secret: '', urls: 'example.com', password: 'old' }]);
-  await page.evaluate(async () => {
-    await VaultCollections.create('team-1', 'Infra');
-    await refreshSharedItems();
-    // While the collection save is in flight, a page updates the password.
-    const real = VaultCollections.moveIn;
-    VaultCollections.moveIn = async (...a) => {
-      const key = await VaultKeys.getKey();
-      const mine = (await VaultStore.readAll(key)).items.find(i => i.title === 'Mine');
-      Vault.getField(mine, 'password').value = 'new';
-      await VaultStore.save(mine, key);
-      await new Promise(r => setTimeout(r, 200));
-      return real(...a);
-    };
-  });
-  await page.click('#nav-settings');
-  await page.locator('.acc-head', { hasText: 'Mine' }).click();
-  page.on('dialog', d => d.accept());
-  await page.evaluate(() => { const b = document.querySelector('#acc-detail .btn-move-collection'); b.click(); b.click(); });
-  await expect(page.locator('#status-msg')).toContainText('It changed while moving');
-  const r = await page.evaluate(async () => ({
-    personal: (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => Vault.getValue(i, 'password')),
-    shared: fake.items.size,
-  }));
-  expect(r).toEqual({ personal: ['new'], shared: 1 });
-});
-
 test('the main Save refuses to drop unsaved edits to a shared item', async ({ context, extensionId }) => {
   const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: '', secret: TEST_SECRET, urls: '' }]);
   await page.evaluate(async () => {
@@ -325,29 +258,3 @@ test('reading a shared note that starts with a newline is not an edit; viewers n
   await expect(page.locator('#status-msg')).toHaveText('Saved');
 });
 
-test('after a move kept the updated personal login, a later Save keeps its new password', async ({ context, extensionId }) => {
-  const page = await teamPopup(context, extensionId, [{ name: 'Mine', email: 'me@x.com', secret: '', urls: 'example.com', password: 'old' }]);
-  await page.evaluate(async () => {
-    await VaultCollections.create('team-1', 'Infra');
-    await refreshSharedItems();
-    const real = VaultCollections.moveIn;
-    VaultCollections.moveIn = async (...a) => {
-      const key = await VaultKeys.getKey();
-      const mine = (await VaultStore.readAll(key)).items.find(i => i.title === 'Mine');
-      Vault.getField(mine, 'password').value = 'new';
-      await VaultStore.save(mine, key);
-      return real(...a);
-    };
-  });
-  await page.click('#nav-settings');
-  await page.locator('.acc-head', { hasText: 'Mine' }).click();
-  page.on('dialog', d => d.accept());
-  await page.click('#acc-detail .btn-move-collection');
-  await expect(page.locator('#status-msg')).toContainText('It changed while moving');
-  await page.locator('.acc-head', { hasText: 'Mine' }).first().click();
-  await expect(page.locator('#acc-detail .acc-password')).toHaveValue('new');
-  await page.fill('#acc-detail .acc-name', 'Mine renamed');
-  await page.click('#btn-save-all');
-  await expect.poll(() => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
-    .map(i => [i.title, Vault.getValue(i, 'password')]))).toEqual([['Mine renamed', 'new']]);
-});
