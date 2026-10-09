@@ -455,3 +455,24 @@ test('a newer version from another device keeps the shares made here (their keys
   });
   expect(r).toEqual({ notes: 'v2 elsewhere', shares: ['s-1'], remoteShares: ['s-1'] });
 });
+
+test('pairing a newer local twin with a server login keeps the server copy\'s shares', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const make = (over) => {
+      const i = Vault.newItem('login', { title: 'Same', totp: { secret: 'JBSWY3DPEHPK3PXP', digits: 6, period: 30, algorithm: 'SHA1' }, ...over });
+      Vault.getField(i, 'username').value = 'me';
+      return i;
+    };
+    // On the server (e.g. just converted from a collection): with a share key.
+    const theirs = make({ updatedAt: '2026-01-01T00:00:00.000Z', shares: [{ id: 's-1', sk: 'k', whole: true, parts: null }] });
+    await fakeServer.remoteSave(theirs);
+    // Here, never synced, a newer twin (same secret, title, username).
+    await VaultStore.save(make({ updatedAt: '2026-02-01T00:00:00.000Z', notes: 'newer here' }), key);
+    await VaultSync.sync(key);
+    const items = (await VaultStore.readAll(key)).items;
+    return { count: items.length, id: items[0].id === theirs.id, notes: items[0].notes, shares: (items[0].shares || []).map(s => s.id) };
+  });
+  expect(r).toEqual({ count: 1, id: true, notes: 'newer here', shares: ['s-1'] });
+});

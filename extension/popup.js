@@ -4077,6 +4077,22 @@ async function collectionItemsSection(c) {
         ? rows.map((r, i) => `<div class="share-grant"><span><b>${esc(r.title || 'Untitled')}</b> · ${esc(r.by)}</span>${r.share ? `<button type="button" class="btn-del coll-unshare" data-i="${i}">Remove from collection</button>` : ''}</div>`).join('')
         : (mineFailed ? '' : '<div class="coll-meta">Nothing here yet. Share items into it from their editor in the Vault (Share…).</div>'));
     box.querySelector('.coll-items-retry')?.addEventListener('click', async () => box.replaceWith(await collectionItemsSection(c)));
+    if (_convertNotSynced) {
+      const note = document.createElement('div');
+      note.className = 'coll-meta coll-items-error coll-convert-sync';
+      note.innerHTML = 'Converted items haven\'t reached this device yet. <button type="button" class="coll-link coll-sync-now">Sync now</button>';
+      note.querySelector('.coll-sync-now').addEventListener('click', async () => {
+        try {
+          const key = await VaultKeys.getKey();
+          await VaultSync.sync(key);
+          await reloadFromVault(key);
+          _convertNotSynced = false;
+          setStatus('Synced');
+        } catch { setStatus('Sync failed — check your connection', false); }
+        box.replaceWith(await collectionItemsSection(c));
+      });
+      box.prepend(note);
+    }
     // Items stored in the collection (the older model): a manager converts
     // them into shares of items of their own.
     const older = rows.filter(r => r.by === 'the collection').length;
@@ -4090,7 +4106,9 @@ async function collectionItemsSection(c) {
         if (!confirm(`Convert ${older} item${older === 1 ? '' : 's'} stored in "${c.name}"?\n\nThey move into your vault and are shared back to "${c.name}" — teammates keep seeing and editing them. If you leave the team, they leave the collection with you.`)) return;
         btn.disabled = true;
         const res = await convertCollectionItems(c);
-        setStatus(res.failed ? `Converted ${res.done}; ${res.failed} could not be — check your connection and try again` : `Converted ${res.done} item${res.done === 1 ? '' : 's'}`, !res.failed);
+        setStatus(res.failed ? `Converted ${res.done}; ${res.failed} could not be — check your connection and try again`
+          : !res.refreshed ? `Converted ${res.done}, but they haven't reached this device yet — use Sync now`
+          : `Converted ${res.done} item${res.done === 1 ? '' : 's'}`, !res.failed && res.refreshed);
         await refreshSharedItems();
         box.replaceWith(await collectionItemsSection(c));
       });
@@ -4134,12 +4152,19 @@ async function convertCollectionItems(c) {
     else if (res !== 'gone') failed++;
   }
   // My new items (with their share keys) come in through sync; the sources
-  // leave the collection's local copy. Reloaded whatever happened.
-  await VaultSync.sync(key).catch(() => {});
+  // leave the collection's local copy. Reloaded whatever happened; a failed
+  // sync is reported (the items are on the server, not here yet).
+  let refreshed = true;
+  try { await VaultSync.sync(key); } catch { refreshed = false; }
   await VaultCollections.pull(c).catch(() => {});
   await reloadFromVault(key);
-  return { done, failed };
+  _convertNotSynced = !refreshed && done > 0;
+  return { done, failed, refreshed };
 }
+
+// Converted items that haven't reached this device (its sync failed after
+// the conversion): the collection's Items offer to sync again.
+let _convertNotSynced = false;
 
 async function convertOne(c, source, revision, key) {
   const s = { id: crypto.randomUUID(), sk: VaultCrypto.b64e(VaultCrypto.generateKey()), whole: true, parts: null };

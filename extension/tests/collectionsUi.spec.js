@@ -367,3 +367,28 @@ test("a manager converts the collection's older items: one atomic request each, 
   });
   expect(r).toEqual({ requests: 1, mineNotes: 'v2 (teammate)', keyInItem: true, copyNotes: 'v2 (teammate)', grant: 'edit', left: 0 });
 });
+
+test('if this device can\'t sync after converting, it says so and offers Sync now', async ({ context, extensionId }) => {
+  const { installFakeShares } = await import('./fakeShares.js');
+  const page = await teamPopup(context, extensionId);
+  await installFakeShares(page);
+  await page.evaluate(async team => {
+    Sharing.getMyTeam = async () => team;
+    const c = await VaultCollections.create('team-1', 'Infra');
+    await VaultCollections.save(c, Vault.newItem('note', { title: 'Old runbook' }));
+    window._sync = VaultSync.sync;
+    VaultSync.sync = async () => { throw new Error('offline'); };
+    await refreshSharedItems();
+  }, TEAM);
+  await openTeam(page);
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-head').click();
+  page.on('dialog', d => d.accept());
+  await page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-convert').click();
+  await expect(page.locator('#status-msg')).toContainText("haven't reached this device yet");
+  const items = () => page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
+  await expect(items().locator('.coll-convert-sync')).toBeVisible();
+  await page.evaluate(() => { VaultSync.sync = window._sync; });
+  await items().locator('.coll-sync-now').click();
+  await expect(page.locator('#status-msg')).toContainText('Synced');
+  await expect(items().locator('.coll-convert-sync')).toHaveCount(0);
+});
