@@ -1,19 +1,18 @@
 # OTPilot
 
-> Chrome extension that auto-fills TOTP 2FA codes on login pages. Detects 2FA setup pages automatically. End-to-end encrypted sync across devices.
+> Password manager with built-in 2FA. Fills your password and your 2FA code on any login page. End-to-end encrypted, synced across devices, free to start.
 
-OTPilot is a Chrome browser extension for managing TOTP (Time-based One-Time Password) two-factor authentication codes. It auto-fills 2FA codes directly on login pages and automatically detects 2FA setup pages to save accounts with one click — no QR scanner, no base32 strings.
+OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) codes together. On a login page it fills the username and password, then the 2FA code — no phone, no copying six digits. It also detects 2FA setup pages and saves the account in one click.
 
 ## Key features
 
-- Auto-fills TOTP codes on login pages without user interaction
-- Detects 2FA setup pages automatically — reads otpauth:// URIs from the DOM
-- End-to-end encrypted cloud sync across devices (Personal plan)
-- Inline master password unlock prompt directly on the page
-- Wildcard URL pattern matching (useful for staging environments)
-- Fully local by default — works without an account or internet connection
-- Open source (MIT license)
-- No telemetry, no tracking
+- Fills passwords and 2FA codes on login pages; offers to save new sign-ins and updated passwords
+- Detects 2FA setup pages automatically — reads otpauth:// URIs and QR codes from the page
+- Secure notes, servers and API credentials, with custom fields and related items
+- End-to-end encrypted: the vault is encrypted on your device under a master password
+- Sync across devices (Personal plan); import from Chrome, 1Password, Bitwarden, LastPass and more
+- Team sharing: share a whole item or chosen fields end-to-end encrypted, or share live 2FA codes without the secret
+- Open source, no telemetry
 
 ## Compared to alternatives
 
@@ -23,7 +22,7 @@ OTPilot is a Chrome browser extension for managing TOTP (Time-based One-Time Pas
 
 ## Team sharing
 
-OTPilot supports sharing TOTP codes with teammates without exposing the underlying secret. The owner uploads the secret encrypted with an independent sharing key. The backend generates the TOTP code on demand for recipients — the raw secret is never transmitted. Revocation is instant: the owner deletes the sharing key and access is cut immediately.
+OTPilot supports sharing TOTP codes with teammates without exposing the underlying secret. The owner uploads the secret encrypted with an independent sharing key. The backend generates the TOTP code on demand for recipients, who never receive the secret itself. Revocation is instant: the owner removes a recipient and their access is cut immediately. Sharing whole items (passwords, notes, fields) is separate and end-to-end encrypted: the server never sees them.
 
 Invitation flow:
 - With an account: invite appears directly in the extension
@@ -31,9 +30,9 @@ Invitation flow:
 
 ## Plans
 
-- Free: all core features, local-only storage, no account required
-- Personal ($15 one-time): E2E encrypted cloud sync across devices
-- Team ($8–10/month or $70–80/year): sync + TOTP code sharing with instant revocation, up to 5 seats included
+- Free: unlimited 2FA codes, up to 50 passwords, notes and other items, on one device
+- Personal ($3/month or $30/year): unlimited items, end-to-end encrypted sync across devices
+- Team ($8/workspace/month or $80/year, 5 seats included, +$2 per extra seat/month): sharing with teammates and collections
 
 ## Links
 

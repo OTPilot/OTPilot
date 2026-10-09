@@ -1,6 +1,6 @@
 # OTPilot Extension
 
-Chrome extension (Manifest V3). Detects 2FA setup pages, saves TOTP secrets in one click, auto-fills codes on login, and optionally syncs encrypted accounts to the cloud.
+Password manager with built-in 2FA, as a Chrome extension (Manifest V3). Fills your password and your 2FA code on any login page. End-to-end encrypted, synced across devices, free to start.
 
 ## Features
 

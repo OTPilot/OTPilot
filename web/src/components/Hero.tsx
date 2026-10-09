@@ -82,16 +82,16 @@ export default function Hero() {
         </div>
 
         <h1 className="text-5xl md:text-7xl font-bold text-white tracking-tight mb-6 leading-[1.05]">
-          Your passwords and 2FA,{' '}
+          Password manager
+          <br />with{' '}
           <span className="bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent">
-            everywhere
+            built-in 2FA
           </span>
-          <br />you are.
         </h1>
 
         <p className="text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto mb-10 leading-relaxed">
-          OTPilot is a password manager with built-in 2FA: it fills your password and your code on
-          any site. End-to-end encrypted, open source, and synced across all your devices.
+          Fills your password and your 2FA code on any login page. End-to-end encrypted, synced
+          across devices, free to start.
         </p>
 
         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
