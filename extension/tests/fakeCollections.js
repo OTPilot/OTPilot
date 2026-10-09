@@ -50,6 +50,8 @@ export function installFakeCollections(page) {
         S.items.set(parts[3], { ...cur, record: null, deleted: true, revision: ++S.rev });
         (S.converted ||= []).push(body);
         if (window.fakeShares) {
+          // The new personal item is on my server vault now (sync brings it).
+          window.fakeShares.vault.push({ id: body.item.id, record: body.item.record, revision: ++window.fakeShares.rev });
           window.fakeShares.shares.set(body.share.id, { id: body.share.id, owner: S.me, item_id: body.item.id, whole: true, record: body.share.record,
             revision: ++window.fakeShares.rev, grants: [{ collection_id: c.id, role: 'edit', wrapped_key: body.share.wrapped_key }] });
         }

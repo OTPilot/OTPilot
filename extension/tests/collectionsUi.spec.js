@@ -388,7 +388,12 @@ test('if this device can\'t sync after converting, it says so and offers Sync no
   const items = () => page.locator('.coll-row', { hasText: 'Infra' }).locator('.coll-items');
   await expect(items().locator('.coll-convert-sync')).toBeVisible();
   await page.evaluate(() => { VaultSync.sync = window._sync; });
+  // Not here yet…
+  expect(await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.length)).toBe(0);
   await items().locator('.coll-sync-now').click();
   await expect(page.locator('#status-msg')).toContainText('Synced');
   await expect(items().locator('.coll-convert-sync')).toHaveCount(0);
+  // …and after Sync now the converted item is in my vault, with its share key.
+  const mine = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => [i.title, (i.shares || []).length, !!i.shares?.[0]?.sk]));
+  expect(mine).toEqual([['Old runbook', 1, true]]);
 });
