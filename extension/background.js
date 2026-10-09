@@ -230,9 +230,50 @@ async function storeCapture(sender, msg) {
   const password = typeof msg.password === 'string' ? msg.password : '';
   if (!host || !password || password.length > 1024) return;
   if ((await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE]?.includes(host)) return;
-  const username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
+  let username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
+  // A form with its own username ends any two-step flow in this tab; one
+  // without takes the username step's (kept for a retried password).
+  // `step`: the username step this capture took its username from, the only
+  // one settling it may end.
+  let step = null;
+  if (username) await chrome.storage.session.remove(pendingUsernameKey(sender.tab.id));
+  else {
+    const pending = await pendingUsernameFor(sender.tab.id, host);
+    if (pending) ({ username, id: step } = pending);
+  }
   const id = crypto.randomUUID(); // offers and choices name the capture they're about
-  await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { id, host, username, password, at: Date.now() } });
+  await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { id, host, username, password, at: Date.now(), ...(step ? { step } : {}) } });
+}
+
+// Two-step sign-ins (username page, then password page): the username step's
+// value waits here for the password step in the same tab, on a related host.
+const PENDING_USERNAME_TTL = 5 * 60 * 1000;
+const pendingUsernameKey = tabId => `pendingUsername:${tabId}`;
+
+async function captureUsername(sender, msg) {
+  const host = senderHost(sender);
+  const username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
+  if (!host || !username || sender.tab?.id === undefined) return;
+  await chrome.storage.session.set({ [pendingUsernameKey(sender.tab.id)]: { id: crypto.randomUUID(), host, username, at: Date.now() } });
+}
+
+// Kept until it expires, a new username step or a form with its own username
+// replaces it, or the sign-in's save offer is settled: a rejected password
+// retried on the same page needs it again.
+async function pendingUsernameFor(tabId, host) {
+  const key = pendingUsernameKey(tabId);
+  const pending = (await chrome.storage.session.get(key))[key];
+  if (!pending) return null;
+  if (Date.now() - pending.at > PENDING_USERNAME_TTL) { await chrome.storage.session.remove(key); return null; }
+  return relatedHost(pending.host, host) ? pending : null;
+}
+
+// Ends the username step a settled capture used — not a newer one the user
+// started since (back on the username page, another account).
+async function endUsernameStep(tabId, pending) {
+  if (!pending.step) return;
+  const key = pendingUsernameKey(tabId);
+  if ((await chrome.storage.session.get(key))[key]?.id === pending.step) await chrome.storage.session.remove(key);
 }
 
 // Removes the tab's capture only if it is still `id` (a newer sign-in may
@@ -320,7 +361,12 @@ async function pendingLoginOffer(sender) {
   if (state === 'setup') { await dropPendingLogin(key, pending.id); return null; }
   if (state === 'locked') return { ...offer, kind: 'locked' };
   const plan = await planPendingLogin(pending);
-  if (plan.kind === 'none') { await dropPendingLogin(key, pending.id); return null; }
+  if (plan.kind === 'none') {
+    // Already saved as is: the sign-in went through, its flow is over.
+    await dropPendingLogin(key, pending.id);
+    await endUsernameStep(sender.tab.id, pending);
+    return null;
+  }
   return {
     ...offer, kind: plan.kind, name: plan.item?.title || '', limit: !!plan.limit, newLimit: !!plan.newLimit,
     // What an update could apply to (names and usernames only), so the page
@@ -341,6 +387,9 @@ async function resolvePendingLogin(sender, id, choice, target) {
   const found = await readPendingLogin(sender);
   if (!found || typeof id !== 'string' || found.pending.id !== id) return { ok: false };
   const { key, pending } = found;
+  // The sign-in is settled (saved, dismissed or never): its username step
+  // ends with it, so a later password-only form doesn't inherit it.
+  await endUsernameStep(sender.tab.id, pending);
   if (choice === 'never') {
     const never = (await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE] || [];
     await chrome.storage.local.set({ [NEVER_SAVE]: [...new Set([...never, pending.host])] });
@@ -377,7 +426,7 @@ async function resolvePendingLogin(sender, id, choice, target) {
   });
 }
 
-chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove(pendingLoginKey(tabId)); });
+chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove([pendingLoginKey(tabId), pendingUsernameKey(tabId)]); });
 
 // The custom properties of the active theme, from theme.css (the single
 // definition of every theme): ":root" is the default, the rest are
@@ -686,6 +735,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // Saving a submitted sign-in (forms.js): capture, then ask on the next page.
   if (msg.action === 'vaultCaptureLogin') {
     captureLogin(_sender, msg).finally(() => sendResponse({}));
+    return true;
+  }
+
+  if (msg.action === 'vaultCaptureUsername') {
+    captureUsername(_sender, msg).finally(() => sendResponse({}));
     return true;
   }
 
