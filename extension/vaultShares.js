@@ -119,7 +119,11 @@ const VaultShares = (() => {
   async function share(item, chosen, grants) {
     if (!grants.length) throw new Error('Pick at least one teammate or collection');
     const whole = !chosen;
-    const existing = (item.shares || []).find(s => samePartsAs(s, whole, chosen || []));
+    // Only a share the server still has (its last grant may have gone
+    // elsewhere meanwhile); one it lost is dropped from the item.
+    const onServer = new Set((await mine()).map(x => x.id));
+    item = { ...item, shares: (item.shares || []).filter(x => onServer.has(x.id)) };
+    const existing = item.shares.find(s => samePartsAs(s, whole, chosen || []));
     if (existing) {
       for (const g of grants) await ok(`/shares/${existing.id}/grants`, { method: 'PUT', body: JSON.stringify(await grantBody(existing, g)) });
       return item;
@@ -134,7 +138,7 @@ const VaultShares = (() => {
       }),
     });
     await noteMine(s.id, body.revision, await fingerprint(copy));
-    return { ...item, shares: [...(item.shares || []), s] };
+    return { ...item, shares: [...item.shares, s] };
   }
 
   // Stores `shares` on the saved item (under the vault lock, with the key
@@ -170,13 +174,15 @@ const VaultShares = (() => {
 
   // Brings back what editors changed in whole copies, and forgets shares
   // the server no longer has (their last grant went). Returns the items to
-  // store ({ id → item }); nothing is written here.
+  // store ({ id → item }) and the revisions to record once they're stored
+  // (`seen`); nothing is written here.
   async function pullEdits(items, server) {
     const byShare = new Map();
     for (const item of items) for (const s of item.shares || []) byShare.set(s.id, { item, s });
     const onServer = new Map(server.map(x => [x.id, x]));
     const published = await readMine();
     const changed = new Map();
+    const seen = [];
     for (const [id, { item, s }] of byShare) {
       const cur = changed.get(item.id) || item;
       const there = onServer.get(id);
@@ -194,9 +200,9 @@ const VaultShares = (() => {
         ...cur, title: copy.title, fields: copy.fields, totp: copy.totp, urls: copy.urls,
         notes: copy.notes, autofill: copy.autofill, updatedAt: copy.updatedAt,
       });
-      await noteMine(id, there.revision, await fingerprint(copy));
+      seen.push([id, there.revision, await fingerprint(copy)]);
     }
-    return changed;
+    return { changed, seen };
   }
 
   // Rewrites the copies whose content changed since this device last
@@ -231,20 +237,37 @@ const VaultShares = (() => {
     const shared = items.filter(i => (i.shares || []).length);
     if (!shared.length) return 0;
     const server = await mine();
-    const changed = await pullEdits(shared, server);
+    const { changed, seen } = await pullEdits(shared, server);
+    const read = new Map(shared.map(i => [i.id, i]));
+    let applied = new Set();
     if (changed.size) {
-      await VaultStore.transaction(async tx => {
+      applied = await VaultStore.transaction(async tx => {
         if ((await VaultKeys.getKey()) !== key) throw new Error('the vault key changed');
+        const records = await tx.listRecords();
+        const done = new Set();
         for (const item of changed.values()) {
+          // Only over the version these changes were worked out from: a save,
+          // a deletion or a new share meanwhile wins (the next pass redoes it).
+          let now = null;
+          try { now = records[item.id] ? await VaultCrypto.decryptItem(records[item.id], key) : null; } catch { now = null; }
+          const before = read.get(item.id);
+          if (!now || now.updatedAt !== before.updatedAt || JSON.stringify(now.shares || []) !== JSON.stringify(before.shares || [])) continue;
           const next = { ...item };
           if (!next.shares?.length) delete next.shares;
           await tx.put(next.id, await VaultCrypto.encryptItem(next, key));
+          done.add(item.id);
         }
+        return done;
       });
+      // Editors' revisions count as seen only once their changes are stored.
+      const byShare = new Map(shared.flatMap(i => (i.shares || []).map(x => [x.id, i.id])));
+      for (const [id, rev, fp] of seen) if (applied.has(byShare.get(id))) await noteMine(id, rev, fp);
     }
-    const current = shared.map(i => changed.get(i.id) || i);
+    // Copies are republished only from what's stored (an item skipped above
+    // is republished on the next pass, after its new version is read).
+    const current = shared.filter(i => !changed.has(i.id) || applied.has(i.id)).map(i => (applied.has(i.id) ? changed.get(i.id) : i));
     await publish(current, server);
-    return changed.size;
+    return applied.size;
   }
 
   // ── Grantee ────────────────────────────────────────────────────────────

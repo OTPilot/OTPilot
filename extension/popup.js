@@ -1487,7 +1487,7 @@ ${esc(item.notes || '')}</textarea>
     if (entry.role === 'view') {
       body.querySelectorAll('input, textarea').forEach(el => { el.readOnly = true; });
       body.querySelectorAll('.cat-choice').forEach(el => { el.disabled = true; });
-      body.querySelectorAll('.btn-gen-password, .btn-del, .cf-del, .cf-hide, .cf-add').forEach(el => el.remove());
+      body.querySelectorAll(`.btn-gen-password, .cf-del, .cf-hide, .cf-add${entry.share ? '' : ', .btn-del'}`).forEach(el => el.remove());
     }
   }
   body.querySelector('.item-totp')?.addEventListener('input', e => { e.target.dataset.dirty = '1'; });
@@ -1499,8 +1499,26 @@ ${esc(item.notes || '')}</textarea>
   });
   mountCollectionControls(body, entry);
 
+  // An item shared with me: its owner deletes it. Given to me directly, I
+  // can leave it; through a collection, the collection's managers decide.
+  if (entry.share) {
+    const del = body.querySelector('.btn-del');
+    if (del && (entry.share.via || []).some(v => v.user_id)) {
+      del.textContent = 'Leave';
+      del.title = 'Stop seeing this shared item';
+      del.classList.add('btn-leave-share');
+    } else del?.remove();
+  }
   body.querySelector('.btn-del')?.addEventListener('click', async () => {
     syncOpenAccToDraft();
+    if (entry.share) {
+      if (!confirm(`Stop seeing "${draft[idx].name}"? ${entry.collectionName} can share it with you again.`)) return;
+      try { await VaultShares.leave(entry.share); } catch { setStatus('Could not leave — check your connection', false); return; }
+      sharedItems = [...sharedItems.filter(s => !s.share), ...await sharedWithMe(true)];
+      patchEntries([entry._id], []);
+      setStatus(`You no longer see "${entry.name}"`);
+      return;
+    }
     if (shared) {
       if (!confirm(`Delete "${draft[idx].name}" from "${entry.collectionName}" for everyone in it?`)) return;
       await deleteSharedEntry(entry);
@@ -1658,7 +1676,12 @@ async function renderSharePanel(panel, itemId) {
       await VaultSync.sync(k); // the item has to be on the server to be shared
       const stored = await VaultStore.get(itemId, k);
       const next = await VaultShares.share(stored, everything() ? null : chosenParts(), grants);
-      if (next !== stored) await VaultShares.attach(itemId, next.shares, k);
+      if (next !== stored) {
+        await VaultShares.attach(itemId, next.shares, k);
+        // Upload the item with its new share key right away, so another of
+        // my devices gets it before it can save a version without it.
+        await VaultSync.sync(k).catch(() => {});
+      }
       setStatus(`Shared "${stored.title || 'item'}" ✓`);
     } catch (err) {
       setStatus(err?.message || 'Share failed', false);

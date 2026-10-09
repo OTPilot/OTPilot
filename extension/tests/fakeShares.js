@@ -24,7 +24,7 @@ export function installFakeShares(page) {
         if (parts[2] === 'batch') return reply(200, { created: body.items.map(i => ({ id: i.id, revision: ++S.rev })), conflicts: [] });
         return reply(200, { id: parts[2], revision: ++S.rev });
       }
-      if (parts[0] === 'teams') {
+      if (parts[0] === 'teams' && method === 'GET' && parts.length <= 2) {
         if (parts.length === 1) return reply(200, { id: 'team-1', name: 'T' });
         return reply(200, { members: [
           { user_id: S.me, email: 'me@team.test', public_key: await TeamKeys.getPublicKeyB64() },
@@ -41,12 +41,24 @@ export function installFakeShares(page) {
         })) });
       }
       if (parts[1] === 'with-me') {
-        return reply(200, { shares: [...S.shares.values()].filter(s => s.owner !== S.me && s.grants.some(g => g.user_id === S.me)).map(s => ({
-          id: s.id, owner: { id: s.owner, email: s.ownerEmail }, whole: s.whole, record: s.record, revision: s.revision,
-          role: s.grants.find(g => g.user_id === S.me).role, via: s.grants.filter(g => g.user_id === S.me).map(g => ({ user_id: g.user_id, wrapped_key: g.wrapped_key })),
-        })) });
+        // Directly, or through a collection I'm in (its fake, if installed);
+        // a collection member's role caps the grant, like the API.
+        const memberRole = cid => window.fake?.collections?.get(cid)?.members.get(S.me)?.role;
+        const reach = g => g.user_id === S.me || (g.collection_id && memberRole(g.collection_id));
+        return reply(200, { shares: [...S.shares.values()].filter(s => s.owner !== S.me && s.grants.some(reach)).map(s => {
+          const via = s.grants.filter(reach);
+          const edit = s.whole && via.some(g => g.role === 'edit' && (g.user_id || ['edit', 'manage'].includes(memberRole(g.collection_id))));
+          return {
+            id: s.id, owner: { id: s.owner, email: s.ownerEmail }, whole: s.whole, record: s.record, revision: s.revision,
+            role: edit ? 'edit' : 'view',
+            via: via.map(g => (g.user_id ? { user_id: g.user_id, wrapped_key: g.wrapped_key } : { collection_id: g.collection_id, wrapped_key: g.wrapped_key })),
+          };
+        }) });
       }
+      // Like the API: an edit grant only on a whole copy.
+      const editOnPartial = (whole, grants) => !whole && grants.some(g => g.role === 'edit');
       if (parts.length === 1 && method === 'POST') {
+        if (editOnPartial(body.whole, body.grants)) return reply(400, { error: 'only a whole-item share can be edited by others' });
         S.shares.set(body.id, { id: body.id, owner: S.me, item_id: body.item_id, whole: body.whole, record: body.record, revision: ++S.rev, grants: body.grants });
         return reply(200, { id: body.id, revision: S.rev });
       }
@@ -54,6 +66,7 @@ export function installFakeShares(page) {
       if (!s) return reply(404, {});
       if (parts[2] === 'grants') {
         if (method === 'PUT') {
+          if (editOnPartial(s.whole, [body])) return reply(400, { error: 'only a whole-item share can be edited by others' });
           s.grants = [...s.grants.filter(g => (body.user_id ? g.user_id !== body.user_id : g.collection_id !== body.collection_id)), body];
           return reply(200, { ok: true });
         }
@@ -87,13 +100,16 @@ export function installFakeShares(page) {
         return { sk, item: await VaultCrypto.decryptItem(s.record, sk) };
       } finally { await TeamKeys.adoptPrivJwk(mine); }
     };
-    // A share Bob owns, granted to me.
-    S.shareFromBob = async (item, role = 'view') => {
+    // A share Bob owns, granted to me — or, with `collection` ({ id, key }),
+    // to a collection (its key encrypts the share key).
+    S.shareFromBob = async (item, role = 'view', collection = null) => {
       const id = crypto.randomUUID();
       const sk = VaultCrypto.b64e(VaultCrypto.generateKey());
       const record = await VaultCrypto.encryptItem({ ...item, id }, sk);
-      const wrapped = await TeamKeys.wrapUserShare(VaultCrypto.b64d(sk), await TeamKeys.getPublicKeyB64());
-      S.shares.set(id, { id, owner: bob.user_id, ownerEmail: bob.email, item_id: item.id, whole: true, record, revision: ++S.rev, grants: [{ user_id: S.me, role, wrapped_key: wrapped }] });
+      const grant = collection
+        ? { collection_id: collection.id, role, wrapped_key: await VaultCrypto.encryptName(sk, collection.key, id) }
+        : { user_id: S.me, role, wrapped_key: await TeamKeys.wrapUserShare(VaultCrypto.b64d(sk), await TeamKeys.getPublicKeyB64()) };
+      S.shares.set(id, { id, owner: bob.user_id, ownerEmail: bob.email, item_id: item.id, whole: true, record, revision: ++S.rev, grants: [grant] });
       return { id, sk };
     };
   });

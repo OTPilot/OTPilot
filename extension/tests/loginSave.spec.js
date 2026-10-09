@@ -289,6 +289,7 @@ test('signing in with a login a team collection already has offers no personal c
     Vault.getField(item, 'password').value = 'team-pass';
     await chrome.storage.local.set({ [`cr:${cid}:${item.id}`]: await VaultCrypto.encryptItem(item, ck) });
     await chrome.storage.session.set({ collectionKeys: { [cid]: ck } });
+    await chrome.storage.local.set({ cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800 } }); // shared items are an account's
   });
   const site = await context.newPage();
   await signIn(site, 'ops@team.test', 'team-pass');
@@ -313,6 +314,7 @@ test('an ambiguous shared match (two usernames differing only by case) still off
     }
     await chrome.storage.local.set(sets);
     await chrome.storage.session.set({ collectionKeys: { [cid]: ck } });
+    await chrome.storage.local.set({ cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800 } }); // shared items are an account's
   });
   const site = await context.newPage();
   await signIn(site, 'alice@x.com', 'mine');
@@ -492,6 +494,7 @@ test('a change-password form (no username) still offers the personal login when 
     Vault.getField(item, 'password').value = 'team-pass';
     await chrome.storage.local.set({ [`cr:${cid}:${item.id}`]: await VaultCrypto.encryptItem(item, ck) });
     await chrome.storage.session.set({ collectionKeys: { [cid]: ck } });
+    await chrome.storage.local.set({ cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800 } }); // shared items are an account's
   });
   const site = await context.newPage();
   await site.goto(`${SITE}/change-password.html`);
