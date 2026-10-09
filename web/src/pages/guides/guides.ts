@@ -47,7 +47,7 @@ export const GUIDES: Guide[] = [
           'Check the accounts to bring over and click Import selected.',
           'Google Authenticator doesn\'t record which website each code belongs to, so link each one the first time: on the site\'s 2FA page, open the OTPilot popup, pick the account and click Fill Page. OTPilot asks to save the site ("It\'ll auto-fill here next time"): click Save. From then on the code fills on its own.',
         ],
-        after: ['OTPilot supports the codes almost every site uses: six digits, changing every 30 seconds. Accounts with other settings are skipped and listed when you import.'],
+        after: ['OTPilot supports the codes almost every site uses: six digits, changing every 30 seconds. Accounts with other settings are skipped, and the import says how many.'],
       },
       {
         h2: 'What changes when your codes are in the browser',
