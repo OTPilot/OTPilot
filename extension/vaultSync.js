@@ -98,7 +98,9 @@ const VaultSync = (() => {
       return twins;
     };
 
+    const touched = new Set(); // ids this pull wrote
     for (const r of remote) {
+      touched.add(r.id);
       const known = state.synced[r.id];
       const mine = local[r.id];
 
@@ -172,13 +174,17 @@ const VaultSync = (() => {
           // Both sides' shares stay (their keys live only in the item —
           // docs/sharing.md), whichever version's content wins.
           const shares = [...(theirs.shares || []), ...(ours?.shares || []).filter(s => !(theirs.shares || []).some(t => t.id === s.id))];
+          // Related items linked on either side stay linked too.
+          const links = [...new Set([...(theirs.links || []), ...(ours?.links || [])])].filter(id => id !== r.id && id !== twinId);
+          const extra = { ...(shares.length ? { shares } : {}), ...(links.length ? { links } : {}) };
+          touched.add(r.id);
           if (ours && (ours.updatedAt || '') > (theirs.updatedAt || '')) {
-            const rec = await VaultCrypto.encryptItem({ ...ours, id: r.id, ...(shares.length ? { shares } : {}) }, key);
+            const rec = await VaultCrypto.encryptItem({ ...ours, id: r.id, ...extra }, key);
             await tx.put(r.id, rec);
             state.synced[r.id] = { rev: r.revision, fp: null }; // pushes ours
-          } else if (shares.length > (theirs.shares || []).length) {
-            await tx.put(r.id, await VaultCrypto.encryptItem({ ...theirs, shares }, key));
-            state.synced[r.id] = { rev: r.revision, fp: null }; // pushes the merged shares
+          } else if (shares.length > (theirs.shares || []).length || links.length > (theirs.links || []).length) {
+            await tx.put(r.id, await VaultCrypto.encryptItem({ ...theirs, ...extra }, key));
+            state.synced[r.id] = { rev: r.revision, fp: null }; // pushes the merged shares / links
           } else {
             await tx.put(r.id, r.record);
             state.synced[r.id] = { rev: r.revision, fp: fp(r.record) };
@@ -191,6 +197,19 @@ const VaultSync = (() => {
       await tx.put(r.id, r.record);
       state.synced[r.id] = { rev: r.revision, fp: fp(r.record) };
       stats.pulled++;
+    }
+
+    // Items here that link a login this pull moved to the server's id link
+    // the new id (re-encrypted: the change is pushed like any edit).
+    const moved = stats.remapped;
+    if (Object.keys(moved).length) {
+      for (const [id, rec] of Object.entries(local)) {
+        if (touched.has(id) || moved[id]) continue;
+        const item = await decryptOrNull(rec, key);
+        if (!item?.links?.some(l => moved[l])) continue;
+        const links = [...new Set(item.links.map(l => moved[l] || l))].filter(l => l !== id);
+        await tx.put(id, await VaultCrypto.encryptItem({ ...item, links }, key));
+      }
     }
   }
 

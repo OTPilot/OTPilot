@@ -1641,8 +1641,11 @@ function mountRelated(body, entry) {
   // A new note that links back here, opened to be written.
   section.querySelector('.rel-new-note').addEventListener('click', () => {
     syncOpenAccToDraft();
-    const note = entryOf(Vault.newItem('note', { title: entry.name ? `${entry.name} notes` : '' }));
-    note.category = entry.category || '';
+    // The login's tags, so the note shows under the same category filters.
+    const note = entryOf(Vault.newItem('note', {
+      title: entry.name ? `${entry.name} notes` : '',
+      tags: VaultAccounts.normalizeTags([entry.category, ...(entry.moreTags || [])]),
+    }));
     setLinks(note, [entry._id]);
     draft.push(note);
     if (typeFilter && typeFilter !== 'note') typeFilter = '';
@@ -2306,7 +2309,16 @@ function refreshAccountsUI() {
 // Item ids a sync replaced while the popup was open (a login migrated on two
 // devices kept under the server's id): the editor's copies follow them.
 const _idRemaps = {};
-const remapId = a => (a._id && _idRemaps[a._id] ? { ...a, _id: _idRemaps[a._id] } : a);
+// Links to them (related items) follow too.
+function remapId(a) {
+  let out = a._id && _idRemaps[a._id] ? { ...a, _id: _idRemaps[a._id] } : a;
+  const links = linksOf(out);
+  if (links.some(id => _idRemaps[id])) {
+    const next = [...new Set(links.map(id => _idRemaps[id] || id))];
+    out = out._kind ? { ...out, item: { ...out.item, links: next } } : { ...out, links: next };
+  }
+  return out;
+}
 
 function mergeDraftWithCurrent() {
   const base = new Map(_draftBase.filter(a => a._id).map(remapId).map(a => [a._id, JSON.stringify(a)]));

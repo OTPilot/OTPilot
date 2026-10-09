@@ -703,6 +703,18 @@ test('a note created from a login links back to it, and each shows the other as 
   await expect(page.locator('#acc-detail .rel-row')).toHaveText(/Bank/);
 });
 
+test('a note created under a tag filter takes the login\'s tags and stays in view', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{ name: 'Bank', email: 'me@example.com', secret: '', urls: 'bank.example', password: 'pw', category: 'Personal', moreTags: ['Work'] }] });
+  await page.locator('#vault-cat-bar .cat-pill', { hasText: 'Work' }).click();
+  await page.locator('.acc-head', { hasText: 'Bank' }).click();
+  await page.click('#acc-detail .rel-new-note');
+  await expect(page.locator('.acc-row:visible .acc-head', { hasText: 'Bank notes' })).toHaveCount(1);
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items))
+    .find(i => i.type === 'note')?.tags).toEqual(['Personal', 'Work']);
+  await expect(page.locator('.acc-row:visible .acc-head', { hasText: 'Bank notes' })).toHaveCount(1);
+});
+
 test('linking an existing item from the search, and unlinking it from either side', async ({ context, extensionId }) => {
   const page = await vault(context, extensionId, {
     accounts: [{ name: 'Bank', email: 'me@example.com', secret: '', urls: 'bank.example', password: 'pw' }],
