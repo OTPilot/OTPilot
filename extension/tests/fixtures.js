@@ -12,7 +12,7 @@ export const test = base.extend({
     // Fresh isolated profile per test — prevents session-restore from stale tabs
     // and lock conflicts when tests run in parallel.
     const userDataDir = mkdtempSync(path.join(tmpdir(), 'otpilot-test-'));
-    const context = await chromium.launchPersistentContext(userDataDir, {
+    const launch = () => chromium.launchPersistentContext(userDataDir, {
       headless: false,
       args: [
         `--disable-extensions-except=${extensionPath}`,
@@ -22,6 +22,16 @@ export const test = base.extend({
         '--enable-blink-features=BarcodeDetection',
       ],
     });
+    // On CI (xvfb, several workers) Chromium sometimes exits right away with
+    // "The platform failed to initialize" — it couldn't reach the virtual
+    // display. Only that launch failure is retried, never a test.
+    let context;
+    for (let attempt = 1; ; attempt++) {
+      try { context = await launch(); break; } catch (e) {
+        if (attempt >= 3 || !/platform failed to initialize/i.test(String(e?.message))) throw e;
+        await new Promise(r => setTimeout(r, 500 * attempt));
+      }
+    }
     // On failure, keep what each page showed and logged (content scripts
     // log to their page's console) — CI uploads test-results/.
     const logs = [];
