@@ -138,11 +138,20 @@ const VaultSync = (() => {
 
       const changedHere = !!mine && (!known || fp(mine) !== known.fp);
       if (changedHere) {
-        // Both sides changed: the newer edit wins.
+        // Both sides changed: the newer edit wins — but shares made here
+        // (their keys live only in the item, docs/sharing.md) are kept even
+        // when the other side's version wins, or this device's copies of
+        // the item could no longer be updated.
         const ours = await decryptOrNull(mine, key);
         if (!ours || (theirs.updatedAt || '') > (ours.updatedAt || '')) {
-          await tx.put(r.id, r.record);
-          state.synced[r.id] = { rev: r.revision, fp: fp(r.record) };
+          const extra = (ours?.shares || []).filter(s => !(theirs.shares || []).some(t => t.id === s.id));
+          if (extra.length) {
+            await tx.put(r.id, await VaultCrypto.encryptItem({ ...theirs, shares: [...(theirs.shares || []), ...extra] }, key));
+            state.synced[r.id] = { rev: r.revision, fp: null }; // pushes the merged item
+          } else {
+            await tx.put(r.id, r.record);
+            state.synced[r.id] = { rev: r.revision, fp: fp(r.record) };
+          }
           stats.pulled++;
         } else {
           state.synced[r.id] = { rev: r.revision, fp: known?.fp ?? null }; // still pushes

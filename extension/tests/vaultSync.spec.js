@@ -436,3 +436,22 @@ test('a pull answered after the device was reset writes nothing back', async ({ 
   expect(r.error).toContain('during sync');
   expect(r.left).toEqual([]);
 });
+
+test('a newer version from another device keeps the shares made here (their keys live only in the item)', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const item = Vault.newItem('note', { title: 'Doc', notes: 'v1', updatedAt: '2026-01-01T00:00:00.000Z' });
+    await VaultStore.save(item, key);
+    await VaultSync.sync(key);
+    // Shared here (not uploaded yet)…
+    await VaultStore.save({ ...item, shares: [{ id: 's-1', sk: 'k', whole: true, parts: null }] }, key);
+    // …while another device saved a newer version, without that share.
+    await fakeServer.remoteSave({ ...item, notes: 'v2 elsewhere', updatedAt: '2026-02-01T00:00:00.000Z' });
+    await VaultSync.sync(key);
+    const [local] = (await VaultStore.readAll(key)).items;
+    const remote = await fakeServer.read(item.id);
+    return { notes: local.notes, shares: (local.shares || []).map(s => s.id), remoteShares: (remote.shares || []).map(s => s.id) };
+  });
+  expect(r).toEqual({ notes: 'v2 elsewhere', shares: ['s-1'], remoteShares: ['s-1'] });
+});

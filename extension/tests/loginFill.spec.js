@@ -180,6 +180,7 @@ test('logins in a team collection unlocked this session are offered and filled t
     Vault.getField(item, 'password').value = 'team-pass';
     await chrome.storage.local.set({ [`cr:${cid}:${item.id}`]: await VaultCrypto.encryptItem(item, ck) });
     await chrome.storage.session.set({ collectionKeys: { [cid]: ck } });
+    await chrome.storage.local.set({ cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800 } }); // shared items are an account's
   });
   const site = await context.newPage();
   await site.goto(`${SITE}/login.html`);

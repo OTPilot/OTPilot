@@ -758,25 +758,49 @@ let collections = [];  // VaultCollections.list()
 let sharedItems = [];  // [{ collection, item, revision }]
 
 // `_baseRev`: the revision this entry shows, which its save is based on.
-function sharedEntryOf({ collection, item, revision }) {
+// A collection's item ({ collection, item, revision }) or an item shared
+// with me ({ share, item }: VaultShares, docs/sharing.md).
+function sharedEntryOf({ collection, share, item, revision }) {
+  if (share) {
+    return { ...entryOf(item), _kind: 'shared', share, cid: null, collectionName: share.owner?.email || 'a teammate', role: share.role === 'edit' ? 'edit' : 'view', _baseRev: share.revision };
+  }
   return { ...entryOf(item), _kind: 'shared', cid: collection.id, collectionName: collection.name || 'Shared', role: collection.role, _baseRev: revision };
+}
+
+// Items shared with me, as sharedItems rows (only those this device can open).
+async function sharedWithMe(fresh) {
+  if (!_teamPlan) return [];
+  let rows = [];
+  try {
+    rows = fresh ? await VaultShares.refresh()
+      : await VaultShares.readable(((await chrome.storage.local.get('sharesWithMe')).sharesWithMe?.shares) || []);
+  } catch { return []; }
+  return rows.filter(r => r.item).map(r => ({ share: r, item: r.item }));
 }
 
 // Pulls every collection this user is in and redraws (team plans only; a
 // failure, e.g. offline, keeps what was shown).
+let _teamPlan = false;
 async function refreshSharedItems() {
   const { userPlan } = await chrome.storage.local.get('userPlan');
-  if (!['team_lite', 'team_pro'].includes(userPlan)) { collections = []; sharedItems = []; return; }
-  let list;
-  try { list = await VaultCollections.list(); } catch { return; }
+  _teamPlan = ['team_lite', 'team_pro'].includes(userPlan);
+  if (!_teamPlan) { collections = []; sharedItems = []; return; }
+  // Collections failing to load (offline, API down) keep the ones shown;
+  // items shared with me are refreshed either way.
+  let list = null;
+  try { list = await VaultCollections.list(); } catch { /* keep what was shown */ }
   const out = [];
-  for (const c of list) {
-    if (!c.key) continue;
-    try { await VaultCollections.pull(c); } catch { /* offline: local copy */ }
-    for (const { item, revision } of await VaultCollections.snapshot(c)) out.push({ collection: c, item, revision });
+  if (list) {
+    for (const c of list) {
+      if (!c.key) continue;
+      try { await VaultCollections.pull(c); } catch { /* offline: local copy */ }
+      for (const { item, revision } of await VaultCollections.snapshot(c)) out.push({ collection: c, item, revision });
+    }
+    collections = list;
+  } else {
+    out.push(...sharedItems.filter(s => s.collection));
   }
-  collections = list;
-  sharedItems = out;
+  sharedItems = [...out, ...await sharedWithMe(true)];
   refreshAccountsUI();
 }
 
@@ -1040,7 +1064,7 @@ ${esc(acc.notes || '')}</textarea>
       <span class="toggle-label">Auto-fill on matching pages</span>
     </label>
     <div class="acc-share">
-      <button type="button" class="btn-share-team">↗ Share with team</button>
+      <button type="button" class="btn-share-team" title="Teammates get live codes; the 2FA secret itself is never revealed">↗ Share 2FA code only</button>
       <div class="share-picker" style="display:none"></div>
     </div>
     ${collectionControlsHTML(acc)}`;
@@ -1463,7 +1487,7 @@ ${esc(item.notes || '')}</textarea>
     if (entry.role === 'view') {
       body.querySelectorAll('input, textarea').forEach(el => { el.readOnly = true; });
       body.querySelectorAll('.cat-choice').forEach(el => { el.disabled = true; });
-      body.querySelectorAll('.btn-gen-password, .btn-del, .cf-del, .cf-hide, .cf-add').forEach(el => el.remove());
+      body.querySelectorAll(`.btn-gen-password, .cf-del, .cf-hide, .cf-add${entry.share ? '' : ', .btn-del'}`).forEach(el => el.remove());
     }
   }
   body.querySelector('.item-totp')?.addEventListener('input', e => { e.target.dataset.dirty = '1'; });
@@ -1475,8 +1499,28 @@ ${esc(item.notes || '')}</textarea>
   });
   mountCollectionControls(body, entry);
 
+  // An item shared with me: its owner deletes it. Given to me directly, I
+  // can leave it; through a collection, the collection's managers decide.
+  if (entry.share) {
+    const del = body.querySelector('.btn-del');
+    if (del && (entry.share.via || []).some(v => v.user_id)) {
+      del.textContent = 'Leave';
+      del.title = 'Stop seeing this shared item';
+      del.classList.add('btn-leave-share');
+    } else del?.remove();
+  }
   body.querySelector('.btn-del')?.addEventListener('click', async () => {
     syncOpenAccToDraft();
+    if (entry.share) {
+      if (!confirm(`Stop seeing "${draft[idx].name}"? ${entry.collectionName} can share it with you again.`)) return;
+      try { await VaultShares.leave(entry.share); } catch { setStatus('Could not leave — check your connection', false); return; }
+      sharedItems = [...sharedItems.filter(s => !s.share), ...await sharedWithMe(true)];
+      // Still reachable through a collection: it stays, and says so.
+      const still = sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf);
+      patchEntries([entry._id], still);
+      setStatus(still.length ? `Your direct access to "${entry.name}" is removed — you still see it through a collection` : `You no longer see "${entry.name}"`);
+      return;
+    }
     if (shared) {
       if (!confirm(`Delete "${draft[idx].name}" from "${entry.collectionName}" for everyone in it?`)) return;
       await deleteSharedEntry(entry);
@@ -1526,25 +1570,126 @@ ${esc(item.notes || '')}</textarea>
 // then removed from the personal vault).
 function collectionControlsHTML(entry) {
   if (isSharedEntry(entry)) {
+    if (entry.share) {
+      return entry.role === 'view'
+        ? `<div class="coll-meta">Shared with you by ${esc(entry.collectionName)} — view only.</div>`
+        : `<button type="button" class="btn-save-all btn-save-shared">Save — shared by ${esc(entry.collectionName)}</button>`;
+    }
     return entry.role === 'view'
       ? `<div class="coll-meta">View only — ask a manager of "${esc(entry.collectionName)}" for edit access.</div>`
       : `<button type="button" class="btn-save-all btn-save-shared">Save to ${esc(entry.collectionName)}</button>`;
   }
-  const targets = collections.filter(c => c.key && c.role !== 'view');
-  if (!targets.length || !entry._id || !_draftBase.some(b => b._id === entry._id)) return '';
-  return `<div class="acc-field move-to-collection">
-    <label>Share in a team collection</label>
-    <div class="field-row">
-      <select class="move-target">${targets.map(c => `<option value="${esc(c.id)}">${esc(c.name || 'Collection')}</option>`).join('')}</select>
-      <button type="button" class="btn-crypto-ok btn-move-collection">Move</button>
-    </div>
+  // A saved personal item, on a team plan: share it.
+  if (!_teamPlan || !entry._id || !_draftBase.some(b => b._id === entry._id)) return '';
+  return `<div class="acc-field share-item-field">
+    <button type="button" class="btn-share-team btn-share-item">Share…</button>
+    <div class="share-panel" style="display:none"></div>
   </div>`;
 }
 
 function mountCollectionControls(body, entry) {
   body.querySelector('.btn-save-shared')?.addEventListener('click', () => saveSharedEntry(entry));
-  body.querySelector('.btn-move-collection')?.addEventListener('click', () =>
-    moveToCollection(entry, body.querySelector('.move-target').value));
+  body.querySelector('.btn-share-item')?.addEventListener('click', () => {
+    const panel = body.querySelector('.share-panel');
+    if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+    panel.style.display = '';
+    renderSharePanel(panel, entry._id);
+  });
+}
+
+// ── Share an item (docs/sharing.md) ──
+// Who it's shared with now (each grant removable), then a new share:
+// teammates and collections, what to share (everything by default), and
+// whether they can edit (only when everything is shared).
+async function renderSharePanel(panel, itemId) {
+  panel.innerHTML = '<div class="share-msg">Loading…</div>';
+  const key = await VaultKeys.getKey();
+  const item = key && await VaultStore.get(itemId, key).catch(() => null);
+  if (!item) { panel.innerHTML = '<div class="share-msg">Save this item first.</div>'; return; }
+  let team, members = [], mine = [];
+  let myId = null;
+  try { myId = (await SupabaseAuth.getSession())?.user?.id ?? null; } catch { /* ignore */ }
+  try {
+    team = await Sharing.getMyTeam();
+    // Not me (by id, or by my public key when the session isn't loaded yet).
+    const myKey = await TeamKeys.getPublicKeyB64().catch(() => null);
+    members = team ? (await Sharing.getMembers(team.id)).filter(m => m.user_id !== myId && !(myKey && m.public_key === myKey)) : [];
+    mine = (await VaultShares.mine()).filter(s => s.item_id === itemId);
+  } catch { panel.innerHTML = '<div class="share-msg">Could not load your team — check your connection.</div>'; return; }
+  const who = g => (g.user_id
+    ? (members.find(m => m.user_id === g.user_id)?.email || 'a teammate')
+    : `Collection "${collections.find(c => c.id === g.collection_id)?.name || 'collection'}"`);
+  const parts = VaultShares.parts(item);
+  const label = s => {
+    const mineShare = (item.shares || []).find(x => x.id === s.id);
+    if (!mineShare || mineShare.whole) return 'everything';
+    return parts.filter(p => (mineShare.parts || []).includes(p.key)).map(p => p.label).join(', ') || 'the name only';
+  };
+  const current = mine.flatMap(s => s.grants.map(g => ({ s, g })));
+  const writable = collections.filter(c => c.key && c.role !== 'view');
+  panel.innerHTML = `
+    ${current.length ? `<div class="share-section"><div class="share-title">Shared with</div>
+      ${current.map(({ s, g }, i) => `<div class="share-grant" data-i="${i}">
+        <span><b>${esc(who(g))}</b> · ${g.role === 'edit' ? 'can edit' : 'can view'} · ${esc(label(s))}</span>
+        <button type="button" class="btn-del share-remove" data-i="${i}">Remove</button></div>`).join('')}</div>` : ''}
+    <div class="share-section"><div class="share-title">Share with</div>
+      ${members.length ? members.map(m => `<label class="share-recip"><input type="checkbox" class="share-user" value="${esc(m.user_id)}" ${m.public_key ? '' : 'disabled'}> ${esc(m.email || m.user_id)}${m.public_key ? '' : ' <span class="share-dim">(not set up)</span>'}</label>`).join('') : '<div class="share-msg">No teammates yet.</div>'}
+      ${writable.map(c => `<label class="share-recip"><input type="checkbox" class="share-coll" value="${esc(c.id)}"> Collection "${esc(c.name || 'collection')}"</label>`).join('')}
+    </div>
+    <div class="share-section"><div class="share-title">What to share</div>
+      <label class="share-recip"><input type="checkbox" class="share-part" value="" checked disabled> Name</label>
+      ${parts.map(p => `<label class="share-recip"><input type="checkbox" class="share-part" value="${esc(p.key)}" checked> ${esc(p.label)}</label>`).join('')}
+    </div>
+    <div class="share-section field-row">
+      <select class="share-role"><option value="view">Can view</option><option value="edit">Can edit</option></select>
+      <button type="button" class="btn-crypto-ok share-confirm">Share</button>
+    </div>`;
+  const role = panel.querySelector('.share-role');
+  const chosenParts = () => [...panel.querySelectorAll('.share-part:checked')].map(c => c.value).filter(Boolean);
+  const everything = () => chosenParts().length === parts.length;
+  // Editing is for a copy of the whole item.
+  const syncRole = () => {
+    const editOpt = role.querySelector('option[value="edit"]');
+    editOpt.disabled = !everything();
+    if (!everything()) role.value = 'view';
+  };
+  panel.querySelectorAll('.share-part').forEach(c => c.addEventListener('change', syncRole));
+  panel.querySelectorAll('.share-remove').forEach(btn => btn.addEventListener('click', async () => {
+    const { s, g } = current[+btn.dataset.i];
+    btn.disabled = true;
+    try {
+      const k = await VaultKeys.getKey();
+      const stored = await VaultStore.get(itemId, k);
+      const next = await VaultShares.unshare(stored, s.id, g);
+      if (next !== stored) await VaultShares.attach(itemId, next.shares, k);
+      setStatus(`Stopped sharing with ${who(g)}`);
+    } catch { setStatus('Could not remove — check your connection', false); }
+    renderSharePanel(panel, itemId);
+  }));
+  panel.querySelector('.share-confirm').addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    const users = [...panel.querySelectorAll('.share-user:checked')].map(c => members.find(m => m.user_id === c.value));
+    const colls = [...panel.querySelectorAll('.share-coll:checked')].map(c => collections.find(x => x.id === c.value));
+    const grants = [...users.map(u => ({ user: u, role: role.value })), ...colls.map(c => ({ collection: c, role: role.value }))];
+    if (!grants.length) { setStatus('Pick at least one teammate or collection', false); return; }
+    btn.disabled = true;
+    try {
+      const k = await VaultKeys.getKey();
+      await VaultSync.sync(k); // the item has to be on the server to be shared
+      const stored = await VaultStore.get(itemId, k);
+      const next = await VaultShares.share(stored, everything() ? null : chosenParts(), grants);
+      if (next !== stored) {
+        await VaultShares.attach(itemId, next.shares, k);
+        // Upload the item with its new share key right away, so another of
+        // my devices gets it before it can save a version without it.
+        await VaultSync.sync(k).catch(() => {});
+      }
+      setStatus(`Shared "${stored.title || 'item'}" ✓`);
+    } catch (err) {
+      setStatus(err?.message || 'Share failed', false);
+    }
+    renderSharePanel(panel, itemId);
+  });
 }
 
 // Replaces the rows of the given ids (in the draft and its base) with fresh
@@ -1564,6 +1709,7 @@ function patchEntries(ids, fresh) {
 
 async function saveSharedEntry(entry) {
   syncOpenAccToDraft();
+  if (entry.share) { await saveShareCopy(entry); return; }
   const c = collections.find(x => x.id === entry.cid);
   if (!c?.key) { setStatus('This collection is not available on this device', false); return; }
   if (!entry.name) { setStatus('It needs a name', false); return; }
@@ -1576,7 +1722,21 @@ async function saveSharedEntry(entry) {
   patchEntries([entry._id], fresh);
 }
 
+// An editor's save of an item shared with them: written to the share, which
+// its owner's extension brings back into their item.
+async function saveShareCopy(entry) {
+  if (!entry.name) { setStatus('It needs a name', false); return; }
+  let res;
+  try { res = await VaultShares.saveCopy({ ...entry.share, revision: entry._baseRev }, itemOfEntry(entry)); }
+  catch { setStatus('Could not save — check your connection', false); return; }
+  if (res.conflict) setStatus('Someone changed this meanwhile — showing their version', false);
+  else setStatus(`Saved — ${entry.collectionName} sees it too`);
+  sharedItems = [...sharedItems.filter(s => !s.share), ...await sharedWithMe(true)];
+  patchEntries([entry._id], sharedItems.filter(s => s.item.id === entry._id).map(sharedEntryOf));
+}
+
 async function deleteSharedEntry(entry) {
+  if (entry.share) return; // an item shared with me: its owner removes it
   const c = collections.find(x => x.id === entry.cid);
   if (!c?.key) return;
   let res;
@@ -1592,64 +1752,10 @@ async function sharedItemsFromLocal() {
     if (!c.key) continue;
     for (const { item, revision } of await VaultCollections.snapshot(c)) out.push({ collection: c, item, revision });
   }
-  return out;
+  return [...out, ...await sharedWithMe(false)];
 }
 
-let _moving = false;
-async function moveToCollection(entry, cid) {
-  if (_moving) return; // a second click would put another copy in the collection
-  _moving = true;
-  const btn = document.querySelector('#acc-detail .btn-move-collection');
-  if (btn) btn.disabled = true;
-  try { await moveNow(entry, cid); } finally { _moving = false; if (btn?.isConnected) btn.disabled = false; }
-}
 
-async function moveNow(entry, cid) {
-  syncOpenAccToDraft();
-  if (JSON.stringify(draft) !== JSON.stringify(_draftBase)) { setStatus('Save or cancel your changes first', false); return; }
-  const c = collections.find(x => x.id === cid);
-  const key = await VaultKeys.getKey();
-  if (!c?.key || !key) return;
-  if (!confirm(`Move "${entry.name}" into "${c.name}"? Everyone in it will see it, and it leaves your personal vault.`)) return;
-  // The exact record copied: the personal copy is only removed if it is
-  // still this one once the collection has it (a page may update the login
-  // meanwhile).
-  const copied = (await VaultStore.listRecords())[entry._id];
-  const item = copied && await VaultCrypto.decryptItem(copied, key).catch(() => null);
-  if (!item) { setStatus('Could not read this item', false); return; }
-  try {
-    const res = await VaultCollections.moveIn(c, item);
-    if (!res.ok) throw new Error('not saved');
-  } catch { setStatus('Could not move it — check your connection', false); return; }
-  const before = new Set(sharedItems.map(s => s.item.id));
-  const removed = await VaultStore.transaction(async tx => {
-    const now = (await tx.listRecords())[entry._id];
-    if (!now || now.data?.iv !== copied.data?.iv) return false;
-    await tx.remove(entry._id);
-    return true;
-  });
-  if (!removed) {
-    setStatus('It changed while moving: the collection has the earlier copy, your updated one stays in your vault', false);
-  }
-  // The locked-vault index must stop offering it now, sync or not (rebuilt
-  // under the vault lock, so a page saving a login meanwhile isn't undone).
-  await VaultAccounts.rebuildIndex(key);
-  await stampLocalChange();
-  silentPullSync(); // the removal reaches the user's other devices
-  accounts = await VaultAccounts.load(key);
-  _loadedIds = new Set(accounts.map(a => a._id));
-  otherItems = await VaultAccounts.loadOthers(key);
-  sharedItems = await sharedItemsFromLocal();
-  const added = sharedItems.filter(s => !before.has(s.item.id)).map(sharedEntryOf);
-  if (removed) patchEntries([entry._id], added);
-  else {
-    // Kept: show (and base later saves on) the updated version, not the copy.
-    const kept = [...accounts, ...otherItems.map(entryOf)].find(e => e._id === entry._id);
-    patchEntries([entry._id], [...(kept ? [{ ...structuredClone(kept) }] : []), ...added]);
-  }
-  renderAccountBar();
-  if (removed) setStatus(`Moved to ${c.name}`);
-}
 
 // An otpauth://totp/ link (what a 2FA QR code holds): { secret, issuer,
 // account }, { unsupported: true } for settings OTPilot can't generate,
@@ -1947,6 +2053,9 @@ function planOtherItems(merged) {
     kept.add(entry._id);
     const item = itemOfEntry(entry);
     const cur = current.get(entry._id);
+    // Shares are managed by VaultShares on the stored item, never by the
+    // editor (whose copy may predate a share made meanwhile).
+    if (cur?.shares) item.shares = cur.shares; else delete item.shares;
     if (!cur || !same(item, cur)) put.push({ ...item, updatedAt: now });
   }
   return { put, remove: [...current.keys()].filter(id => !kept.has(id)) };
@@ -3385,6 +3494,8 @@ async function doSync() {
     if (!key) throw new Error('vault is locked');
     Object.assign(_idRemaps, (await VaultSync.sync(key)).remapped);
     await reloadFromVault(key);
+    // My shared items: editors' changes in, fresh copies out.
+    if (_teamPlan && await VaultShares.syncOwner(key).catch(() => 0)) await reloadFromVault(key);
 
     let { serverMeta, exported } = await syncV1Blob(key);
     // Refused: a blob written meanwhile by another device. Merge it and export

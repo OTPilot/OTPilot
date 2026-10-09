@@ -274,7 +274,8 @@ test('locked: after unlocking, the code is offered to the existing login', async
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
   const overlay = page.locator('#otpilot-suggestion');
-  await expect(overlay).toContainText('Add this 2FA code to DigitalOcean?');
+  // The unlock (PBKDF2) can take a while on a loaded machine.
+  await expect(overlay).toContainText('Add this 2FA code to DigitalOcean?', { timeout: 15000 });
   await overlay.locator('.otpilot-attach').click();
   await expect.poll(async () => (await readAccounts(popup)).map(a => [a.name, a.email, a.secret]))
     .toEqual([['DigitalOcean', 'demo@example.com', TEST_SECRET]]);

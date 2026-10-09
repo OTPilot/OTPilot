@@ -140,6 +140,14 @@ const SupabaseAuth = (() => {
       }).catch(() => {});
     }
     await clearSession();
+    // What the account could open as a team member — items shared with it,
+    // collection and share keys — goes with it: another account signing in
+    // here must not get it (autofill included).
+    try {
+      const all = await chrome.storage.local.get(null);
+      await chrome.storage.local.remove(Object.keys(all).filter(k => k.startsWith('sr:') || k === 'sharesWithMe' || k === 'sharesPublished'));
+      await chrome.storage.session.remove(['shareKeys', 'collectionKeys']);
+    } catch { /* storage unavailable */ }
   }
 
   return { getSession, getAccessToken, signInWithGoogle, signOut, cacheSession };
