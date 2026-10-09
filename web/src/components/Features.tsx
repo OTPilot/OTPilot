@@ -79,7 +79,7 @@ const features = [
       </svg>
     ),
     title: 'Email codes, filled too',
-    description: 'Waiting for a code by email? OTPilot reads it from your open webmail tab and fills it in. Processed only on your device.',
+    description: 'Waiting for a code by email? OTPilot reads it from an open Gmail, Outlook, Yahoo Mail, Proton Mail, Fastmail or Zoho Mail tab and fills it in. Processed only on your device.',
     accent: 'from-teal-400/10 to-teal-400/5',
     border: 'border-teal-500/10',
     iconBg: 'bg-teal-500/10 text-teal-400',
@@ -127,7 +127,7 @@ const features = [
       </svg>
     ),
     title: 'Switch from Google Authenticator',
-    description: 'Screenshot its "Transfer accounts" QR codes and select them: every 2FA code comes over, decoded on your device. Passwords import from a CSV.',
+    description: 'Screenshot its "Transfer accounts" QR codes and select them to import its time-based 2FA codes, decoded on your device. Passwords import from a CSV.',
     accent: 'from-amber-400/10 to-amber-400/5',
     border: 'border-amber-500/10',
     iconBg: 'bg-amber-500/10 text-amber-400',
