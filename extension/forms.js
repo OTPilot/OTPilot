@@ -636,7 +636,8 @@
   const SIGN_IN_SUBMIT = /\b(sign\s*in|log\s*in|login|continue|next|submit|verify|confirm|iniciar|ingresar|acceder|entrar|continuar|siguiente|enviar|verificar)\b/i;
   const NOT_SIGN_IN = /\b(subscribe|newsletter|sign\s*up|register|join|suscrib\w*|registr\w*)\b/i;
   const buttonLabel = b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' ');
-  const readsSignIn = b => !!b && isVisible(b) && SIGN_IN_BUTTON.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b));
+  const readsSignIn = b => !!b && isVisible(b) && SIGN_IN_BUTTON.test(buttonLabel(b))
+    && !NOT_SIGN_IN.test(buttonLabel(b)) && !NOT_SUBMIT.test(buttonLabel(b));
 
   // The nearest visible button `accepts` takes for a form-less `field`,
   // within its sign-in panel: the containers around it, widening while they
@@ -675,7 +676,7 @@
     const own = [field, login?.username, login?.password].filter(Boolean);
     // Without a form the button has to say it signs in: never a "Go" or
     // "Search" that happens to be nearer.
-    return buttonNear(field, b => SIGN_IN_SUBMIT.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b)), own);
+    return buttonNear(field, b => SIGN_IN_SUBMIT.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b)) && !NOT_SUBMIT.test(buttonLabel(b)), own);
   }
 
   function findUsernameOnlyField() {

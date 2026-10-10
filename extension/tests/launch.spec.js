@@ -201,3 +201,11 @@ test('a filled, form-less search box never takes the sign-in click', async ({ co
   await expect(site.locator('#went')).toHaveText('');
   await expect(site.locator('#password')).toHaveValue('pw-11');
 });
+
+test('a form-less panel skips "Forgot login?" / "Show password" buttons and clicks Sign in', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Help first', email: 'me@example.com', secret: '', urls: `${SITE}/login-panel-forgot.html`, password: 'pw-00' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Help first');
+  await expect(site).toHaveURL(/welcome\.html\?email=me%40example\.com&password=pw-00/);
+});
