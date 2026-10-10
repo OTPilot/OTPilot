@@ -141,3 +141,11 @@ test('a secondary "Sign up" button doesn\'t stop the username step', async ({ co
   const site = await launchFromRow(context, popup, 'Signup aside');
   await expect(site).toHaveURL(/welcome\.html\?password=pw-77/);
 });
+
+test('a form-less username panel clicks its sign-in button, not a "Sign up" before it', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Panel site', email: 'me@example.com', secret: '', urls: `${SITE}/login-step1-panel.html`, password: 'pw-55' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Panel site');
+  await expect(site).toHaveURL(/welcome\.html\?password=pw-55/);
+});

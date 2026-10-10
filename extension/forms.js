@@ -628,28 +628,35 @@
   let _launchStep = ''; // the step already filled on this page
   const launchFill = step => chrome.runtime.sendMessage({ action: 'vaultLaunchFill', step }).catch(() => null);
 
-  // The username field of a page asking only for it (no password yet) —
-  // only with evidence it's a sign-in step, never a newsletter's email box:
-  // autocomplete="username", or a form whose button reads like signing in.
+  // The username field of a page asking only for it (no password yet), and
+  // the button that submits it — only with evidence it's a sign-in step,
+  // never a newsletter's email box: autocomplete="username", or a submitting
+  // action that reads like signing in. That same button is the one clicked.
   const SIGN_IN_BUTTON = /\b(sign\s*in|log\s*in|login|continue|next|iniciar|ingresar|acceder|entrar|continuar|siguiente)\b/i;
   const NOT_SIGN_IN = /\b(subscribe|newsletter|sign\s*up|register|join|suscrib\w*|registr\w*)\b/i;
+  const buttonLabel = b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' ');
+  const readsSignIn = b => !!b && isVisible(b) && SIGN_IN_BUTTON.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b));
+
+  // The button that submits `field`: its form's submit button, else (no
+  // form) the nearest visible button that reads like signing in — never a
+  // "Sign up" that happens to come first.
+  function signInButtonFor(field) {
+    if (field.form) return findSubmitButton(field.form);
+    const scope = field.closest('section, div') || document;
+    return [...scope.querySelectorAll('button, input[type="submit"]')].find(readsSignIn) || null;
+  }
+
   function findUsernameOnlyField() {
     if (hasVisiblePassword(document)) return null;
     const inputs = [...document.querySelectorAll('input')].filter(el =>
       ['text', 'email', 'tel'].includes(el.type) && isVisible(el)
       && !autocompleteOf(el).includes('one-time-code'));
-    return inputs.find(el => {
-      if (autocompleteOf(el).split(/\s+/).includes('username')) return true;
-      if (!(el.type === 'email' || USERNAME_HINT.test(`${el.name} ${el.id}`))) return false;
-      // The action that would submit this field: the form's submit button,
-      // else the nearest visible button that reads like signing in. Other
-      // buttons (a secondary "Sign up") don't count either way.
-      const label = b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' ');
-      const signIn = b => b && isVisible(b) && SIGN_IN_BUTTON.test(label(b)) && !NOT_SIGN_IN.test(label(b));
-      if (el.form) return signIn(findSubmitButton(el.form));
-      const scope = el.closest('section, div') || document;
-      return [...scope.querySelectorAll('button, input[type="submit"]')].some(signIn);
-    }) || null;
+    for (const el of inputs) {
+      const button = signInButtonFor(el);
+      if (autocompleteOf(el).split(/\s+/).includes('username')) return { field: el, button };
+      if ((el.type === 'email' || USERNAME_HINT.test(`${el.name} ${el.id}`)) && readsSignIn(button)) return { field: el, button };
+    }
+    return null;
   }
 
   // The launched login's username in that field: another one the site
@@ -658,14 +665,11 @@
     if (field.value.trim().toLowerCase() !== String(username).trim().toLowerCase()) fillInputValue(field, username);
   }
 
-  async function submitAfterFill(field) {
+  async function submitAfterFill(field, button) {
     if (await isNoAutoSubmitHost(location.hostname.toLowerCase())) return;
-    const form = field.form;
     setTimeout(() => {
-      const btn = form ? findSubmitButton(form)
-        : [...document.querySelectorAll('button, input[type="submit"]')].find(b => isVisible(b) && isSubmitControl(b));
-      if (btn) btn.click();
-      else if (form) form.requestSubmit?.();
+      if (button?.isConnected) button.click();
+      else if (field.form) field.form.requestSubmit?.();
     }, 300);
   }
 
@@ -684,17 +688,18 @@
         fillInputValue(login.password, res.password);
       } finally { _filling = false; }
       _launch = false; // the launch ends with the password
-      submitAfterFill(login.password);
+      submitAfterFill(login.password, signInButtonFor(login.password));
       return;
     }
-    const userField = !login && _launchStep === '' && findUsernameOnlyField();
-    if (userField) {
+    const step = !login && _launchStep === '' && findUsernameOnlyField();
+    if (step) {
+      const { field: userField, button } = step;
       _launchStep = 'username';
       const res = await launchFill('username');
       if (!res?.ok) return;
       _filling = true;
       try { putUsername(userField, res.username); } finally { _filling = false; }
-      submitAfterFill(userField);
+      submitAfterFill(userField, button);
     }
   }
 
