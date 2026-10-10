@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Deeply wrapped sign-in panel</title></head>
+<body>
+  <header><input type="search" id="site-search" placeholder="Search"><button type="button">Go</button></header>
+  <!-- A form-less panel whose fields sit five wrappers deep; Verify is a
+       sibling at the panel's top. -->
+  <section id="panel">
+    <div><div><div><div><div>
+      <input type="email" id="email" autocomplete="username">
+      <input type="password" id="password" autocomplete="current-password">
+    </div></div></div></div></div>
+    <button type="button" id="verify">Verify</button>
+  </section>
+  <script>
+    document.getElementById('verify').onclick = () => {
+      location.href = 'welcome.html?email=' + encodeURIComponent(document.getElementById('email').value)
+        + '&password=' + encodeURIComponent(document.getElementById('password').value);
+    };
+  </script>
+</body></html>

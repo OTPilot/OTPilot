@@ -173,3 +173,11 @@ test('a form-less sign-in panel never borrows another form\'s button (a search b
   const site = await launchFromRow(context, popup, 'Search page');
   await expect(site).toHaveURL(/welcome\.html\?email=me%40example\.com&password=pw-44/);
 });
+
+test('a deeply wrapped form-less panel reaches its button, not a header search\'s', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Deep panel', email: 'me@example.com', secret: '', urls: `${SITE}/login-panel-deep.html`, password: 'pw-33' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Deep panel');
+  await expect(site).toHaveURL(/welcome\.html\?email=me%40example\.com&password=pw-33/);
+});
