@@ -619,6 +619,65 @@
     });
   } catch { /* extension context gone */ }
 
+  // ── Launched from OTPilot ("Open & sign in") ───────────────────────────
+  // This tab was opened by the popup to sign in: fill the username step and
+  // the sign-in form as they appear and submit them (not where auto-submit
+  // is known to be rejected: there the click is left to the user). The
+  // background releases the password once, so a rejected one never loops.
+  let _launch = null; // null: not asked yet; false: no launch; true: on
+  let _launchStep = ''; // the step already filled on this page
+  const launchFill = step => chrome.runtime.sendMessage({ action: 'vaultLaunchFill', step }).catch(() => null);
+
+  // An empty username field on a page asking only for it (no password yet).
+  function findUsernameOnlyField() {
+    if (hasVisiblePassword(document)) return null;
+    const inputs = [...document.querySelectorAll('input')].filter(el =>
+      ['text', 'email', 'tel'].includes(el.type) && isVisible(el) && !el.value
+      && !autocompleteOf(el).includes('one-time-code'));
+    return inputs.find(el => /\b(username|email)\b/.test(autocompleteOf(el)) || el.type === 'email'
+      || USERNAME_HINT.test(`${el.name} ${el.id}`)) || null;
+  }
+
+  async function submitAfterFill(field) {
+    if (await isNoAutoSubmitHost(location.hostname.toLowerCase())) return;
+    const form = field.form;
+    setTimeout(() => {
+      const btn = form ? findSubmitButton(form)
+        : [...document.querySelectorAll('button, input[type="submit"]')].find(b => isVisible(b) && isSubmitControl(b));
+      if (btn) btn.click();
+      else if (form) form.requestSubmit?.();
+    }, 300);
+  }
+
+  async function continueLaunch() {
+    if (_launch === false || !chrome.runtime?.id) return;
+    if (_launch === null) _launch = !!(await launchFill('probe'))?.ok;
+    if (!_launch) return;
+    const login = findLoginFields();
+    if (login && _launchStep !== 'password') {
+      _launchStep = 'password';
+      const res = await launchFill('password');
+      if (!res?.ok) { _launch = false; return; }
+      _filling = true;
+      try {
+        if (login.username && res.username && !login.username.value) fillInputValue(login.username, res.username);
+        fillInputValue(login.password, res.password);
+      } finally { _filling = false; }
+      _launch = false; // the launch ends with the password
+      submitAfterFill(login.password);
+      return;
+    }
+    const userField = !login && _launchStep === '' && findUsernameOnlyField();
+    if (userField) {
+      _launchStep = 'username';
+      const res = await launchFill('username');
+      if (!res?.ok) return;
+      _filling = true;
+      try { fillInputValue(userField, res.username); } finally { _filling = false; }
+      submitAfterFill(userField);
+    }
+  }
+
   // Sign-in forms often appear after load (SPAs, modals).
   let timer;
   const observer = new MutationObserver(() => {
@@ -627,6 +686,7 @@
       if (!chrome.runtime?.id) { observer.disconnect(); return; } // extension reloaded
       check();
       syncBadges();
+      continueLaunch();
       // A sign-in that takes a while to finish: offer once its form is gone.
       if (_capturedAt && Date.now() - _capturedAt < 3 * 60 * 1000) offerSave();
     }, 400);
@@ -634,4 +694,5 @@
   observer.observe(document.documentElement, { childList: true, subtree: true });
   check();
   offerSave();
+  continueLaunch();
 })();
