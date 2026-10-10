@@ -181,3 +181,11 @@ test('a deeply wrapped form-less panel reaches its button, not a header search\'
   const site = await launchFromRow(context, popup, 'Deep panel');
   await expect(site).toHaveURL(/welcome\.html\?email=me%40example\.com&password=pw-33/);
 });
+
+test('a form-less panel with an already-filled extra field (organization) still submits', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Org panel', email: 'me@example.com', secret: '', urls: `${SITE}/login-panel-org.html`, password: 'pw-22' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Org panel');
+  await expect(site).toHaveURL(/welcome\.html\?org=acme&email=me%40example\.com&password=pw-22/);
+});

@@ -639,12 +639,13 @@
 
   // The nearest visible button `accepts` takes for a form-less `field`,
   // within its sign-in panel: the containers around it, widening while they
-  // hold no other input than the sign-in's own (`own`) — a container that
-  // also holds a search box or a newsletter field is past the panel. Buttons
-  // of a form (a search box's, a newsletter's) never count.
+  // hold no other empty input than the sign-in's own (`own`) — a container
+  // that also holds an empty search box or newsletter field is past the
+  // panel; an already-filled field (an organization, a remembered tenant)
+  // belongs to the sign-in. Buttons of a form never count.
   const FIELD_TYPES = ['text', 'email', 'tel', 'password', 'search', 'number', 'url'];
   function buttonNear(field, accepts, own = [field]) {
-    const other = el => !el.form && !own.includes(el) && FIELD_TYPES.includes(el.type) && isVisible(el);
+    const other = el => !el.form && !own.includes(el) && FIELD_TYPES.includes(el.type) && isVisible(el) && !el.value;
     for (let scope = field.parentElement; scope && scope !== document.documentElement; scope = scope.parentElement) {
       if ([...scope.querySelectorAll('input')].some(other)) break;
       const hit = [...scope.querySelectorAll('button, input[type="submit"]')]
