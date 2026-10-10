@@ -23,7 +23,8 @@ async function popupWith(context, extensionId, accounts) {
 // tab it opened.
 async function launchFromRow(context, popup, name) {
   const item = popup.locator('#home-list .lc-item', { hasText: name });
-  await item.hover();
+  // Shown on hover or focus: focus is steadier than a hover in CI.
+  await item.locator('.lc-row').focus();
   const opened = context.waitForEvent('page');
   await item.locator('.lc-launch').click();
   return opened;
@@ -118,6 +119,7 @@ test('a public site is always opened over https, even when saved as http', async
     launchUrlOf(['example.com']),
     launchUrlOf(['*.example.com']),
     launchUrlOf(['localhost:8765/test/login-nav.html']),
+    launchUrlOf(['https://localhost:8443/login']),
     launchUrlOf(['javascript:alert(1)', 'site.org']),
     launchUrlOf(['']),
   ]);
@@ -126,7 +128,16 @@ test('a public site is always opened over https, even when saved as http', async
     'https://example.com/',
     'https://example.com/',
     'http://localhost:8765/test/login-nav.html',
+    'https://localhost:8443/login',
     'https://site.org/',
     null,
   ]);
+});
+
+test('a secondary "Sign up" button doesn\'t stop the username step', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Signup aside', email: 'me@example.com', secret: '', urls: `${SITE}/login-step1-signup.html`, password: 'pw-77' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Signup aside');
+  await expect(site).toHaveURL(/welcome\.html\?password=pw-77/);
 });

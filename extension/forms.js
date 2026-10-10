@@ -641,10 +641,14 @@
     return inputs.find(el => {
       if (autocompleteOf(el).split(/\s+/).includes('username')) return true;
       if (!(el.type === 'email' || USERNAME_HINT.test(`${el.name} ${el.id}`))) return false;
-      const scope = el.form || el.closest('section, div') || document;
-      const buttons = [...scope.querySelectorAll('button, input[type="submit"]')].filter(isVisible)
-        .map(b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' '));
-      return buttons.some(t => SIGN_IN_BUTTON.test(t)) && !buttons.some(t => NOT_SIGN_IN.test(t));
+      // The action that would submit this field: the form's submit button,
+      // else the nearest visible button that reads like signing in. Other
+      // buttons (a secondary "Sign up") don't count either way.
+      const label = b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' ');
+      const signIn = b => b && isVisible(b) && SIGN_IN_BUTTON.test(label(b)) && !NOT_SIGN_IN.test(label(b));
+      if (el.form) return signIn(findSubmitButton(el.form));
+      const scope = el.closest('section, div') || document;
+      return [...scope.querySelectorAll('button, input[type="submit"]')].some(signIn);
     }) || null;
   }
 

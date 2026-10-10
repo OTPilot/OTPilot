@@ -210,16 +210,19 @@ const launchKey = tabId => `launch:${tabId}`;
 const isLocalHost = host => host === 'localhost' || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
 
 // The URL to open for a saved website pattern ("site.com/login",
-// "*.site.com", "https://…"), or null. Always https, except local hosts: a
-// saved http:// address of a public site is opened over https, so a
-// launch never sends a password over plain http.
+// "*.site.com", "https://…"), or null. A public site is always opened over
+// https (a saved http:// address too), so a launch never sends a password
+// over plain http; a local host keeps a saved https:// and defaults to http.
 function launchUrlOf(urls) {
   for (const raw of urls || []) {
-    let u = String(raw || '').trim().replace(/^https?:\/\//i, '').replace(/^\*\./, '');
+    const saved = String(raw || '').trim();
+    const scheme = /^(https?):\/\//i.exec(saved)?.[1]?.toLowerCase();
+    const u = saved.replace(/^https?:\/\//i, '').replace(/^\*\./, '');
     if (!u || /^[a-z][a-z0-9+.-]*:/i.test(u.split(/[/?#]/)[0].replace(/:\d+$/, ''))) continue;
     const host = u.split(/[/?#]/)[0].replace(/:\d+$/, '').toLowerCase();
+    const proto = !isLocalHost(host) ? 'https' : (scheme || 'http');
     try {
-      const url = new URL(`${isLocalHost(host) ? 'http' : 'https'}://${u}`);
+      const url = new URL(`${proto}://${u}`);
       if (url.hostname && !url.hostname.includes('*')) return url.href;
     } catch { /* not a URL: try the next one */ }
   }
