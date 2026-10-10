@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in panel next to a filled, form-less search</title></head>
+<body>
+  <!-- A form-less search box with a remembered query and its Go button sit
+       closer to the password than the panel's Verify button. -->
+  <section id="panel">
+    <div class="top">
+      <div class="creds">
+        <input type="email" id="email" autocomplete="username">
+        <input type="password" id="password" autocomplete="current-password">
+      </div>
+      <div class="search"><input type="search" id="q" value="pricing"><button type="button" id="go">Go</button></div>
+    </div>
+    <button type="button" id="verify">Verify</button>
+  </section>
+  <p id="went"></p>
+  <script>
+    document.getElementById('go').onclick = () => { document.getElementById('went').textContent = 'searched'; };
+    document.getElementById('verify').onclick = () => {
+      location.href = 'welcome.html?email=' + encodeURIComponent(document.getElementById('email').value)
+        + '&password=' + encodeURIComponent(document.getElementById('password').value);
+    };
+  </script>
+</body></html>

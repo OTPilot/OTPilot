@@ -189,3 +189,15 @@ test('a form-less panel with an already-filled extra field (organization) still 
   const site = await launchFromRow(context, popup, 'Org panel');
   await expect(site).toHaveURL(/welcome\.html\?org=acme&email=me%40example\.com&password=pw-22/);
 });
+
+test('a filled, form-less search box never takes the sign-in click', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Search beside', email: 'me@example.com', secret: '', urls: `${SITE}/login-panel-filled-search.html`, password: 'pw-11' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Search beside');
+  // Go is never clicked; Verify is outside the search's container, so the
+  // fill stays and the click is the user's.
+  await site.waitForTimeout(1500);
+  await expect(site.locator('#went')).toHaveText('');
+  await expect(site.locator('#password')).toHaveValue('pw-11');
+});

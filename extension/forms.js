@@ -633,6 +633,7 @@
   // never a newsletter's email box: autocomplete="username", or a submitting
   // action that reads like signing in. That same button is the one clicked.
   const SIGN_IN_BUTTON = /\b(sign\s*in|log\s*in|login|continue|next|iniciar|ingresar|acceder|entrar|continuar|siguiente)\b/i;
+  const SIGN_IN_SUBMIT = /\b(sign\s*in|log\s*in|login|continue|next|submit|verify|confirm|iniciar|ingresar|acceder|entrar|continuar|siguiente|enviar|verificar)\b/i;
   const NOT_SIGN_IN = /\b(subscribe|newsletter|sign\s*up|register|join|suscrib\w*|registr\w*)\b/i;
   const buttonLabel = b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' ');
   const readsSignIn = b => !!b && isVisible(b) && SIGN_IN_BUTTON.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b));
@@ -641,11 +642,16 @@
   // within its sign-in panel: the containers around it, widening while they
   // hold no other empty input than the sign-in's own (`own`) — a container
   // that also holds an empty search box or newsletter field is past the
-  // panel; an already-filled field (an organization, a remembered tenant)
-  // belongs to the sign-in. Buttons of a form never count.
+  // panel, and so is a search box even with a query in it; an already-filled
+  // field (an organization, a remembered tenant) belongs to the sign-in.
+  // Buttons of a form never count.
   const FIELD_TYPES = ['text', 'email', 'tel', 'password', 'search', 'number', 'url'];
+  // A search box is never part of a sign-in, filled or not.
+  const isSearchField = el => el.type === 'search' || el.getAttribute('role') === 'searchbox'
+    || /^(q|query|s|search)$|search/i.test(`${el.name || ''} ${el.id || ''}`.trim());
   function buttonNear(field, accepts, own = [field]) {
-    const other = el => !el.form && !own.includes(el) && FIELD_TYPES.includes(el.type) && isVisible(el) && !el.value;
+    const other = el => !el.form && !own.includes(el) && FIELD_TYPES.includes(el.type) && isVisible(el)
+      && (!el.value || isSearchField(el));
     for (let scope = field.parentElement; scope && scope !== document.documentElement; scope = scope.parentElement) {
       if ([...scope.querySelectorAll('input')].some(other)) break;
       const hit = [...scope.querySelectorAll('button, input[type="submit"]')]
@@ -667,7 +673,9 @@
     if (field.form) return findSubmitButton(field.form);
     const login = findLoginFields();
     const own = [field, login?.username, login?.password].filter(Boolean);
-    return buttonNear(field, b => isSubmitControl(b) && !NOT_SIGN_IN.test(buttonLabel(b)), own);
+    // Without a form the button has to say it signs in: never a "Go" or
+    // "Search" that happens to be nearer.
+    return buttonNear(field, b => SIGN_IN_SUBMIT.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b)), own);
   }
 
   function findUsernameOnlyField() {
