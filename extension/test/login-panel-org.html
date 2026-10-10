@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in panel with an organization field</title></head>
+<body>
+  <!-- A form-less panel with an already-filled organization field; the
+       Continue button is a sibling a few wrappers up. -->
+  <section id="panel">
+    <div class="org"><div><input type="text" id="org" value="acme"></div></div>
+    <div class="creds"><div>
+      <input type="email" id="email" autocomplete="username">
+      <input type="password" id="password" autocomplete="current-password">
+    </div></div>
+    <button type="button" id="continue">Continue</button>
+  </section>
+  <script>
+    document.getElementById('continue').onclick = () => {
+      location.href = 'welcome.html?org=' + encodeURIComponent(document.getElementById('org').value)
+        + '&email=' + encodeURIComponent(document.getElementById('email').value)
+        + '&password=' + encodeURIComponent(document.getElementById('password').value);
+    };
+  </script>
+</body></html>

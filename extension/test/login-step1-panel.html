@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in — step 1 panel without a form</title></head>
+<body>
+  <!-- No <form>, no autocomplete hint; "Sign up" comes before "Continue". -->
+  <div id="panel">
+    <input type="email" id="email">
+    <button id="signup">Sign up</button>
+    <button id="continue">Continue</button>
+  </div>
+  <p id="went"></p>
+  <script>
+    document.getElementById('signup').onclick = () => { document.getElementById('went').textContent = 'signup'; };
+    document.getElementById('continue').onclick = () => {
+      location.href = 'login-step2.html?email=' + encodeURIComponent(document.getElementById('email').value);
+    };
+  </script>
+</body></html>

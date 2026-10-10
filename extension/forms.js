@@ -619,6 +619,126 @@
     });
   } catch { /* extension context gone */ }
 
+  // ── Launched from OTPilot ("Open & sign in") ───────────────────────────
+  // This tab was opened by the popup to sign in: fill the username step and
+  // the sign-in form as they appear and submit them (not where auto-submit
+  // is known to be rejected: there the click is left to the user). The
+  // background releases the password once, so a rejected one never loops.
+  let _launch = null; // null: not asked yet; false: no launch; true: on
+  let _launchStep = ''; // the step already filled on this page
+  const launchFill = step => chrome.runtime.sendMessage({ action: 'vaultLaunchFill', step }).catch(() => null);
+
+  // The username field of a page asking only for it (no password yet), and
+  // the button that submits it — only with evidence it's a sign-in step,
+  // never a newsletter's email box: autocomplete="username", or a submitting
+  // action that reads like signing in. That same button is the one clicked.
+  const SIGN_IN_BUTTON = /\b(sign\s*in|log\s*in|login|continue|next|iniciar|ingresar|acceder|entrar|continuar|siguiente)\b/i;
+  const SIGN_IN_SUBMIT = /\b(sign\s*in|log\s*in|login|continue|next|submit|verify|confirm|iniciar|ingresar|acceder|entrar|continuar|siguiente|enviar|verificar)\b/i;
+  const NOT_SIGN_IN = /\b(subscribe|newsletter|sign\s*up|register|join|suscrib\w*|registr\w*)\b/i;
+  const buttonLabel = b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' ');
+  const readsSignIn = b => !!b && isVisible(b) && SIGN_IN_BUTTON.test(buttonLabel(b))
+    && !NOT_SIGN_IN.test(buttonLabel(b)) && !NOT_SUBMIT.test(buttonLabel(b));
+
+  // The nearest visible button `accepts` takes for a form-less `field`,
+  // within its sign-in panel: the containers around it, widening while they
+  // hold no other empty input than the sign-in's own (`own`) — a container
+  // that also holds an empty search box or newsletter field is past the
+  // panel, and so is a search box even with a query in it; an already-filled
+  // field (an organization, a remembered tenant) belongs to the sign-in.
+  // Buttons of a form never count.
+  const FIELD_TYPES = ['text', 'email', 'tel', 'password', 'search', 'number', 'url'];
+  // A search box is never part of a sign-in, filled or not.
+  const isSearchField = el => el.type === 'search' || el.getAttribute('role') === 'searchbox'
+    || /^(q|query|s|search)$|search/i.test(`${el.name || ''} ${el.id || ''}`.trim());
+  function buttonNear(field, accepts, own = [field]) {
+    const other = el => !el.form && !own.includes(el) && FIELD_TYPES.includes(el.type) && isVisible(el)
+      && (!el.value || isSearchField(el));
+    for (let scope = field.parentElement; scope && scope !== document.documentElement; scope = scope.parentElement) {
+      if ([...scope.querySelectorAll('input')].some(other)) break;
+      const hit = [...scope.querySelectorAll('button, input[type="submit"]')]
+        .find(b => !b.form && isVisible(b) && accepts(b));
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  // The button that submits a username step: its form's submit button, else
+  // (no form) the nearest one that reads like signing in — never a
+  // "Sign up" that happens to come first.
+  const signInButtonFor = field => (field.form ? findSubmitButton(field.form) : buttonNear(field, readsSignIn));
+
+  // The button that submits a sign-in form: its form's submit button, else
+  // the nearest submit-looking control (Sign in, Continue, Submit, Verify…)
+  // that isn't a sign-up.
+  function passwordButtonFor(field) {
+    if (field.form) return findSubmitButton(field.form);
+    const login = findLoginFields();
+    const own = [field, login?.username, login?.password].filter(Boolean);
+    // Without a form the button has to say it signs in: never a "Go" or
+    // "Search" that happens to be nearer.
+    return buttonNear(field, b => SIGN_IN_SUBMIT.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b)) && !NOT_SUBMIT.test(buttonLabel(b)), own);
+  }
+
+  function findUsernameOnlyField() {
+    if (hasVisiblePassword(document)) return null;
+    const inputs = [...document.querySelectorAll('input')].filter(el =>
+      ['text', 'email', 'tel'].includes(el.type) && isVisible(el)
+      && !autocompleteOf(el).includes('one-time-code'));
+    for (const el of inputs) {
+      const button = signInButtonFor(el);
+      if (autocompleteOf(el).split(/\s+/).includes('username')) return { field: el, button };
+      if ((el.type === 'email' || USERNAME_HINT.test(`${el.name} ${el.id}`)) && readsSignIn(button)) return { field: el, button };
+    }
+    return null;
+  }
+
+  // The launched login's username in that field: another one the site
+  // remembered is replaced (the user asked to sign in as this login).
+  function putUsername(field, username) {
+    if (field.value.trim().toLowerCase() !== String(username).trim().toLowerCase()) fillInputValue(field, username);
+  }
+
+  // `findButton` runs when the click is due: the page may have replaced the
+  // button while reacting to the fill.
+  async function submitAfterFill(field, findButton) {
+    if (await isNoAutoSubmitHost(location.hostname.toLowerCase())) return;
+    setTimeout(() => {
+      const button = field.isConnected ? findButton(field) : null;
+      if (button) button.click();
+      else if (field.form) field.form.requestSubmit?.();
+    }, 300);
+  }
+
+  async function continueLaunch() {
+    if (_launch === false || !chrome.runtime?.id) return;
+    if (_launch === null) _launch = !!(await launchFill('probe'))?.ok;
+    if (!_launch) return;
+    const login = findLoginFields();
+    if (login && _launchStep !== 'password') {
+      _launchStep = 'password';
+      const res = await launchFill('password');
+      if (!res?.ok) { _launch = false; return; }
+      _filling = true;
+      try {
+        if (login.username && res.username) putUsername(login.username, res.username);
+        fillInputValue(login.password, res.password);
+      } finally { _filling = false; }
+      _launch = false; // the launch ends with the password
+      submitAfterFill(login.password, passwordButtonFor);
+      return;
+    }
+    const step = !login && _launchStep === '' && findUsernameOnlyField();
+    if (step) {
+      const { field: userField } = step;
+      _launchStep = 'username';
+      const res = await launchFill('username');
+      if (!res?.ok) return;
+      _filling = true;
+      try { putUsername(userField, res.username); } finally { _filling = false; }
+      submitAfterFill(userField, signInButtonFor);
+    }
+  }
+
   // Sign-in forms often appear after load (SPAs, modals).
   let timer;
   const observer = new MutationObserver(() => {
@@ -627,6 +747,7 @@
       if (!chrome.runtime?.id) { observer.disconnect(); return; } // extension reloaded
       check();
       syncBadges();
+      continueLaunch();
       // A sign-in that takes a while to finish: offer once its form is gone.
       if (_capturedAt && Date.now() - _capturedAt < 3 * 60 * 1000) offerSave();
     }, 400);
@@ -634,4 +755,5 @@
   observer.observe(document.documentElement, { childList: true, subtree: true });
   check();
   offerSave();
+  continueLaunch();
 })();

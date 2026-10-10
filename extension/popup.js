@@ -490,8 +490,39 @@ function renderAccountBar() {
       renderAccountBar();
       startTimer();
     });
-    list.appendChild(row);
+    // "Open & sign in", shown on the row being hovered or focused (beside
+    // the row's button: a button can't hold another).
+    const item = document.createElement('div');
+    item.className = 'lc-item';
+    item.appendChild(row);
+    if (canLaunch(acc)) {
+      const launch = document.createElement('button');
+      launch.className = 'lc-launch';
+      launch.title = 'Open and sign in';
+      launch.setAttribute('aria-label', `Open ${acc.name || 'this site'} and sign in`);
+      launch.innerHTML = SVG_SIGN_IN;
+      launch.addEventListener('click', () => launchAccount(acc));
+      item.appendChild(launch);
+    }
+    list.appendChild(item);
   });
+}
+
+// ── Open & sign in ────────────────────────────────────────────────────────────
+// Opens the login's first website in a new tab; the background then fills
+// the sign-in there (forms.js continueLaunch) and the usual auto-fill the 2FA
+// code. Only for logins with a website.
+const SVG_SIGN_IN = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
+</svg>`;
+
+const canLaunch = acc => !!acc?._id && String(acc.urls || '').split('\n').some(u => u.trim());
+
+async function launchAccount(acc) {
+  let res;
+  try { res = await chrome.runtime.sendMessage({ action: 'vaultLaunch', id: acc._id }); } catch { res = null; }
+  if (res?.ok) { window.close(); return; }
+  setStatus(res?.error === 'no-url' ? 'This account has no website to open' : 'Could not open the site', false);
 }
 
 document.getElementById('home-search').addEventListener('input', renderAccountBar);
@@ -532,6 +563,7 @@ async function refreshDisplay() {
   currentCode = '';
 
   if (!acc) {
+    document.getElementById('btn-launch').hidden = true;
     renderHomeCreds(null);
     document.getElementById('home-detail').classList.remove('no-code');
     bigIcon.innerHTML = '';
@@ -549,6 +581,7 @@ async function refreshDisplay() {
   }
 
   nameLabel.innerHTML = esc(acc.name || '') + sharedBadgeHTML(findSharedCode(acc));
+  document.getElementById('btn-launch').hidden = !canLaunch(acc);
   renderHomeCreds(acc);
   // Without a 2FA code the code block and Copy / Fill step aside: the
   // account's details are what there is to show.
@@ -625,6 +658,20 @@ function homeRelated(acc) {
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// A saved website pattern as a URL to open (plain http only for local hosts),
+// or null — the same rule as the background's launchUrlOf.
+function siteUrl(pattern) {
+  let u = String(pattern || '').trim();
+  if (!u) return null;
+  if (!/^https?:\/\//i.test(u)) {
+    u = u.replace(/^\*\./, '');
+    const host = u.split(/[/?#]/)[0].replace(/:\d+$/, '').toLowerCase();
+    const local = host === 'localhost' || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+    u = `${local ? 'http' : 'https'}://${u}`;
+  }
+  try { const url = new URL(u); return /^https?:$/.test(url.protocol) && !url.hostname.includes('*') ? url.href : null; } catch { return null; }
+}
+
 async function homeCopy(value, label) {
   try { await navigator.clipboard.writeText(value); setStatus(`${label} copied`); }
   catch { setStatus('Could not copy — the browser blocked the clipboard', false); }
@@ -632,7 +679,7 @@ async function homeCopy(value, label) {
 
 // One label | value row; secret values masked with Show.
 // No label: the value takes the row (a section's only text, like notes).
-function homeRow({ label, value, secret = false, multiline = false }) {
+function homeRow({ label, value, secret = false, multiline = false, open = null }) {
   const el = document.createElement('div');
   el.className = 'home-cred' + (multiline ? ' multiline' : '') + (label ? '' : ' full');
   el.innerHTML = `<span class="home-cred-label"></span><span class="home-cred-value"></span><span class="home-cred-actions"></span>`;
@@ -649,6 +696,14 @@ function homeRow({ label, value, secret = false, multiline = false }) {
     let shown = false;
     eye.addEventListener('click', () => { shown = !shown; show(shown); eye.textContent = shown ? 'Hide' : 'Show'; });
     actions.appendChild(eye);
+  }
+  if (open) {
+    const btn = document.createElement('button');
+    btn.className = 'home-cred-btn';
+    btn.textContent = 'Open';
+    btn.title = 'Open the site (without signing in)';
+    btn.addEventListener('click', () => { chrome.tabs.create({ url: open }); window.close(); });
+    actions.appendChild(btn);
   }
   const copy = document.createElement('button');
   copy.className = 'home-cred-btn';
@@ -698,7 +753,7 @@ function renderHomeCreds(acc) {
   if (acc.email) signIn.push(homeRow({ label: 'Username', value: acc.email }));
   if (acc.password) signIn.push(homeRow({ label: 'Password', value: acc.password, secret: true }));
   const site = String(acc.urls || '').split('\n').map(u => u.trim()).find(Boolean);
-  if (site) signIn.push(homeRow({ label: 'Website', value: site }));
+  if (site) signIn.push(homeRow({ label: 'Website', value: site, open: siteUrl(site) }));
   if (signIn.length) box.appendChild(homeSection('Sign-in', signIn));
 
   // Custom fields, by section (the default one first), like the editor.
@@ -830,6 +885,11 @@ document.getElementById('btn-fill').addEventListener('click', async () => {
   } catch {
     setStatus('No OTP field found on this page', false);
   }
+});
+
+document.getElementById('btn-launch').innerHTML = `${SVG_SIGN_IN}<span>Open &amp; sign in</span>`;
+document.getElementById('btn-launch').addEventListener('click', () => {
+  if (accounts[activeIndex]) launchAccount(accounts[activeIndex]);
 });
 
 document.getElementById('btn-edit-account').addEventListener('click', () => {

@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in panel without a form</title></head>
+<body>
+  <!-- No <form>; the fields sit in their own wrappers and the button,
+       labelled Verify, is outside them. -->
+  <div id="panel">
+    <div class="row"><input type="email" id="email" autocomplete="username"></div>
+    <div class="row"><input type="password" id="password" autocomplete="current-password"></div>
+    <div class="actions"><button type="button" id="verify">Verify</button></div>
+  </div>
+  <script>
+    document.getElementById('verify').onclick = () => {
+      location.href = 'welcome.html?email=' + encodeURIComponent(document.getElementById('email').value)
+        + '&password=' + encodeURIComponent(document.getElementById('password').value);
+    };
+  </script>
+</body></html>

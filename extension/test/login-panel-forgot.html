@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in panel with a help button first</title></head>
+<body>
+  <!-- Form-less: "Forgot login?" and "Show login password" come before Sign in. -->
+  <div id="panel">
+    <input type="email" id="email" autocomplete="username">
+    <input type="password" id="password" autocomplete="current-password">
+    <button type="button" id="forgot">Forgot login?</button>
+    <button type="button" id="show">Show login password</button>
+    <button type="button" id="signin">Sign in</button>
+  </div>
+  <p id="went"></p>
+  <script>
+    document.getElementById('forgot').onclick = () => { document.getElementById('went').textContent = 'forgot'; };
+    document.getElementById('show').onclick = () => { document.getElementById('went').textContent = 'show'; };
+    document.getElementById('signin').onclick = () => {
+      location.href = 'welcome.html?email=' + encodeURIComponent(document.getElementById('email').value)
+        + '&password=' + encodeURIComponent(document.getElementById('password').value);
+    };
+  </script>
+</body></html>

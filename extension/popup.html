@@ -85,6 +85,25 @@
     .lc-row-text { flex: 1; min-width: 0; }
     .lc-row-name { display: block; font-size: 11px; font-weight: 600; color: var(--ink-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .lc-row-sub { display: block; font-size: 9.5px; color: var(--ink-5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* "Open & sign in" beside a Home row, on hover / focus. */
+    .lc-item { position: relative; }
+    .lc-launch {
+      position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+      width: 26px; height: 26px; border-radius: 7px; display: none; align-items: center; justify-content: center;
+      border: 1px solid rgba(var(--accent-2-rgb), .35); background: var(--surface); color: var(--accent-2);
+      cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.12); padding: 0;
+    }
+    .lc-item:hover .lc-launch, .lc-item:focus-within .lc-launch { display: inline-flex; }
+    .lc-launch:hover { background: var(--surface-2); }
+    .lc-item:hover .lc-row-tab-dot, .lc-item:focus-within .lc-row-tab-dot { display: none; }
+    #btn-launch {
+      display: inline-flex; align-items: center; gap: 6px; margin: 4px auto 6px; height: 26px; padding: 0 12px;
+      border-radius: 13px; border: 1px solid rgba(var(--accent-2-rgb), .35); background: rgba(var(--accent-2-rgb), .08);
+      color: var(--accent-2); font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer;
+    }
+    #btn-launch[hidden] { display: none; }
+    #btn-launch:hover { background: rgba(var(--accent-2-rgb), .16); }
+    #btn-launch svg { width: 13px; height: 13px; }
     .lc-row-tab-dot { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); width: 5px; height: 5px; border-radius: 50%; background: var(--accent-2); }
     .lc-empty { padding: 20px 12px; text-align: center; font-size: 11px; color: var(--ink-4); line-height: 1.6; }
 
@@ -1236,6 +1255,7 @@
         <div id="account-name"></div>
         <button id="btn-obfuscate" title="Show code"></button>
       </div>
+      <button id="btn-launch" hidden title="Open the site in a new tab and sign in"></button>
       <div id="otp-display" class="dim">••• •••</div>
       <div class="countdown" id="countdown">–</div>
       <div class="progress-wrap">

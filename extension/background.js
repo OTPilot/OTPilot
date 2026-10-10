@@ -195,6 +195,89 @@ async function fillLogin(sender, id) {
   return { ok: true, username: Vault.getValue(item, 'username'), password };
 }
 
+// ── Launch: open a login's site and sign in ─────────────────────────────────
+// The popup's "Open & sign in" opens the login's first website in a new tab
+// and leaves a launch for that tab (session storage: never a page's to set).
+// Pages in that tab ask for it (vaultLaunchFill): on a host the login covers
+// (loginCoversHost, as for every fill) they get the username, then the
+// password once — a launch is gone as soon as the password is released, so a
+// rejected password never loops. The 2FA code is filled by the usual OTP
+// auto-fill. The user's click in the popup is what starts it.
+const LAUNCH_TTL = 2 * 60 * 1000;
+const launchKey = tabId => `launch:${tabId}`;
+
+// Plain http is only for the user's own machine / network.
+const isLocalHost = host => host === 'localhost' || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+
+// The URL to open for a saved website pattern ("site.com/login",
+// "*.site.com", "https://…"), or null. A public site is always opened over
+// https (a saved http:// address too), so a launch never sends a password
+// over plain http; a local host keeps a saved https:// and defaults to http.
+function launchUrlOf(urls) {
+  for (const raw of urls || []) {
+    const saved = String(raw || '').trim();
+    const scheme = /^(https?):\/\//i.exec(saved)?.[1]?.toLowerCase();
+    const u = saved.replace(/^https?:\/\//i, '').replace(/^\*\./, '');
+    if (!u || /^[a-z][a-z0-9+.-]*:/i.test(u.split(/[/?#]/)[0].replace(/:\d+$/, ''))) continue;
+    const host = u.split(/[/?#]/)[0].replace(/:\d+$/, '').toLowerCase();
+    const proto = !isLocalHost(host) ? 'https' : (scheme || 'http');
+    try {
+      const url = new URL(`${proto}://${u}`);
+      if (url.hostname && !url.hostname.includes('*')) return url.href;
+    } catch { /* not a URL: try the next one */ }
+  }
+  return null;
+}
+
+// Only the extension's own pages (the popup) start a launch: a content
+// script's sender URL is the web page's.
+const fromExtensionPage = sender => sender?.id === chrome.runtime.id
+  && String(sender.url || '').startsWith(chrome.runtime.getURL(''));
+
+async function launchLogin(sender, id) {
+  if (!fromExtensionPage(sender) || typeof id !== 'string') return { ok: false };
+  if ((await VaultLock.state()) !== 'unlocked') return { ok: false, error: 'locked' };
+  const item = (await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null)) || (await sharedLogin(id));
+  if (!item || item.type !== 'login') return { ok: false };
+  const url = launchUrlOf(item.urls);
+  if (!url) return { ok: false, error: 'no-url' };
+  // The launch is stored before the site starts loading (a blank tab
+  // first), so the site's first page always finds it.
+  const tab = await chrome.tabs.create({ url: 'about:blank', active: true });
+  // Only to sign in when there's something to sign in with.
+  if (Vault.getValue(item, 'username') || Vault.getValue(item, 'password')) {
+    await chrome.storage.session.set({ [launchKey(tab.id)]: { id, at: Date.now() } });
+  }
+  await chrome.tabs.update(tab.id, { url });
+  await VaultLock.touch();
+  return { ok: true };
+}
+
+// What a page in a launched tab may fill: `step` 'username' (a page asking
+// only for the username) or 'password' (the sign-in form: username +
+// password, which ends the launch). `probe` just says whether one is on.
+async function launchFill(sender, step) {
+  const host = senderHost(sender);
+  if (!host) return { ok: false };
+  // Never into a plain-http page of a public site (a redirect can land there).
+  if (new URL(sender.url).protocol !== 'https:' && !isLocalHost(host)) return { ok: false };
+  const key = launchKey(sender.tab.id);
+  const launch = (await chrome.storage.session.get(key))[key];
+  if (!launch) return { ok: false };
+  if (Date.now() - launch.at > LAUNCH_TTL) { await chrome.storage.session.remove(key); return { ok: false }; }
+  if (step === 'probe') return { ok: true };
+  if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
+  const item = (await VaultStore.get(launch.id, await VaultKeys.getKey()).catch(() => null)) || (await sharedLogin(launch.id));
+  if (!item || item.type !== 'login' || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
+  const username = Vault.getValue(item, 'username');
+  if (step === 'username') return username ? { ok: true, username } : { ok: false };
+  const password = Vault.getValue(item, 'password');
+  if (step !== 'password' || !password) return { ok: false };
+  await chrome.storage.session.remove(key);
+  await VaultLock.touch();
+  return { ok: true, username, password };
+}
+
 // ── Saving sign-ins ──────────────────────────────────────────────────────────
 // A submitted sign-in form's credentials wait in chrome.storage.session
 // (memory-only, unreadable by content scripts) for the next page in the same
@@ -426,7 +509,7 @@ async function resolvePendingLogin(sender, id, choice, target) {
   });
 }
 
-chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove([pendingLoginKey(tabId), pendingUsernameKey(tabId)]); });
+chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove([pendingLoginKey(tabId), pendingUsernameKey(tabId), launchKey(tabId)]); });
 
 // The custom properties of the active theme, from theme.css (the single
 // definition of every theme): ":root" is the default, the rest are
@@ -724,6 +807,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // picked whose saved URLs cover that host.
   if (msg.action === 'vaultLoginsForPage') {
     loginsForPage(_sender).then(sendResponse).catch(() => sendResponse({ state: 'locked', logins: [] }));
+    return true;
+  }
+
+  if (msg.action === 'vaultLaunch') {
+    launchLogin(_sender, msg.id).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  if (msg.action === 'vaultLaunchFill') {
+    launchFill(_sender, msg.step).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 
