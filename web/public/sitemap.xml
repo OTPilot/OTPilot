@@ -8,6 +8,24 @@
     <priority>1.0</priority>
   </url>
   <url>
+    <loc>https://otpilot.app/google-authenticator-for-chrome</loc>
+    <lastmod>2026-10-10</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://otpilot.app/authy-alternative</loc>
+    <lastmod>2026-10-10</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://otpilot.app/autofill-2fa-codes-chrome</loc>
+    <lastmod>2026-10-10</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://otpilot.app/security</loc>
     <lastmod>2026-10-10</lastmod>
     <changefreq>monthly</changefreq>

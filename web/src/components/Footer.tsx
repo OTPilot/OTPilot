@@ -10,6 +10,9 @@ export default function Footer() {
         </div>
 
         <div className="flex flex-wrap justify-center gap-6">
+          <a href="/google-authenticator-for-chrome" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">Google Authenticator for Chrome</a>
+          <a href="/authy-alternative" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">Authy alternative</a>
+          <a href="/autofill-2fa-codes-chrome" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">Autofill 2FA codes</a>
           <a href="/tos" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">Terms of Service</a>
           <a href="/privacy" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">Privacy Policy</a>
           <a href="/security" className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">Security</a>

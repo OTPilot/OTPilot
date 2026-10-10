@@ -18,6 +18,8 @@ import Gdpr from './pages/legal/Gdpr'
 import Support from './pages/Support'
 import AcceptInvite from './pages/AcceptInvite'
 import Security from './pages/legal/Security'
+import GuidePage from './pages/guides/GuidePage'
+import { GUIDES } from './pages/guides/guides'
 import './index.css'
 
 export const routes: RouteRecord[] = [
@@ -46,6 +48,7 @@ export const routes: RouteRecord[] = [
       { path: 'privacy', element: <Privacy /> },
       { path: 'refunds', element: <Refunds /> },
       { path: 'gdpr', element: <Gdpr /> },
+      ...GUIDES.map(g => ({ path: g.path.slice(1), element: <GuidePage guide={g} /> })),
     ],
   },
 ]
