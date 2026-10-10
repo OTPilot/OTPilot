@@ -149,3 +149,19 @@ test('a form-less username panel clicks its sign-in button, not a "Sign up" befo
   const site = await launchFromRow(context, popup, 'Panel site');
   await expect(site).toHaveURL(/welcome\.html\?password=pw-55/);
 });
+
+test('a form-less sign-in panel is submitted through its button outside the fields\' wrappers (Verify)', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Verify panel', email: 'me@example.com', secret: '', urls: `${SITE}/login-panel-verify.html`, password: 'pw-88' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Verify panel');
+  await expect(site).toHaveURL(/welcome\.html\?email=me%40example\.com&password=pw-88/);
+});
+
+test('a username step whose button the page replaces on input still goes through', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Replaced button', email: 'me@example.com', secret: '', urls: `${SITE}/login-step1-replaced.html`, password: 'pw-66' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Replaced button');
+  await expect(site).toHaveURL(/welcome\.html\?password=pw-66/);
+});

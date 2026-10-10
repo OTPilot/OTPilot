@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in — step 1, button replaced on input</title></head>
+<body>
+  <!-- No <form>: typing in the field replaces the Continue button. -->
+  <div id="panel">
+    <input type="email" id="email" autocomplete="username">
+    <span id="slot"><button id="continue">Continue</button></span>
+  </div>
+  <script>
+    const go = () => { location.href = 'login-step2.html?email=' + encodeURIComponent(document.getElementById('email').value); };
+    document.getElementById('continue').onclick = go;
+    document.getElementById('email').addEventListener('input', () => {
+      const b = document.createElement('button');
+      b.textContent = 'Continue';
+      b.onclick = go;
+      document.getElementById('slot').replaceChildren(b);
+    });
+  </script>
+</body></html>

@@ -637,14 +637,27 @@
   const buttonLabel = b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' ');
   const readsSignIn = b => !!b && isVisible(b) && SIGN_IN_BUTTON.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b));
 
-  // The button that submits `field`: its form's submit button, else (no
-  // form) the nearest visible button that reads like signing in — never a
-  // "Sign up" that happens to come first.
-  function signInButtonFor(field) {
-    if (field.form) return findSubmitButton(field.form);
-    const scope = field.closest('section, div') || document;
-    return [...scope.querySelectorAll('button, input[type="submit"]')].find(readsSignIn) || null;
+  // The nearest visible button `accepts` takes, looking in ever wider
+  // containers around `field` (a panel's button can sit outside the
+  // field's own wrapper).
+  function buttonNear(field, accepts) {
+    for (let scope = field.parentElement; scope; scope = scope.parentElement) {
+      const hit = [...scope.querySelectorAll('button, input[type="submit"]')].find(b => isVisible(b) && accepts(b));
+      if (hit) return hit;
+    }
+    return null;
   }
+
+  // The button that submits a username step: its form's submit button, else
+  // (no form) the nearest one that reads like signing in — never a
+  // "Sign up" that happens to come first.
+  const signInButtonFor = field => (field.form ? findSubmitButton(field.form) : buttonNear(field, readsSignIn));
+
+  // The button that submits a sign-in form: its form's submit button, else
+  // the nearest submit-looking control (Sign in, Continue, Submit, Verify…)
+  // that isn't a sign-up.
+  const passwordButtonFor = field => (field.form ? findSubmitButton(field.form)
+    : buttonNear(field, b => isSubmitControl(b) && !NOT_SIGN_IN.test(buttonLabel(b))));
 
   function findUsernameOnlyField() {
     if (hasVisiblePassword(document)) return null;
@@ -665,10 +678,13 @@
     if (field.value.trim().toLowerCase() !== String(username).trim().toLowerCase()) fillInputValue(field, username);
   }
 
-  async function submitAfterFill(field, button) {
+  // `findButton` runs when the click is due: the page may have replaced the
+  // button while reacting to the fill.
+  async function submitAfterFill(field, findButton) {
     if (await isNoAutoSubmitHost(location.hostname.toLowerCase())) return;
     setTimeout(() => {
-      if (button?.isConnected) button.click();
+      const button = field.isConnected ? findButton(field) : null;
+      if (button) button.click();
       else if (field.form) field.form.requestSubmit?.();
     }, 300);
   }
@@ -688,18 +704,18 @@
         fillInputValue(login.password, res.password);
       } finally { _filling = false; }
       _launch = false; // the launch ends with the password
-      submitAfterFill(login.password, signInButtonFor(login.password));
+      submitAfterFill(login.password, passwordButtonFor);
       return;
     }
     const step = !login && _launchStep === '' && findUsernameOnlyField();
     if (step) {
-      const { field: userField, button } = step;
+      const { field: userField } = step;
       _launchStep = 'username';
       const res = await launchFill('username');
       if (!res?.ok) return;
       _filling = true;
       try { putUsername(userField, res.username); } finally { _filling = false; }
-      submitAfterFill(userField, button);
+      submitAfterFill(userField, signInButtonFor);
     }
   }
 
