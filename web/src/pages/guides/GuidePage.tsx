@@ -3,7 +3,7 @@ import { Seo } from '../../seo'
 import Navbar from '../../components/Navbar'
 import Footer from '../../components/Footer'
 import { CHROME_STORE_URL } from '../../lib/browser'
-import type { Guide } from './guides'
+import { GUIDES, type Guide } from './guides'
 
 // One search-intent page (an alternative, a how-to): the answer first, then
 // how it works, then questions — each page ends on installing the extension.
@@ -48,9 +48,6 @@ export default function GuidePage({ guide }: { guide: Guide }) {
                   {s.steps.map((st) => <li key={st}>{st}</li>)}
                 </ol>
               )}
-              {s.after?.map((p) => (
-                <p key={p} className="text-zinc-400 leading-relaxed mb-4">{p}</p>
-              ))}
               {s.bullets && (
                 <ul className="space-y-3 mb-4">
                   {s.bullets.map((b) => (
@@ -74,6 +71,9 @@ export default function GuidePage({ guide }: { guide: Guide }) {
                   </table>
                 </div>
               )}
+              {s.after?.map((p) => (
+                <p key={p} className="text-zinc-400 leading-relaxed mb-4">{p}</p>
+              ))}
             </section>
           ))}
 
@@ -90,6 +90,17 @@ export default function GuidePage({ guide }: { guide: Guide }) {
               </dl>
             </section>
           )}
+
+          <nav aria-label="More from OTPilot" className="mt-12">
+            <h2 className="text-sm font-semibold text-zinc-300 mb-3">More from OTPilot</h2>
+            <ul className="flex flex-wrap gap-x-6 gap-y-2">
+              {GUIDES.filter((g) => g.path !== guide.path).map((g) => (
+                <li key={g.path}>
+                  <a href={g.path} className="text-sm text-teal-400 hover:text-teal-300">{g.nav}</a>
+                </li>
+              ))}
+            </ul>
+          </nav>
 
           <div className="mt-16 p-8 rounded-2xl border border-teal-500/20 bg-teal-500/5 text-center">
             <p className="text-2xl font-bold text-white mb-2">Password manager with built-in 2FA</p>
