@@ -637,12 +637,16 @@
   const buttonLabel = b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' ');
   const readsSignIn = b => !!b && isVisible(b) && SIGN_IN_BUTTON.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b));
 
-  // The nearest visible button `accepts` takes, looking in ever wider
-  // containers around `field` (a panel's button can sit outside the
-  // field's own wrapper).
+  // The nearest visible button `accepts` takes for a form-less `field`,
+  // looking in a few wider containers around it (a panel's button can sit
+  // outside the field's own wrapper) but never the whole page, and never a
+  // button of another form (a search box's, a newsletter's).
+  const PANEL_DEPTH = 4;
   function buttonNear(field, accepts) {
-    for (let scope = field.parentElement; scope; scope = scope.parentElement) {
-      const hit = [...scope.querySelectorAll('button, input[type="submit"]')].find(b => isVisible(b) && accepts(b));
+    let scope = field.parentElement;
+    for (let depth = 0; scope && scope !== document.body && depth < PANEL_DEPTH; depth++, scope = scope.parentElement) {
+      const hit = [...scope.querySelectorAll('button, input[type="submit"]')]
+        .find(b => !b.form && isVisible(b) && accepts(b));
       if (hit) return hit;
     }
     return null;

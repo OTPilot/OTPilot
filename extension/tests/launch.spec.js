@@ -165,3 +165,11 @@ test('a username step whose button the page replaces on input still goes through
   const site = await launchFromRow(context, popup, 'Replaced button');
   await expect(site).toHaveURL(/welcome\.html\?password=pw-66/);
 });
+
+test('a form-less sign-in panel never borrows another form\'s button (a search box)', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Search page', email: 'me@example.com', secret: '', urls: `${SITE}/login-panel-search.html`, password: 'pw-44' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Search page');
+  await expect(site).toHaveURL(/welcome\.html\?email=me%40example\.com&password=pw-44/);
+});
