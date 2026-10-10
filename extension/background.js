@@ -206,21 +206,21 @@ async function fillLogin(sender, id) {
 const LAUNCH_TTL = 2 * 60 * 1000;
 const launchKey = tabId => `launch:${tabId}`;
 
+// Plain http is only for the user's own machine / network.
+const isLocalHost = host => host === 'localhost' || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+
 // The URL to open for a saved website pattern ("site.com/login",
-// "*.site.com", "https://…"), or null. Plain http only for local hosts.
+// "*.site.com", "https://…"), or null. Always https, except local hosts: a
+// saved http:// address of a public site is opened over https, so a
+// launch never sends a password over plain http.
 function launchUrlOf(urls) {
   for (const raw of urls || []) {
-    let u = String(raw || '').trim();
-    if (!u) continue;
-    if (!/^https?:\/\//i.test(u)) {
-      u = u.replace(/^\*\./, '');
-      const host = u.split(/[/?#]/)[0].replace(/:\d+$/, '').toLowerCase();
-      const local = host === 'localhost' || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
-      u = `${local ? 'http' : 'https'}://${u}`;
-    }
+    let u = String(raw || '').trim().replace(/^https?:\/\//i, '').replace(/^\*\./, '');
+    if (!u || /^[a-z][a-z0-9+.-]*:/i.test(u.split(/[/?#]/)[0].replace(/:\d+$/, ''))) continue;
+    const host = u.split(/[/?#]/)[0].replace(/:\d+$/, '').toLowerCase();
     try {
-      const url = new URL(u);
-      if (/^https?:$/.test(url.protocol) && url.hostname && !url.hostname.includes('*')) return url.href;
+      const url = new URL(`${isLocalHost(host) ? 'http' : 'https'}://${u}`);
+      if (url.hostname && !url.hostname.includes('*')) return url.href;
     } catch { /* not a URL: try the next one */ }
   }
   return null;
@@ -238,11 +238,14 @@ async function launchLogin(sender, id) {
   if (!item || item.type !== 'login') return { ok: false };
   const url = launchUrlOf(item.urls);
   if (!url) return { ok: false, error: 'no-url' };
-  const tab = await chrome.tabs.create({ url, active: true });
+  // The launch is stored before the site starts loading (a blank tab
+  // first), so the site's first page always finds it.
+  const tab = await chrome.tabs.create({ url: 'about:blank', active: true });
   // Only to sign in when there's something to sign in with.
   if (Vault.getValue(item, 'username') || Vault.getValue(item, 'password')) {
     await chrome.storage.session.set({ [launchKey(tab.id)]: { id, at: Date.now() } });
   }
+  await chrome.tabs.update(tab.id, { url });
   await VaultLock.touch();
   return { ok: true };
 }
@@ -253,6 +256,8 @@ async function launchLogin(sender, id) {
 async function launchFill(sender, step) {
   const host = senderHost(sender);
   if (!host) return { ok: false };
+  // Never into a plain-http page of a public site (a redirect can land there).
+  if (new URL(sender.url).protocol !== 'https:' && !isLocalHost(host)) return { ok: false };
   const key = launchKey(sender.tab.id);
   const launch = (await chrome.storage.session.get(key))[key];
   if (!launch) return { ok: false };

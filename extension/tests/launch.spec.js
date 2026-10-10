@@ -90,3 +90,43 @@ test('accounts without a website have no launch button; the Website row opens th
   await site.waitForTimeout(1500);
   await expect(site.locator('input[name="password"]')).toHaveValue('');
 });
+
+test('a username the site remembered is replaced by the launched login\'s', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Prefilled', email: 'me@example.com', secret: '', urls: `${SITE}/login-prefilled.html`, password: 'pw-9' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Prefilled');
+  await expect(site).toHaveURL(/welcome\.html\?email=me%40example\.com&password=pw-9/);
+});
+
+test('an email box that isn\'t a sign-in step (a newsletter) is left alone', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'News site', email: 'me@example.com', secret: '', urls: `${SITE}/newsletter.html`, password: 'pw' },
+  ]);
+  const site = await launchFromRow(context, popup, 'News site');
+  await expect(site).toHaveURL(/newsletter\.html/);
+  await site.waitForTimeout(1500);
+  await expect(site.locator('input[name="newsletter_email"]')).toHaveValue('');
+  await expect(site).toHaveURL(/newsletter\.html$/);
+});
+
+test('a public site is always opened over https, even when saved as http', async ({ context }) => {
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker');
+  const urls = await worker.evaluate(() => [
+    launchUrlOf(['http://example.com/login']),
+    launchUrlOf(['example.com']),
+    launchUrlOf(['*.example.com']),
+    launchUrlOf(['localhost:8765/test/login-nav.html']),
+    launchUrlOf(['javascript:alert(1)', 'site.org']),
+    launchUrlOf(['']),
+  ]);
+  expect(urls).toEqual([
+    'https://example.com/login',
+    'https://example.com/',
+    'https://example.com/',
+    'http://localhost:8765/test/login-nav.html',
+    'https://site.org/',
+    null,
+  ]);
+});

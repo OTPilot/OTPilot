@@ -628,14 +628,30 @@
   let _launchStep = ''; // the step already filled on this page
   const launchFill = step => chrome.runtime.sendMessage({ action: 'vaultLaunchFill', step }).catch(() => null);
 
-  // An empty username field on a page asking only for it (no password yet).
+  // The username field of a page asking only for it (no password yet) —
+  // only with evidence it's a sign-in step, never a newsletter's email box:
+  // autocomplete="username", or a form whose button reads like signing in.
+  const SIGN_IN_BUTTON = /\b(sign\s*in|log\s*in|login|continue|next|iniciar|ingresar|acceder|entrar|continuar|siguiente)\b/i;
+  const NOT_SIGN_IN = /\b(subscribe|newsletter|sign\s*up|register|join|suscrib\w*|registr\w*)\b/i;
   function findUsernameOnlyField() {
     if (hasVisiblePassword(document)) return null;
     const inputs = [...document.querySelectorAll('input')].filter(el =>
-      ['text', 'email', 'tel'].includes(el.type) && isVisible(el) && !el.value
+      ['text', 'email', 'tel'].includes(el.type) && isVisible(el)
       && !autocompleteOf(el).includes('one-time-code'));
-    return inputs.find(el => /\b(username|email)\b/.test(autocompleteOf(el)) || el.type === 'email'
-      || USERNAME_HINT.test(`${el.name} ${el.id}`)) || null;
+    return inputs.find(el => {
+      if (autocompleteOf(el).split(/\s+/).includes('username')) return true;
+      if (!(el.type === 'email' || USERNAME_HINT.test(`${el.name} ${el.id}`))) return false;
+      const scope = el.form || el.closest('section, div') || document;
+      const buttons = [...scope.querySelectorAll('button, input[type="submit"]')].filter(isVisible)
+        .map(b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' '));
+      return buttons.some(t => SIGN_IN_BUTTON.test(t)) && !buttons.some(t => NOT_SIGN_IN.test(t));
+    }) || null;
+  }
+
+  // The launched login's username in that field: another one the site
+  // remembered is replaced (the user asked to sign in as this login).
+  function putUsername(field, username) {
+    if (field.value.trim().toLowerCase() !== String(username).trim().toLowerCase()) fillInputValue(field, username);
   }
 
   async function submitAfterFill(field) {
@@ -660,7 +676,7 @@
       if (!res?.ok) { _launch = false; return; }
       _filling = true;
       try {
-        if (login.username && res.username && !login.username.value) fillInputValue(login.username, res.username);
+        if (login.username && res.username) putUsername(login.username, res.username);
         fillInputValue(login.password, res.password);
       } finally { _filling = false; }
       _launch = false; // the launch ends with the password
@@ -673,7 +689,7 @@
       const res = await launchFill('username');
       if (!res?.ok) return;
       _filling = true;
-      try { fillInputValue(userField, res.username); } finally { _filling = false; }
+      try { putUsername(userField, res.username); } finally { _filling = false; }
       submitAfterFill(userField);
     }
   }
