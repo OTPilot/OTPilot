@@ -282,4 +282,134 @@ export const GUIDES: Guide[] = [
       { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
     ],
   },
+  {
+    path: '/guides/github-2fa',
+    kind: 'guide',
+    nav: 'Set up 2FA on GitHub',
+    title: 'How to set up 2FA on GitHub with OTPilot | OTPilot',
+    description: 'Turn on two-factor authentication on GitHub in two minutes and never type the code again: OTPilot saves the account from the setup page and fills the code at sign-in.',
+    h1: 'Set up two-factor authentication on GitHub',
+    intro: 'GitHub asks for an authenticator app code on every new sign-in. With OTPilot the code lives in your browser: it saves the account straight from GitHub\'s setup page and fills the code for you afterwards.',
+    sections: [
+      {
+        h2: 'Turn on 2FA',
+        steps: [
+          'On GitHub, click your profile picture (top right) → Settings.',
+          'In the sidebar, under Access, click Password and authentication.',
+          'In the Two-factor authentication section, click Enable two-factor authentication.',
+          'GitHub shows a QR code. OTPilot detects it and offers to save the account: click Add account. If the prompt doesn\'t appear, show the setup key on the site instead, then in OTPilot click + → 2FA code and paste it.',
+          'Type the current code from OTPilot into "Verify the code from the app" (open the OTPilot popup to see it).',
+          'Download your recovery codes and keep them somewhere safe, then click I have saved my recovery codes.',
+        ],
+      },
+      {
+        h2: 'Next time you sign in',
+        paragraphs: ['OTPilot fills your GitHub username and password, then the 2FA code when GitHub asks for it, and submits.'],
+      },
+    ],
+    faq: [
+      { q: 'What if I lose access to OTPilot?', a: 'Use one of GitHub\'s recovery codes to sign in, then set up 2FA again. Keep the codes outside OTPilot, or turn on sync so your vault is on more than one device.' },
+    ],
+  },
+  {
+    path: '/guides/google-account-2fa',
+    kind: 'guide',
+    nav: 'Authenticator app for your Google Account',
+    title: 'How to use an authenticator app with your Google Account | OTPilot',
+    description: 'Add an authenticator app to your Google Account\'s 2-Step Verification and let OTPilot fill the code on the sign-in page.',
+    h1: 'Add an authenticator app to your Google Account',
+    intro: 'Google\'s 2-Step Verification can use codes from an authenticator app. OTPilot can be that app: it saves the account from Google\'s setup page and fills the code when Google asks for it.',
+    sections: [
+      {
+        h2: 'Set it up',
+        steps: [
+          'On a computer, go to your Google Account → Security → 2-Step Verification → Authenticator (myaccount.google.com/two-step-verification/authenticator).',
+          'Click Set up authenticator.',
+          'Google shows a QR code. OTPilot detects it and offers to save the account: click Add account. If the prompt doesn\'t appear, click Can\'t scan it? to see the key, then in OTPilot click + → 2FA code and paste it.',
+          'Enter the current code from OTPilot to confirm.',
+        ],
+        after: ['Google notes it can take up to 7 days for the authenticator to show up as a sign-in option.'],
+      },
+    ],
+    faq: [
+      { q: 'Do I still need my phone?', a: 'Not for the code: OTPilot generates it in your browser. Google may still offer its other 2-Step Verification options, like prompts on your phone.' },
+    ],
+  },
+  {
+    path: '/guides/aws-mfa',
+    kind: 'guide',
+    nav: 'Set up MFA on AWS',
+    title: 'How to set up MFA on AWS with an authenticator app | OTPilot',
+    description: 'Assign a virtual MFA device to your AWS root user or IAM user with OTPilot as the authenticator, and get the MFA code filled at console sign-in.',
+    h1: 'Set up MFA on AWS with OTPilot',
+    intro: 'AWS calls an authenticator app a virtual MFA device. OTPilot works as one: it saves the device from the console\'s setup wizard and fills the MFA code when you sign in.',
+    sections: [
+      {
+        h2: 'Assign the MFA device',
+        steps: [
+          'Sign in to the AWS Management Console. On the right of the navigation bar, choose your account name → Security credentials.',
+          'In the Multi-Factor Authentication (MFA) section, choose Assign MFA device.',
+          'Type a device name, choose Authenticator app, then Next.',
+          'Choose Show QR code. OTPilot detects it and offers to save the account: click Add account. If the prompt doesn\'t appear, choose Show secret key, then in OTPilot click + → 2FA code and paste it.',
+          'AWS asks for two consecutive codes: type the current code from OTPilot in MFA code 1, wait for the next one (up to 30 seconds) and type it in MFA code 2. Choose Add MFA.',
+        ],
+        after: ['Submit right after typing the second code: if you wait too long, AWS can register the device out of sync.'],
+      },
+      {
+        h2: 'A backup you can count on',
+        paragraphs: ['AWS lets you register up to eight MFA devices. Adding a second one (a security key, or the same secret on another device) means losing one never locks you out of the account.'],
+      },
+    ],
+    faq: [
+      { q: 'Does it work for IAM users too?', a: 'Yes: an IAM user can assign an MFA device from its own Security credentials page the same way (if its permissions allow it, or an administrator does it from IAM), and OTPilot fills the code at sign-in.' },
+    ],
+  },
+  {
+    path: '/guides/cloudflare-2fa',
+    kind: 'guide',
+    nav: 'Set up 2FA on Cloudflare',
+    title: 'How to set up 2FA on Cloudflare with an authenticator app | OTPilot',
+    description: 'Turn on two-factor authentication for your Cloudflare dashboard with OTPilot as the authenticator app, and get the code filled when you sign in.',
+    h1: 'Set up two-factor authentication on Cloudflare',
+    intro: 'Cloudflare protects your sites and DNS, so its dashboard deserves a second factor. OTPilot works as the authenticator app: it saves the account from Cloudflare\'s setup page and fills the code at sign-in.',
+    sections: [
+      {
+        h2: 'Turn on 2FA',
+        steps: [
+          'In the Cloudflare dashboard, go to Profile → Authentication.',
+          'Under Two-Factor Authentication, select Set up.',
+          'Under Mobile App Authentication, select Add.',
+          'Cloudflare shows a QR code. OTPilot detects it and offers to save the account: click Add account. If the prompt doesn\'t appear, show the setup key on the site instead, then in OTPilot click + → 2FA code and paste it.',
+          'Enter the current code from OTPilot, then your Cloudflare password, and select Next.',
+          'Enter your password again, select Next to review your backup codes, and Download, Print or Copy them somewhere safe. Select Next to finish.',
+        ],
+      },
+    ],
+    faq: [
+      { q: 'What are the backup codes for?', a: 'They get you into your Cloudflare account if you lose access to your authenticator. Keep them outside OTPilot.' },
+    ],
+  },
+  {
+    path: '/guides/stripe-2fa',
+    kind: 'guide',
+    nav: 'Set up 2FA on Stripe',
+    title: 'How to set up two-step authentication on Stripe with an authenticator app | OTPilot',
+    description: 'Add an authenticator app to your Stripe Dashboard\'s two-step authentication with OTPilot, and get the code filled when you sign in.',
+    h1: 'Set up two-step authentication on Stripe',
+    intro: 'Your Stripe Dashboard moves money, so Stripe asks for two-step authentication. OTPilot can be the authenticator app: it saves the account from Stripe\'s setup flow and fills the code when you sign in.',
+    sections: [
+      {
+        h2: 'Add an authenticator app',
+        steps: [
+          'In the Stripe Dashboard, open your Personal details page.',
+          'In the Two-step authentication section, select Add authentication method and choose an authenticator app.',
+          'Stripe shows a QR code. OTPilot detects it and offers to save the account: click Add account. If the prompt doesn\'t appear, show the setup key on the site instead, then in OTPilot click + → 2FA code and paste it.',
+          'Enter the current code from OTPilot to confirm.',
+          'Store the backup code Stripe gives you somewhere safe.',
+        ],
+        after: ['Stripe recommends adding more than one authentication method, so losing one never locks you out.'],
+      },
+    ],
+    faq: [],
+  },
 ]

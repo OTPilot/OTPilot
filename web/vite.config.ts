@@ -6,6 +6,26 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { GUIDES } from './src/pages/guides/guides'
 
+/** The public pages: prerendered for search engines and listed in the
+ * sitemap, from this one list. */
+const PUBLIC_PAGES: { path: string; priority: number }[] = [
+  { path: '/', priority: 1.0 },
+  ...GUIDES.map(g => ({ path: g.path, priority: g.kind === 'compare' ? 0.8 : 0.6 })),
+  { path: '/security', priority: 0.7 },
+  ...['/privacy', '/tos', '/gdpr', '/refunds'].map(path => ({ path, priority: 0.3 })),
+]
+
+function writeSitemap() {
+  const lastmod = new Date().toISOString().slice(0, 10)
+  const urls = PUBLIC_PAGES.map(p => `  <url>
+    <loc>https://otpilot.app${p.path}</loc>
+    <lastmod>${lastmod}</lastmod>
+    <priority>${p.priority.toFixed(1)}</priority>
+  </url>`).join('\n')
+  writeFileSync(resolve(process.cwd(), 'dist/sitemap.xml'),
+    `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`)
+}
+
 /** Neutral SPA fallback shell for every route besides "/" (dashboard, auth,
  * legal, support — none of that needs to be crawlable, see vercel.json's
  * catch-all rewrite). Reusing the root `index.html` is wrong: it's the fully
@@ -36,9 +56,10 @@ export default defineConfig({
     // Prerender the public pages (indexed by search engines); dashboard,
     // auth and support stay a client-only SPA, served through the
     // app-shell fallback below. Keep in sync with public/sitemap.xml.
-    includedRoutes: () => ['/', '/security', '/privacy', '/tos', '/gdpr', '/refunds', ...GUIDES.map(g => g.path)],
+    includedRoutes: () => PUBLIC_PAGES.map(p => p.path),
     onFinished: () => {
       writeAppShell()
+      writeSitemap()
     },
   },
 })
