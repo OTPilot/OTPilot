@@ -7,7 +7,7 @@ import { Api, ApiError } from './api.js'
 import { browserLogin } from './browser.js'
 import { fieldValue, findGrant, loadGrants, openItem, PendingApproval, waitForAnswer, type Grant } from './grants.js'
 import { redact } from './redact.js'
-import { commandAllowed, runCommand } from './run.js'
+import { resolveAllowed, runCommand } from './run.js'
 import type { Credentials } from './store.js'
 
 export const VERSION = '0.1.0'
@@ -126,20 +126,22 @@ export function buildServer(ctx: Ctx): McpServer {
     const values: Record<string, string> = {}
     const secrets: string[] = []
     const used = new Map<string, Grant>()
+    let program: { path: string; rest: string } | undefined
     for (const [name, ref] of Object.entries(env)) {
       const cut = ref.lastIndexOf('/')
       if (cut <= 0) return fail(`env ${name}: write it as "<account>/<field>", e.g. "Staging DB/password".`)
       const grant = findGrant(grants, ref.slice(0, cut))
-      const refused = commandAllowed(command, grant.commands)
-      if (refused) return fail(`${grant.title}: ${refused}`)
+      const limit = resolveAllowed(command, grant.commands, cwd)
+      if (limit && 'error' in limit) return fail(`${grant.title}: ${limit.error}`)
+      if (limit) program = limit
       const item = await openItem(ctx.api, ctx.creds.privateJwk, grant, 'run', reason || '', WAIT_MS)
       values[name] = await fieldValue(item, ref.slice(cut + 1))
       secrets.push(values[name], ...item.fields.map(f => f.value || ''), item.totp?.secret || '')
       used.set(grant.itemId, grant)
     }
-    const r = await runCommand(command, values, { cwd, timeoutSec: timeout_seconds, secrets: secrets.filter(Boolean) })
-    const program = command.trim().split(/\s+/)[0] || 'command'
-    for (const g of used.values()) await report(ctx, g.itemId, 'run', program)
+    const r = await runCommand(command, values, { cwd, timeoutSec: timeout_seconds, secrets: secrets.filter(Boolean), program })
+    const programName = command.trim().split(/\s+/)[0] || 'command'
+    for (const g of used.values()) await report(ctx, g.itemId, 'run', programName)
     const out = [`exit code: ${r.exitCode ?? 'none'}${r.timedOut ? ' (timed out)' : ''}`]
     if (r.stdout) out.push(`stdout:\n${r.stdout}`)
     if (r.stderr) out.push(`stderr:\n${r.stderr}`)

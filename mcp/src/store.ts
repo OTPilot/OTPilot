@@ -44,9 +44,12 @@ export async function save(profile: string, c: Credentials): Promise<'keychain' 
   try {
     if (e) {
       e.setPassword(JSON.stringify(c))
+      rmSync(fileOf(profile), { force: true }) // no older copy left to load instead
       return 'keychain'
     }
   } catch { /* fall back to the file */ }
+  // In the file: an older keychain entry mustn't win over it later.
+  try { e?.deletePassword() } catch { /* none, or no keychain */ }
   const f = fileOf(profile)
   mkdirSync(join(homedir(), '.config', 'otpilot'), { recursive: true, mode: 0o700 })
   writeFileSync(f, JSON.stringify(c), { mode: 0o600 })

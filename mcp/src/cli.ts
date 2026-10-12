@@ -49,7 +49,11 @@ function guessName(): string {
 function openUrl(url: string) {
   const cmd = platform() === 'darwin' ? 'open' : platform() === 'win32' ? 'cmd' : 'xdg-open'
   const a = platform() === 'win32' ? ['/c', 'start', '', url] : [url]
-  try { spawn(cmd, a, { stdio: 'ignore', detached: true }).unref() } catch { /* printed anyway */ }
+  try {
+    const child = spawn(cmd, a, { stdio: 'ignore', detached: true })
+    child.on('error', () => { /* no opener here: the printed URL works */ })
+    child.unref()
+  } catch { /* printed anyway */ }
 }
 
 function setupLines(profile: string) {
@@ -65,7 +69,10 @@ function setupLines(profile: string) {
 
 async function connect(flags: Record<string, string | boolean>) {
   const name = typeof flags.name === 'string' ? flags.name : guessName()
-  const profile = typeof flags.profile === 'string' ? flags.profile : process.env.OTPILOT_PROFILE || slug(name)
+  // Without --name or --profile it's the default profile, which plain
+  // status / serve use too; --name "Codex" keeps a second agent apart.
+  const profile = typeof flags.profile === 'string' ? flags.profile
+    : process.env.OTPILOT_PROFILE || (typeof flags.name === 'string' ? slug(flags.name) : 'default')
   const apiUrl = typeof flags.api === 'string' ? flags.api : process.env.OTPILOT_API_URL || DEFAULT_API_URL
   const keys = await generateKeyPair()
   const api = new Api(apiUrl)

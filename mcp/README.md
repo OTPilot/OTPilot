@@ -48,7 +48,8 @@ No tool returns a password, a 2FA code or any other value.
 
 - **The agent's own key.** `connect` creates an ECDH P-256 keypair; the private key stays in your OS keychain. Each account you allow is a copy, holding only what you chose (just the 2FA code, the sign-in, or chosen fields), encrypted for that key in the extension. OTPilot's servers only see ciphertext.
 - **Two approvals.** Connecting an agent gives it nothing; each account is allowed per agent. The verification code is derived from the agent's public key on every side, so a swapped key shows a different code.
-- **Limits you set:** for a while or until revoked, "ask me every time", and "only with these commands" (`run` then refuses chained commands).
+- **Limits you set:** for a while or until revoked, "ask me every time", and "only with these commands": `run` then accepts only that program, called by name and resolved on the server's PATH (never from the working or temp directory), as a single command with no chaining or redirection — a guard against mistakes and simple tricks, not against an agent that can plant its own binary on your PATH.
+- **Only over HTTPS** (plain HTTP just for local hosts), and every secret is scrubbed from what comes back — before the output is cut, so none is left half-removed. A timeout kills the command and everything it started.
 - **Only on the right site.** `browser_login` fills only on pages the account's saved sites cover.
 - **Activity and revoke** in the extension's Agents view.
 - **The honest limit:** an agent that runs commands decides what they do and could try to reveal a secret on purpose. OTPilot scrubs secrets from what it returns; for sensitive accounts allow only the 2FA code, limit the commands, or turn on "ask me every time".

@@ -65,15 +65,20 @@ const settle = (page: Page) => page.waitForLoadState('networkidle', { timeout: 1
 export async function browserLogin(item: VaultItem, opts: { url?: string; outDir: string; headless?: boolean }): Promise<LoginResult> {
   const username = Vault.getValue(item, 'username')
   const password = Vault.getValue(item, 'password')
+  // Only on the account's sites, and only over HTTPS — plain HTTP just for a
+  // local host (localhost, 127.x, ::1, *.localhost, *.local), as in the extension.
   const covers = (url: string) => {
     try {
       const u = new URL(url)
-      return ['http:', 'https:'].includes(u.protocol) && Vault.loginCoversHost(item.urls, u.hostname)
+      const host = u.hostname.replace(/^\[|\]$/g, '')
+      const local = /^(localhost|127(\.\d+){3}|::1)$/.test(host) || /\.(localhost|local)$/.test(host)
+      const secure = u.protocol === 'https:' || (u.protocol === 'http:' && local)
+      return secure && Vault.loginCoversHost(item.urls, u.hostname)
     } catch { return false }
   }
   const start = opts.url || (item.urls[0] ? (/^https?:\/\//.test(item.urls[0]) ? item.urls[0] : `https://${item.urls[0].replace(/^\*\./, '')}`) : '')
   if (!start) throw new Error(`"${item.title}" has no website saved, so OTPilot doesn't know where to sign in.`)
-  if (!covers(start)) throw new Error(`${start} isn't one of "${item.title}"'s saved sites; OTPilot only signs in there.`)
+  if (!covers(start)) throw new Error(`${start} isn't one of "${item.title}"'s saved sites over HTTPS; OTPilot only signs in there.`)
   if (!password && !item.totp?.secret) throw new Error(`"${item.title}" gives this agent nothing to sign in with (allow its sign-in in OTPilot).`)
 
   const browser = await launch(opts.headless !== false)
@@ -83,6 +88,8 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
     await page.goto(start, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     await settle(page)
     let filledSomething = false
+    let submittedPassword = false
+    let lastStep: 'username' | 'password' | 'otp' | null = null
     let note: string | undefined
     for (let step = 0; step < 5; step++) {
       if (!covers(page.url())) {
@@ -95,6 +102,7 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
         await otp.fill(await generateTOTP(item.totp!.secret, item.totp!.period || 30, item.totp!.digits || 6))
         await otp.press('Enter')
         filledSomething = true
+        lastStep = 'otp'
       } else if (pass) {
         if (!password) { note = 'This agent may only use the 2FA code: sign in with the password yourself first.'; break }
         const user = await firstVisible(page, USER)
@@ -102,6 +110,8 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
         await pass.fill(password)
         await pass.press('Enter')
         filledSomething = true
+        submittedPassword = true
+        lastStep = 'password'
       } else {
         const user = await firstVisible(page, USER)
         if (user && username && (await user.inputValue()) !== username && !filledSomething) {
@@ -109,12 +119,17 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
           await user.fill(username)
           await user.press('Enter')
           filledSomething = true
+          lastStep = 'username'
         } else break
       }
       await settle(page)
     }
-    const stillAsking = covers(page.url()) && ((await firstVisible(page, PASSWORD)) || (item.totp?.secret && (await firstVisible(page, OTP))))
-    if (!filledSomething || stillAsking) {
+    const onSite = covers(page.url())
+    const stillAsking = onSite && ((await firstVisible(page, PASSWORD)) || (item.totp?.secret && (await firstVisible(page, OTP))))
+    // A sign-in that never got past the username (rejected, or a step OTPilot
+    // can't see) isn't one: only a submitted password or code counts.
+    const unfinished = lastStep === 'username' || (!submittedPassword && lastStep !== 'otp')
+    if (!filledSomething || stillAsking || unfinished) {
       return {
         status: 'needs_user',
         url: page.url(),
@@ -125,8 +140,9 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
       }
     }
     mkdirSync(opts.outDir, { recursive: true, mode: 0o700 })
-    const slug = item.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'session'
-    const file = resolve(join(opts.outDir, `${slug}.json`))
+    const slug = item.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'session'
+    // One file per sign-in: two accounts (or two sign-ins) never share one.
+    const file = resolve(join(opts.outDir, `${slug}-${item.id.slice(0, 8)}-${Date.now()}.json`))
     writeFileSync(file, JSON.stringify(await context.storageState()), { mode: 0o600 })
     chmodSync(file, 0o600)
     return { status: 'signed_in', url: page.url(), title: await page.title(), storageState: file }

@@ -56,6 +56,18 @@ describe('browser_login', () => {
     expect(state.cookies.map((c: { name: string; value: string }) => `${c.name}=${c.value}`)).toContain('session=signed-in')
   })
 
+  it('never sends a password over plain HTTP to a public site', async () => {
+    await expect(browserLogin(loginItem({ urls: ['acme.example'] }), { url: 'http://acme.example/login', outDir: tmpdir() })).rejects.toThrow(/over HTTPS/)
+  })
+
+  it('a username the site doesn\'t take is not a sign-in', async ctx => {
+    if (!browserOk) ctx.skip()
+    const item = loginItem({ urls: ['127.0.0.1'] })
+    item.fields[0].value = 'nobody@acme.io'
+    const r = await browserLogin(item, { url: base, outDir: tmpdir() })
+    expect(r.status).toBe('needs_user')
+  })
+
   it('never starts on a site the account doesn\'t cover', async () => {
     await expect(browserLogin(loginItem({ urls: ['acme.example'] }), { url: base, outDir: tmpdir() })).rejects.toThrow(/only signs in there/)
   })
