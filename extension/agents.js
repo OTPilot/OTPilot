@@ -47,25 +47,35 @@ const Agents = (() => {
   }
 
   const pins = async () => (await local.get(PINS))[PINS] || {};
-  async function setPin(id, pin) {
-    const all = await pins();
-    if (pin) all[id] = pin; else delete all[id];
-    await local.set({ [PINS]: all });
+  // The popup and the background both write these maps: every
+  // read-modify-write takes one lock, so neither drops the other's entry.
+  const locked = fn => navigator.locks.request('otpilot-agents', fn);
+
+  function setPin(id, pin) {
+    return locked(async () => {
+      const all = await pins();
+      if (pin) all[id] = pin; else delete all[id];
+      await local.set({ [PINS]: all });
+    });
   }
 
   async function published() { return (await local.get(PUBLISHED))[PUBLISHED] || {}; }
   async function approved() { return (await local.get(APPROVED))[APPROVED] || {}; }
-  async function noteApproved(key, scope) {
-    const all = await approved();
-    if (scope) all[key] = scope; else delete all[key];
-    await local.set({ [APPROVED]: all });
+  function noteApproved(key, scope) {
+    return locked(async () => {
+      const all = await approved();
+      if (scope) all[key] = scope; else delete all[key];
+      await local.set({ [APPROVED]: all });
+    });
   }
   const sameScope = (a, b) => JSON.stringify({ kind: a?.kind, parts: [...(a?.parts || [])].sort() })
     === JSON.stringify({ kind: b?.kind, parts: [...(b?.parts || [])].sort() });
-  async function notePublished(entries) {
-    const all = await published();
-    for (const [k, fp] of entries) { if (fp) all[k] = fp; else delete all[k]; }
-    await local.set({ [PUBLISHED]: all });
+  function notePublished(entries) {
+    return locked(async () => {
+      const all = await published();
+      for (const [k, fp] of entries) { if (fp) all[k] = fp; else delete all[k]; }
+      await local.set({ [PUBLISHED]: all });
+    });
   }
 
   // Everything the Agents view shows, each agent with its code and whether
@@ -99,7 +109,7 @@ const Agents = (() => {
     await ok(`/agents/${agentId}`, { method: 'DELETE' });
     await setPin(agentId, null);
     const keep = all => Object.fromEntries(Object.entries(all).filter(([k]) => !k.startsWith(`${agentId}:`)));
-    await local.set({ [PUBLISHED]: keep(await published()), [APPROVED]: keep(await approved()) });
+    await locked(async () => local.set({ [PUBLISHED]: keep(await published()), [APPROVED]: keep(await approved()) }));
   }
 
   // ── Scopes ─────────────────────────────────────────────────────────────

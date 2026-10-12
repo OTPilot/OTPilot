@@ -221,3 +221,15 @@ test('a server item offered to an agent defaults to its own fields', async ({ co
   expect(scope.kind).toBe('fields');
   expect(scope.parts.length).toBeGreaterThan(0);
 });
+
+test('approvals written at the same time are all kept', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const n = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ status: 'active' });
+    await Agents.pin(a);
+    const items = await Agents.vaultItems(await VaultKeys.getKey());
+    await Promise.all(items.map(i => Agents.grant(a, i, { scope: { kind: 'login' } })));
+    return Object.keys((await chrome.storage.local.get('agentsApproved')).agentsApproved).length;
+  });
+  expect(n).toBe(2);
+});
