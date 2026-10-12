@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, OnceLock},
     time::Duration,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{mpsc, Semaphore};
 
 const SITE: &str = "https://otpilot.app";
 
@@ -159,11 +159,52 @@ impl Mail {
     }
 }
 
-/// Emails being sent at once, at most: the rest wait their turn.
+/// Emails being sent at once, at most.
 const MAX_SENDING: usize = 8;
+/// Emails waiting their turn, at most. Past that (Resend down or very slow)
+/// new ones are dropped with a warning rather than piling up in memory.
+const MAX_WAITING: usize = 500;
 
-/// Sends one email via Resend, in the background: the request that caused it
-/// doesn't wait for delivery. No-op when disabled or unconfigured.
+struct Outgoing {
+    key: String,
+    body: serde_json::Value,
+}
+
+/// The queue to the sender task, started on first use: it takes one email at
+/// a time off a bounded channel and sends up to `MAX_SENDING` at once.
+fn outbox() -> &'static mpsc::Sender<Outgoing> {
+    static OUTBOX: OnceLock<mpsc::Sender<Outgoing>> = OnceLock::new();
+    OUTBOX.get_or_init(|| {
+        let (tx, mut rx) = mpsc::channel::<Outgoing>(MAX_WAITING);
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            let sending = Arc::new(Semaphore::new(MAX_SENDING));
+            while let Some(mail) = rx.recv().await {
+                let Ok(turn) = sending.clone().acquire_owned().await else {
+                    return;
+                };
+                let client = client.clone();
+                tokio::spawn(async move {
+                    let sent = client
+                        .post("https://api.resend.com/emails")
+                        .bearer_auth(mail.key)
+                        .timeout(Duration::from_secs(20))
+                        .json(&mail.body)
+                        .send()
+                        .await;
+                    if let Err(e) = sent {
+                        tracing::warn!("[email] not sent: {e}");
+                    }
+                    drop(turn);
+                });
+            }
+        });
+        tx
+    })
+}
+
+/// Queues one email for Resend: the request that caused it doesn't wait for
+/// delivery. No-op when disabled or unconfigured.
 async fn send(enabled: bool, api_key: Option<&str>, from: &str, to: &str, mail: Mail) {
     if !enabled {
         tracing::debug!(
@@ -176,35 +217,19 @@ async fn send(enabled: bool, api_key: Option<&str>, from: &str, to: &str, mail: 
         tracing::warn!("SEND_EMAILS=true but RESEND_API_KEY is not set — email skipped");
         return;
     };
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    static SENDING: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    let client = CLIENT.get_or_init(reqwest::Client::new).clone();
-    let sending = SENDING
-        .get_or_init(|| Arc::new(Semaphore::new(MAX_SENDING)))
-        .clone();
-    let key = key.to_string();
-    let body = serde_json::json!({
-        "from": from,
-        "to":   [to],
-        "subject": mail.subject,
-        "html": mail.html(),
-        "text": mail.text(),
-    });
-    tokio::spawn(async move {
-        let Ok(_turn) = sending.acquire_owned().await else {
-            return;
-        };
-        let sent = client
-            .post("https://api.resend.com/emails")
-            .bearer_auth(key)
-            .timeout(Duration::from_secs(20))
-            .json(&body)
-            .send()
-            .await;
-        if let Err(e) = sent {
-            tracing::warn!("[email] not sent: {e}");
-        }
-    });
+    let outgoing = Outgoing {
+        key: key.to_string(),
+        body: serde_json::json!({
+            "from": from,
+            "to":   [to],
+            "subject": mail.subject,
+            "html": mail.html(),
+            "text": mail.text(),
+        }),
+    };
+    if outbox().try_send(outgoing).is_err() {
+        tracing::warn!("[email] queue full — dropped: {}", mail.subject);
+    }
 }
 
 /// Team invitation. `recipient_has_account` picks the copy: existing users get a

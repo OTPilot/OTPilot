@@ -161,7 +161,7 @@ pub(crate) async fn announce(
         "INSERT INTO notifications (user_id, kind, team_id, actor_id, target_id, role)
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (user_id, kind, target_id) DO UPDATE SET
-           team_id = EXCLUDED.team_id, actor_id = EXCLUDED.actor_id, role = EXCLUDED.role,
+           id = EXCLUDED.id, team_id = EXCLUDED.team_id, actor_id = EXCLUDED.actor_id, role = EXCLUDED.role,
            created_at = NOW()",
     )
     .bind(user)
@@ -358,6 +358,7 @@ mod db_tests {
         assert_eq!(add("view", true).await.0, StatusCode::OK);
         assert_eq!(notices(&app, ana).await.len(), 1);
         // Removed and added again before she looked: still one notice.
+        let before = notices(&app, ana).await;
         let (s, _) = call(
             &app,
             owner,
@@ -368,6 +369,20 @@ mod db_tests {
         .await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(add("view", true).await.0, StatusCode::OK);
+        let again = notices(&app, ana).await;
+        assert_eq!(again.len(), 1);
+        // A new notice (new id): dismissing the one she saw before leaves it.
+        assert_ne!(again[0]["id"], before[0]["id"]);
+        let old_id = before[0]["id"].as_str().unwrap().to_string();
+        let (s, _) = call(
+            &app,
+            ana,
+            Method::POST,
+            &format!("/notifications/{old_id}/read"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
         assert_eq!(notices(&app, ana).await.len(), 1);
         let (s, _) = call(
             &app,
