@@ -17,6 +17,7 @@ import Refunds from './pages/legal/Refunds'
 import Gdpr from './pages/legal/Gdpr'
 import Support from './pages/Support'
 import AcceptInvite from './pages/AcceptInvite'
+import Goodbye from './pages/Goodbye'
 import Security from './pages/legal/Security'
 import GuidePage from './pages/guides/GuidePage'
 import { GUIDES } from './pages/guides/guides'
@@ -44,6 +45,7 @@ export const routes: RouteRecord[] = [
       { path: 'teams/accept/:token', element: <AcceptInvite /> },
       { path: 'security', element: <Security /> },
       { path: 'support', element: <Support /> },
+      { path: 'goodbye', element: <Goodbye /> },
       { path: 'tos', element: <Tos /> },
       { path: 'privacy', element: <Privacy /> },
       { path: 'refunds', element: <Refunds /> },

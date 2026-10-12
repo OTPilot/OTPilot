@@ -565,6 +565,17 @@ async function fillAndSubmitWithAccount(acc) {
 
 // Message from popup "Fill Page" button
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  // From the popup, a login shared with the user (not in the page's own
+  // account list): its code, filled like an own account's.
+  if (msg.action === 'fillWith') {
+    isSessionLocked().then(locked => {
+      if (locked) { reply({ ok: false, msg: 'OTPilot is locked' }); return; }
+      if (!msg.account?.secret) { reply({ ok: false, msg: 'No 2FA code saved for this account' }); return; }
+      fillAndSubmitWithAccount({ name: String(msg.account.name || ''), secret: String(msg.account.secret) })
+        .then(r => reply({ ok: r.ok, code: r.code, msg: r.msg }));
+    });
+    return true;
+  }
   if (msg.action === 'fill') {
     isSessionLocked().then(locked => {
       if (locked) { reply({ ok: false, msg: 'OTPilot is locked' }); return; }
