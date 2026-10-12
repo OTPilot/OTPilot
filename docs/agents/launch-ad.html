@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OTPilot 2.1 · launch ad</title>
+<!-- Launch creatives for OTPilot for AI agents. Each .ad is one artboard at
+     its exact pixel size; export with docs/agents/export-ads.cjs. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #050507; padding: 40px; display: flex; flex-direction: column; gap: 40px; align-items: flex-start; font-family: 'Inter', system-ui, sans-serif; }
+  .label { color: #71717a; font-size: 13px; margin-bottom: -28px; }
+
+  .ad { position: relative; overflow: hidden; background: #0a0a0f; color: #f4f4f5; display: flex; }
+  .ad::before { /* grid */
+    content: ''; position: absolute; inset: 0; opacity: .045;
+    background-image: linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+  .glow { position: absolute; border-radius: 50%; filter: blur(110px); pointer-events: none; }
+  .g1 { background: rgba(139, 92, 246, .28); }
+  .g2 { background: rgba(20, 184, 166, .22); }
+
+  .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; letter-spacing: -.01em; }
+  .brand img { border-radius: 10px; }
+  .new { display: inline-flex; align-items: center; gap: 10px; border: 1px solid rgba(167,139,250,.3); background: rgba(139,92,246,.12); color: #c4b5fd; border-radius: 999px; font-weight: 500; }
+  .new b { background: #a78bfa; color: #0a0a0f; border-radius: 6px; font-weight: 800; letter-spacing: .08em; }
+  h1 { font-weight: 800; letter-spacing: -.035em; line-height: 1.02; }
+  h1 .grad { background: linear-gradient(90deg, #c4b5fd, #5eead4 55%, #6ee7b7); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { color: #a1a1aa; line-height: 1.45; }
+  .sub b { color: #e4e4e7; font-weight: 600; }
+  .cta { display: flex; align-items: center; gap: 14px; }
+  .btn { background: linear-gradient(90deg, #a78bfa, #2dd4bf); color: #0a0a0f; font-weight: 700; border-radius: 14px; }
+  .url { color: #a1a1aa; font-weight: 500; }
+
+  /* Approval card (the extension) */
+  .card { background: #1e293b; border: 1px solid #1e3a5f; border-radius: 16px; box-shadow: 0 30px 60px rgba(0,0,0,.55); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  .card-top { display: flex; align-items: center; gap: 10px; color: #f1f5f9; font-weight: 700; }
+  .card-top .logo { width: 1.5em; height: 1.5em; border-radius: 6px; }
+  .req { border: 1px solid rgba(245,158,11,.4); background: rgba(245,158,11,.07); border-radius: 12px; display: flex; flex-direction: column; }
+  .who { display: flex; gap: .7em; align-items: center; }
+  .bot { width: 2.4em; height: 2.4em; border-radius: .6em; background: rgba(245,158,11,.16); color: #f59e0b; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .bot svg { width: 1.4em; height: 1.4em; }
+  .t1 { color: #f1f5f9; font-weight: 600; }
+  .t2 { color: #64748b; font-size: .82em; margin-top: .15em; }
+  .chips { display: flex; gap: .4em; flex-wrap: wrap; }
+  .chip { border: 1px solid #38bdf8; color: #38bdf8; background: rgba(56,189,248,.08); border-radius: 999px; padding: .15em .7em; font-size: .82em; }
+  .chip.off { border-color: #1e3a5f; color: #94a3b8; background: none; }
+  .row { display: flex; align-items: center; gap: .6em; }
+  .deny { border: 1px solid rgba(248,113,113,.4); color: #f87171; border-radius: .45em; padding: .4em .9em; font-weight: 600; font-size: .9em; }
+  .allow { margin-left: auto; background: #0ea5e9; color: #fff; border-radius: .45em; padding: .4em .9em; font-weight: 600; font-size: .9em; }
+
+  /* Terminal */
+  .term { background: #0d1117; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; box-shadow: 0 30px 60px rgba(0,0,0,.6); overflow: hidden; font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+  .bar { display: flex; gap: .5em; align-items: center; background: #161b22; padding: .7em 1em; }
+  .bar i { width: .75em; height: .75em; border-radius: 50%; display: block; }
+  .bar span { color: #6e7681; margin-left: .6em; font-size: .85em; }
+  .tb { padding: 1em 1.2em 1.2em; line-height: 1.6; color: #c9d1d9; white-space: pre-wrap; }
+  .u { color: #f4f4f5; } .tool { color: #d2a8ff; } .d { color: #6e7681; } .ok { color: #56d364; } .w { color: #e3b341; }
+
+  /* ── 1200 × 630 ── */
+  .a-wide { width: 1200px; height: 630px; padding: 56px 64px; }
+  .a-wide .g1 { width: 520px; height: 520px; right: -60px; top: -60px; }
+  .a-wide .g2 { width: 420px; height: 420px; left: -120px; bottom: -160px; }
+  .a-wide .left { position: relative; width: 560px; display: flex; flex-direction: column; }
+  .a-wide .brand { font-size: 22px; } .a-wide .brand img { width: 40px; height: 40px; }
+  .a-wide .new { font-size: 15px; padding: 6px 14px 6px 6px; margin: 34px 0 22px; align-self: flex-start; } .a-wide .new b { font-size: 12px; padding: 3px 8px; }
+  .a-wide h1 { font-size: 58px; }
+  .a-wide .sub { font-size: 21px; margin-top: 22px; }
+  .a-wide .cta { margin-top: auto; } .a-wide .btn { font-size: 18px; padding: 13px 22px; } .a-wide .url { font-size: 17px; }
+  .a-wide .visual { position: absolute; right: 56px; top: 70px; width: 520px; height: 500px; }
+  .a-wide .term { position: absolute; left: 0; top: 0; width: 470px; font-size: 13px; }
+  .a-wide .card { position: absolute; right: 0; bottom: 0; width: 360px; padding: 14px; font-size: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .a-wide .req { padding: 12px; gap: 11px; }
+
+  /* ── 1080 × 1080 ── */
+  .a-square { width: 1080px; height: 1080px; padding: 72px; flex-direction: column; }
+  .a-square .g1 { width: 640px; height: 640px; right: -160px; top: 280px; }
+  .a-square .g2 { width: 520px; height: 520px; left: -200px; top: -200px; }
+  .a-square .head { position: relative; display: flex; align-items: center; justify-content: space-between; }
+  .a-square .brand { font-size: 28px; } .a-square .brand img { width: 52px; height: 52px; border-radius: 13px; }
+  .a-square .new { font-size: 19px; padding: 7px 16px 7px 7px; } .a-square .new b { font-size: 14px; padding: 4px 10px; }
+  .a-square h1 { position: relative; font-size: 70px; margin-top: 56px; }
+  .a-square .sub { position: relative; font-size: 27px; margin-top: 22px; max-width: 860px; }
+  .a-square .visual { position: relative; flex: 1; margin: 40px 0 36px; }
+  .a-square .term { position: absolute; left: 0; top: 0; width: 600px; font-size: 15px; }
+  .a-square .card { position: absolute; right: 0; bottom: 0; width: 470px; padding: 18px; font-size: 17px; display: flex; flex-direction: column; gap: 14px; }
+  .a-square .req { padding: 15px; gap: 13px; }
+  .a-square .cta { position: relative; justify-content: space-between; } .a-square .btn { font-size: 24px; padding: 16px 28px; } .a-square .url { font-size: 22px; }
+
+  /* ── 1080 × 1920 ── */
+  .a-story { width: 1080px; height: 1920px; padding: 100px 80px 100px; flex-direction: column; }
+  .a-story .g1 { width: 800px; height: 800px; right: -300px; top: 760px; }
+  .a-story .g2 { width: 700px; height: 700px; left: -300px; top: -100px; }
+  .a-story .brand { position: relative; font-size: 34px; } .a-story .brand img { width: 64px; height: 64px; border-radius: 16px; }
+  .a-story .new { position: relative; font-size: 24px; padding: 9px 20px 9px 9px; margin-top: 64px; align-self: flex-start; } .a-story .new b { font-size: 18px; padding: 5px 12px; }
+  .a-story h1 { position: relative; font-size: 100px; margin-top: 40px; }
+  .a-story .sub { position: relative; font-size: 33px; margin-top: 34px; }
+  .a-story .visual { position: relative; flex: none; height: 790px; margin: 56px 0 auto; }
+  .a-story .term { position: absolute; left: 0; top: 0; width: 820px; font-size: 22px; }
+  .a-story .card { position: absolute; right: 0; top: 480px; width: 640px; padding: 24px; font-size: 24px; display: flex; flex-direction: column; gap: 18px; }
+  .a-story .req { padding: 20px; gap: 16px; }
+  .a-story .cta { position: relative; justify-content: space-between; } .a-story .btn { font-size: 34px; padding: 22px 36px; border-radius: 20px; } .a-story .url { font-size: 30px; }
+</style>
+</head>
+<body>
+
+<template id="tpl-term">
+  <div class="term">
+    <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span>claude — ~/code/acme</span></div>
+    <div class="tb"><span class="u">&gt; Test the staging login</span>
+
+<span class="tool">● otpilot.browser_login</span>("AWS staging")
+  <span class="d">⎿</span> <span class="w">pending_approval</span>
+  <span class="d">⎿</span> <span class="ok">signed_in</span>
+
+<span class="tool">● otpilot.run</span>("psql …",
+    env: { PGPASSWORD: <span class="d">"acme-db/password"</span> })
+  <span class="d">⎿ count: 14  (secrets redacted)</span>
+
+  Done. <span class="d">I never saw the password or the 2FA code.</span></div>
+  </div>
+</template>
+
+<template id="tpl-card">
+  <div class="card">
+    <div class="card-top"><img class="logo" src="../../web/public/logo.png" alt="">OTPilot</div>
+    <div class="req">
+      <div class="who">
+        <span class="bot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="currentColor"/><circle cx="15" cy="14" r="1.2" fill="currentColor"/></svg></span>
+        <div><div class="t1">Claude Code asks for AWS staging</div><div class="t2">to sign in · just now</div></div>
+      </div>
+      <div class="chips"><span class="chip">2FA code</span><span class="chip">Password</span><span class="chip off">Notes</span></div>
+      <div class="row"><span class="deny">Deny</span><span class="allow">Allow for Claude Code</span></div>
+    </div>
+  </div>
+</template>
+
+<p class="label">1200 × 630 — X, LinkedIn, link previews (also /ai-agents og:image)</p>
+<div class="ad a-wide" id="ad-wide">
+  <div class="glow g1"></div><div class="glow g2"></div>
+  <div class="left">
+    <div class="brand"><img src="../../web/public/logo.png" alt="">OTPilot</div>
+    <div class="new"><b>NEW</b>OTPilot 2.1 · for AI agents</div>
+    <h1>Your AI agent can sign in.<br><span class="grad">It never sees the password.</span></h1>
+    <p class="sub">Passwords and 2FA codes for <b>Claude Code, Codex and Cursor</b>, only for the accounts you approve.</p>
+    <div class="cta"><span class="btn">Free to start</span><span class="url">otpilot.app/ai-agents</span></div>
+  </div>
+  <div class="visual" data-term data-card></div>
+</div>
+
+<p class="label">1080 × 1080 — feed</p>
+<div class="ad a-square" id="ad-square">
+  <div class="glow g1"></div><div class="glow g2"></div>
+  <div class="head">
+    <div class="brand"><img src="../../web/public/logo.png" alt="">OTPilot</div>
+    <div class="new"><b>NEW</b>2.1 · for AI agents</div>
+  </div>
+  <h1>Your AI agent can sign in.<br><span class="grad">It never sees the password.</span></h1>
+  <p class="sub">Passwords and 2FA codes for <b>Claude Code, Codex and Cursor</b>, only for the accounts you approve.</p>
+  <div class="visual" data-term data-card></div>
+  <div class="cta"><span class="btn">Free to start</span><span class="url">otpilot.app/ai-agents</span></div>
+</div>
+
+<p class="label">1080 × 1920 — stories</p>
+<div class="ad a-story" id="ad-story">
+  <div class="glow g1"></div><div class="glow g2"></div>
+  <div class="brand"><img src="../../web/public/logo.png" alt="">OTPilot</div>
+  <div class="new"><b>NEW</b>OTPilot 2.1 · for AI agents</div>
+  <h1>Your AI agent can sign in.<br><span class="grad">It never sees the password.</span></h1>
+  <p class="sub">Passwords and 2FA codes for <b>Claude Code, Codex and Cursor</b>. You approve each agent and each account.</p>
+  <div class="visual" data-term data-card></div>
+  <div class="cta"><span class="btn">Free to start</span><span class="url">otpilot.app/ai-agents</span></div>
+</div>
+
+<script>
+  const term = document.getElementById('tpl-term').content;
+  const card = document.getElementById('tpl-card').content;
+  document.querySelectorAll('.visual').forEach(v => {
+    v.append(term.cloneNode(true), card.cloneNode(true));
+  });
+</script>
+</body>
+</html>

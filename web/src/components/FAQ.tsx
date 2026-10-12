@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Head } from 'vite-react-ssg'
+import { FREE_AGENTS, FREE_AGENT_ACCOUNTS } from '../lib/agents'
 
 const faqs = [
   {
@@ -13,6 +14,10 @@ const faqs = [
   {
     q: 'What does the free plan include?',
     a: 'Unlimited 2FA codes, plus up to 50 other items (passwords, secure notes, servers, API credentials) on one browser, with auto-fill, the password generator and imports from other password managers. A login that only holds a 2FA code (and its username) never counts toward the 50. Personal removes the limit and syncs everything across your devices.',
+  },
+  {
+    q: 'Can my AI agent use my passwords and 2FA codes?',
+    a: `Yes, without ever seeing them. Connect Claude Code, Codex, Cursor or any MCP agent, approve it in the extension, and allow it the accounts it may use, one by one. The agent asks OTPilot to sign in or run a command; OTPilot uses the password and 2FA code itself and returns only the result. Free covers ${FREE_AGENTS} agent with up to ${FREE_AGENT_ACCOUNTS} accounts; Personal and Team are unlimited.`,
   },
   {
     q: 'How does billing work? Can I cancel?',

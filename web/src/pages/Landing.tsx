@@ -4,6 +4,7 @@ import Navbar from '../components/Navbar'
 import Hero from '../components/Hero'
 import Showcase from '../components/Showcase'
 import Features from '../components/Features'
+import AgentsSection from '../components/AgentsSection'
 import HowItWorks from '../components/HowItWorks'
 import Pricing from '../components/Pricing'
 import FAQ from '../components/FAQ'
@@ -21,6 +22,7 @@ export default function Landing() {
       <Navbar />
       <Hero />
       <Showcase />
+      <AgentsSection />
       <Features />
       <HowItWorks />
       <Pricing />

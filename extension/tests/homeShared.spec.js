@@ -1,6 +1,9 @@
 import { test, expect, seedUnlocked, waitForVault, writeAccounts, TEST_SECRET } from './fixtures.js';
 import { installFakeShares } from './fakeShares.js';
 import { installFakeCollections } from './fakeCollections.js';
+import { readFileSync } from 'node:fs';
+
+const VERSION = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8')).version;
 
 // Home with what's shared: logins shared with the user listed after their own
 // (code, details, Fill, Open & sign in), who shared it on Home's detail, who
@@ -138,7 +141,7 @@ test('the uninstall survey URL carries only the version, plan and install day', 
   const u = new URL(url);
   expect(u.pathname).toBe('/goodbye');
   expect(Object.keys(Object.fromEntries(u.searchParams)).sort()).toEqual(['i', 'p', 'v']);
-  expect(u.searchParams.get('v')).toBe('2.0.3');
+  expect(u.searchParams.get('v')).toBe(VERSION);
   expect(u.searchParams.get('p')).toBe('personal');
   expect(u.searchParams.get('i')).toMatch(/^\d{4}-\d{2}-\d{2}$/); // the day only
 });

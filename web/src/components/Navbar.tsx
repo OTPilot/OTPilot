@@ -31,6 +31,10 @@ export default function Navbar() {
 
         <div className="hidden md:flex items-center gap-8">
           <a href="/#features" className="text-sm text-zinc-400 hover:text-white transition-colors">Features</a>
+          <a href="/ai-agents" className="text-sm text-zinc-400 hover:text-white transition-colors inline-flex items-center gap-1.5">
+            AI agents
+            <span className="px-1.5 py-px rounded bg-violet-400 text-black text-[9px] font-bold tracking-wider">NEW</span>
+          </a>
           <a href="/#pricing" className="text-sm text-zinc-400 hover:text-white transition-colors">Pricing</a>
           <a href="/#faq" className="text-sm text-zinc-400 hover:text-white transition-colors">FAQ</a>
         </div>
