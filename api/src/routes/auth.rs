@@ -101,8 +101,10 @@ async fn sync_user(
             .await;
     }
 
-    // Auto-accept a pending team invite addressed to this user's email (e.g. a
-    // brand-new account created from an invite link) when not already in a team.
+    // Auto-accept a pending team invite addressed to this user's email when
+    // the account was created after it (signed up from the invite email) and
+    // isn't in a team yet. An account that already existed accepts or
+    // declines it in the extension or from the email link.
     if let Some(email) = auth.email.as_deref() {
         let already_member: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1)")
@@ -115,10 +117,12 @@ async fn sync_user(
                 r#"
                 SELECT token FROM pending_invites
                 WHERE lower(email) = lower($1) AND accepted_at IS NULL AND expires_at > NOW()
+                  AND created_at <= (SELECT created_at FROM users WHERE id = $2)
                 ORDER BY created_at DESC LIMIT 1
                 "#,
             )
             .bind(email)
+            .bind(auth.id)
             .fetch_optional(&state.db)
             .await
             .unwrap_or(None);

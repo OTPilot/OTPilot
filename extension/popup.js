@@ -2844,6 +2844,155 @@ document.getElementById('btn-quick-add').addEventListener('click', e => {
   });
 });
 
+// ── Notices (header bell) ─────────────────────────────────────────────────────
+// Team invitations to accept or decline, and "a teammate added you to a
+// collection / shared an item with you". The background fetches them and
+// keeps the toolbar badge's count; acting on one here refreshes both.
+
+let _notices = { invites: [], notices: [] };
+// Bumped on sign-in / sign-out, so an answer for the previous account is dropped.
+let _noticesSession = 0;
+
+const NOTICE_ROLES = { manage: 'Can manage', edit: 'Can edit', view: 'View only' };
+
+function noticeAgo(iso) {
+  const min = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  return h < 24 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
+}
+
+function closeNotices() {
+  document.getElementById('notices-menu').style.display = 'none';
+}
+
+// `data` from the background; asked for when not given. null (offline, API
+// down) keeps what's shown.
+async function renderNotices(data) {
+  const session = _noticesSession;
+  if (data === undefined) data = await chrome.runtime.sendMessage({ action: 'refreshNotices' }).catch(() => null);
+  if (session !== _noticesSession) return;
+  if (data) _notices = { invites: data.invites || [], notices: data.notices || [] };
+  const n = _notices.invites.length + _notices.notices.length;
+  document.getElementById('notices-wrap').hidden = !n;
+  document.getElementById('notices-count').textContent = n > 99 ? '99+' : String(n);
+  if (!n) closeNotices();
+  else if (document.getElementById('notices-menu').style.display !== 'none') fillNotices();
+}
+
+const INVITE_ERRORS = {
+  already_in_team: 'You already belong to a team. Leave it first to join this one.',
+  seat_limit_reached: 'This team has no free seats. Ask its owner to add one.',
+};
+
+function fillNotices() {
+  const menu = document.getElementById('notices-menu');
+  menu.innerHTML = '';
+  const row = (html, meta, actions) => {
+    const el = document.createElement('div');
+    el.className = 'notice';
+    el.innerHTML = `<div><div class="notice-text">${html}</div><div class="notice-meta">${esc(meta)}</div></div><div class="notice-actions"></div>`;
+    const bar = el.querySelector('.notice-actions');
+    for (const [label, cls, run] of actions) {
+      const b = document.createElement('button');
+      b.className = `notice-btn ${cls}`;
+      b.textContent = label;
+      b.addEventListener('click', async e => {
+        e.stopPropagation();
+        el.querySelectorAll('button').forEach(x => { x.disabled = true; });
+        el.querySelector('.notice-err')?.remove();
+        const err = await run().catch(() => 'Could not reach OTPilot. Try again.');
+        if (err) {
+          el.querySelectorAll('button').forEach(x => { x.disabled = false; });
+          el.insertAdjacentHTML('beforeend', `<div class="notice-err">${esc(err)}</div>`);
+        }
+      });
+      bar.appendChild(b);
+    }
+    menu.appendChild(el);
+  };
+  const who = s => `<b>${esc(s || 'A teammate')}</b>`;
+
+  for (const inv of _notices.invites) {
+    const hours = Math.max(1, Math.round((new Date(inv.expires_at).getTime() - Date.now()) / 3600000));
+    row(`${who(inv.inviter)} invited you to join the team <b>${esc(inv.team_name)}</b>`,
+      `Team invitation · expires in ${hours} h`, [
+        ['Accept', 'primary', () => answerInvite(inv, 'accept')],
+        ['Decline', '', () => answerInvite(inv, 'decline')],
+      ]);
+  }
+  for (const n of _notices.notices) {
+    const role = NOTICE_ROLES[n.role] || n.role;
+    if (n.kind === 'collection_added') {
+      row(`${who(n.actor)} added you to a shared collection in <b>${esc(n.team_name)}</b>`,
+        `${role} · ${noticeAgo(n.created_at)}`, [
+          ['Open', 'primary', () => openNotice(n, 'team')],
+          ['Dismiss', 'link', () => openNotice(n, null)],
+        ]);
+    } else if (n.kind === 'item_shared') {
+      row(`${who(n.actor)} shared an item with you`,
+        `${n.team_name} · ${role} · ${noticeAgo(n.created_at)}`, [
+          ['Open', 'primary', () => openNotice(n, 'accounts')],
+          ['Dismiss', 'link', () => openNotice(n, null)],
+        ]);
+    }
+  }
+}
+
+// Returns an error message, or nothing when it worked.
+async function answerInvite(inv, answer) {
+  const res = await CloudSync.api(`/teams/${answer}/${encodeURIComponent(inv.token)}`, { method: 'POST' });
+  if (!res.ok && res.status !== 404) {
+    const { error } = await res.json().catch(() => ({}));
+    return INVITE_ERRORS[error] || 'Could not answer the invitation. Try again.';
+  }
+  closeNotices();
+  await renderNotices();
+  if (answer === 'accept' && res.ok) {
+    // The plan is now the team's; the Team tab shows once the team loads.
+    try { await CloudSync.syncUser(); } catch { /* the next open retries */ }
+    await renderSharedCodes();
+    refreshSharedItems();
+    showView('team');
+  }
+}
+
+async function openNotice(n, view) {
+  const res = await CloudSync.api(`/notifications/${encodeURIComponent(n.id)}/read`, { method: 'POST' });
+  if (!res.ok && res.status !== 404) return 'Could not reach OTPilot. Try again.';
+  closeNotices();
+  await renderNotices();
+  if (view) {
+    refreshSharedItems(); // the new collection or item, before it's looked for
+    showView(view);
+  }
+}
+
+document.getElementById('btn-notices').addEventListener('click', e => {
+  e.stopPropagation();
+  const menu = document.getElementById('notices-menu');
+  const open = menu.style.display !== 'none';
+  closeAddMenu();
+  if (open) { closeNotices(); return; }
+  fillNotices();
+  menu.style.display = '';
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest?.('#notices-menu')) closeNotices();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeNotices();
+});
+// Signing in shows that account's notices; signing out drops them at once.
+// A token refresh rewrites the session too: only its appearing or going counts.
+chrome.storage.onChanged.addListener((changes, area) => {
+  const c = changes.cloudSession;
+  if (area !== 'local' || !c || !!c.oldValue === !!c.newValue) return;
+  _noticesSession++;
+  renderNotices(c.newValue ? undefined : { invites: [], notices: [] });
+});
+
 // ── Crypto: Export / Import ───────────────────────────────────────────────────
 
 function b64enc(buf) {
@@ -4326,6 +4475,7 @@ async function silentPullSync() {
   // logged-in member can receive shares even before setting up personal sync.
   (async () => {
     try { if (await SupabaseAuth.getSession()) await CloudSync.syncUser(); } catch { /* ignore */ }
+    renderNotices(); // after sync-user, which may have joined a team
   })();
   silentPullSync(); // fire-and-forget
   renderSharedCodes(); // team "Shared with you" section (no-op if not in a team)

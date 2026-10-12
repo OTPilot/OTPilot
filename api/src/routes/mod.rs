@@ -4,6 +4,7 @@ pub mod billing;
 pub mod collections;
 pub mod devices;
 pub mod icons;
+pub mod notifications;
 pub mod shares;
 pub mod teams;
 pub mod vault;
