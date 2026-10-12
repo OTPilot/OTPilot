@@ -124,7 +124,9 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
       }
       const otp = item.totp?.secret ? await firstVisible(page, OTP) : null
       const pass = await firstVisible(page, PASSWORD)
-      if (otp && !pass) {
+      // The code once the password went in, even if the password field
+      // lingers on the page beside it.
+      if (otp && (!pass || tried.has('password'))) {
         if (tried.has('otp')) break
         await otp.fill(await generateTOTP(item.totp!.secret, item.totp!.period || 30, item.totp!.digits || 6))
         await otp.press('Enter')

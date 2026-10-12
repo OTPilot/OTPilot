@@ -40,6 +40,11 @@ beforeAll(async () => {
       <input type="password" name="pw" style="display:none"><button>Continue</button></form>
       <script>document.querySelector('[name=email]').addEventListener('keydown', e => { if (e.key !== 'Enter' || document.querySelector('[name=pw]').style.display !== 'none') return
         e.preventDefault(); setTimeout(() => { document.querySelector('[name=pw]').style.display = '' }, 500) })</script>`)
+    // Password and code on one page: the code field shows once the password is in, the password stays.
+    if (url.pathname === '/both') return html(`<form method="post" action="/otp"><input type="password" name="pw">
+      <input name="code" autocomplete="one-time-code" style="display:none"><button>Go</button></form>
+      <script>document.querySelector('[name=pw]').addEventListener('keydown', e => { if (e.key !== 'Enter' || document.querySelector('[name=code]').style.display !== 'none') return
+        e.preventDefault(); document.querySelector('[name=code]').style.display = '' })</script>`)
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return form.get('code') === (await generateTOTP(SECRET))
       ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=signed-in; Path=/' })
@@ -96,6 +101,12 @@ describe('browser_login', () => {
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}reveal`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
     expect(r.status).toBe('signed_in')
     expect(Date.now() - started).toBeLessThan(15_000) // not after the 20 s wait
+  }, 40_000)
+
+  it('fills the 2FA code when it shows beside the password field', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}both`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
+    expect(r.status).toBe('signed_in')
   }, 40_000)
 
   it('reports a rejected password instead of claiming success', async ctx => {
