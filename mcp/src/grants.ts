@@ -83,7 +83,10 @@ export async function waitForAnswer(api: Api, requestId: string, waitMs: number)
     const left = until - Date.now()
     if (left <= 0) return 'pending'
     // Each check gives up with the deadline, so a stalled reply can't hold the tool past it.
-    const r = await api.get<{ status: 'pending' | 'allowed' | 'denied' }>(`/agent/requests/${requestId}`, Math.min(left, 15_000)).catch(() => ({ status: 'pending' as const }))
+    // A timeout or a network blip is retried; an API answer (revoked agent,
+    // unknown request) goes up to the tool.
+    const r = await api.get<{ status: 'pending' | 'allowed' | 'denied' }>(`/agent/requests/${requestId}`, Math.min(left, 15_000))
+      .catch(e => { if (e instanceof ApiError) throw e; return { status: 'pending' as const } })
     if (r.status !== 'pending') return r.status
     await sleep(Math.min(2000, Math.max(0, until - Date.now())))
   }

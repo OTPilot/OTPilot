@@ -77,16 +77,43 @@ describe('MCP server', () => {
 
   it('one approval covers every field of an ask-every-time account in a command', async () => {
     const item = loginItem({ title: 'Bank' })
+    const keys = await generateKeyPair()
+    const held = await grantRow(item, keys.publicKey, { askEveryTime: true, withheld: true })
+    const released = await grantRow(item, keys.publicKey, { askEveryTime: true })
     let asks = 0
-    const ctx = await connect([{ item, askEveryTime: true, withheld: true }], (m, p) => {
+    let approved = false
+    const api = new FakeApi((m, p) => {
+      if (p === '/agent/grants') return { body: { grants: [approved ? released : held] } }
       if (m === 'POST' && p === '/agent/requests') { asks++; return { body: { id: '00000000-0000-4000-8000-000000000003' } } }
-      if (p.startsWith('/agent/requests/')) return { body: { status: 'allowed' } }
+      if (p.startsWith('/agent/requests/')) { approved = true; return { body: { status: 'allowed' } } }
+      if (p === '/agent/uses') return { body: { ok: true } }
       return undefined
     })
-    const r = await ctx.call('run', { command: 'true', env: { U: 'Bank/username', P: 'Bank/password' } })
+    const server = buildServer({ api, creds: { apiUrl: '', agentId: 'a', name: 'x', token: 't', publicKey: keys.publicKey, privateJwk: keys.privateJwk } })
+    const [a, b] = InMemoryTransport.createLinkedPair()
+    const c = new Client({ name: 't', version: '1' })
+    await Promise.all([server.connect(a), c.connect(b)])
+    const r: any = await c.callTool({ name: 'run', arguments: { command: 'echo "$U $P"', env: { U: 'Bank/username', P: 'Bank/password' } } })
+    expect(r.isError).toBeFalsy()
+    expect(r.content[0].text).toContain('[REDACTED] [REDACTED]')
     expect(asks).toBe(1)
-    // The fake keeps the copy held back, so the approved reload has none: the point is one request.
-    expect(r.text).toMatch(/approval expired|exit code/)
+  })
+
+  it('a revoked agent waiting for an approval is told to reconnect, not to approve', async () => {
+    const keys = await generateKeyPair()
+    const held = await grantRow(loginItem({ title: 'Bank' }), keys.publicKey, { askEveryTime: true, withheld: true })
+    const api = new FakeApi((m, p) => {
+      if (p === '/agent/grants') return { body: { grants: [held] } }
+      if (m === 'POST' && p === '/agent/requests') return { body: { id: '00000000-0000-4000-8000-000000000004' } }
+      if (p.startsWith('/agent/requests/')) return { status: 401, body: { error: 'unauthorized' } }
+      return undefined
+    })
+    const server = buildServer({ api, creds: { apiUrl: '', agentId: 'a', name: 'x', token: 't', publicKey: keys.publicKey, privateJwk: keys.privateJwk } })
+    const [a, b] = InMemoryTransport.createLinkedPair()
+    const c = new Client({ name: 't', version: '1' })
+    await Promise.all([server.connect(a), c.connect(b)])
+    const r: any = await c.callTool({ name: 'run', arguments: { command: 'true', env: { P: 'Bank/password' } } })
+    expect(r.content[0].text).toMatch(/no longer connected/)
   })
 
   it('request_access waits for the answer and lists the new account', async () => {
