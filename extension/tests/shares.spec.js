@@ -181,7 +181,7 @@ test('the Share panel: teammates, what to share, Can edit only with everything; 
   expect(await page.evaluate(() => fakeShares.shares.size)).toBe(0);
 });
 
-test('the Share panel: a collection that has it shows as shared, a partial copy can\'t be made editable, a share whose key is elsewhere shows a plain label, and changing a role never recreates a removed share', async ({ context, extensionId }) => {
+test('the Share panel: a collection that has it shows as shared, a partial copy can\'t be made editable, a share whose key is elsewhere still changes role, and changing a role never restores a removed grant or share', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, [site]);
   // Collections first: the shares fake passes everything else on to it.
   await installFakeCollections(page);
@@ -213,10 +213,10 @@ test('the Share panel: a collection that has it shows as shared, a partial copy 
   // The partial copy: view only.
   const partial = panel.locator('.share-grant', { hasText: 'Websites' });
   await expect(partial.locator('.share-grant-role option[value="edit"]')).toBeDisabled();
-  // The one whose key isn't here: a plain label, no select.
+  // The one whose key isn't here: still listed (its parts unknown here), and
+  // its role still changes — that needs no key.
   const elsewhere = panel.locator('.share-grant', { hasText: 'some fields' });
-  await expect(elsewhere).toContainText('can view');
-  await expect(elsewhere.locator('.share-grant-role')).toHaveCount(0);
+  await expect(elsewhere.locator('.share-grant-role')).toHaveValue('view');
 
   // A role change touches only that grant: the item's share keys stay.
   const coll = panel.locator('.share-grant', { hasText: 'Collection "Infra"' });
@@ -231,12 +231,22 @@ test('the Share panel: a collection that has it shows as shared, a partial copy 
   }), ids);
   expect(after).toEqual({ keys: ids.shares, role: 'view' });
 
-  // Removed on another device meanwhile: changing its role says so and
-  // doesn't bring it back.
+  // Removed on another device meanwhile — one of two grantees of a share
+  // that goes on: changing their role says so and doesn't bring them back.
+  await page.evaluate(async ({ whole }) => {
+    const bob = (await Sharing.getMembers('team-1')).find(m => m.user_id === 'user-bob');
+    const stored = await VaultStore.get(accounts.find(a => a.name === 'DigitalOcean')._id, await VaultKeys.getKey());
+    await VaultShares.share(stored, null, [{ user: bob, role: 'view' }]); // Bob joins the whole share
+    fakeShares.shares.get(whole).grants = fakeShares.shares.get(whole).grants.filter(g => !g.collection_id); // the collection's grant goes elsewhere
+  }, ids);
+  await panel.locator('.share-grant', { hasText: 'Collection "Infra"' }).locator('.share-grant-role').selectOption('edit');
+  await expect.poll(said).toContain('They were removed from it meanwhile');
+  expect(await page.evaluate(id => fakeShares.shares.get(id).grants.map(g => g.user_id || g.collection_id), ids.whole)).toEqual(['user-bob']);
+  // Deleted altogether: the same.
   await page.evaluate(id => fakeShares.shares.delete(id), ids.whole);
   const before = await page.evaluate(() => fakeShares.shares.size);
-  await panel.locator('.share-grant', { hasText: 'Collection "Infra"' }).locator('.share-grant-role').selectOption('edit');
-  await expect.poll(said).toContain('This share was removed meanwhile');
+  await panel.locator('.share-grant', { hasText: 'bob@team.test' }).filter({ hasText: 'everything' }).locator('.share-grant-role').selectOption('edit');
+  await expect.poll(said).toMatch(/removed from it meanwhile.*removed from it meanwhile/);
   expect(await page.evaluate(() => fakeShares.shares.size)).toBe(before);
 });
 

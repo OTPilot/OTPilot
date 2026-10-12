@@ -2123,16 +2123,12 @@ async function renderSharePanel(panel, itemId) {
   const hasUser = new Set(current.map(({ g }) => g.user_id).filter(Boolean));
   const hasColl = new Set(current.map(({ g }) => g.collection_id).filter(Boolean));
   const offer = (cls, id, text, { off = false, note = '' } = {}) => `<label class="share-recip"><input type="checkbox" class="${cls}" value="${esc(id)}" ${off ? 'checked disabled' : ''}${!off && note ? 'disabled' : ''}> ${esc(text)}${off ? ' <span class="share-dim">(shared)</span>' : note ? ` <span class="share-dim">(${note})</span>` : ''}</label>`;
-  // The role of a grant changes in place; editing is for a whole-item copy,
-  // and needs the share key, which lives in the item (a share made on a
-  // device that hasn't synced it yet can only be removed here).
-  const canChange = s => !!(item.shares || []).find(x => x.id === s.id);
-  const roleSelect = ({ s, g }, i) => (canChange(s)
-    ? `<select class="share-grant-role" data-i="${i}" title="Change their access">
-        <option value="view" ${g.role === 'view' ? 'selected' : ''}>can view</option>
-        <option value="edit" ${g.role === 'edit' ? 'selected' : ''} ${s.whole ? '' : 'disabled'}>can edit</option>
-      </select>`
-    : (g.role === 'edit' ? 'can edit' : 'can view'));
+  // The role of a grant changes in place (no key involved); editing is for
+  // a whole-item copy.
+  const roleSelect = ({ s, g }, i) => `<select class="share-grant-role" data-i="${i}" title="Change their access">
+      <option value="view" ${g.role === 'view' ? 'selected' : ''}>can view</option>
+      <option value="edit" ${g.role === 'edit' ? 'selected' : ''} ${s.whole ? '' : 'disabled'}>can edit</option>
+    </select>`;
   panel.innerHTML = `
     ${current.length ? `<div class="share-section"><div class="share-title">Shared with</div>
       ${current.map(({ s, g }, i) => `<div class="share-grant" data-i="${i}">
@@ -2175,19 +2171,14 @@ async function renderSharePanel(panel, itemId) {
   }));
   panel.querySelectorAll('.share-grant-role').forEach(sel => sel.addEventListener('change', async () => {
     const { s, g } = current[+sel.dataset.i];
-    const target = g.user_id ? { user: members.find(m => m.user_id === g.user_id) } : { collection: collections.find(c => c.id === g.collection_id) };
     sel.disabled = true;
     try {
-      if (!(target.user || target.collection?.key)) throw new Error('unavailable');
-      const stored = await VaultStore.get(itemId, await VaultKeys.getKey());
-      const theirs = (stored.shares || []).find(x => x.id === s.id);
-      if (!theirs) throw new Error('unavailable');
-      // Just this grant: the item (and its other shares' keys) isn't rewritten.
-      await VaultShares.setRole(theirs, target, sel.value);
+      // Just this grant's role (no key involved): the item isn't rewritten,
+      // and a grant removed meanwhile isn't brought back.
+      await VaultShares.setRole(s.id, g.user_id ? { user_id: g.user_id } : { collection_id: g.collection_id }, sel.value);
       setStatus(`${who(g)} ${sel.value === 'edit' ? 'can edit' : 'can view'} it now`);
     } catch (err) {
-      setStatus(err?.message === 'unavailable' ? 'Their access can\'t be changed from this device — remove and share again'
-        : err?.status === 404 ? 'This share was removed meanwhile' : 'Could not change it — check your connection', false);
+      setStatus(err?.status === 404 ? 'They were removed from it meanwhile' : 'Could not change it — check your connection', false);
     }
     renderSharePanel(panel, itemId);
   }));

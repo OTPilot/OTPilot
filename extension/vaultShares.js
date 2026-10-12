@@ -155,11 +155,12 @@ const VaultShares = (() => {
     });
   }
 
-  // Changes one grantee's role on share `shareRef` ({ id, sk } from the
-  // item). Only that grant: never creates a share or touches the item, and a
-  // share the server no longer has fails (404) instead of being recreated.
-  async function setRole(shareRef, target, role) {
-    await ok(`/shares/${shareRef.id}/grants`, { method: 'PUT', body: JSON.stringify(await grantBody(shareRef, { ...target, role })) });
+  // Changes one grantee's role on share `shareId` ({ user_id } or
+  // { collection_id }). Only an existing grant: never creates a share or a
+  // grant, nor touches the item — one removed meanwhile (here or on another
+  // device) fails with 404 instead of being restored.
+  async function setRole(shareId, target, role) {
+    await ok(`/shares/${shareId}/grants`, { method: 'PATCH', body: JSON.stringify({ ...target, role }) });
   }
 
   // Removes one grant; the share goes with its last grant (server side).

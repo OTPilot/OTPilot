@@ -75,6 +75,13 @@ export function installFakeShares(page) {
           s.grants = [...s.grants.filter(g => (body.user_id ? g.user_id !== body.user_id : g.collection_id !== body.collection_id)), body];
           return reply(200, { ok: true });
         }
+        if (method === 'PATCH') {
+          const g = s.grants.find(x => (body.user_id ? x.user_id === body.user_id : x.collection_id === body.collection_id));
+          if (!g) return reply(404, {});
+          if (editOnPartial(s.whole, [body])) return reply(400, { error: 'only a whole-item share can be edited by others' });
+          g.role = body.role;
+          return reply(200, { ok: true });
+        }
         const uid = url.searchParams.get('user_id'), cid = url.searchParams.get('collection_id');
         s.grants = s.grants.filter(g => (uid ? g.user_id !== uid : g.collection_id !== cid));
         if (!s.grants.length) S.shares.delete(s.id);
