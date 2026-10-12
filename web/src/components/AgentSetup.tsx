@@ -28,6 +28,15 @@ const CLIENTS: { id: string; label: string; steps: { text: string; code?: string
     ],
   },
   {
+    id: 'server',
+    label: 'Server / VPS',
+    steps: [
+      { text: 'On the machine where your agent runs (Node 20+), connect it. Open the link it prints on any device signed in to OTPilot, and approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp connect --name VPS --no-open' },
+      { text: 'Point your agent at the server over stdio:', code: 'npx -y @otpilot/mcp --profile vps' },
+      { text: 'For browser sign-ins on a server without Chrome, add a headless Chromium. The credentials stay on that machine (a 0600 file when it has no keychain), so only connect machines you trust.', code: 'npx playwright install --with-deps chromium' },
+    ],
+  },
+  {
     id: 'other',
     label: 'Any MCP agent',
     steps: [
