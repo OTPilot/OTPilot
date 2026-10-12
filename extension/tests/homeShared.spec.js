@@ -185,3 +185,14 @@ test('with no choice made, the shared login for the tab is selected when it load
   await page.click('#nav-home');
   await expect(page.locator('#account-name')).toContainText('Team AWS');
 });
+
+test('a first load that finds nothing doesn\'t use up picking the tab\'s shared login', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    _tabHost = 'localhost'; tabMatchIndex = -1; activeIndex = -1; _homeChosen = false; _sharedTabTried = false;
+    await refreshSharedItems(); // nothing shared yet (or the request failed)
+  });
+  await bobShares(page, { title: 'Team AWS', secret: TEST_SECRET, urls: ['localhost'] });
+  await page.click('#nav-home');
+  await expect(page.locator('#account-name')).toContainText('Team AWS');
+});

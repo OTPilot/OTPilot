@@ -451,8 +451,8 @@ let tabMatchIndex = -1;
 // (activeSharedId); activeIndex keeps pointing at an own account.
 let activeSharedId = null;
 let _tabHost = null; // the active tab's host (a shared login can match it once loaded)
-// A shared login is picked for the tab at most once, and never after the
-// user picked an account themselves.
+// A shared login is picked for the tab at most once (the first load that
+// finds one), and never after the user picked an account themselves.
 let _homeChosen = false;
 let _sharedTabTried = false;
 
@@ -488,9 +488,13 @@ function selectShared(id) {
 // login that matches it is selected (like an own one at popup open).
 function selectSharedForTab() {
   if (_sharedTabTried || _homeChosen || !_tabHost || activeSharedId || tabMatchIndex >= 0) return;
-  _sharedTabTried = true;
   const hit = homeShared().find(a => String(a.urls || '').split('\n').map(u => u.trim()).filter(Boolean).some(p => matchesPattern(p, _tabHost)));
-  if (hit) { activeSharedId = hit._id; _sharedTabMatch = hit._id; renderAccountBar(); startTimer(); }
+  if (!hit) return; // a later load (e.g. after a failed one) may still find it
+  _sharedTabTried = true;
+  activeSharedId = hit._id;
+  _sharedTabMatch = hit._id;
+  renderAccountBar();
+  startTimer();
 }
 let _sharedTabMatch = null;
 
