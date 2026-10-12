@@ -99,6 +99,28 @@ describe('MCP server', () => {
     expect(asks).toBe(1)
   })
 
+  it('a passing server error doesn\'t end an approval wait', async () => {
+    const keys = await generateKeyPair()
+    const item = loginItem({ title: 'Bank' })
+    const held = await grantRow(item, keys.publicKey, { askEveryTime: true, withheld: true })
+    const released = await grantRow(item, keys.publicKey, { askEveryTime: true })
+    let polls = 0
+    const api = new FakeApi((m, p) => {
+      if (p === '/agent/grants') return { body: { grants: [polls > 1 ? released : held] } }
+      if (m === 'POST' && p === '/agent/requests') return { body: { id: '00000000-0000-4000-8000-000000000005' } }
+      if (p.startsWith('/agent/requests/')) return ++polls === 1 ? { status: 500, body: { error: 'internal error' } } : { body: { status: 'allowed' } }
+      if (p === '/agent/uses') return { body: { ok: true } }
+      return undefined
+    })
+    const server = buildServer({ api, creds: { apiUrl: '', agentId: 'a', name: 'x', token: 't', publicKey: keys.publicKey, privateJwk: keys.privateJwk } })
+    const [a, b] = InMemoryTransport.createLinkedPair()
+    const c = new Client({ name: 't', version: '1' })
+    await Promise.all([server.connect(a), c.connect(b)])
+    const r: any = await c.callTool({ name: 'run', arguments: { command: 'true', env: { P: 'Bank/password' } } })
+    expect(r.isError).toBeFalsy()
+    expect(polls).toBe(2)
+  })
+
   it('a revoked agent waiting for an approval is told to reconnect, not to approve', async () => {
     const keys = await generateKeyPair()
     const held = await grantRow(loginItem({ title: 'Bank' }), keys.publicKey, { askEveryTime: true, withheld: true })
