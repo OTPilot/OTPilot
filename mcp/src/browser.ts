@@ -61,6 +61,27 @@ async function launch(headless: boolean): Promise<Browser> {
 
 const settle = (page: Page) => page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {})
 
+/**
+ * After a submit, waits (up to `ms`) for the page to move on: a new document,
+ * another URL, or the submitted field gone or emptied. A sign-in can take a
+ * while after the network goes quiet (a spinner, a slow API), and resubmitting
+ * a password while it's still checking is how accounts get locked.
+ */
+async function moveOn(page: Page, field: Locator, ms = 20_000): Promise<boolean> {
+  const url = page.url()
+  await page.evaluate(() => { (window as unknown as { __otpilot?: boolean }).__otpilot = true }).catch(() => {})
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(400)
+    if (page.url() !== url) return true
+    const sameDoc = await page.evaluate(() => (window as unknown as { __otpilot?: boolean }).__otpilot === true).catch(() => false)
+    if (!sameDoc) return true
+    if (!(await field.isVisible().catch(() => false))) return true
+    if (!(await field.inputValue().catch(() => ''))) return true
+  }
+  return false
+}
+
 /** Signs in to `item`'s site and saves the session under `outDir`. */
 export async function browserLogin(item: VaultItem, opts: { url?: string; outDir: string; headless?: boolean }): Promise<LoginResult> {
   const username = Vault.getValue(item, 'username')
@@ -91,6 +112,9 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
     let submittedPassword = false
     let lastStep: 'username' | 'password' | 'otp' | null = null
     let note: string | undefined
+    // Each step is submitted at most once: a page still asking for the same
+    // thing after it means it was rejected (or needs a person), never a retry.
+    const tried = new Set<'username' | 'password' | 'otp'>()
     for (let step = 0; step < 5; step++) {
       if (!covers(page.url())) {
         if (!filledSomething) throw new Error(`The site sent the browser to ${new URL(page.url()).hostname}, which isn't one of "${item.title}"'s saved sites. Nothing was filled.`)
@@ -99,11 +123,15 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
       const otp = item.totp?.secret ? await firstVisible(page, OTP) : null
       const pass = await firstVisible(page, PASSWORD)
       if (otp && !pass) {
+        if (tried.has('otp')) break
         await otp.fill(await generateTOTP(item.totp!.secret, item.totp!.period || 30, item.totp!.digits || 6))
         await otp.press('Enter')
         filledSomething = true
+        tried.add('otp')
         lastStep = 'otp'
+        if (!(await moveOn(page, otp))) break
       } else if (pass) {
+        if (tried.has('password')) break
         if (!password) { note = 'This agent may only use the 2FA code: sign in with the password yourself first.'; break }
         const user = await firstVisible(page, USER)
         if (user && username && (await user.inputValue()) !== username) await user.fill(username)
@@ -111,15 +139,19 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
         await pass.press('Enter')
         filledSomething = true
         submittedPassword = true
+        tried.add('password')
         lastStep = 'password'
+        if (!(await moveOn(page, pass))) break
       } else {
         const user = await firstVisible(page, USER)
-        if (user && username && (await user.inputValue()) !== username && !filledSomething) {
+        if (user && username && (await user.inputValue()) !== username && !tried.has('username')) {
           // A username-first sign-in: the password page comes next.
           await user.fill(username)
           await user.press('Enter')
           filledSomething = true
+          tried.add('username')
           lastStep = 'username'
+          if (!(await moveOn(page, user))) break
         } else break
       }
       await settle(page)

@@ -13,6 +13,7 @@ const SECRET = 'JBSWY3DPEHPK3PXP'
 let server: Server
 let base = ''
 let browserOk = true
+let spaLogins = 0
 
 const page = (body: string) => `<!doctype html><html><head><title>Acme</title></head><body>${body}</body></html>`
 
@@ -30,6 +31,11 @@ beforeAll(async () => {
     if (url.pathname === '/pass') return form.get('pw') === 'hunter2-secret'
       ? html('<form method="post" action="/otp"><input name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"><button>Verify</button></form>')
       : html('<form method="post" action="/pass"><input type="password" name="pw"></form>')
+    // A single-page sign-in that takes a while to answer, then rejects.
+    if (url.pathname === '/spa') return html(`<input name="email" type="email" autocomplete="username"><input type="password" name="pw"><p id="err"></p>
+      <script>document.querySelector('[name=pw]').addEventListener('keydown', e => { if (e.key !== 'Enter') return
+        fetch('/spa-login', { method: 'POST' }).then(() => setTimeout(() => { err.textContent = 'Try again later' }, 1500)) })</script>`)
+    if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return form.get('code') === (await generateTOTP(SECRET))
       ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=signed-in; Path=/' })
       : html('bad code')
@@ -71,6 +77,13 @@ describe('browser_login', () => {
   it('never starts on a site the account doesn\'t cover', async () => {
     await expect(browserLogin(loginItem({ urls: ['acme.example'] }), { url: base, outDir: tmpdir() })).rejects.toThrow(/only signs in there/)
   })
+
+  it('submits a password once, even when the site is slow to answer', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'] }), { url: `${base}spa`, outDir: tmpdir() })
+    expect(r.status).toBe('needs_user')
+    expect(spaLogins).toBe(1)
+  }, 40_000)
 
   it('reports a rejected password instead of claiming success', async ctx => {
     if (!browserOk) ctx.skip()
