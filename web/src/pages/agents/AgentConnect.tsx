@@ -28,7 +28,7 @@ export default function AgentConnect() {
   // the session up and continues with its own pairing.
   const [signedIn, setSignedIn] = useState(0)
   const kind = useRef(state.kind)
-  kind.current = state.kind
+  useEffect(() => { kind.current = state.kind }, [state.kind])
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       // Only a page still waiting for sign-in reloads: one already
