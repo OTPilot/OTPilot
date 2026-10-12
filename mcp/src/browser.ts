@@ -63,11 +63,12 @@ const settle = (page: Page) => page.waitForLoadState('networkidle', { timeout: 1
 
 /**
  * After a submit, waits (up to `ms`) for the page to move on: a new document,
- * another URL, or the submitted field gone or emptied. A sign-in can take a
+ * another URL, the submitted field gone or emptied, or the `next` step's field
+ * showing on the same page (a password field revealed under the email). A sign-in can take a
  * while after the network goes quiet (a spinner, a slow API), and resubmitting
  * a password while it's still checking is how accounts get locked.
  */
-async function moveOn(page: Page, field: Locator, ms = 20_000): Promise<boolean> {
+async function moveOn(page: Page, field: Locator, next: string | null, ms = 20_000): Promise<boolean> {
   const url = page.url()
   await page.evaluate(() => { (window as unknown as { __otpilot?: boolean }).__otpilot = true }).catch(() => {})
   const deadline = Date.now() + ms
@@ -78,6 +79,7 @@ async function moveOn(page: Page, field: Locator, ms = 20_000): Promise<boolean>
     if (!sameDoc) return true
     if (!(await field.isVisible().catch(() => false))) return true
     if (!(await field.inputValue().catch(() => ''))) return true
+    if (next && (await firstVisible(page, next))) return true
   }
   return false
 }
@@ -129,7 +131,7 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
         filledSomething = true
         tried.add('otp')
         lastStep = 'otp'
-        if (!(await moveOn(page, otp))) break
+        if (!(await moveOn(page, otp, null))) break
       } else if (pass) {
         if (tried.has('password')) break
         if (!password) { note = 'This agent may only use the 2FA code: sign in with the password yourself first.'; break }
@@ -141,7 +143,7 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
         submittedPassword = true
         tried.add('password')
         lastStep = 'password'
-        if (!(await moveOn(page, pass))) break
+        if (!(await moveOn(page, pass, item.totp?.secret ? OTP : null))) break
       } else {
         const user = await firstVisible(page, USER)
         if (user && username && (await user.inputValue()) !== username && !tried.has('username')) {
@@ -151,7 +153,7 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
           filledSomething = true
           tried.add('username')
           lastStep = 'username'
-          if (!(await moveOn(page, user))) break
+          if (!(await moveOn(page, user, PASSWORD))) break
         } else break
       }
       await settle(page)
