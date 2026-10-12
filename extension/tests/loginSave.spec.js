@@ -84,6 +84,22 @@ test('a single-page app that signs in without navigating gets the offer once the
   await expect(site.locator('#otpilot-login-save')).toContainText('spa@example.com');
 });
 
+test('a sign-in whose Login is an <input type="button"> (xStation) is captured: the site\'s 2FA-only login gets its password', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [
+    { name: 'XTB', email: 'alberto@example.com', secret: TEST_SECRET, urls: 'localhost' },
+  ]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-input-button.html`);
+  await site.fill('input[name="xslogin"]', 'alberto@example.com');
+  await site.fill('input[name="xspass"]', 'xtb-pass');
+  await site.click('input[type="button"]');
+  await expect(site.locator('h1')).toHaveText('Dashboard');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update the password for XTB?');
+  await offer.getByRole('button', { name: 'Update' }).click();
+  await expect.poll(async () => (await logins(popup)).map(l => [l.title, l.username, l.password])).toEqual([['XTB', 'alberto@example.com', 'xtb-pass']]);
+});
+
 test('no offer while a sign-in form is still showing (a rejected password)', async ({ context, extensionId }) => {
   await vaultWith(context, extensionId, []);
   const site = await context.newPage();

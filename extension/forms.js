@@ -203,7 +203,8 @@
 
   // A click counts as submitting a sign-in only on a submit button (a
   // <button> with no type is one, inside a form) or a control that reads
-  // like one — never Cancel, Back, Show/Hide password, Forgot password.
+  // like one — an <input type="button" value="Login"> too (xStation, many
+  // Angular apps) — never Cancel, Back, Show/Hide password, Forgot password.
   const NOT_SUBMIT = /\b(cancel|back|close|show|hide|reveal|forgot|reset|clear|cancelar|volver|cerrar|mostrar|ocultar|olvid\w*)\b/i;
   const LOOKS_SUBMIT = /\b(sign\s*in|log\s*in|login|sign\s*up|register|continue|next|submit|enter|go|verify|ingresar|iniciar|acceder|entrar|continuar|siguiente)\b/i;
   function isSubmitControl(btn) {
@@ -219,7 +220,7 @@
   }, true);
   document.addEventListener('click', e => {
     if (e.target.closest?.(`#${OVERLAY_ID}, #${SAVE_ID}, #${DROP_ID}, #otpilot-password-suggest, .${BADGE_CLASS}`)) return; // our own UI
-    const btn = e.target.closest?.('button, input[type="submit"], [role="button"]');
+    const btn = e.target.closest?.('button, input[type="submit"], input[type="button"], [role="button"]');
     if (!btn || !isSubmitControl(btn)) return;
     const scope = btn.form || btn.closest('form') || document;
     if (hasVisiblePassword(scope)) capture(scope); else captureUsername(scope);
@@ -655,7 +656,7 @@
       && (!el.value || isSearchField(el));
     for (let scope = field.parentElement; scope && scope !== document.documentElement; scope = scope.parentElement) {
       if ([...scope.querySelectorAll('input')].some(other)) break;
-      const hit = [...scope.querySelectorAll('button, input[type="submit"]')]
+      const hit = [...scope.querySelectorAll('button, input[type="submit"], input[type="button"]')]
         .find(b => !b.form && isVisible(b) && accepts(b));
       if (hit) return hit;
     }
@@ -665,18 +666,28 @@
   // The button that submits a username step: its form's submit button, else
   // (no form) the nearest one that reads like signing in — never a
   // "Sign up" that happens to come first.
-  const signInButtonFor = field => (field.form ? findSubmitButton(field.form) : buttonNear(field, readsSignIn));
+  // A form with no submit button (its "Login" is an <input type="button">
+  // or a <button type="button"> run by the page's script): the visible one
+  // that reads like `accepts`. Never requestSubmit() there — such a form
+  // usually has no action, so submitting it just reloads the page.
+  const formButton = (form, accepts) => [...form.querySelectorAll('button, input[type="button"], [role="button"]')]
+    .find(b => isVisible(b) && accepts(b));
+  const signsInToSubmit = b => SIGN_IN_SUBMIT.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b)) && !NOT_SUBMIT.test(buttonLabel(b));
+
+  const signInButtonFor = field => (field.form
+    ? findSubmitButton(field.form) || formButton(field.form, readsSignIn)
+    : buttonNear(field, readsSignIn));
 
   // The button that submits a sign-in form: its form's submit button, else
   // the nearest submit-looking control (Sign in, Continue, Submit, Verify…)
   // that isn't a sign-up.
   function passwordButtonFor(field) {
-    if (field.form) return findSubmitButton(field.form);
+    if (field.form) return findSubmitButton(field.form) || formButton(field.form, signsInToSubmit);
     const login = findLoginFields();
     const own = [field, login?.username, login?.password].filter(Boolean);
     // Without a form the button has to say it signs in: never a "Go" or
     // "Search" that happens to be nearer.
-    return buttonNear(field, b => SIGN_IN_SUBMIT.test(buttonLabel(b)) && !NOT_SIGN_IN.test(buttonLabel(b)) && !NOT_SUBMIT.test(buttonLabel(b)), own);
+    return buttonNear(field, signsInToSubmit, own);
   }
 
   function findUsernameOnlyField() {
