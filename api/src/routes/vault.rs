@@ -320,12 +320,20 @@ async fn delete_item(
     .bind(id)
     .fetch_one(&mut *tx)
     .await?;
-    // Its shared copies go with it (docs/sharing.md).
+    // Its shared copies go with it (docs/sharing.md), and its agents' copies.
     sqlx::query("DELETE FROM shares WHERE owner_id = $1 AND item_id = $2")
         .bind(auth.id)
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    sqlx::query(
+        "DELETE FROM agent_grants g USING agents a
+         WHERE g.item_id = $2 AND a.id = g.agent_id AND a.user_id = $1",
+    )
+    .bind(auth.id)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(Json(json!({ "id": id, "revision": revision })).into_response())
 }

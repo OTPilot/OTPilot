@@ -163,6 +163,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::shares::router())
         .merge(routes::notifications::router())
         .merge(routes::feedback::router())
+        .merge(routes::agents::router())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
