@@ -75,10 +75,11 @@ async function connect(flags: Record<string, string | boolean>) {
   const code = agentCode(keys.publicKey)
   say(`\nOTPilot — connecting "${name}" on ${hostname()}\n`)
   say(`  Verification code:  ${code}\n`)
+  const open = flags.open !== 'false' && flags['no-open'] !== true
   say(`  1. Sign in at ${pairing.connect_url}`)
-  say('     (opening it in your browser)')
+  if (open) say('     (opening it in your browser)')
   say('  2. Open the OTPilot extension → Agents, and approve it if it shows the same code.\n')
-  if (flags.open !== 'false' && flags['no-open'] !== true) openUrl(pairing.connect_url)
+  if (open) openUrl(pairing.connect_url)
   say('Waiting for your approval…')
   const until = Date.now() + pairing.expires_in * 1000
   while (Date.now() < until) {
