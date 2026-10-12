@@ -76,10 +76,16 @@ export default function Hero() {
 
       <div className="relative z-10 max-w-6xl mx-auto px-6 text-center">
         {/* Badge */}
-        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-teal-500/20 bg-teal-500/5 text-teal-400 text-xs font-medium mb-8">
-          <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
-          New in 2.0 — passwords, secure notes and team sharing
-        </div>
+        <a
+          href="/ai-agents"
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-violet-400/25 bg-violet-500/10 text-violet-300 text-xs font-medium mb-8 hover:border-violet-400/40 transition-colors"
+        >
+          <span className="px-1.5 py-0.5 rounded-md bg-violet-400 text-black text-[10px] font-bold tracking-wider">NEW</span>
+          2.1 — let AI agents sign in without seeing your passwords
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        </a>
 
         <h1 className="text-5xl md:text-7xl font-bold text-white tracking-tight mb-6 leading-[1.05]">
           Password manager{' '}

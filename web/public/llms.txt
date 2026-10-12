@@ -12,6 +12,7 @@ OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) code
 - End-to-end encrypted: the vault is encrypted on your device under a master password
 - Sync across devices (Personal plan); import from Chrome, 1Password, Bitwarden, LastPass and more
 - Team sharing: share a whole item or chosen fields end-to-end encrypted, or share live 2FA codes without the secret
+- AI agents (new in 2.1): Claude Code, Codex, Cursor or any MCP agent can sign in and run commands with the accounts you allow, without the secrets ever reaching the model
 - Open source, no telemetry
 
 ## Compared to alternatives
@@ -28,10 +29,19 @@ Invitation flow:
 - With an account: invite appears directly in the extension
 - Without an account: recipient receives an email with a link to install the extension; the pending invite is automatically linked to their email on signup
 
+## AI agents (2.1)
+
+The user manages everything in the extension; the agent only talks to the OTPilot MCP server on the user's computer. Its tools never return a secret: it signs in to websites (password + 2FA, on the account's own site only) and hands the session to the agent's browser, or runs a command with secrets injected as environment variables and scrubbed from the output.
+
+- Two approvals: an agent connects with a verification code checked in the extension and gets no accounts; each account is then allowed per agent, with a scope (2FA code only, whole sign-in, chosen fields) and a duration, or "ask every time"
+- Each allowed account is encrypted for that agent's own key (kept in the OS keychain); the server only stores ciphertext; revoking an agent cuts its access
+- Activity log of every use; requests show on the extension's badge
+- Limit: an agent that runs commands decides what they do and could try to reveal a secret on purpose; scrubbing, 2FA-only scopes and per-use approval narrow it
+
 ## Plans
 
-- Free: unlimited 2FA codes, up to 50 passwords, notes and other items, on one device
-- Personal ($3/month or $30/year): unlimited items, end-to-end encrypted sync across devices
+- Free: unlimited 2FA codes, up to 50 passwords, notes and other items, on one device; AI agents: 1 agent, up to 3 accounts
+- Personal ($3/month or $30/year): unlimited items, end-to-end encrypted sync across devices, unlimited AI agents
 - Team ($8/workspace/month or $80/year, 5 seats included, +$2 per extra seat/month): sharing with teammates and collections
 
 ## Links

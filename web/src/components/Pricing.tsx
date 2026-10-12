@@ -1,11 +1,28 @@
 import { useState } from 'react'
 import { detectBrowser, browserMeta } from '../lib/browser'
+import { FREE_AGENTS_LABEL } from '../lib/agents'
+
+// A plan line; `isNew` adds the NEW tag (features of the latest release).
+type Feature = string | { text: string; isNew: true; href?: string }
 
 export default function Pricing() {
   const [yearly, setYearly] = useState(false)
   const { name: browserLabel, available: browserAvailable, href: browserHref } = browserMeta[detectBrowser()]
 
-  const plans = [
+  const plans: {
+    name: string
+    price: string
+    priceNote: string
+    annualEquiv?: string
+    description: string
+    cta: string
+    ctaHref: string
+    ctaExternal: boolean
+    ctaDisabled?: boolean
+    highlight: boolean
+    badge?: string
+    features: Feature[]
+  }[] = [
     {
       name: 'Free',
       price: '$0',
@@ -23,6 +40,7 @@ export default function Pricing() {
         'Email code auto-fill',
         'Import from other password managers',
         'Master password lock',
+        { text: `AI agents: ${FREE_AGENTS_LABEL}`, isNew: true, href: '/ai-agents' },
       ],
     },
     {
@@ -42,6 +60,7 @@ export default function Pricing() {
         'End-to-end encrypted sync',
         'Multi-device, multi-browser',
         'Cloud backup',
+        { text: 'Unlimited AI agents and accounts', isNew: true, href: '/ai-agents' },
         'Cancel anytime',
       ],
     },
@@ -62,6 +81,7 @@ export default function Pricing() {
         'Share a 2FA code without revealing its secret',
         'View / edit / manage permissions',
         'Invite & revoke access instantly',
+        { text: 'Unlimited AI agents for every member', isNew: true, href: '/ai-agents' },
         '+$2 / extra seat / month',
       ],
     },
@@ -131,7 +151,7 @@ export default function Pricing() {
                 </div>
 
                 <p className="text-xs text-zinc-500">{plan.priceNote}</p>
-                {'annualEquiv' in plan && plan.annualEquiv && (
+                {plan.annualEquiv && (
                   <p className="text-xs text-teal-400/70 mt-0.5">{plan.annualEquiv}</p>
                 )}
 
@@ -139,17 +159,25 @@ export default function Pricing() {
               </div>
 
               <ul className="space-y-2.5 flex-1 mb-8">
-                {plan.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2.5 text-sm text-zinc-300">
-                    <svg className="w-4 h-4 text-teal-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                    </svg>
-                    {f}
-                  </li>
-                ))}
+                {plan.features.map((f) => {
+                  const text = typeof f === 'string' ? f : f.text
+                  return (
+                    <li key={text} className="flex items-start gap-2.5 text-sm text-zinc-300">
+                      <svg className="w-4 h-4 text-teal-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                      </svg>
+                      {typeof f === 'string' ? f : (
+                        <span>
+                          {f.href ? <a href={f.href} className="hover:text-white underline decoration-violet-400/40 underline-offset-2">{text}</a> : text}
+                          <span className="ml-2 align-middle px-1.5 py-px rounded bg-violet-400 text-black text-[9px] font-bold tracking-wider">NEW</span>
+                        </span>
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
 
-              {'ctaDisabled' in plan && plan.ctaDisabled ? (
+              {plan.ctaDisabled ? (
                 <span className="w-full py-2.5 rounded-xl text-sm font-semibold text-center bg-white/4 text-zinc-600 border border-white/5 cursor-not-allowed block">
                   {plan.cta}
                 </span>

@@ -1,6 +1,11 @@
 // Search-intent pages (rendered by GuidePage, prerendered, listed in the
 // sitemap and the footer). Every claim here must match what the extension
-// does today: check before adding one.
+// does today: check before adding one. Claims about other products are dated
+// (AS_OF): re-check them before changing that date.
+import { FREE_AGENTS, FREE_AGENT_ACCOUNTS } from '../../lib/agents'
+
+const AS_OF = 'October 2026'
+const COST = 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.'
 
 export type Guide = {
   path: string
@@ -235,6 +240,7 @@ export const GUIDES: Guide[] = [
           rows: [
             ['Built-in 2FA codes', 'Premium plan', 'Free, unlimited'],
             ['Email codes from your webmail', 'No', 'Yes'],
+            ['AI agents', 'MCP server: the agent can read vault items, passwords included', 'Agents use only the accounts you allow, without seeing the secrets'],
             ['Platforms', 'Desktop, mobile and browser apps', 'Chrome, Edge and other Chromium browsers'],
             ['End-to-end encrypted', 'Yes', 'Yes'],
           ],
@@ -280,6 +286,132 @@ export const GUIDES: Guide[] = [
       { q: 'Can I bring my codes from another authenticator?', a: 'From Google Authenticator, yes: screenshot its "Transfer accounts" QR codes and select them. From apps with a CSV export, use Settings → From a password manager. Otherwise, re-add each account from the site\'s 2FA settings.' },
       { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices.' },
       { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
+    ],
+  },
+  {
+    path: '/ai-agent-password-manager',
+    kind: 'compare',
+    nav: 'Password manager for AI agents',
+    title: 'Password manager for AI agents: OTPilot vs 1Password vs Bitwarden | OTPilot',
+    description: 'Let Claude Code, Codex or Cursor sign in with your passwords and 2FA codes without seeing them. How OTPilot compares to 1Password, Bitwarden\'s MCP server and pasting secrets into the chat.',
+    h1: 'A password manager your AI agents can use, without seeing your passwords',
+    intro: 'Coding agents now test logins, check dashboards and query databases. They need your credentials to do it, and the easy ways to hand them over put the secret in the model\'s context. Here is how the options compare.',
+    sections: [
+      {
+        h2: 'Side by side',
+        table: {
+          head: ['', 'OTPilot', '1Password', 'Bitwarden MCP server', 'Pasting into the chat'],
+          rows: [
+            ['The model sees the password', 'No', 'No', 'Yes: items are returned to the agent', 'Yes'],
+            ['2FA codes in the same flow', 'Yes', 'Yes', 'Returned to the agent like any field', 'You type them'],
+            ['Approve each agent and each account', 'Yes, per agent and per account', 'You approve each request (1Password for Claude)', 'No: the agent reaches the whole vault', 'No'],
+            ['Terminal agents (Claude Code, Codex, Cursor)', 'Yes, through MCP', 'Environments MCP server and CLI', 'Yes, through MCP', 'Yes'],
+            ['Sign in to websites for the agent', 'Yes, the agent\'s browser gets the session', '1Password for Claude (Mac)', 'No', 'No'],
+            ['Free plan', `Yes: ${FREE_AGENTS} agent, ${FREE_AGENT_ACCOUNTS} accounts`, 'No (14-day trial)', 'The server is free; 2FA codes need Premium', 'Free, and risky'],
+          ],
+        },
+        after: [`Compared as of ${AS_OF}, from each product's public documentation.`],
+      },
+      {
+        h2: 'Why "the model never sees it" matters',
+        paragraphs: [
+          'Whatever enters an agent\'s context can end up in the transcript, your history, logs and the model provider\'s systems, and a prompt injection on any page the agent reads can try to get it repeated somewhere else.',
+          'OTPilot\'s tools never return a secret. The agent asks to sign in or to run a command, OTPilot does it with the real values, and returns the result: "signed in", or the command\'s output with secrets scrubbed.',
+        ],
+      },
+      {
+        h2: 'How OTPilot does it',
+        bullets: [
+          { title: 'Two approvals', text: 'An agent connects with a code you check in the extension, and gets no accounts. Each account is a separate approval for that agent.' },
+          { title: 'Encrypted for that agent', text: 'An account you allow is encrypted for the agent\'s own key, kept in your keychain. Our servers only see ciphertext; revoke it and the agent can no longer open it.' },
+          { title: 'Scope and time', text: 'Allow just the 2FA code, the whole sign-in or chosen fields; for an hour or until you revoke; or ask every time.' },
+          { title: 'Only on the right site', text: 'A sign-in is only made on the site saved in the account.' },
+          { title: 'Activity log', text: 'Every use, by agent and account, with one-click revoke.' },
+        ],
+      },
+      {
+        h2: 'The honest limit',
+        paragraphs: [
+          'An agent that runs commands chooses what those commands do, and could try to reveal a secret on purpose. No password manager can fully prevent that. OTPilot narrows it: secrets are scrubbed from what it returns, and for sensitive accounts you can allow only the 2FA code, limit the commands, or approve every use.',
+        ],
+      },
+    ],
+    faq: [
+      { q: 'Which agents does it work with?', a: 'Any agent that supports the Model Context Protocol (MCP): Claude Code, Codex, Cursor, Claude Desktop and others.' },
+      { q: 'Does the agent use the browser extension?', a: 'No. You manage agents and accounts in the extension; the agent only talks to the OTPilot MCP server on your computer.' },
+      { q: 'How much does it cost?', a: `Agents are in every plan: Free connects ${FREE_AGENTS} agent with up to ${FREE_AGENT_ACCOUNTS} accounts, Personal ($3/month) and Team have no limit.` },
+    ],
+  },
+  {
+    path: '/1password-alternative',
+    kind: 'compare',
+    nav: '1Password alternative',
+    title: '1Password alternative with a free plan and built-in 2FA | OTPilot',
+    description: 'OTPilot is a password manager with built-in 2FA codes, a free plan, end-to-end encrypted sync and AI agent access. Import your 1Password CSV in a minute.',
+    h1: 'A 1Password alternative that starts free',
+    intro: '1Password is a polished password manager, with no free plan after its trial. OTPilot covers what most people use in the browser, passwords and 2FA codes filled together, and its free plan has no time limit.',
+    image: FILL_SHOT,
+    sections: [
+      {
+        h2: 'OTPilot and 1Password side by side',
+        table: {
+          head: ['', '1Password', 'OTPilot'],
+          rows: [
+            ['Free plan', 'No (14-day trial)', 'Yes: unlimited 2FA codes, 50 other items'],
+            ['Built-in 2FA codes', 'Yes', 'Yes, filled after the password'],
+            ['Email codes from your webmail', 'No', 'Yes'],
+            ['AI agents', 'Yes', `Yes, also on the free plan (${FREE_AGENTS} agent, ${FREE_AGENT_ACCOUNTS} accounts)`],
+            ['Open source', 'No', 'Yes'],
+            ['Platforms', 'Desktop, mobile and browser apps', 'Chrome, Edge and other Chromium browsers'],
+          ],
+        },
+        after: [`Compared as of ${AS_OF}. If you need apps on your phone, 1Password has them; OTPilot lives in your computer's browser.`],
+      },
+      {
+        h2: 'Switching',
+        steps: [
+          'In the 1Password desktop app, choose File → Export, pick your account and the CSV format.',
+          'In OTPilot, open Settings → From a password manager and select the file. Passwords and 2FA keys come in together, and logins you already have are matched instead of duplicated.',
+          'Delete the CSV afterwards: it isn\'t encrypted.',
+        ],
+      },
+    ],
+    faq: [
+      { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices or connect AI agents.' },
+      { q: 'How much does it cost?', a: COST },
+    ],
+  },
+  {
+    path: '/lastpass-alternative',
+    kind: 'compare',
+    nav: 'LastPass alternative',
+    title: 'LastPass alternative: passwords and 2FA, encrypted on your device | OTPilot',
+    description: 'Leaving LastPass? OTPilot keeps your passwords and 2FA codes together in Chrome, end-to-end encrypted, with a free plan that isn\'t limited by device type.',
+    h1: 'Leaving LastPass? Bring your passwords and 2FA together',
+    intro: 'LastPass\'s free plan works on one type of device only, computers or phones, and its 2022 breach led many people to look elsewhere. OTPilot keeps your passwords and 2FA codes in your browser, encrypted on your device under your master password.',
+    image: FILL_SHOT,
+    sections: [
+      {
+        h2: 'What you get',
+        bullets: [
+          { title: 'Passwords and 2FA, filled together', text: 'Username and password first, then the 2FA code when the site asks for it.' },
+          { title: 'Encrypted on your device', text: 'Every item is encrypted locally; sync sends only ciphertext, and the extension is open source.' },
+          { title: 'A free plan without a device-type rule', text: 'Free is local to one browser; Personal syncs every browser you use.' },
+          { title: 'AI agents, safely', text: 'Let Claude Code or Codex use the accounts you allow, without seeing the passwords.' },
+        ],
+      },
+      {
+        h2: 'Switching',
+        steps: [
+          'In LastPass, open Advanced Options → Export and save the CSV.',
+          'In OTPilot, open Settings → From a password manager and select the file. Logins with a 2FA key bring it along.',
+          'Delete the CSV afterwards: it isn\'t encrypted.',
+        ],
+      },
+    ],
+    faq: [
+      { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices or connect AI agents.' },
+      { q: 'How much does it cost?', a: COST },
     ],
   },
   {
