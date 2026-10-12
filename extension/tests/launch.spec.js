@@ -51,6 +51,15 @@ test('"Open & sign in" in the account works too, and a two-step sign-in gets bot
   await expect(site).toHaveURL(/welcome\.html\?password=tw0-step/);
 });
 
+test('a form whose Login is an <input type="button"> is signed in with that button, never a native submit', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'XTB', email: 'alberto@example.com', secret: '', urls: `${SITE}/login-input-button.html`, password: 'xtb-pass' },
+  ]);
+  const site = await launchFromRow(context, popup, 'XTB');
+  await expect(site.locator('#who')).toHaveText('alberto@example.com:xtb-pass');
+  expect(site.url()).not.toContain('submitted=1');
+});
+
 test('a rejected password is not filled again', async ({ context, extensionId }) => {
   const popup = await popupWith(context, extensionId, [
     { name: 'Retry site', email: 'r@example.com', secret: '', urls: `${SITE}/login-step2-retry.html`, password: 'wrong-pass' },
