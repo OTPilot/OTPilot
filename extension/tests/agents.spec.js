@@ -153,6 +153,26 @@ test('a request answered elsewhere meanwhile still leaves the account added', as
   await expect(detail.locator('.ag-err')).toHaveCount(0);
 });
 
+test('a request that fails to be answered stays pending and the page says so', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    fakeAgents.addRequest(a.id, { query: 'bank' });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  const detail = page.locator('#agents-detail');
+  await detail.getByRole('button', { name: '+ Add account' }).click();
+  await detail.locator('.ag-pick button', { hasText: 'Bank' }).click();
+  await page.evaluate(() => { const real = Agents.answer; Agents.answer = async () => { Agents.answer = real; throw Object.assign(new Error('agents 503'), { status: 503 }); }; });
+  await detail.locator('.ag-adding [data-act=allow]').click();
+  await expect(detail.locator('.ag-card-row[data-item]')).toContainText('Bank');
+  await expect(detail.locator('.ag-err')).toContainText("Bank is added, but its request couldn't be answered");
+  await expect(page.locator('#agents-list')).toContainText('asks for bank');
+});
+
 test('Review on the agent page opens its request', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
   const agentId = await page.evaluate(async () => {

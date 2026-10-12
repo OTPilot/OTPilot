@@ -301,7 +301,12 @@ function renderAgentRequest(detail, r) {
   allow.addEventListener('click', () => agentAct(box, () => Agents.decide(r, 'allow', { agent: a, item: chosen, opts: readGrantForm(box) })));
 }
 
+// A message for an agent's page, shown once after it re-renders.
+let _agentsNote = null;
+
 function renderActiveAgent(detail, a) {
+  const note = _agentsNote?.agentId === a.id ? _agentsNote.text : null;
+  _agentsNote = null;
   const activity = (_agentsData.activity || []).filter(u => u.agent_id === a.id).slice(0, 8);
   // Its requests for an account still waiting: an account added here can answer one.
   const asks = (_agentsData.requests || []).filter(r => r.agent_id === a.id && !r.item_id);
@@ -330,6 +335,7 @@ function renderActiveAgent(detail, a) {
       : !a.pinned ? `<div class="ag-request"><div class="ag-text">Approved on another device. Before this device updates what it can use, check its code: run <span class="ag-mono">npx -y @otpilot/mcp status</span>.</div>
         <div class="ag-code"><span class="code">${esc(a.code)}</span><span class="hint">Same code in the terminal?</span></div>
         <div class="ag-btns"><span class="ag-grow"></span><button class="ag-btn primary" data-act="pin">Codes match</button></div></div>` : ''}
+    ${note ? `<div class="ag-err">${esc(note)}</div>` : ''}
     ${asks.map(r => `<div class="ag-request" data-req="${esc(r.id)}"><div class="ag-btns"><div class="ag-text ag-grow">Asks for <b>${esc(r.query || 'an account')}</b> · ${esc(noticeAgo(r.created_at))}</div>
       <button class="ag-btn primary sm" data-act="review">Review</button></div></div>`).join('')}
     <div>
@@ -375,9 +381,14 @@ function renderActiveAgent(detail, a) {
     allow.addEventListener('click', () => agentAct(card, async () => {
       const answers = ask && card.querySelector('.ag-answers')?.checked;
       await Agents.grant(a, chosen, readGrantForm(card, a.grants.find(g => g.item_id === chosen.id)));
-      // The account is added either way; a request that expired or was
-      // answered elsewhere meanwhile has nothing left to answer.
-      if (answers) await Agents.answer(ask, 'allow', chosen.id).catch(() => {});
+      if (!answers) return;
+      // The account is added either way. A request that expired or was
+      // answered elsewhere meanwhile has nothing left to answer; any other
+      // failure leaves it waiting, and the page says so.
+      await Agents.answer(ask, 'allow', chosen.id).catch(e => {
+        const gone = e.status === 404 || (e.status === 400 && /already answered|expired/.test(e.message));
+        if (!gone) _agentsNote = { agentId: a.id, text: `${chosen.title || 'The account'} is added, but its request couldn't be answered (${agentError(e)}). Answer it from Pending.` };
+      });
     }));
   };
   detail.querySelector('[data-act=add]').addEventListener('click', openAdd);
