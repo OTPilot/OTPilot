@@ -1030,7 +1030,13 @@ async function handleResolveIcons(rawDomains, hints, prune) {
 // Counted on the toolbar badge (no system notifications); the popup lists
 // them under the header's bell. Refreshed on the poll alarm, at startup, on
 // sign-in and whenever the popup asks (it opens, or acted on one).
+// The signed-in account (read from storage, so it's current whatever order
+// the storage events arrive in): an answer for an account that's no longer
+// signed in is dropped instead of showing its count.
+const noticesAccount = async () => (await SupabaseAuth.getSession().catch(() => null))?.user?.id ?? null;
+
 async function refreshNotices() {
+  const account = await noticesAccount();
   let data = { invites: [], notices: [] };
   try {
     const token = await SupabaseAuth.getAccessToken();
@@ -1040,6 +1046,7 @@ async function refreshNotices() {
       data = await res.json();
     }
   } catch { return null; } // offline
+  if ((await noticesAccount()) !== account) return null;
   const n = (data.invites?.length || 0) + (data.notices?.length || 0);
   await chrome.action.setBadgeText({ text: n ? String(Math.min(n, 99)) : '' });
   if (n) await chrome.action.setBadgeBackgroundColor({ color: '#0284c7' });

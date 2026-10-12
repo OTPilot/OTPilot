@@ -682,19 +682,6 @@ pub(crate) async fn accept_invite_inner(
         return Err(ApiError::Forbidden);
     }
 
-    // A user can belong to at most one team. Block joining a second one (joining
-    // the same team again is a no-op below).
-    let other_team: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1 AND team_id <> $2)",
-    )
-    .bind(user_id)
-    .bind(inv.team_id)
-    .fetch_one(db)
-    .await?;
-    if other_team {
-        return Err(ApiError::BadRequest("already_in_team".into()));
-    }
-
     // Lock the team row so the seat check + membership insert are atomic against
     // concurrent accepts/invites — otherwise the seat_limit can be overrun (TOCTOU).
     let mut tx = db.begin().await?;
@@ -702,6 +689,33 @@ pub(crate) async fn accept_invite_inner(
         .bind(inv.team_id)
         .fetch_one(&mut *tx)
         .await?;
+    // Then the invite itself (team first, like every other team change): a
+    // decline deleting it either happened before — gone — or waits for this
+    // accept and then finds it accepted.
+    let still_open: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pending_invites
+           WHERE token = $1 AND accepted_at IS NULL AND expires_at > NOW() FOR UPDATE)",
+    )
+    .bind(token)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !still_open {
+        return Err(ApiError::BadRequest("invite invalid or expired".into()));
+    }
+
+    // A user can belong to at most one team. Block joining a second one (joining
+    // the same team again is a no-op below).
+    let other_team: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1 AND team_id <> $2)",
+    )
+    .bind(user_id)
+    .bind(inv.team_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if other_team {
+        return Err(ApiError::BadRequest("already_in_team".into()));
+    }
+
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM team_members WHERE team_id = $1")
         .bind(inv.team_id)
         .fetch_one(&mut *tx)

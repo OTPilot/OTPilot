@@ -2815,6 +2815,8 @@ document.getElementById('btn-quick-add').addEventListener('click', e => {
 // keeps the toolbar badge's count; acting on one here refreshes both.
 
 let _notices = { invites: [], notices: [] };
+// Bumped on sign-in / sign-out, so an answer for the previous account is dropped.
+let _noticesSession = 0;
 
 const NOTICE_ROLES = { manage: 'Can manage', edit: 'Can edit', view: 'View only' };
 
@@ -2833,7 +2835,9 @@ function closeNotices() {
 // `data` from the background; asked for when not given. null (offline, API
 // down) keeps what's shown.
 async function renderNotices(data) {
+  const session = _noticesSession;
   if (data === undefined) data = await chrome.runtime.sendMessage({ action: 'refreshNotices' }).catch(() => null);
+  if (session !== _noticesSession) return;
   if (data) _notices = { invites: data.invites || [], notices: data.notices || [] };
   const n = _notices.invites.length + _notices.notices.length;
   document.getElementById('notices-wrap').hidden = !n;
@@ -2944,6 +2948,14 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeNotices();
+});
+// Signing in shows that account's notices; signing out drops them at once.
+// A token refresh rewrites the session too: only its appearing or going counts.
+chrome.storage.onChanged.addListener((changes, area) => {
+  const c = changes.cloudSession;
+  if (area !== 'local' || !c || !!c.oldValue === !!c.newValue) return;
+  _noticesSession++;
+  renderNotices(c.newValue ? undefined : { invites: [], notices: [] });
 });
 
 // ── Crypto: Export / Import ───────────────────────────────────────────────────

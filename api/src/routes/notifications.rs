@@ -4,8 +4,9 @@
 //!
 //! Invitations are read live from `pending_invites` (by the caller's email),
 //! so an accepted, declined or expired one disappears by itself. The other
-//! notices are `notifications` rows, listed only while unread, at most 30
-//! days old and still pointing at something the user can open.
+//! notices are `notifications` rows, one per collection membership / direct
+//! grant: dismissing one deletes it, and listing deletes the caller's notices
+//! that are over 30 days old or point at something they can no longer open.
 
 use axum::{
     extract::{Path, State},
@@ -25,7 +26,7 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/notifications", get(list))
-        .route("/notifications/{id}/read", post(mark_read))
+        .route("/notifications/{id}/read", post(dismiss))
 }
 
 #[derive(sqlx::FromRow)]
@@ -69,19 +70,31 @@ async fn list(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Valu
         }
         None => vec![],
     };
+    // Only what still reaches the user is kept (this also bounds the table:
+    // the extension lists every few minutes).
+    sqlx::query(
+        r#"
+        DELETE FROM notifications n
+        WHERE n.user_id = $1 AND (
+          n.created_at <= NOW() - INTERVAL '30 days'
+          OR NOT CASE n.kind
+            WHEN 'collection_added' THEN EXISTS (SELECT 1 FROM collection_members m
+                                                 WHERE m.collection_id = n.target_id AND m.user_id = $1)
+            WHEN 'item_shared' THEN EXISTS (SELECT 1 FROM share_grants g
+                                            WHERE g.share_id = n.target_id AND g.user_id = $1)
+            ELSE false END)
+        "#,
+    )
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
     let notices = sqlx::query_as::<_, NoticeRow>(
         r#"
         SELECT n.id, n.kind, t.name AS team_name, a.email AS actor, n.target_id, n.role, n.created_at
         FROM notifications n
         JOIN teams t ON t.id = n.team_id
         LEFT JOIN users a ON a.id = n.actor_id
-        WHERE n.user_id = $1 AND n.read_at IS NULL AND n.created_at > NOW() - INTERVAL '30 days'
-          AND CASE n.kind
-            WHEN 'collection_added' THEN EXISTS (SELECT 1 FROM collection_members m
-                                                 WHERE m.collection_id = n.target_id AND m.user_id = $1)
-            WHEN 'item_shared' THEN EXISTS (SELECT 1 FROM share_grants g
-                                            WHERE g.share_id = n.target_id AND g.user_id = $1)
-            ELSE false END
+        WHERE n.user_id = $1
         ORDER BY n.created_at DESC
         LIMIT 50
         "#,
@@ -101,19 +114,18 @@ async fn list(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Valu
     })))
 }
 
-async fn mark_read(
+/// Dismisses a notice (it's been seen): deleted.
+async fn dismiss(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>> {
-    let done = sqlx::query(
-        "UPDATE notifications SET read_at = COALESCE(read_at, NOW()) WHERE id = $1 AND user_id = $2",
-    )
-    .bind(id)
-    .bind(auth.id)
-    .execute(&state.db)
-    .await?
-    .rows_affected();
+    let done = sqlx::query("DELETE FROM notifications WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(auth.id)
+        .execute(&state.db)
+        .await?
+        .rows_affected();
     if done == 0 {
         return Err(ApiError::NotFound);
     }
@@ -128,8 +140,10 @@ pub(crate) enum Notice {
     ItemShared,
 }
 
-/// Records a notice for `user` and emails them. Best effort, after the change
-/// committed: a failure here never fails the request that caused it.
+/// Records a notice for `user` (replacing an earlier one about the same
+/// collection / share, e.g. removed and added again) and emails them in the
+/// background. Best effort, after the change committed: a failure here never
+/// fails the request that caused it.
 pub(crate) async fn announce(
     state: &AppState,
     notice: Notice,
@@ -145,7 +159,10 @@ pub(crate) async fn announce(
     };
     if let Err(e) = sqlx::query(
         "INSERT INTO notifications (user_id, kind, team_id, actor_id, target_id, role)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (user_id, kind, target_id) DO UPDATE SET
+           team_id = EXCLUDED.team_id, actor_id = EXCLUDED.actor_id, role = EXCLUDED.role,
+           created_at = NOW()",
     )
     .bind(user)
     .bind(kind)
@@ -340,6 +357,18 @@ mod db_tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(add("view", true).await.0, StatusCode::OK);
         assert_eq!(notices(&app, ana).await.len(), 1);
+        // Removed and added again before she looked: still one notice.
+        let (s, _) = call(
+            &app,
+            owner,
+            Method::DELETE,
+            &format!("/collections/{cid}/members/{ana}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(add("view", true).await.0, StatusCode::OK);
+        assert_eq!(notices(&app, ana).await.len(), 1);
         let (s, _) = call(
             &app,
             owner,
@@ -350,6 +379,14 @@ mod db_tests {
         .await;
         assert_eq!(s, StatusCode::OK);
         assert!(notices(&app, ana).await.is_empty());
+        // Listing dropped it from the table too.
+        let stored: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM notifications WHERE user_id = $1")
+                .bind(ana)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(stored, 0);
     }
 
     #[tokio::test]
@@ -397,6 +434,8 @@ mod db_tests {
             Some(json!({
                 "id": sid, "item_id": item, "whole": true, "record": record,
                 "grants": [
+                    // Named twice: one notice, with the role stored.
+                    { "user_id": ana, "role": "edit", "wrapped_key": "k0" },
                     { "user_id": ana, "role": "view", "wrapped_key": "k1" },
                     { "collection_id": cid, "role": "view", "wrapped_key": "k2" },
                 ],
@@ -407,6 +446,7 @@ mod db_tests {
         let list = notices(&app, ana).await;
         assert_eq!(list.len(), 1);
         assert_eq!(list[0]["kind"], "item_shared");
+        assert_eq!(list[0]["role"], "view");
         assert_eq!(list[0]["target_id"], json!(sid));
         // Through the collection: nothing new for its members.
         assert_eq!(notices(&app, beto).await.len(), beto_before);
@@ -564,5 +604,70 @@ mod db_tests {
         .await
         .unwrap();
         assert!(joined);
+    }
+
+    #[tokio::test]
+    async fn a_decline_waiting_on_an_accept_finds_it_accepted() {
+        let (app, db, _g) = app().await;
+        let (owner, ana) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "free").await,
+        );
+        let t = team(&db, owner, &[]).await;
+        let token = invite(&db, t, owner, "ana@x.io").await;
+
+        // An accept in progress holds the invite (as accept_invite_inner does).
+        let mut accepting = db.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM pending_invites WHERE token = $1 FOR UPDATE")
+            .bind(&token)
+            .execute(&mut *accepting)
+            .await
+            .unwrap();
+        let decline = {
+            let (app, token) = (app.clone(), token.clone());
+            tokio::spawn(async move {
+                call_with_email(
+                    &app,
+                    ana,
+                    Some("ana@x.io"),
+                    Method::POST,
+                    &format!("/teams/decline/{token}"),
+                    None,
+                )
+                .await
+            })
+        };
+        crate::test_support::wait_for_lock_waits(&db, 1).await;
+        sqlx::query("UPDATE pending_invites SET accepted_at = NOW() WHERE token = $1")
+            .bind(&token)
+            .execute(&mut *accepting)
+            .await
+            .unwrap();
+        accepting.commit().await.unwrap();
+        let (s, _) = decline.await.unwrap();
+        assert_eq!(s, StatusCode::NOT_FOUND);
+
+        // Declined first: the accept finds nothing to accept.
+        let second = invite(&db, t, owner, "ana@x.io").await;
+        let (s, _) = call_with_email(
+            &app,
+            ana,
+            Some("ana@x.io"),
+            Method::POST,
+            &format!("/teams/decline/{second}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _) = call_with_email(
+            &app,
+            ana,
+            Some("ana@x.io"),
+            Method::POST,
+            &format!("/teams/accept/{second}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
     }
 }

@@ -358,19 +358,24 @@ async fn create_share(
         insert_grant(&mut tx, body.id, auth.id, g).await?;
     }
     tx.commit().await?;
-    for g in &body.grants {
-        if let Some(uid) = g.user_id {
-            announce(
-                &state,
-                Notice::ItemShared,
-                uid,
-                team_id,
-                &auth,
-                body.id,
-                &g.role,
-            )
-            .await;
-        }
+    // Once per person, with the role stored (a repeated grantee's last entry
+    // is the one insert_grant kept).
+    let people: BTreeMap<Uuid, &str> = body
+        .grants
+        .iter()
+        .filter_map(|g| Some((g.user_id?, g.role.as_str())))
+        .collect();
+    for (uid, role) in people {
+        announce(
+            &state,
+            Notice::ItemShared,
+            uid,
+            team_id,
+            &auth,
+            body.id,
+            role,
+        )
+        .await;
     }
     Ok(Json(json!({ "id": body.id, "revision": revision })))
 }

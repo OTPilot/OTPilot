@@ -62,7 +62,7 @@ test('the bell shows only with something to see, and lists invitations and notic
   await expect(page.locator('#notices-menu')).toBeHidden();
 });
 
-test('declining an invitation removes it; dismissing a notice marks it read', async ({ context, extensionId }) => {
+test('declining an invitation removes it; dismissing a notice clears it', async ({ context, extensionId }) => {
   const page = await popupWith(context, extensionId, { invites: [INVITE], notices: [ADDED] });
   await page.click('#btn-notices');
   await page.evaluate(() => { window.__notices = { invites: [], notices: [window.__notices.notices[0]] }; });
@@ -132,4 +132,58 @@ test('the toolbar badge counts invitations and notices, and clears when there ar
     }
   }, [INVITE, ADDED]);
   expect(badge).toEqual({ two: '2', none: '', offline: '1' });
+});
+
+test('signing out hides the previous account\'s notices; signing in shows the new one\'s', async ({ context, extensionId }) => {
+  const page = await popupWith(context, extensionId, { invites: [INVITE], notices: [] });
+  await page.evaluate(() => chrome.storage.local.set({ cloudSession: { user: { id: 'a' } } }));
+  await expect(page.locator('#notices-count')).toHaveText('1');
+  // An answer still on its way for account a when it signs out is dropped.
+  await page.evaluate(() => {
+    const send = chrome.runtime.sendMessage;
+    chrome.runtime.sendMessage = msg => msg?.action === 'refreshNotices'
+      ? new Promise(r => setTimeout(() => r({ invites: [window.__notices.invites[0]], notices: [] }), 300))
+      : send(msg);
+    renderNotices();
+    chrome.runtime.sendMessage = send;
+    return chrome.storage.local.remove('cloudSession');
+  });
+  await expect(page.locator('#notices-wrap')).toBeHidden();
+  await page.waitForTimeout(500);
+  await expect(page.locator('#notices-wrap')).toBeHidden();
+
+  await page.evaluate(added => {
+    window.__notices = { invites: [], notices: [added] };
+    return chrome.storage.local.set({ cloudSession: { user: { id: 'b' } } });
+  }, ADDED);
+  await expect(page.locator('#notices-count')).toHaveText('1');
+  await page.click('#btn-notices');
+  await expect(page.locator('.notice')).toContainText('added you to a shared collection');
+});
+
+test('the badge ignores an answer that arrives after the account changed', async ({ context }) => {
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker');
+  const badge = await worker.evaluate(async invite => {
+    const realFetch = globalThis.fetch;
+    const [getToken, getSession] = [SupabaseAuth.getAccessToken, SupabaseAuth.getSession];
+    let account = 'a';
+    SupabaseAuth.getSession = async () => ({ user: { id: account } });
+    SupabaseAuth.getAccessToken = async () => 'token';
+    globalThis.fetch = async url => {
+      if (!String(url).endsWith('/notifications')) return realFetch(url);
+      account = 'b'; // signed out and in as someone else meanwhile
+      return new Response(JSON.stringify({ invites: [invite], notices: [] }));
+    };
+    try {
+      await chrome.action.setBadgeText({ text: '' });
+      const answer = await refreshNotices();
+      return { answer, text: await chrome.action.getBadgeText({}) };
+    } finally {
+      globalThis.fetch = realFetch;
+      SupabaseAuth.getAccessToken = getToken;
+      SupabaseAuth.getSession = getSession;
+    }
+  }, INVITE);
+  expect(badge).toEqual({ answer: null, text: '' });
 });

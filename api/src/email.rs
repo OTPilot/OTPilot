@@ -5,6 +5,12 @@
 //! 2FA code, one button). Each email only fills in a `Mail`; the plain-text
 //! version (`Mail::text`) goes along for clients that don't render HTML.
 
+use std::{
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
+use tokio::sync::Semaphore;
+
 const SITE: &str = "https://otpilot.app";
 
 /// What one email says; the layout is the same for all of them.
@@ -153,7 +159,11 @@ impl Mail {
     }
 }
 
-/// Sends one email via Resend. No-op when disabled or unconfigured.
+/// Emails being sent at once, at most: the rest wait their turn.
+const MAX_SENDING: usize = 8;
+
+/// Sends one email via Resend, in the background: the request that caused it
+/// doesn't wait for delivery. No-op when disabled or unconfigured.
 async fn send(enabled: bool, api_key: Option<&str>, from: &str, to: &str, mail: Mail) {
     if !enabled {
         tracing::debug!(
@@ -166,20 +176,35 @@ async fn send(enabled: bool, api_key: Option<&str>, from: &str, to: &str, mail: 
         tracing::warn!("SEND_EMAILS=true but RESEND_API_KEY is not set — email skipped");
         return;
     };
-
-    let client = reqwest::Client::new();
-    let _ = client
-        .post("https://api.resend.com/emails")
-        .bearer_auth(key)
-        .json(&serde_json::json!({
-            "from": from,
-            "to":   [to],
-            "subject": mail.subject,
-            "html": mail.html(),
-            "text": mail.text(),
-        }))
-        .send()
-        .await;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    static SENDING: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    let client = CLIENT.get_or_init(reqwest::Client::new).clone();
+    let sending = SENDING
+        .get_or_init(|| Arc::new(Semaphore::new(MAX_SENDING)))
+        .clone();
+    let key = key.to_string();
+    let body = serde_json::json!({
+        "from": from,
+        "to":   [to],
+        "subject": mail.subject,
+        "html": mail.html(),
+        "text": mail.text(),
+    });
+    tokio::spawn(async move {
+        let Ok(_turn) = sending.acquire_owned().await else {
+            return;
+        };
+        let sent = client
+            .post("https://api.resend.com/emails")
+            .bearer_auth(key)
+            .timeout(Duration::from_secs(20))
+            .json(&body)
+            .send()
+            .await;
+        if let Err(e) = sent {
+            tracing::warn!("[email] not sent: {e}");
+        }
+    });
 }
 
 /// Team invitation. `recipient_has_account` picks the copy: existing users get a
