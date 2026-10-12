@@ -22,6 +22,7 @@ export default function AgentConnect() {
   const [params] = useSearchParams()
   const id = params.get('p') ?? ''
   const [state, setState] = useState<State>({ kind: 'loading' })
+  const [netError, setNetError] = useState(false)
 
   useEffect(() => {
     ;(async () => {
@@ -31,7 +32,11 @@ export default function AgentConnect() {
         setState({ kind: 'error', message: 'This link is incomplete. Run the connect command again.' })
         return
       }
-      const res = await apiFetch(`/agents/pair/${id}`)
+      const res = await apiFetch(`/agents/pair/${id}`).catch(() => null)
+      if (!res) {
+        setState({ kind: 'error', message: 'Could not reach OTPilot. Check your connection and reload this page.' })
+        return
+      }
       if (!res.ok) {
         setState({ kind: 'error', message: 'This connection request has expired or was already used. Run the connect command again.' })
         return
@@ -43,8 +48,14 @@ export default function AgentConnect() {
 
   async function claim() {
     if (state.kind !== 'confirm') return
+    setNetError(false)
     setState({ ...state, kind: 'claiming' })
-    const res = await apiFetch(`/agents/pair/${id}/claim`, { method: 'POST' })
+    const res = await apiFetch(`/agents/pair/${id}/claim`, { method: 'POST' }).catch(() => null)
+    if (!res) {
+      setState({ ...state, kind: 'confirm' })
+      setNetError(true)
+      return
+    }
     if (res.ok) { setState({ ...state, kind: 'claimed' }); return }
     const j = await res.json().catch(() => ({}))
     setState({ kind: 'error', message: j.error ?? 'Could not connect this agent. Run the connect command again.' })
@@ -93,10 +104,12 @@ export default function AgentConnect() {
                 <p className="text-sm text-zinc-400 leading-relaxed">
                   Connecting gives it <b className="text-zinc-200">no accounts</b>. You approve it, and choose what it can use, in the OTPilot extension.
                 </p>
+                {netError && <p className="text-sm text-red-400">Could not reach OTPilot. Check your connection and try again.</p>}
                 <div className="flex gap-3">
                   <button
+                    disabled={state.kind === 'claiming'}
                     onClick={() => setState({ kind: 'error', message: 'Not connected. Close this tab: someone else may be trying to connect an agent to your account. Nothing was shared.' })}
-                    className="flex-1 py-2.5 rounded-xl border border-zinc-700 text-zinc-300 text-sm font-medium hover:border-zinc-500"
+                    className="flex-1 py-2.5 rounded-xl border border-zinc-700 text-zinc-300 text-sm font-medium hover:border-zinc-500 disabled:opacity-60"
                   >
                     Codes don't match
                   </button>
