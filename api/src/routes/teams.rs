@@ -43,6 +43,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/teams/{id}/invite", post(invite_member))
         .route("/teams/accept/{token}", post(accept_invite))
+        .route("/teams/decline/{token}", post(decline_invite))
         .route("/teams/{id}/leave", delete(leave_team))
         .route("/teams/{id}/members/{uid}", delete(remove_member))
         .route("/teams/{id}/audit", get(get_audit))
@@ -623,6 +624,36 @@ async fn accept_invite(
     Ok(Json(json!({ "ok": true, "team_id": team_id })))
 }
 
+/// The invitee turns an invitation down (from the extension): it's deleted,
+/// which also frees its seat.
+async fn decline_invite(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(token): Path<String>,
+) -> Result<Json<Value>> {
+    let email = auth.email.clone().unwrap_or_default();
+    let team_id: Option<Uuid> = sqlx::query_scalar(
+        "DELETE FROM pending_invites
+         WHERE token = $1 AND lower(email) = lower($2) AND accepted_at IS NULL
+         RETURNING team_id",
+    )
+    .bind(&token)
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await?;
+    let team_id = team_id.ok_or(ApiError::NotFound)?;
+    audit(
+        &state.db,
+        team_id,
+        auth.id,
+        "decline",
+        Some(auth.id),
+        json!({ "email": email.to_lowercase() }),
+    )
+    .await;
+    Ok(Json(json!({ "ok": true })))
+}
+
 /// Shared with the auth.rs auto-accept path. Validates token + email, enforces
 /// seats, inserts membership, sets plan = team_lite. Returns the team id.
 pub(crate) async fn accept_invite_inner(
@@ -651,19 +682,6 @@ pub(crate) async fn accept_invite_inner(
         return Err(ApiError::Forbidden);
     }
 
-    // A user can belong to at most one team. Block joining a second one (joining
-    // the same team again is a no-op below).
-    let other_team: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1 AND team_id <> $2)",
-    )
-    .bind(user_id)
-    .bind(inv.team_id)
-    .fetch_one(db)
-    .await?;
-    if other_team {
-        return Err(ApiError::BadRequest("already_in_team".into()));
-    }
-
     // Lock the team row so the seat check + membership insert are atomic against
     // concurrent accepts/invites — otherwise the seat_limit can be overrun (TOCTOU).
     let mut tx = db.begin().await?;
@@ -671,6 +689,33 @@ pub(crate) async fn accept_invite_inner(
         .bind(inv.team_id)
         .fetch_one(&mut *tx)
         .await?;
+    // Then the invite itself (team first, like every other team change): a
+    // decline deleting it either happened before — gone — or waits for this
+    // accept and then finds it accepted.
+    let still_open: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pending_invites
+           WHERE token = $1 AND accepted_at IS NULL AND expires_at > NOW() FOR UPDATE)",
+    )
+    .bind(token)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !still_open {
+        return Err(ApiError::BadRequest("invite invalid or expired".into()));
+    }
+
+    // A user can belong to at most one team. Block joining a second one (joining
+    // the same team again is a no-op below).
+    let other_team: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1 AND team_id <> $2)",
+    )
+    .bind(user_id)
+    .bind(inv.team_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if other_team {
+        return Err(ApiError::BadRequest("already_in_team".into()));
+    }
+
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM team_members WHERE team_id = $1")
         .bind(inv.team_id)
         .fetch_one(&mut *tx)

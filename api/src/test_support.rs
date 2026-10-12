@@ -132,15 +132,19 @@ pub async fn create_user(db: &PgPool, plan: &str) -> Uuid {
     id
 }
 
-pub fn token_for(user: Uuid) -> String {
+/// A token that also carries an `email` claim (invitations match by email).
+pub fn token_with_email(user: Uuid, email: Option<&str>) -> String {
     let mut header = Header::new(Algorithm::ES256);
     header.kid = Some(KID.into());
-    let claims = json!({
+    let mut claims = json!({
         "sub": user.to_string(),
         "aud": "authenticated",
         "iss": format!("{SUPABASE_URL}/auth/v1"),
         "exp": chrono::Utc::now().timestamp() + 3600,
     });
+    if let Some(email) = email {
+        claims["email"] = json!(email);
+    }
     encode(
         &header,
         &claims,
@@ -158,10 +162,25 @@ pub async fn call(
     uri: &str,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    call_with_email(app, user, None, method, uri, body).await
+}
+
+/// `call`, signed in with an email address.
+pub async fn call_with_email(
+    app: &Router,
+    user: Uuid,
+    email: Option<&str>,
+    method: Method,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let req = Request::builder()
         .method(method)
         .uri(uri)
-        .header("authorization", format!("Bearer {}", token_for(user)))
+        .header(
+            "authorization",
+            format!("Bearer {}", token_with_email(user, email)),
+        )
         .header("content-type", "application/json")
         .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
         .unwrap();
