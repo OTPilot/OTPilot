@@ -3,6 +3,7 @@ import { Seo } from '../seo'
 import Navbar from '../components/Navbar'
 import Footer from '../components/Footer'
 import AgentTerminal from '../components/AgentTerminal'
+import AgentSetup from '../components/AgentSetup'
 import { CHROME_STORE_URL } from '../lib/browser'
 import { FREE_AGENTS, FREE_AGENT_ACCOUNTS } from '../lib/agents'
 
@@ -229,6 +230,17 @@ export default function AiAgents() {
               </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* Set up */}
+      <section id="setup" className="py-20 px-6 border-t border-white/5">
+        <div className="max-w-3xl mx-auto">
+          <h2 className="text-3xl md:text-4xl font-bold text-white tracking-tight text-center mb-4">Set it up in two minutes</h2>
+          <p className="text-zinc-400 text-center max-w-xl mx-auto mb-10">
+            You need the OTPilot extension and an OTPilot account (free works). Each agent is connected and approved on its own.
+          </p>
+          <AgentSetup />
         </div>
       </section>
 
