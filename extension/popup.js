@@ -1428,7 +1428,8 @@ ${esc(acc.urls || '')}</textarea>
       <textarea class="acc-notes" placeholder="Anything else worth keeping: recovery codes, security answers…">
 ${esc(acc.notes || '')}</textarea>
     </div>`;
-  const extras = notesField + customFieldsHTML(acc.customFields) + relatedHTML(acc);
+  const extras = notesField + customFieldsHTML(acc.customFields) + relatedHTML(acc)
+    + (_draftBase.some(b => b._id === acc._id) ? agentsSectionHTML(acc) : '');
   const body = document.createElement('div');
   body.className = 'acc-body open';
   body.innerHTML = `
@@ -1521,6 +1522,7 @@ ${esc(acc.notes || '')}</textarea>
   mountCategoryChooser(body);
   mountCustomFields(body);
   mountRelated(body, acc);
+  mountAgentsSection(body);
 
   container.innerHTML = '';
   container.appendChild(body);
@@ -2655,6 +2657,7 @@ async function saveAccounts(intended) {
   await saveState();
   await stampLocalChange();
   silentPullSync(); // start push before navigating so fetch is in-flight while popup is open
+  refreshAgentCopies(); // AI agents' copies of what changed (agents.js)
 
   renderAccountBar();
   activeTabIconHint().then(requestIcons); // pick up icons for any newly-added domains
@@ -2757,6 +2760,8 @@ function showView(view, opts = {}) {
   document.getElementById('sync-panel').style.display     = view === 'sync'     ? '' : 'none';
   document.getElementById('team-panel').style.display     = view === 'team'     ? '' : 'none';
   document.getElementById('generate-panel').style.display = view === 'generate' ? '' : 'none';
+  document.getElementById('agents-panel').style.display   = view === 'agents'   ? '' : 'none';
+  document.getElementById('nav-agents').classList.toggle('active',   view === 'agents');
   document.getElementById('nav-generate').classList.toggle('active', view === 'generate');
   document.getElementById('nav-home').classList.toggle('active',     view === 'home');
   document.getElementById('nav-settings').classList.toggle('active', view === 'accounts');
@@ -2770,6 +2775,7 @@ function showView(view, opts = {}) {
   }
   if (view === 'sync') renderSyncPanel();
   if (view === 'team') renderTeamPanel();
+  if (view === 'agents') renderAgentsPanel();
   if (view === 'generate') renderGenerator();
   if (view === 'settings') {
     chrome.storage.local.get('emailAutoFill', d => {
@@ -3030,8 +3036,10 @@ async function renderNotices(data) {
   const session = _noticesSession;
   if (data === undefined) data = await chrome.runtime.sendMessage({ action: 'refreshNotices' }).catch(() => null);
   if (session !== _noticesSession) return;
-  if (data) _notices = { invites: data.invites || [], notices: data.notices || [] };
-  const n = _notices.invites.length + _notices.notices.length;
+  if (data) _notices = { invites: data.invites || [], notices: data.notices || [], agents: data.agents || { pending: 0, requests: 0 } };
+  const agentsWaiting = (_notices.agents?.pending || 0) + (_notices.agents?.requests || 0);
+  updateAgentsDot(agentsWaiting);
+  const n = _notices.invites.length + _notices.notices.length + agentsWaiting;
   document.getElementById('notices-wrap').hidden = !n;
   document.getElementById('notices-count').textContent = n > 99 ? '99+' : String(n);
   if (!n) closeNotices();
@@ -3071,6 +3079,15 @@ function fillNotices() {
   };
   const who = s => `<b>${esc(s || 'A teammate')}</b>`;
 
+  const ag = _notices.agents || {};
+  if (ag.pending) {
+    row(ag.pending === 1 ? '<b>An AI agent</b> wants to connect' : `<b>${ag.pending} AI agents</b> want to connect`,
+      'Check its code before approving', [['Review', 'primary', async () => { closeNotices(); showView('agents'); }]]);
+  }
+  if (ag.requests) {
+    row(ag.requests === 1 ? '<b>An AI agent</b> is asking to use an account' : `<b>AI agents</b> are asking to use ${ag.requests} accounts`,
+      'Waiting for your answer', [['Review', 'primary', async () => { closeNotices(); showView('agents'); }]]);
+  }
   for (const inv of _notices.invites) {
     const hours = Math.max(1, Math.round((new Date(inv.expires_at).getTime() - Date.now()) / 3600000));
     row(`${who(inv.inviter)} invited you to join the team <b>${esc(inv.team_name)}</b>`,
@@ -4322,6 +4339,15 @@ async function syncV1Blob(key) {
   return { serverMeta, exported: await exportV1Blob(serverMeta, fromV1Device) };
 }
 
+// AI agents' copies follow the vault (agents.js): after a save, a sync, and
+// when the popup opens unlocked. Best effort: the next pass retries.
+async function refreshAgentCopies() {
+  try {
+    const key = await VaultKeys.getKey();
+    if (key) await Agents.syncCopies(key);
+  } catch { /* offline, signed out */ }
+}
+
 async function doSync() {
   if (_syncInProgress) return;
   _syncInProgress = true;
@@ -4337,6 +4363,7 @@ async function doSync() {
     await reloadFromVault(key);
     // My shared items: editors' changes in, fresh copies out.
     if (_teamPlan && await VaultShares.syncOwner(key).catch(() => 0)) await reloadFromVault(key);
+    refreshAgentCopies();
 
     let { serverMeta, exported } = await syncV1Blob(key);
     // Refused: a blob written meanwhile by another device. Merge it and export
@@ -4633,6 +4660,7 @@ async function silentPullSync() {
   (async () => {
     try { if (await SupabaseAuth.getSession()) await CloudSync.syncUser(); } catch { /* ignore */ }
     renderNotices(); // after sync-user, which may have joined a team
+    refreshAgentCopies();
   })();
   silentPullSync(); // fire-and-forget
   renderSharedCodes(); // team "Shared with you" section (no-op if not in a team)
