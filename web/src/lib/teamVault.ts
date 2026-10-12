@@ -298,11 +298,13 @@ async function attachShare(u: Unlocked, stored: StoredItem, s: ShareRef | null, 
   throw new Error('Your vault kept changing — try again')
 }
 
-/** Changes a grantee's role on one of my shares (the key is re-wrapped from the item). */
-export async function changeGrant(stored: StoredItem, share: MyShare, g: Grantee, role: 'view' | 'edit'): Promise<void> {
-  const ref = (stored.item.shares || []).find((s) => s.id === share.id)
-  if (!ref) throw new Error('This share was made on a device that hasn\'t synced it yet')
-  await call(`/shares/${share.id}/grants`, { method: 'PUT', body: JSON.stringify(await grantBody(ref.sk, ref.id, g, role)) })
+/**
+ * Changes an existing grant's role on one of my shares. Never adds a grant:
+ * one removed meanwhile (e.g. on another device) is a 404, not restored.
+ */
+export async function changeGrant(share: MyShare, g: Grant, role: 'view' | 'edit'): Promise<void> {
+  const target = g.user_id ? { user_id: g.user_id } : { collection_id: g.collection_id }
+  await call(`/shares/${share.id}/grants`, { method: 'PATCH', body: JSON.stringify({ ...target, role }) })
 }
 
 export async function removeGrant(shareId: string, g: { user_id?: string | null; collection_id?: string | null }): Promise<void> {

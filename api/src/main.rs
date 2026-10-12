@@ -149,10 +149,7 @@ async fn main() -> anyhow::Result<()> {
         rate_limiter: Arc::new(middleware::rate_limit::RateLimiter::new()),
     };
 
-    let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers(Any)
-        .allow_origin(Any);
+    let cors = cors();
 
     let app = Router::new()
         .merge(routes::auth::router())
@@ -176,4 +173,50 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// The dashboard (another origin) calls the API from the browser: every
+/// method a route uses has to be allowed here, PATCH included (renaming a
+/// collection, changing a grant's role).
+fn cors() -> CorsLayer {
+    CorsLayer::new()
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
+        .allow_headers(Any)
+        .allow_origin(Any)
+}
+
+#[cfg(test)]
+mod cors_tests {
+    use axum::{body::Body, http::Request, routing::patch, Router};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn a_browser_may_send_patch() {
+        let app = Router::new()
+            .route("/x", patch(|| async { "ok" }))
+            .layer(super::cors());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/x")
+                    .header("origin", "https://otpilot.app")
+                    .header("access-control-request-method", "PATCH")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let allowed = res.headers()["access-control-allow-methods"]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(allowed.contains("PATCH"), "{allowed}");
+    }
 }

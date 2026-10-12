@@ -293,15 +293,9 @@ function MyShareRow({ share, stored, locked, teammates, collections, run }: {
   share: MyShare; stored: StoredItem | undefined; locked: boolean; teammates: Teammate[]
   collections: Collection[]; run: Run
 }) {
-  const granteeOf = (g: Grant): Grantee | null => {
-    if (g.user_id) { const user = teammates.find((t) => t.user_id === g.user_id); return user ? { user } : null }
-    const collection = collections.find((c) => c.id === g.collection_id)
-    return collection ? { collection } : null
-  }
   const nameOf = (g: Grant) => g.user_id
     ? (teammates.find((t) => t.user_id === g.user_id)?.email ?? 'a teammate')
     : collectionName(collections, g.collection_id!, locked)
-  const canChange = !!stored && !!(stored.item.shares || []).find((s) => s.id === share.id)
   return (
     <div className="py-2 border-b border-zinc-800/60 last:border-0">
       <div className="text-sm text-zinc-200">
@@ -309,17 +303,14 @@ function MyShareRow({ share, stored, locked, teammates, collections, run }: {
         <span className="text-xs text-zinc-500"> · {share.whole ? 'the whole item' : 'some fields'}</span>
       </div>
       {share.grants.map((g) => {
-        const target = granteeOf(g)
         return (
           <div key={g.user_id ?? g.collection_id} className="flex items-center justify-between gap-3 pl-3 py-1">
             <span className="text-xs text-zinc-400 truncate">{nameOf(g)}</span>
-            {canChange && target && ('user' in target || target.collection.key) ? (
-              <select value={g.role} onChange={(e) => run(() => changeGrant(stored!, share, target, e.target.value as 'view' | 'edit'))}
-                className="bg-zinc-950 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-300">
-                <option value="view">Can view</option>
-                <option value="edit" disabled={!share.whole}>Can edit</option>
-              </select>
-            ) : <span className="text-xs text-zinc-500">{ROLE_LABEL[g.role]}</span>}
+            <select value={g.role} onChange={(e) => run(() => changeGrant(share, g, e.target.value as 'view' | 'edit'))}
+              className="bg-zinc-950 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-300">
+              <option value="view">Can view</option>
+              <option value="edit" disabled={!share.whole}>Can edit</option>
+            </select>
             <button onClick={() => run(() => removeGrant(share.id, g))} className="text-xs text-red-400 hover:text-red-300">Remove</button>
           </div>
         )

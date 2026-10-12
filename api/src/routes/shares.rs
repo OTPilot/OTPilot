@@ -51,7 +51,10 @@ pub fn router() -> Router<AppState> {
         .route("/shares/mine", get(list_mine))
         .route("/shares/with-me", get(list_with_me))
         .route("/shares/{id}", put(update_share).delete(delete_share))
-        .route("/shares/{id}/grants", put(put_grant).delete(remove_grant))
+        .route(
+            "/shares/{id}/grants",
+            put(put_grant).patch(set_grant_role).delete(remove_grant),
+        )
 }
 
 // ── Validation and access ──────────────────────────────────────────────────
@@ -506,6 +509,57 @@ async fn put_grant(
 }
 
 #[derive(Deserialize)]
+struct RoleRequest {
+    #[serde(default)]
+    user_id: Option<Uuid>,
+    #[serde(default)]
+    collection_id: Option<Uuid>,
+    role: String,
+}
+
+/// Changes the role of an existing grant (owner only). Unlike PUT it never
+/// adds one: a grant removed meanwhile (on another device) is a 404, not
+/// restored.
+async fn set_grant_role(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(r): Json<RoleRequest>,
+) -> Result<Json<Value>> {
+    if r.user_id.is_some() == r.collection_id.is_some() {
+        return Err(ApiError::BadRequest("user_id or collection_id".into()));
+    }
+    if r.role != "view" && r.role != "edit" {
+        return Err(ApiError::BadRequest("role must be view or edit".into()));
+    }
+    let mut tx = state.db.begin().await?;
+    let share = lock_team_then_share(&mut tx, id).await?;
+    if share.owner_id != auth.id {
+        return Err(ApiError::NotFound);
+    }
+    if r.role == "edit" && !share.whole {
+        return Err(ApiError::BadRequest(
+            "only a whole-item share can be edited by others".into(),
+        ));
+    }
+    let changed = sqlx::query(
+        "UPDATE share_grants SET role = $4 WHERE share_id = $1 AND (user_id = $2 OR collection_id = $3)",
+    )
+    .bind(id)
+    .bind(r.user_id)
+    .bind(r.collection_id)
+    .bind(&r.role)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if changed == 0 {
+        return Err(ApiError::NotFound);
+    }
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
 struct GrantTarget {
     #[serde(default)]
     user_id: Option<Uuid>,
@@ -932,6 +986,105 @@ mod db_tests {
             .await
             .unwrap();
         assert!(with_me(&app, ceci).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn changing_a_role_never_restores_a_removed_grant() {
+        let (app, db, _g) = app().await;
+        let (owner, ceci, juan) = (
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+            create_user(&db, "team_lite").await,
+        );
+        team(&db, owner, &[ceci, juan]).await;
+        let it = item(&db, owner).await;
+        let (s, _, sid) = share(
+            &app,
+            owner,
+            it,
+            true,
+            json!([
+                { "user_id": ceci, "role": "view", "wrapped_key": "kc" },
+                { "user_id": juan, "role": "view", "wrapped_key": "kj" },
+            ]),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let grants = format!("/shares/{sid}/grants");
+        let (s, _) = call(
+            &app,
+            owner,
+            Method::PATCH,
+            &grants,
+            Some(json!({ "user_id": ceci, "role": "edit" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let role: String = sqlx::query_scalar(
+            "SELECT role FROM share_grants WHERE share_id = $1 AND user_id = $2",
+        )
+        .bind(sid)
+        .bind(ceci)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(role, "edit");
+        // Juan removed (another device); his role changed from a stale panel: 404.
+        let (s, _) = call(
+            &app,
+            owner,
+            Method::DELETE,
+            &format!("{grants}?user_id={juan}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _) = call(
+            &app,
+            owner,
+            Method::PATCH,
+            &grants,
+            Some(json!({ "user_id": juan, "role": "edit" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        assert!(with_me(&app, juan).await.is_empty());
+        // Only the owner; edit only on a whole copy (checked below); one target.
+        let (s, _) = call(
+            &app,
+            ceci,
+            Method::PATCH,
+            &grants,
+            Some(json!({ "user_id": ceci, "role": "view" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _) = call(
+            &app,
+            owner,
+            Method::PATCH,
+            &grants,
+            Some(json!({ "role": "view" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (_, _, partial) = share(
+            &app,
+            owner,
+            it,
+            false,
+            json!([{ "user_id": ceci, "role": "view", "wrapped_key": "k" }]),
+        )
+        .await;
+        let (s, _) = call(
+            &app,
+            owner,
+            Method::PATCH,
+            &format!("/shares/{partial}/grants"),
+            Some(json!({ "user_id": ceci, "role": "edit" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

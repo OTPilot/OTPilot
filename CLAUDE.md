@@ -183,7 +183,7 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | PUT/DELETE | `/collections/:cid/items/:id` | Write / delete with `base_revision` (`edit`/`manage`). Personal `/vault/items` never lists or touches collection items, and vice versa |
 | POST | `/shares` | Share one of my items: `{ id, item_id, whole, record, grants: [{ user_id \| collection_id, role, wrapped_key }] }` (teammates / my team's collections I can edit) |
 | PUT/DELETE | `/shares/:id` | Rewrite the copy (owner, or an `edit` grantee of a whole share; `base_revision`, 409 + current) / delete it (owner) |
-| PUT/DELETE | `/shares/:id/grants` | Add or change a grant (owner) / remove one (owner, or a grantee leaving their direct grant); the share goes with its last grant |
+| PUT/PATCH/DELETE | `/shares/:id/grants` | Add or change a grant with its key (owner) / change only an existing grant's role (owner; 404 when it's gone — never re-adds one; used by the role selects in the extension and the web) / remove one (owner, or a grantee leaving their direct grant); the share goes with its last grant |
 | GET | `/shares/mine`, `/shares/with-me` | My shares with their grants / every share I can open (direct or via a collection), whole list each time with revisions, my effective role and the wrapped key(s) |
 | POST | `/icons/resolve` | Resolve favicons for a batch of domains; fetches + stores any missing in S3/R2, returns `{domain: {status, url?}}` (**public** — so free / not-signed-in users get icons; abuse bounded by SSRF guards, 50-domain cap, negative cache, and a global fetch semaphore) |
 | POST/GET | `/teams` | Create (idempotent, team plan) / get the user's team |
