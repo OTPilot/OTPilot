@@ -305,8 +305,9 @@ function renderAgentRequest(detail, r) {
 let _agentsNote = null;
 
 function renderActiveAgent(detail, a) {
+  // Shown on its own agent's page only (another agent may be open meanwhile).
   const note = _agentsNote?.agentId === a.id ? _agentsNote.text : null;
-  _agentsNote = null;
+  if (note) _agentsNote = null;
   const activity = (_agentsData.activity || []).filter(u => u.agent_id === a.id).slice(0, 8);
   // Its requests for an account still waiting: an account added here can answer one.
   const asks = (_agentsData.requests || []).filter(r => r.agent_id === a.id && !r.item_id);
