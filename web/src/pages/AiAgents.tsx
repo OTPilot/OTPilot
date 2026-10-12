@@ -102,8 +102,8 @@ const faq = [
     a: 'Not through OTPilot: no tool returns a secret. The agent gets results ("signed in", a command\'s output with secrets scrubbed). An agent that runs commands decides what they do, though, and could try to reveal a secret on purpose. For sensitive accounts, allow only the 2FA code, limit the commands, or turn on "ask every time".',
   },
   {
-    q: 'Do I need an account? Is my vault uploaded?',
-    a: 'You need a free OTPilot account so the agent can receive what you allow. Only the accounts you allow are uploaded, each one encrypted for that agent\'s key. The rest of your vault stays on your device.',
+    q: 'Do I need an account? What does the agent receive?',
+    a: 'You need a free OTPilot account (a free plan works) so the agent can receive what you allow. For each account you allow, OTPilot uploads a copy encrypted for that agent\'s key, holding only what you chose. Connecting an agent uploads nothing else; if you use sync, the rest of your vault stays encrypted under your own key, which agents never get.',
   },
   {
     q: 'Does it work when Chrome is closed?',
@@ -114,8 +114,8 @@ const faq = [
     a: `It's included in every plan. Free connects ${FREE_AGENTS} agent with up to ${FREE_AGENT_ACCOUNTS} accounts; Personal and Team have no limit on agents or accounts.`,
   },
   {
-    q: 'What if my agent or my laptop is compromised?',
-    a: 'Only the accounts you allowed that agent are exposed, not your vault. Revoke the agent in OTPilot and it can\'t open them anymore; change the passwords of the accounts it had.',
+    q: 'What if my agent is compromised?',
+    a: 'It can only open the accounts you allowed it, not your vault. Revoke the agent in OTPilot so it can\'t get them again, and change the passwords of the accounts it had. A compromised computer is a bigger problem, as with any password manager: whoever controls it can also capture your vault when you unlock it.',
   },
 ]
 
