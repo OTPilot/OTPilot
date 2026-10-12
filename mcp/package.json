@@ -1,0 +1,33 @@
+{
+  "name": "@otpilot/mcp",
+  "version": "0.1.0",
+  "description": "OTPilot for AI agents: let Claude Code, Codex, Cursor or any MCP agent sign in and run commands with the accounts you allow — without ever seeing the passwords or 2FA codes.",
+  "license": "GPL-3.0-only",
+  "homepage": "https://otpilot.app/ai-agents",
+  "repository": { "type": "git", "url": "git+https://github.com/OTPilot/OTPilot.git", "directory": "mcp" },
+  "keywords": ["mcp", "model-context-protocol", "password-manager", "2fa", "totp", "ai-agents", "claude-code", "codex"],
+  "type": "module",
+  "bin": { "otpilot-mcp": "dist/cli.js" },
+  "files": ["dist", "vendor", "README.md"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "prebuild": "npm run vendor",
+    "build": "tsc -p tsconfig.json",
+    "pretest": "npm run vendor",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@napi-rs/keyring": "^2.1.1",
+    "playwright-core": "^1.64.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

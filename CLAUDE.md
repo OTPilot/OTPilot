@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Monorepo structure
 
-Three independent sub-projects:
+Four independent sub-projects:
 
 - `extension/` — Chrome MV3 extension (vanilla JS). No build step; load unpacked directly.
 - `api/` — Rust/Axum HTTP backend. Connects to PostgreSQL; runs SQLx migrations on startup.
 - `web/` — React 19 + Vite + Tailwind 4 frontend. Talks to the API and Supabase Auth.
+- `mcp/` — `@otpilot/mcp` (TypeScript, Node ≥ 20): the MCP server AI agents use (2.1, docs/agents/plan.md). Published to npm.
 
 ---
 
@@ -51,6 +52,15 @@ npm run lint           # ESLint
 npm test               # vitest (lib/*.test.ts)
 ```
 Requires `web/.env.local` with `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`.
+
+### MCP (`@otpilot/mcp`)
+```bash
+cd mcp
+npm test               # vitest (copies extension/vaultCrypto.js, vault.js, totp.js to vendor/ first)
+npm run build          # tsc → dist/
+node dist/cli.js connect --api http://localhost:8082   # pair against a local API
+```
+`vendor/` is generated (gitignored, shipped in the package): never edit it, change `extension/` instead. `browser_login`'s tests use the installed Google Chrome (skipped without a browser).
 
 ### Docker (local postgres only)
 ```bash
@@ -121,6 +131,9 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 - **v1 blob during the transition:** `doSync()` runs `VaultSync` first. The blob is only *merged* when it was written by a 1.x device (2.0 devices write `writer: 'v2'` inside the encrypted payload and their blobs are ignored); then the vault syncs again. `exportV1Blob()` writes the vault's v1 view (with `writer: 'v2'`, and v1 tombstones for accounts removed since the last export, tracked in `v1Export`) whenever it differs from the last export. Only logins with a 2FA secret are exported (`v1Exportable`); password-only logins also stay out of the merge with a 1.x blob, so a 1.x tombstone can't delete them by name
 - `vaultAccounts.js` — bridge between the v1 account list the current UI uses and vault items. A v1 account also carries `notes` and `customFields` (the item's `fields` marked `custom: true`: `{ id, label, value, kind, section? }`, any field kind — kept as is unless the user switches it text ⇄ password —, after the type's template fields; `customFieldsOf` / `withCustomFields`), applied only when the caller sends them — a page or a 1.x device's account keeps them; they're stripped from the list content scripts get. `load`/`save` (only re-encrypts changed items, keeps item fields the v1 UI doesn't know, deletes only ids the caller loaded), `add`/`update` (used by the background for content scripts). `save`/`add`/`update` read, check and write under one `VaultStore.transaction`, verifying the passed key is still the vault key. Writes `vaultIndex`, a **plaintext** index of each login's name, URL patterns, autofill flag and `hasPassword` / `hasTotp` booleans (no secrets/usernames; an index missing either flag is rebuilt on unlock) so a page can show "Unlock to auto-fill <name>" only where an account matches while the vault is locked — a deliberate product trade-off: it reveals which sites have accounts to anyone who can read the browser profile
 
+
+### MCP server (`mcp/`, 2.1)
+The only way an AI agent reaches OTPilot; no tool returns a value. `cli.ts`: `connect` (ECDH keypair → `POST /agents/pair` → prints the verification code, opens `connect_url`, polls for the token; credentials in the OS keychain via `@napi-rs/keyring`, else `~/.config/otpilot/mcp-<profile>.json` 0600; one **profile** per agent identity, defaulted from `--name`), `status`, `disconnect`, `serve` (stdio). `extension.ts` loads the extension's `vaultCrypto.js` / `vault.js` / `totp.js` from `vendor/` (same code, not a port); `ecies.ts` is the inverse of `TeamKeys.wrapUserShare`. `grants.ts`: `loadGrants` (labels always, values only when open), `findGrant` (exact title, else the one containing it), `openItem` (an "ask every time" grant: `POST /agent/requests` with `item_id`, waits 90 s, else `PendingApproval`), `fieldValue` (`username` / `password` / `totp` = a fresh code / `notes` / a custom field's label). Tools (`server.ts`, with MCP `instructions`): `list_accounts`, `request_access`, `check_request`, `browser_login` (`browser.ts`: Playwright with the system Chrome/Edge, else Chromium; fills username → password → 2FA, two-step pages too, **only on pages `Vault.loginCoversHost` covers**; saves `storageState` to `./.otpilot/<account>.json` 0600; `needs_user` when the site still asks), `run` (`run.ts`: env from `account/field` references, per-account command allowlist refusing `; & | \` $( <>`, 120 s default timeout, output capped and passed through `redact.ts` — every used secret plus its base64 / base64url / URL / hex / JSON encodings). Every use is reported (`POST /agent/uses`).
 
 ### Vault view (popup, 2.0)
 The Vault view lists every item type. Its `draft` holds logins as v1 accounts (`VaultAccounts`) and every other item as an **entry** wrapping it (`{ _kind: 'item', _id, type, name, category, moreTags, email: summary, item }` — `entryOf` / `itemOfEntry` in `popup.js`); non-login items live in `otherItems` (`VaultAccounts.loadOthers`). Save splits the merged draft: logins through `VaultAccounts.save`, the rest through `planOtherItems()` (`put` = changed or new, `remove` = deleted here) straight to `VaultStore`, and the Free-limit check covers both (`exceedsFreeLimit(…, others)`). `mergeDraftWithCurrent()` works on both kinds, so an item a sync changed while the editor was open keeps the synced version unless edited here. "+ Add" opens a type picker: "2FA code" first (a login opened in a compact, 2FA-first form — `_compact` draft flag, never persisted: secret first with `otpauth://` paste parsing via `parseOtpauth`, the password behind "+ Add password"; saved it's a regular login), then `Vault.TYPES`, plus `UPCOMING_TYPES` disabled as "Soon"; non-login items get a template-driven editor (`renderItemDetail`: secret kinds masked with show/copy; no generate button in the editors — passwords are generated in the Generate view or suggested on sign-up pages). Tags: the category is the first tag and "More tags" the rest, for every type (`moreTags` on v1 accounts, kept as-is when a caller doesn't send it); the category bar and filters match **any** tag (`tagsOf`). A type filter (`#vault-type-bar`) appears once the vault holds more than one type. **Custom fields** (every editor, `customFieldsHTML` / `readCustomFields`) are compact label | value rows grouped in sections: the default "Custom fields" one first, then named ones (a field's `section`, so renaming a section renames it on its fields and a section with no filled field isn't saved); each section adds a row by kind (Text / Hidden / Email / Date / Multi-line chips; `.cf-add` is the Text one) and "+ New section" adds one. **Related items** (`relatedHTML` / `mountRelated`): an item links others by id (`links` — on a login's v1 account, applied by `applyAccount` only when sent, stripped for content scripts; on `entry.item` for other types; never in a share copy or the CSV); an item's "Related" list is what it links **plus what links it**, personal saved items only (a new login has no id until saved). "+ Link item" searches the vault, "+ New note linked here" creates a note that links back, ✕ unlinks both sides (both items stay); a merge joins both logins' links and repoints items that linked the other login.

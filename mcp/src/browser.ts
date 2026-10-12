@@ -1,0 +1,136 @@
+// `browser_login`: OTPilot signs in itself, in its own browser (the system's
+// Chrome through Playwright, else Playwright's Chromium), and hands the agent
+// the signed-in session (a Playwright storageState file) — never the
+// username, password or 2FA code. Every fill happens only on a page the
+// account's saved sites cover (Vault.loginCoversHost, as in the extension), so
+// a redirect or an injected link can't send the credentials anywhere else.
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import type { Browser, Page, Locator } from 'playwright-core'
+import { Vault, generateTOTP, type VaultItem } from './extension.js'
+
+export type LoginResult = {
+  status: 'signed_in' | 'needs_user'
+  url: string
+  title: string
+  storageState?: string
+  note?: string
+}
+
+const USER = [
+  'input[autocomplete="username"]',
+  'input[type="email"]',
+  'input[name*="user" i]:not([type="hidden"]):not([type="password"])',
+  'input[name*="login" i]:not([type="hidden"]):not([type="password"])',
+  'input[name*="email" i]:not([type="hidden"])',
+  'input[id*="user" i]:not([type="hidden"]):not([type="password"])',
+  'input[id*="email" i]:not([type="hidden"])',
+].join(', ')
+const PASSWORD = 'input[type="password"]:not([autocomplete="new-password"])'
+const OTP = [
+  'input[autocomplete="one-time-code"]',
+  'input[name*="otp" i]', 'input[id*="otp" i]',
+  'input[name*="totp" i]', 'input[name*="2fa" i]', 'input[name*="mfa" i]',
+  'input[name*="code" i]:not([type="hidden"])', 'input[id*="code" i]:not([type="hidden"])',
+  'input[inputmode="numeric"][maxlength="6"]',
+].join(', ')
+
+async function firstVisible(page: Page, selector: string): Promise<Locator | null> {
+  const all = page.locator(selector)
+  const n = Math.min(await all.count(), 10)
+  for (let i = 0; i < n; i++) {
+    const el = all.nth(i)
+    if (await el.isVisible().catch(() => false) && await el.isEditable().catch(() => false)) return el
+  }
+  return null
+}
+
+async function launch(headless: boolean): Promise<Browser> {
+  const { chromium } = await import('playwright-core')
+  const tries = [
+    () => chromium.launch({ channel: 'chrome', headless }),
+    () => chromium.launch({ channel: 'msedge', headless }),
+    () => chromium.launch({ headless }),
+  ]
+  let last: unknown
+  for (const t of tries) {
+    try { return await t() } catch (e) { last = e }
+  }
+  throw new Error(`No browser to sign in with: install Google Chrome, or run "npx playwright install chromium". (${String(last).split('\n')[0]})`)
+}
+
+const settle = (page: Page) => page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {})
+
+/** Signs in to `item`'s site and saves the session under `outDir`. */
+export async function browserLogin(item: VaultItem, opts: { url?: string; outDir: string; headless?: boolean }): Promise<LoginResult> {
+  const username = Vault.getValue(item, 'username')
+  const password = Vault.getValue(item, 'password')
+  const covers = (url: string) => {
+    try {
+      const u = new URL(url)
+      return ['http:', 'https:'].includes(u.protocol) && Vault.loginCoversHost(item.urls, u.hostname)
+    } catch { return false }
+  }
+  const start = opts.url || (item.urls[0] ? (/^https?:\/\//.test(item.urls[0]) ? item.urls[0] : `https://${item.urls[0].replace(/^\*\./, '')}`) : '')
+  if (!start) throw new Error(`"${item.title}" has no website saved, so OTPilot doesn't know where to sign in.`)
+  if (!covers(start)) throw new Error(`${start} isn't one of "${item.title}"'s saved sites; OTPilot only signs in there.`)
+  if (!password && !item.totp?.secret) throw new Error(`"${item.title}" gives this agent nothing to sign in with (allow its sign-in in OTPilot).`)
+
+  const browser = await launch(opts.headless !== false)
+  try {
+    const context = await browser.newContext()
+    const page = await context.newPage()
+    await page.goto(start, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+    await settle(page)
+    let filledSomething = false
+    let note: string | undefined
+    for (let step = 0; step < 5; step++) {
+      if (!covers(page.url())) {
+        if (!filledSomething) throw new Error(`The site sent the browser to ${new URL(page.url()).hostname}, which isn't one of "${item.title}"'s saved sites. Nothing was filled.`)
+        break // signed in and redirected elsewhere (an app domain): done
+      }
+      const otp = item.totp?.secret ? await firstVisible(page, OTP) : null
+      const pass = await firstVisible(page, PASSWORD)
+      if (otp && !pass) {
+        await otp.fill(await generateTOTP(item.totp!.secret, item.totp!.period || 30, item.totp!.digits || 6))
+        await otp.press('Enter')
+        filledSomething = true
+      } else if (pass) {
+        if (!password) { note = 'This agent may only use the 2FA code: sign in with the password yourself first.'; break }
+        const user = await firstVisible(page, USER)
+        if (user && username && (await user.inputValue()) !== username) await user.fill(username)
+        await pass.fill(password)
+        await pass.press('Enter')
+        filledSomething = true
+      } else {
+        const user = await firstVisible(page, USER)
+        if (user && username && (await user.inputValue()) !== username && !filledSomething) {
+          // A username-first sign-in: the password page comes next.
+          await user.fill(username)
+          await user.press('Enter')
+          filledSomething = true
+        } else break
+      }
+      await settle(page)
+    }
+    const stillAsking = covers(page.url()) && ((await firstVisible(page, PASSWORD)) || (item.totp?.secret && (await firstVisible(page, OTP))))
+    if (!filledSomething || stillAsking) {
+      return {
+        status: 'needs_user',
+        url: page.url(),
+        title: await page.title(),
+        note: note || (filledSomething
+          ? 'The site is still asking for credentials or a code (wrong password, a captcha, or a step OTPilot doesn\'t handle). Ask the user to sign in.'
+          : 'No sign-in form found on the page.'),
+      }
+    }
+    mkdirSync(opts.outDir, { recursive: true, mode: 0o700 })
+    const slug = item.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'session'
+    const file = resolve(join(opts.outDir, `${slug}.json`))
+    writeFileSync(file, JSON.stringify(await context.storageState()), { mode: 0o600 })
+    chmodSync(file, 0o600)
+    return { status: 'signed_in', url: page.url(), title: await page.title(), storageState: file }
+  } finally {
+    await browser.close().catch(() => {})
+  }
+}
