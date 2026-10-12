@@ -29,7 +29,9 @@ export default function AgentConnect() {
   const [signedIn, setSignedIn] = useState(0)
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_IN') setSignedIn(n => n + 1)
+      // Only a page still waiting for sign-in reloads: one already
+      // confirming or connected keeps what it shows.
+      if (event === 'SIGNED_IN') setState(cur => { if (cur.kind === 'need-auth') setSignedIn(n => n + 1); return cur })
     })
     return () => subscription.unsubscribe()
   }, [])
