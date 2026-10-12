@@ -36,6 +36,12 @@ export function installFakeAgents(page, { free = false } = {}) {
       const sk = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: VaultCrypto.b64d(iv) }, aes, VaultCrypto.b64d(ct)));
       return VaultCrypto.decryptItem(g.record, VaultCrypto.b64e(sk));
     };
+    S.openLabel = async (agentId, itemId) => {
+      const g = S.agents.get(agentId).grants.get(itemId);
+      const rec = g.record;
+      g.record = g.label;
+      try { return await S.openGrant(agentId, itemId); } finally { g.record = rec; }
+    };
 
     const prev = CloudSync.api;
     CloudSync.api = async (path, opts = {}) => {

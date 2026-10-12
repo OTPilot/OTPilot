@@ -56,6 +56,8 @@ test('approve a pending agent after its code, then let it use a 2FA code only', 
   expect(copy.title).toBe('GitHub');
   expect(copy.totp.secret).toBe(TEST_SECRET);
   expect(copy.fields).toEqual([]); // no username, no password
+  const label = await page.evaluate(async ({ id, item }) => fakeAgents.openLabel(id, item), { id: agent.id, item: await itemId(page, 'GitHub') });
+  expect([label.title, label.urls, label.totp]).toEqual(['GitHub', ['github.com'], null]);
   expect((await page.evaluate(() => chrome.storage.local.get('agentPins'))).agentPins[agent.id].code).toBe(agent.code);
 });
 

@@ -140,9 +140,13 @@ const Agents = (() => {
     };
     const copy = copyOf(item, scope);
     const sk = VaultCrypto.generateKey();
+    // The label (title + sites) is always readable by the agent, so it can
+    // name an "ask every time" account before its copy is released.
+    const label = { id: item.id, type: item.type, title: item.title || '', urls: [...(item.urls || [])], fields: [], totp: null, notes: '', tags: [] };
     const body = {
       ...meta,
       record: await VaultCrypto.encryptItem(copy, VaultCrypto.b64e(sk)),
+      label: await VaultCrypto.encryptItem(label, VaultCrypto.b64e(sk)),
       wrapped_key: await TeamKeys.wrapUserShare(sk, p.key),
     };
     await ok(`/agents/${agent.id}/grants/${item.id}`, { method: 'PUT', body: JSON.stringify(body) });
