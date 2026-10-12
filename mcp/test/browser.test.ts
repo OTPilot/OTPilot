@@ -13,6 +13,7 @@ const SECRET = 'JBSWY3DPEHPK3PXP'
 let server: Server
 let base = ''
 let browserOk = true
+let spaLogins = 0
 
 const page = (body: string) => `<!doctype html><html><head><title>Acme</title></head><body>${body}</body></html>`
 
@@ -30,6 +31,21 @@ beforeAll(async () => {
     if (url.pathname === '/pass') return form.get('pw') === 'hunter2-secret'
       ? html('<form method="post" action="/otp"><input name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"><button>Verify</button></form>')
       : html('<form method="post" action="/pass"><input type="password" name="pw"></form>')
+    // A single-page sign-in that takes a while to answer, then rejects.
+    if (url.pathname === '/spa') return html(`<input name="email" type="email" autocomplete="username"><input type="password" name="pw"><p id="err"></p>
+      <script>document.querySelector('[name=pw]').addEventListener('keydown', e => { if (e.key !== 'Enter') return
+        fetch('/spa-login', { method: 'POST' }).then(() => setTimeout(() => { err.textContent = 'Try again later' }, 1500)) })</script>`)
+    // Username first, then the password field shows under it on the same page.
+    if (url.pathname === '/reveal') return html(`<form method="post" action="/pass"><input name="email" type="email" autocomplete="username">
+      <input type="password" name="pw" style="display:none"><button>Continue</button></form>
+      <script>document.querySelector('[name=email]').addEventListener('keydown', e => { if (e.key !== 'Enter' || document.querySelector('[name=pw]').style.display !== 'none') return
+        e.preventDefault(); setTimeout(() => { document.querySelector('[name=pw]').style.display = '' }, 500) })</script>`)
+    // Password and code on one page: the code field shows once the password is in, the password stays.
+    if (url.pathname === '/both') return html(`<form method="post" action="/otp"><input type="password" name="pw">
+      <input name="code" autocomplete="one-time-code" style="display:none"><button>Go</button></form>
+      <script>document.querySelector('[name=pw]').addEventListener('keydown', e => { if (e.key !== 'Enter' || document.querySelector('[name=code]').style.display !== 'none') return
+        e.preventDefault(); document.querySelector('[name=code]').style.display = '' })</script>`)
+    if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return form.get('code') === (await generateTOTP(SECRET))
       ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=signed-in; Path=/' })
       : html('bad code')
@@ -71,6 +87,27 @@ describe('browser_login', () => {
   it('never starts on a site the account doesn\'t cover', async () => {
     await expect(browserLogin(loginItem({ urls: ['acme.example'] }), { url: base, outDir: tmpdir() })).rejects.toThrow(/only signs in there/)
   })
+
+  it('submits a password once, even when the site is slow to answer', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'] }), { url: `${base}spa`, outDir: tmpdir() })
+    expect(r.status).toBe('needs_user')
+    expect(spaLogins).toBe(1)
+  }, 40_000)
+
+  it('goes on when the password field shows under the username on the same page', async ctx => {
+    if (!browserOk) ctx.skip()
+    const started = Date.now()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}reveal`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
+    expect(r.status).toBe('signed_in')
+    expect(Date.now() - started).toBeLessThan(15_000) // not after the 20 s wait
+  }, 40_000)
+
+  it('fills the 2FA code when it shows beside the password field', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}both`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
+    expect(r.status).toBe('signed_in')
+  }, 40_000)
 
   it('reports a rejected password instead of claiming success', async ctx => {
     if (!browserOk) ctx.skip()
