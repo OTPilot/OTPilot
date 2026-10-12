@@ -124,7 +124,8 @@ async function main() {
   if (cmd !== 'serve') { say(`Unknown command "${cmd}". Commands: connect, status, disconnect, serve.`); process.exit(2) }
   const creds = await store.load(profile)
   if (!creds) {
-    say(`OTPilot: no agent connected here (profile ${profile}). Run: npx -y @otpilot/mcp connect`)
+    const again = profile === 'default' ? '' : ` --profile ${profile}`
+    say(`OTPilot: no agent connected here (profile ${profile}). Run: npx -y @otpilot/mcp connect${again}`)
     process.exit(1)
   }
   await serve({ api: new Api(creds.apiUrl, creds.token), creds })

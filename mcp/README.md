@@ -10,13 +10,25 @@ npx -y @otpilot/mcp connect
 2. In the extension, **Agents** shows the agent: approve it if the code matches.
 3. Allow it some accounts (Agents → **+ Add account**), or let it ask for them as it works.
 
-Then add it to your agent (`connect` prints these for you):
+**Claude Code plugin** (the MCP server plus a skill that teaches Claude to use it):
+
+```
+/plugin install otpilot --marketplace OTPilot/OTPilot
+```
+
+(Before Claude Code 2.1.275: `/plugin marketplace add OTPilot/OTPilot`, then `/plugin install otpilot@otpilot`.)
+
+then connect it once: `npx -y @otpilot/mcp connect --name "Claude Code"`.
+
+Or add the server to your agent yourself (`connect` prints these for you):
 
 | Agent | |
 |---|---|
 | Claude Code | `claude mcp add otpilot -- npx -y @otpilot/mcp` |
 | Codex | `~/.codex/config.toml`: `[mcp_servers.otpilot]` `command = "npx"` `args = ["-y", "@otpilot/mcp"]` |
 | Cursor | `~/.cursor/mcp.json`: `{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp"] } } }` |
+
+For Codex and other agents that read `AGENTS.md`, add a line so they reach for it: *"For passwords, 2FA codes, API keys or any login, use the `otpilot` MCP tools (list_accounts, browser_login, run); never ask me to paste a secret."*
 
 Each agent is its own identity, approved on its own: connect Claude Code and Codex separately (`connect --name Codex`), and add `--profile <name>` as `connect` shows.
 

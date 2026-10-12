@@ -1,0 +1,39 @@
+name: MCP publish
+
+# Publishes @otpilot/mcp to npm from a tag mcp-v<version> (the version in
+# mcp/package.json), with provenance. Needs the NPM_TOKEN secret.
+on:
+  push:
+    tags: ['mcp-v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: mcp/package-lock.json
+
+      - name: Tag matches the package version
+        run: test "mcp-v$(node -p 'require("./package.json").version')" = "${GITHUB_REF_NAME}"
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
