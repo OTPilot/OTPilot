@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState, type KeyboardEvent } from 'react'
 
 // How to connect each agent to OTPilot (mirrors mcp/README.md and what
 // `npx -y @otpilot/mcp connect` prints).
@@ -40,14 +40,29 @@ const CLIENTS: { id: string; label: string; steps: { text: string; code?: string
 export default function AgentSetup() {
   const [tab, setTab] = useState('claude')
   const client = CLIENTS.find(c => c.id === tab)!
+  const tabs = useRef<(HTMLButtonElement | null)[]>([])
+  // Arrow keys (and Home / End) move between tabs, as a tablist should.
+  const onKey = (e: KeyboardEvent, i: number) => {
+    const n = CLIENTS.length
+    const to = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 }[e.key]
+    if (to === undefined) return
+    e.preventDefault()
+    setTab(CLIENTS[to].id)
+    tabs.current[to]?.focus()
+  }
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] overflow-hidden text-left">
-      <div className="flex flex-wrap gap-1 p-2 border-b border-white/10" role="tablist">
-        {CLIENTS.map(c => (
+      <div className="flex flex-wrap gap-1 p-2 border-b border-white/10" role="tablist" aria-label="Your agent">
+        {CLIENTS.map((c, i) => (
           <button
             key={c.id}
+            ref={el => { tabs.current[i] = el }}
+            id={`setup-tab-${c.id}`}
             role="tab"
             aria-selected={tab === c.id}
+            aria-controls="setup-panel"
+            tabIndex={tab === c.id ? 0 : -1}
+            onKeyDown={e => onKey(e, i)}
             onClick={() => setTab(c.id)}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab === c.id ? 'bg-white/10 text-white' : 'text-zinc-400 hover:text-white'}`}
           >
@@ -55,7 +70,7 @@ export default function AgentSetup() {
           </button>
         ))}
       </div>
-      <ol className="p-5 space-y-4">
+      <ol className="p-5 space-y-4" id="setup-panel" role="tabpanel" aria-labelledby={`setup-tab-${tab}`}>
         {client.steps.map((s, i) => (
           <li key={i} className="flex gap-3">
             <span className="w-6 h-6 shrink-0 rounded-full bg-violet-400/15 text-violet-300 text-xs font-bold flex items-center justify-center">{i + 1}</span>
