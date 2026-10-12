@@ -931,6 +931,11 @@ mod tests {
         json!({ "v": 1, "key": { "iv": "a", "ct": "b" }, "data": { "iv": "c", "ct": "d" } })
     }
 
+    // A label distinct from record(): a swap between the two would show.
+    fn label() -> Value {
+        json!({ "v": 1, "key": { "iv": "l", "ct": "m" }, "data": { "iv": "n", "ct": "o" } })
+    }
+
     fn app(db: sqlx::PgPool) -> Router {
         router()
             .merge(crate::routes::notifications::router())
@@ -1033,7 +1038,7 @@ mod tests {
         item: Uuid,
         extra: Value,
     ) -> (StatusCode, Value) {
-        let mut body = json!({ "record": record(), "label": record(), "wrapped_key": "wk", "scope": { "kind": "2fa" } });
+        let mut body = json!({ "record": record(), "label": label(), "wrapped_key": "wk", "scope": { "kind": "2fa" } });
         for (k, v) in extra.as_object().unwrap() {
             body[k] = v.clone();
         }
@@ -1262,7 +1267,7 @@ mod tests {
         assert_eq!(grants[0]["record"], Value::Null);
         assert_eq!(
             grants[0]["label"],
-            record(),
+            label(),
             "its name is readable to ask for it"
         );
         assert_eq!(grants[0]["wrapped_key"], "wk");
@@ -1299,6 +1304,21 @@ mod tests {
         .await;
         assert_eq!(st["status"], "allowed");
         let (_, b) = raw(&app, Some(&token), Method::GET, "/agent/grants", None).await;
+        assert_eq!(b["grants"][0]["record"], record());
+        assert_eq!(b["grants"][0]["label"], label());
+        // Rewritten: the label follows the new value, apart from the copy.
+        let new_label =
+            json!({ "v": 1, "key": { "iv": "x", "ct": "y" }, "data": { "iv": "z", "ct": "w" } });
+        grant(
+            &app,
+            ana,
+            agent,
+            ask,
+            json!({ "ask_every_time": true, "label": new_label }),
+        )
+        .await;
+        let (_, b) = raw(&app, Some(&token), Method::GET, "/agent/grants", None).await;
+        assert_eq!(b["grants"][0]["label"], new_label);
         assert_eq!(b["grants"][0]["record"], record());
         // Asking for an item it has no grant for isn't possible.
         let (s, _) = raw(
