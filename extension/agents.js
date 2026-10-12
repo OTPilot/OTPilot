@@ -9,8 +9,11 @@
 // ciphertext; expiry, "ask every time" and revocation are enforced there.
 //
 // Trust: a public key is only encrypted to once the user checked its code on
-// this device (`agentPins`). Another device of the same user that didn't pin
-// an agent leaves its copies alone (the pinning device keeps them current).
+// this device (`agentPins`), and only what the user allowed on this device is
+// ever encrypted to it (`agentsApproved`: item + scope): a compromised server
+// can't widen a grant (2FA → sign-in) or add an item by editing its list.
+// Another device that didn't pin an agent or approve a grant leaves those
+// copies alone (the device that did keeps them current).
 //
 // Needs vault.js, vaultCrypto.js, vaultStore.js, vaultKeys.js, keys.js,
 // cloudSync.js, vaultShares.js (project()).
@@ -18,6 +21,7 @@ const Agents = (() => {
   const local = chrome.storage.local;
   const PINS = 'agentPins';           // { [agentId]: { key, code } } keys checked on this device
   const PUBLISHED = 'agentsPublished'; // { [agentId:itemId]: fingerprint } what this device last uploaded
+  const APPROVED = 'agentsApproved';   // { [agentId:itemId]: scope } what the user allowed on this device
 
   // ── Verification code ──────────────────────────────────────────────────
   // First 40 bits of SHA-256 over the raw public key, base32, XXXX-XXXX.
@@ -50,6 +54,14 @@ const Agents = (() => {
   }
 
   async function published() { return (await local.get(PUBLISHED))[PUBLISHED] || {}; }
+  async function approved() { return (await local.get(APPROVED))[APPROVED] || {}; }
+  async function noteApproved(key, scope) {
+    const all = await approved();
+    if (scope) all[key] = scope; else delete all[key];
+    await local.set({ [APPROVED]: all });
+  }
+  const sameScope = (a, b) => JSON.stringify({ kind: a?.kind, parts: [...(a?.parts || [])].sort() })
+    === JSON.stringify({ kind: b?.kind, parts: [...(b?.parts || [])].sort() });
   async function notePublished(entries) {
     const all = await published();
     for (const [k, fp] of entries) { if (fp) all[k] = fp; else delete all[k]; }
@@ -86,8 +98,8 @@ const Agents = (() => {
   async function remove(agentId) {
     await ok(`/agents/${agentId}`, { method: 'DELETE' });
     await setPin(agentId, null);
-    const all = await published();
-    await local.set({ [PUBLISHED]: Object.fromEntries(Object.entries(all).filter(([k]) => !k.startsWith(`${agentId}:`))) });
+    const keep = all => Object.fromEntries(Object.entries(all).filter(([k]) => !k.startsWith(`${agentId}:`)));
+    await local.set({ [PUBLISHED]: keep(await published()), [APPROVED]: keep(await approved()) });
   }
 
   // ── Scopes ─────────────────────────────────────────────────────────────
@@ -103,9 +115,12 @@ const Agents = (() => {
   }
 
   // The scope that suits an item by default: its 2FA code when it has one
-  // (the least it can give), else its sign-in.
+  // (the least it can give), else a login's sign-in, else the other item
+  // types' own fields (a server, an API key…).
   function defaultScope(item) {
-    return item.totp?.secret ? { kind: '2fa' } : { kind: 'login' };
+    if (item.totp?.secret) return { kind: '2fa' };
+    if (item.type === 'login') return { kind: 'login' };
+    return { kind: 'fields', parts: VaultShares.parts(item).map(p => p.key) };
   }
 
   // What a scope gives of this item, for the UI ("2FA code · Password").
@@ -150,6 +165,7 @@ const Agents = (() => {
       wrapped_key: await TeamKeys.wrapUserShare(sk, p.key),
     };
     await ok(`/agents/${agent.id}/grants/${item.id}`, { method: 'PUT', body: JSON.stringify(body) });
+    await noteApproved(`${agent.id}:${item.id}`, scope);
     await notePublished([[`${agent.id}:${item.id}`, await fingerprint(copy, meta)]]);
   }
 
@@ -158,6 +174,7 @@ const Agents = (() => {
       await ok(`/agents/${agentId}/grants/${itemId}`, { method: 'DELETE' });
     } catch (e) { if (e.status !== 404) throw e; }
     await notePublished([[`${agentId}:${itemId}`, null]]);
+    await noteApproved(`${agentId}:${itemId}`, null);
   }
 
   // Answers a request: allow (writing the grant first when it's for a new
@@ -186,23 +203,34 @@ const Agents = (() => {
 
   // ── Keeping copies current ─────────────────────────────────────────────
   // Rewrites the copies whose item changed since this device uploaded them,
-  // and removes the grants of items that no longer exist (a Free vault
-  // doesn't sync, so the server can't know). Only for agents pinned here.
-  // Returns how many copies were written.
+  // and removes the grants of items deleted here (a Free vault doesn't sync,
+  // so the server can't know). Only for agents pinned here, and only grants
+  // the user approved here with the same scope: what the server lists is
+  // never taken as permission to encrypt more. Returns how many copies were
+  // written.
   async function syncCopies(key) {
     if (!(await SupabaseAuth.getSession().catch(() => null))) return 0;
     const p = await pins();
     if (!Object.keys(p).length) return 0;
+    const ok_ = await approved();
     const { agents } = await ok('/agents');
     const { items } = await VaultStore.readAll(key);
     const byId = new Map(items.map(i => [i.id, i]));
+    const deleted = new Set(Object.keys(await VaultStore.listTombstones()));
     const pub = await published();
     let written = 0;
     for (const agent of agents) {
       if (agent.status !== 'active' || p[agent.id]?.key !== agent.public_key) continue;
       for (const g of agent.grants) {
+        const mine = ok_[`${agent.id}:${g.item_id}`];
+        if (!mine || !sameScope(mine, g.scope)) continue;
         const item = byId.get(g.item_id);
-        if (!item) { await ungrant(agent.id, g.item_id).catch(() => {}); continue; }
+        if (!item) {
+          // Only a deletion this device knows of (an unreadable record, or an
+          // item this device never had, isn't one).
+          if (deleted.has(g.item_id)) await ungrant(agent.id, g.item_id).catch(() => {});
+          continue;
+        }
         const meta = { scope: g.scope, expires_at: g.expires_at, ask_every_time: g.ask_every_time, commands: g.commands };
         if (pub[`${agent.id}:${item.id}`] === await fingerprint(copyOf(item, g.scope), meta)) continue;
         await grant(agent, item, { scope: g.scope, expiresAt: g.expires_at, askEveryTime: g.ask_every_time, commands: g.commands });

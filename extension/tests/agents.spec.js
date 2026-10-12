@@ -178,3 +178,46 @@ test('agents waiting show in the bell and on the rail', async ({ context, extens
   await page.locator('#notices-menu .notice-btn', { hasText: 'Review' }).first().click();
   await expect(page.locator('#agents-panel')).toBeVisible();
 });
+
+test('a widened or extra grant from the server is never encrypted to the agent', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const result = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ status: 'active' });
+    await Agents.pin(a);
+    const key = await VaultKeys.getKey();
+    const [gh, bank] = await Agents.vaultItems(key).then(items => [items.find(i => i.title === 'GitHub'), items.find(i => i.title === 'Bank')]);
+    await Agents.grant(a, gh, { scope: { kind: '2fa' } });
+    // The server lies: GitHub widened to its sign-in, Bank added.
+    const before = a.grants.get(gh.id).record;
+    a.grants.get(gh.id).scope = { kind: 'login' };
+    a.grants.set(bank.id, { scope: { kind: 'login' }, commands: [], record: null });
+    const written = await Agents.syncCopies(key);
+    return { written, same: a.grants.get(gh.id).record === before, bank: a.grants.get(bank.id).record };
+  });
+  expect(result).toEqual({ written: 0, same: true, bank: null });
+});
+
+test('a grant for an item this device never had is left alone', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const kept = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ status: 'active' });
+    await Agents.pin(a);
+    const other = crypto.randomUUID();
+    a.grants.set(other, { scope: { kind: '2fa' }, commands: [] });
+    await chrome.storage.local.set({ agentsApproved: { [`${a.id}:${other}`]: { kind: '2fa' } } });
+    await Agents.syncCopies(await VaultKeys.getKey());
+    return a.grants.has(other);
+  });
+  expect(kept).toBe(true);
+});
+
+test('a server item offered to an agent defaults to its own fields', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const scope = await page.evaluate(() => {
+    const item = Vault.newItem('server', { title: 'Box' });
+    item.fields.find(f => f.kind === 'password' || f.id === 'password').value = 'pw';
+    return Agents.defaultScope(item);
+  });
+  expect(scope.kind).toBe('fields');
+  expect(scope.parts.length).toBeGreaterThan(0);
+});

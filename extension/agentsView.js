@@ -215,7 +215,10 @@ function agentGrantFormHTML(item, current) {
       ${parts.map(p => `<label><input type="checkbox" value="${esc(p.key)}"${chosen.has(p.key) ? ' checked' : ''}> ${esc(p.label)}</label>`).join('') || '<span class="ag-note">This item has no fields to share.</span>'}
     </div>
     <label>For
-      <select class="ag-duration">${AGENT_DURATIONS.map(([v, l]) => opt(v, l, !v)).join('')}</select>
+      <select class="ag-duration">
+        ${current?.expires_at ? opt('keep', `As now (${esc(agentExpiry(current.expires_at))})`, true) : ''}
+        ${AGENT_DURATIONS.map(([v, l]) => opt(v, l, !v && !current?.expires_at)).join('')}
+      </select>
       <span style="margin-left:8px"><input type="checkbox" class="ag-ask"${current?.ask_every_time ? ' checked' : ''}> Ask me every time</span>
     </label>
     <label style="flex-direction:column;align-items:stretch;gap:3px">Only with these commands (optional, comma-separated)
@@ -229,7 +232,7 @@ function mountGrantForm(box) {
   scope?.addEventListener('change', () => { box.querySelector('.ag-fields').hidden = scope.value !== 'fields'; });
 }
 
-function readGrantForm(box) {
+function readGrantForm(box, current) {
   const kind = box.querySelector('.ag-scope').value;
   const scope = kind === 'fields'
     ? { kind, parts: [...box.querySelectorAll('.ag-fields input:checked')].map(i => i.value) }
@@ -237,7 +240,7 @@ function readGrantForm(box) {
   if (kind === 'fields' && !scope.parts.length) throw new Error('Pick at least one field');
   return {
     scope,
-    expiresAt: durationToIso(box.querySelector('.ag-duration').value),
+    expiresAt: box.querySelector('.ag-duration').value === 'keep' ? current?.expires_at ?? null : durationToIso(box.querySelector('.ag-duration').value),
     askEveryTime: box.querySelector('.ag-ask').checked,
     commands: box.querySelector('.ag-commands').value.split(',').map(s => s.trim()).filter(Boolean),
   };
@@ -359,7 +362,7 @@ function renderActiveAgent(detail, a) {
       allow.disabled = false;
     });
     card.querySelector('[data-act=cancel]').addEventListener('click', () => { box.innerHTML = ''; });
-    allow.addEventListener('click', () => agentAct(card, () => Agents.grant(a, chosen, readGrantForm(card))));
+    allow.addEventListener('click', () => agentAct(card, () => Agents.grant(a, chosen, readGrantForm(card, a.grants.find(g => g.item_id === chosen.id)))));
   };
   detail.querySelector('[data-act=add]').addEventListener('click', openAdd);
   if (_agentsSel.adding && a.pinned) { _agentsSel.adding = false; openAdd(); }
