@@ -30,13 +30,13 @@ const base = { id: 'item-1', type: 'login', title: 'GitHub', updatedAt: '2026-10
 
 let shares: Map<string, { id: string; item_id: string; whole: boolean; grants: unknown[] }>
 let vault: { record: ItemRecord; revision: number }
-let onPut: (r: Req) => Promise<[number, unknown]> | null
+let onPut: (r: Req) => Promise<[number, unknown] | null>
 
 beforeEach(async () => {
   server.calls = []
   shares = new Map()
   vault = { record: await encryptItem(base, VK), revision: 1 }
-  onPut = () => null
+  onPut = async () => null
   server.handle = async (r) => {
     if (r.path === '/shares/mine') return [200, { shares: [...shares.values()].map((s) => ({ ...s, revision: 1 })) }]
     if (r.path === '/shares' && r.method === 'POST') {
