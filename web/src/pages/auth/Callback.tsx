@@ -10,7 +10,8 @@ export default function Callback() {
 
   useEffect(() => {
     function redirectAfterLogin() {
-      const next = sessionStorage.getItem('auth_next')
+      const saved = sessionStorage.getItem('auth_next')
+      const next = saved && saved.startsWith('/') && !saved.startsWith('//') ? saved : null
       sessionStorage.removeItem('auth_next')
       navigate(next || '/dashboard', { replace: true })
     }
