@@ -32,6 +32,18 @@ For Codex and other agents that read `AGENTS.md`, add a line so they reach for i
 
 Each agent is its own identity, approved on its own: connect Claude Code and Codex separately (`connect --name Codex`), and add `--profile <name>` as `connect` shows.
 
+### On a server or VPS
+
+Run it where the agent runs — your laptop, a VPS, a container. On a server without a browser, skip the opener and open the printed link on any device signed in to OTPilot, then approve it in the extension if the codes match:
+
+```bash
+npx -y @otpilot/mcp connect --name VPS --no-open
+npx -y @otpilot/mcp --profile vps                 # what the agent runs
+npx playwright install --with-deps chromium       # only for browser_login without Chrome
+```
+
+With no keychain (a bare Linux box) the credentials go to `~/.config/otpilot/mcp-<profile>.json` (0600): the accounts you allow are opened on that machine, so connect only machines you trust — whoever has root there can use them.
+
 ## Tools
 
 | Tool | What the agent gets |
