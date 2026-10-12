@@ -21,7 +21,7 @@ test('saved items read back decrypted and are stored encrypted, one key per item
     const raw = await new Promise(r => chrome.storage.local.get(null, r));
     const { items: back, failed } = await VaultStore.readAll(vk);
     return {
-      keys: Object.keys(raw).sort(),
+      keys: Object.keys(raw).filter(k => k !== 'installedAt').sort(), // the extension's own bookkeeping
       rawText: JSON.stringify(raw),
       titles: back.map(i => i.title).sort(),
       failed,
@@ -92,7 +92,7 @@ test('clear wipes vault records and tombstones but nothing else', async ({ conte
     await VaultStore.save(items, vk);
     await VaultStore.remove('b');
     await VaultStore.clear();
-    return Object.keys(await new Promise(r => chrome.storage.local.get(null, r))).sort();
+    return Object.keys(await new Promise(r => chrome.storage.local.get(null, r))).filter(k => k !== 'installedAt').sort();
   }, [item('a', 'A'), item('b', 'B')]);
   expect(keys).toEqual(['accounts', 'theme']);
 });

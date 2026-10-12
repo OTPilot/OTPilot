@@ -139,6 +139,7 @@ async function syncActiveIndexToUrl() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.url?.startsWith('http')) {
       const hostname = new URL(tab.url).hostname.toLowerCase();
+      _tabHost = hostname;
       activeIndex = findAccountIndexByHostname(hostname);
     } else {
       activeIndex = -1;
@@ -359,8 +360,11 @@ function normalizeIconDomain(input) {
   return d;
 }
 
+// A login (v1 account, `urls` one per line) or a vault entry wrapping an
+// item (shared ones too: `item.urls`).
 function accountIconDomain(acc) {
-  return normalizeIconDomain(acc.domain) || normalizeIconDomain((acc.urls || '').split('\n')[0]);
+  const urls = acc.urls ?? (acc.item?.urls || []).join('\n');
+  return normalizeIconDomain(acc.domain || acc.item?.iconDomain) || normalizeIconDomain((urls || '').split('\n')[0]);
 }
 
 function accountIconDataUrl(acc) {
@@ -382,9 +386,11 @@ function avatarNode(acc, extraClass = '') {
   return tmp.content.firstChild;
 }
 
-// All distinct icon domains across saved accounts.
+// All distinct icon domains across saved accounts and the items shared with
+// this user (the full set: the background prunes icons of any other domain).
 function iconDomains() {
-  return [...new Set(accounts.map(accountIconDomain).filter(Boolean))];
+  const shared = sharedItems.map(s => accountIconDomain({ item: s.item }));
+  return [...new Set([...accounts.map(accountIconDomain), ...shared].filter(Boolean))];
 }
 
 // Best-effort: if the popup's active tab happens to be the site an account was
@@ -416,8 +422,9 @@ function requestIcons(hints = {}) {
   if (!chrome.runtime?.id) return;
   const domains = iconDomains();
   if (!domains.length) return;
-  // prune: this is the full account set, so the SW can evict icons for deleted accounts.
-  chrome.runtime.sendMessage({ action: 'resolveIcons', domains, hints, prune: true }, resp => {
+  // prune: once this is the full set (shared items loaded), so the SW can
+  // evict icons of deleted accounts.
+  chrome.runtime.sendMessage({ action: 'resolveIcons', domains, hints, prune: _sharedKnown }, resp => {
     if (chrome.runtime.lastError) return;
     const updated = resp?.updated || {};
     if (!Object.keys(updated).length) return;
@@ -438,6 +445,59 @@ function requestIcons(hints = {}) {
 // the right row even after they've clicked over to look at something else.
 let tabMatchIndex = -1;
 
+// Logins shared with this user (a teammate's share, or an item of one of
+// their collections) show on Home after their own, with the code, sign-in
+// details, Fill and Open & sign in. One of them is selected by item id
+// (activeSharedId); activeIndex keeps pointing at an own account.
+let activeSharedId = null;
+let _tabHost = null; // the active tab's host (a shared login can match it once loaded)
+// A shared login is picked for the tab at most once (the first load that
+// finds one), and never after the user picked an account themselves.
+let _homeChosen = false;
+let _sharedTabTried = false;
+
+function homeShared() {
+  return sharedItems.filter(s => s.item?.type === 'login')
+    .map(s => ({ ...VaultAccounts.toAccount(s.item), _shared: sharedEntryOf(s) }))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+
+// The account Home shows: the selected shared login, or the own one.
+function homeAccount() {
+  if (activeSharedId) return homeShared().find(a => a._id === activeSharedId) || null;
+  return accounts[activeIndex] || null;
+}
+
+function selectOwn(i) {
+  _homeChosen = true;
+  activeIndex = i;
+  activeSharedId = null;
+  chrome.storage.local.set({ activeIndex }); // only the selection changed
+  renderAccountBar();
+  startTimer();
+}
+
+function selectShared(id) {
+  _homeChosen = true;
+  activeSharedId = id;
+  renderAccountBar();
+  startTimer();
+}
+
+// Once shared items load: with no own account for the active tab, a shared
+// login that matches it is selected (like an own one at popup open).
+function selectSharedForTab() {
+  if (_sharedTabTried || _homeChosen || !_tabHost || activeSharedId || tabMatchIndex >= 0) return;
+  const hit = homeShared().find(a => String(a.urls || '').split('\n').map(u => u.trim()).filter(Boolean).some(p => matchesPattern(p, _tabHost)));
+  if (!hit) return; // a later load (e.g. after a failed one) may still find it
+  _sharedTabTried = true;
+  activeSharedId = hit._id;
+  _sharedTabMatch = hit._id;
+  renderAccountBar();
+  startTimer();
+}
+let _sharedTabMatch = null;
+
 function renderAccountBar() {
   renderCategoryBar(document.getElementById('home-cat-bar'), renderAccountBar);
 
@@ -445,27 +505,32 @@ function renderAccountBar() {
   const countEl = document.getElementById('home-count');
   const q = (document.getElementById('home-search')?.value || '').trim().toLowerCase();
 
+  const matchesQuery = acc => !q || (acc.name || '').toLowerCase().includes(q) || (acc.email || '').toLowerCase().includes(q);
   const entries = accounts
     .map((acc, i) => ({ acc, i }))
     .filter(e => accountMatchesFilter(e.acc))
-    .filter(e => !q || (e.acc.name || '').toLowerCase().includes(q) || (e.acc.email || '').toLowerCase().includes(q));
+    .filter(e => matchesQuery(e.acc));
+  const allShared = homeShared();
+  // Shared logins carry no tags of this user's: hidden while a category is picked.
+  const shared = categoryFilter ? [] : allShared.filter(matchesQuery);
+  const total = accounts.length + allShared.length;
 
   countEl.textContent = q
-    ? `${entries.length} result${entries.length === 1 ? '' : 's'}`
-    : `${accounts.length} account${accounts.length === 1 ? '' : 's'}`;
+    ? `${entries.length + shared.length} result${entries.length + shared.length === 1 ? '' : 's'}`
+    : `${total} account${total === 1 ? '' : 's'}`;
 
   list.innerHTML = '';
-  if (!entries.length) {
+  if (!entries.length && !shared.length) {
     const empty = document.createElement('div');
     empty.className = 'lc-empty';
-    empty.textContent = accounts.length ? `No account matches "${q}"` : 'No accounts yet — add one in Settings';
+    empty.textContent = total ? `No account matches "${q}"` : 'No accounts yet — add one in Settings';
     list.appendChild(empty);
     return;
   }
 
   entries.forEach(({ acc, i }) => {
     const row = document.createElement('button');
-    row.className = 'lc-row' + (i === activeIndex ? ' sel' : '');
+    row.className = 'lc-row' + (i === activeIndex && !activeSharedId ? ' sel' : '');
 
     const av = avatarNode(acc);
 
@@ -484,14 +549,47 @@ function renderAccountBar() {
       row.appendChild(dot);
     }
 
-    row.addEventListener('click', () => {
-      activeIndex = i;
-      chrome.storage.local.set({ activeIndex }); // only the selection changed
-      renderAccountBar();
-      startTimer();
-    });
+    row.addEventListener('click', () => selectOwn(i));
     // "Open & sign in", shown on the row being hovered or focused (beside
     // the row's button: a button can't hold another).
+    const item = document.createElement('div');
+    item.className = 'lc-item';
+    item.appendChild(row);
+    if (canLaunch(acc)) {
+      const launch = document.createElement('button');
+      launch.className = 'lc-launch';
+      launch.title = 'Open and sign in';
+      launch.setAttribute('aria-label', `Open ${acc.name || 'this site'} and sign in`);
+      launch.innerHTML = SVG_SIGN_IN;
+      launch.addEventListener('click', () => launchAccount(acc));
+      item.appendChild(launch);
+    }
+    list.appendChild(item);
+  });
+
+  if (shared.length) {
+    const head = document.createElement('div');
+    head.className = 'lc-section';
+    head.textContent = 'Shared with you';
+    list.appendChild(head);
+  }
+  shared.forEach(acc => {
+    const row = document.createElement('button');
+    row.className = 'lc-row lc-row-shared' + (acc._id === activeSharedId ? ' sel' : '');
+    const text = document.createElement('span');
+    text.className = 'lc-row-text';
+    text.innerHTML = '<span class="lc-row-name"></span><span class="lc-row-sub"></span>';
+    text.querySelector('.lc-row-name').textContent = acc.name || 'Unnamed';
+    text.querySelector('.lc-row-sub').textContent = acc.email || `Shared · ${acc._shared.collectionName}`;
+    row.title = `Shared · ${acc._shared.collectionName}`;
+    row.append(avatarNode(acc), text);
+    if (acc._id === _sharedTabMatch) {
+      const dot = document.createElement('span');
+      dot.className = 'lc-row-tab-dot';
+      dot.title = 'Matches this tab';
+      row.appendChild(dot);
+    }
+    row.addEventListener('click', () => selectShared(acc._id));
     const item = document.createElement('div');
     item.className = 'lc-item';
     item.appendChild(row);
@@ -548,9 +646,7 @@ async function refreshDisplay() {
   const btnEdit   = document.getElementById('btn-edit-account');
   const bigIcon   = document.getElementById('account-big-icon');
 
-  const acc = accounts[activeIndex];
-  // Shared codes (read-only, no secret of your own) live in a separate list
-  // below and aren't editable here — only own accounts get the edit shortcut.
+  const acc = homeAccount();
   btnEdit.disabled = !acc;
 
   // Drop the previous account's code and disable Copy/Fill immediately,
@@ -741,7 +837,7 @@ function homeItemRows(item) {
 
 function renderHomeCreds(acc) {
   const related = homeRelated(acc);
-  const key = acc ? JSON.stringify([acc._id, acc.email || '', acc.password || '', acc.urls || '', acc.notes || '', acc.customFields || [],
+  const key = acc ? JSON.stringify([_teamPlan, _sharingRev, acc._id, acc.email || '', acc.password || '', acc.urls || '', acc.notes || '', acc.customFields || [],
     related.map(r => [r.id, r.name, r.item?.updatedAt || r.acc?._updatedAt || '']), [..._homeOpenRelated]]) : '';
   if (key === _homeCredsKey) return;
   _homeCredsKey = key;
@@ -788,10 +884,7 @@ function renderHomeCreds(acc) {
           // By id now: `accounts` may have been re-sorted since this rendered.
           const i = accounts.findIndex(a => a._id === r.id);
           if (i < 0) return;
-          activeIndex = i;
-          chrome.storage.local.set({ activeIndex });
-          renderAccountBar();
-          startTimer();
+          selectOwn(i);
           return;
         }
         if (open) _homeOpenRelated.delete(r.id); else _homeOpenRelated.add(r.id);
@@ -817,12 +910,82 @@ function renderHomeCreds(acc) {
     box.appendChild(homeSection(`Related · ${related.length}`, rows));
   }
 
-  // Adding fields, notes or links happens in the editor.
+  box.appendChild(homeSharingSection(acc));
+
+  // Adding fields, notes or links happens in the editor (own items only).
+  if (acc._shared) return;
   const more = document.createElement('button');
   more.className = 'home-edit-more';
   more.textContent = '+ Add fields, notes or related items';
   more.addEventListener('click', () => editAccount(activeIndex));
   box.appendChild(more);
+}
+
+// ── Sharing, on Home ──────────────────────────────────────────────────────────
+// Under the account: who shared it with this user (and how), or — an own
+// item — who it's shared with, and a way to the Share panel. Team plans only.
+// The own shares come from the server, cached for a short while.
+let _mySharesCache = { at: 0, list: null, members: null };
+// Bumped whenever what Home's sharing section shows may have changed (shared
+// items loaded, a share or role changed): part of Home's render key.
+let _sharingRev = 0;
+function sharingChanged() {
+  _mySharesCache.at = 0;
+  _sharingRev++;
+}
+
+async function mySharesCached() {
+  if (Date.now() - _mySharesCache.at < 30000 && _mySharesCache.list) return _mySharesCache;
+  const list = await VaultShares.mine();
+  let members = [];
+  try { const team = await Sharing.getMyTeam(); members = team ? await Sharing.getMembers(team.id) : []; } catch { /* names fall back */ }
+  _mySharesCache = { at: Date.now(), list, members };
+  return _mySharesCache;
+}
+
+function homeSharingSection(acc) {
+  const holder = document.createElement('div');
+  if (!_teamPlan) return holder;
+  if (acc._shared) {
+    const e = acc._shared;
+    const rows = [];
+    if (e.share) {
+      rows.push(homeRow({ label: 'Shared by', value: e.share.owner?.email || 'A teammate' }));
+      const via = (e.share.via || []).filter(v => v.collection_id).map(v => collections.find(c => c.id === v.collection_id)?.name).filter(Boolean);
+      rows.push(homeRow({ label: 'Through', value: (e.share.via || []).some(v => v.user_id) ? ['You directly', ...via].join(', ') : via.join(', ') || 'A collection' }));
+    } else {
+      rows.push(homeRow({ label: 'Collection', value: e.collectionName }));
+    }
+    rows.push(homeRow({ label: 'Access', value: e.role === 'edit' || e.role === 'manage' ? 'Can edit' : 'Can view' }));
+    holder.appendChild(homeSection('Shared with you', rows));
+    return holder;
+  }
+  const id = acc._id;
+  (async () => {
+    let cache;
+    try { cache = await mySharesCached(); } catch { return; }
+    if (!holder.isConnected || homeAccount()?._id !== id) return;
+    const grants = cache.list.filter(s => s.item_id === id).flatMap(s => s.grants.map(g => ({ g, whole: s.whole })));
+    const rows = grants.map(({ g, whole }) => homeRow({
+      label: g.role === 'edit' ? 'Can edit' : 'Can view',
+      value: g.user_id
+        ? (cache.members.find(m => m.user_id === g.user_id)?.email || 'A teammate')
+        : `Collection "${collections.find(c => c.id === g.collection_id)?.name || 'collection'}"`
+          + (whole ? '' : ' · some fields'),
+    }));
+    const manage = document.createElement('button');
+    manage.className = 'home-sec-link';
+    manage.textContent = rows.length ? 'Manage…' : 'Share…';
+    manage.addEventListener('click', () => showView('accounts', { openItemId: id, openShare: true }));
+    if (!rows.length) {
+      const none = document.createElement('div');
+      none.className = 'home-rel-empty';
+      none.textContent = 'Not shared with anyone';
+      rows.push(none);
+    }
+    holder.appendChild(homeSection(grants.length ? `Shared with · ${grants.length}` : 'Sharing', rows, manage));
+  })();
+  return holder;
 }
 
 function startTimer() {
@@ -878,8 +1041,12 @@ document.getElementById('btn-copy').addEventListener('click', async () => {
 document.getElementById('btn-fill').addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   if (!tab?.id) return;
+  const acc = homeAccount();
   try {
-    const result = await chrome.tabs.sendMessage(tab.id, { action: 'fill', accountIndex: activeIndex });
+    // A shared login isn't in the page's own account list: it's sent along.
+    const result = await chrome.tabs.sendMessage(tab.id, acc?._shared
+      ? { action: 'fillWith', account: { name: acc.name, secret: acc.secret } }
+      : { action: 'fill', accountIndex: activeIndex });
     if (result?.ok) setStatus('Filled: ' + result.code);
     else            setStatus(result?.msg || 'Fill failed', false);
   } catch {
@@ -889,12 +1056,15 @@ document.getElementById('btn-fill').addEventListener('click', async () => {
 
 document.getElementById('btn-launch').innerHTML = `${SVG_SIGN_IN}<span>Open &amp; sign in</span>`;
 document.getElementById('btn-launch').addEventListener('click', () => {
-  if (accounts[activeIndex]) launchAccount(accounts[activeIndex]);
+  const acc = homeAccount();
+  if (acc) launchAccount(acc);
 });
 
 document.getElementById('btn-edit-account').addEventListener('click', () => {
-  if (!accounts[activeIndex]) return;
-  editAccount(activeIndex);
+  const acc = homeAccount();
+  if (!acc) return;
+  if (acc._shared) showView('accounts', { openItemId: acc._id }); // read-only unless they can edit
+  else editAccount(activeIndex);
 });
 
 // ── Settings – account list ───────────────────────────────────────────────────
@@ -979,6 +1149,9 @@ async function sharedWithMe(fresh) {
 // Pulls every collection this user is in and redraws (team plans only; a
 // failure, e.g. offline, keeps what was shown).
 let _teamPlan = false;
+// Whether sharedItems is known yet (loaded, or none for this plan): until
+// then requestIcons() doesn't prune, or it would evict the shared items' icons.
+let _sharedKnown = false;
 // The refresh in flight (what the Team tab's collection lists wait for).
 let _sharedItemsLoad = null;
 function refreshSharedItems() {
@@ -989,7 +1162,7 @@ function refreshSharedItems() {
 async function refreshSharedItemsNow() {
   const { userPlan } = await chrome.storage.local.get('userPlan');
   _teamPlan = ['team_lite', 'team_pro'].includes(userPlan);
-  if (!_teamPlan) { collections = []; sharedItems = []; return; }
+  if (!_teamPlan) { collections = []; sharedItems = []; _sharedKnown = true; return; }
   // Collections failing to load (offline, API down) keep the ones shown;
   // items shared with me are refreshed either way.
   let list = null;
@@ -1006,7 +1179,12 @@ async function refreshSharedItemsNow() {
     out.push(...sharedItems.filter(s => s.collection));
   }
   sharedItems = [...out, ...await sharedWithMe(true)];
+  _sharedKnown = true;
+  sharingChanged();
+  if (activeSharedId && !homeShared().some(a => a._id === activeSharedId)) activeSharedId = null; // no longer shared
   refreshAccountsUI();
+  selectSharedForTab();
+  requestIcons(); // the shared items' sites too
 }
 
 function renderAccountsList(openTargetIdx = -1, { preserveSearch = false, openItemId = null } = {}) {
@@ -1227,7 +1405,6 @@ function renderAccDetail() {
       <div class="field-row">
         <input class="acc-password" type="password" placeholder="Password" value="${esc(acc.password || '')}" autocomplete="new-password">
         <button class="btn-eye" title="Show/hide">${SVG_EYE}</button>
-        <button class="btn-eye btn-gen-password" title="Generate a password">⟳</button>
       </div>
     </div>
     ${hidePassword ? '<button type="button" class="coll-link btn-add-password">+ Add password</button>' : ''}`;
@@ -1316,7 +1493,7 @@ ${esc(acc.notes || '')}</textarea>
   });
 
   // Custom-field rows wire their own buttons (mountCustomFields).
-  body.querySelectorAll('.btn-eye:not(.btn-gen-password)').forEach(b => !b.closest('.cf-row') && b.addEventListener('click', e => {
+  body.querySelectorAll('.btn-eye').forEach(b => !b.closest('.cf-row') && b.addEventListener('click', e => {
     const btn = e.currentTarget;
     const inp = btn.parentElement.querySelector('input');
     const reveal = inp.type === 'password';
@@ -1324,14 +1501,6 @@ ${esc(acc.notes || '')}</textarea>
     btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
   }));
 
-  // Fills a new password with the Generate view's settings, shown so the user sees what they got.
-  body.querySelector('.btn-gen-password').addEventListener('click', async () => {
-    const { generatorOptions } = await chrome.storage.local.get('generatorOptions');
-    const inp = body.querySelector('.acc-password');
-    inp.value = Generator.generate({ ...generatorOptions, mode: 'password' });
-    inp.type = 'text';
-    inp.parentElement.querySelector('.btn-eye:not(.btn-gen-password)').innerHTML = SVG_EYE_OFF;
-  });
 
   // Live-update the list row's name/email as you type, without a full
   // syncOpenAccToDraft()+rebuild — that would steal focus from the input.
@@ -1925,7 +2094,6 @@ ${val}</textarea>`;
       <div class="field-row">
         ${input}
         ${secret ? `<button class="btn-eye" title="Show/hide">${SVG_EYE}</button>` : ''}
-        ${f.kind === 'password' ? '<button class="btn-eye btn-gen-password" title="Generate">⟳</button>' : ''}
         ${f.kind === 'multiline' ? '' : '<button class="btn-eye btn-copy-field" title="Copy">⧉</button>'}
       </div>
     </div>`;
@@ -1974,7 +2142,7 @@ ${esc(item.notes || '')}</textarea>
     if (entry.role === 'view') {
       body.querySelectorAll('input, textarea').forEach(el => { el.readOnly = true; });
       body.querySelectorAll('.cat-choice').forEach(el => { el.disabled = true; });
-      body.querySelectorAll(`.btn-gen-password, .cf-del, .cf-hide, .cf-add-kind, .cf-new-section, .cf-section-del${entry.share ? '' : ', .btn-del'}`).forEach(el => el.remove());
+      body.querySelectorAll(`.cf-del, .cf-hide, .cf-add-kind, .cf-new-section, .cf-section-del${entry.share ? '' : ', .btn-del'}`).forEach(el => el.remove());
     }
   }
   body.querySelector('.item-totp')?.addEventListener('input', e => { e.target.dataset.dirty = '1'; });
@@ -2023,19 +2191,12 @@ ${esc(item.notes || '')}</textarea>
     applyVaultSearch();
     renderAccDetail();
   });
-  body.querySelectorAll('.btn-eye:not(.btn-gen-password):not(.btn-copy-field):not(.btn-eye-totp)').forEach(b => !b.closest('.cf-row') && b.addEventListener('click', e => {
+  body.querySelectorAll('.btn-eye:not(.btn-copy-field):not(.btn-eye-totp)').forEach(b => !b.closest('.cf-row') && b.addEventListener('click', e => {
     const btn = e.currentTarget;
     const inp = btn.parentElement.querySelector('.item-field');
     const reveal = inp.type === 'password';
     inp.type = reveal ? 'text' : 'password';
     btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
-  }));
-  body.querySelectorAll('.btn-gen-password').forEach(b => b.addEventListener('click', async () => {
-    const inp = b.parentElement.querySelector('.item-field');
-    const { generatorOptions } = await chrome.storage.local.get('generatorOptions');
-    inp.value = Generator.generate({ ...generatorOptions, mode: 'password' });
-    inp.dataset.dirty = '1';
-    inp.type = 'text';
   }));
   body.querySelectorAll('.btn-copy-field').forEach(b => b.addEventListener('click', async () => {
     const inp = b.parentElement.querySelector('.item-field');
@@ -2091,6 +2252,7 @@ function mountCollectionControls(body, entry) {
 // teammates and collections, what to share (everything by default), and
 // whether they can edit (only when everything is shared).
 async function renderSharePanel(panel, itemId) {
+  sharingChanged(); // Home's Sharing section reads the shares again
   panel.innerHTML = '<div class="share-msg">Loading…</div>';
   const key = await VaultKeys.getKey();
   const item = key && await VaultStore.get(itemId, key).catch(() => null);
@@ -2601,7 +2763,11 @@ function showView(view, opts = {}) {
   document.getElementById('nav-config').classList.toggle('active',   view === 'settings');
   document.getElementById('nav-sync').classList.toggle('active',     view === 'sync');
   document.getElementById('nav-team').classList.toggle('active',     view === 'team');
-  if (view === 'accounts') renderAccountsList(opts.openAccountIdx ?? -1, { preserveSearch: opts.preserveSearch, openItemId: opts.openItemId });
+  if (view === 'accounts') {
+    renderAccountsList(opts.openAccountIdx ?? -1, { preserveSearch: opts.preserveSearch, openItemId: opts.openItemId });
+    // From Home's Sharing section: straight to the item's Share panel.
+    if (opts.openShare) document.querySelector('#acc-detail .btn-share-item')?.click();
+  }
   if (view === 'sync') renderSyncPanel();
   if (view === 'team') renderTeamPanel();
   if (view === 'generate') renderGenerator();
@@ -4721,6 +4887,16 @@ function collectionRow(c, team, members, myId) {
 // What's in a collection: my items shared there (removable), teammates'
 // items shared there (with their owner), and items stored in the collection
 // itself (shared before items stayed in their owner's vault).
+// The role select of an item of mine shared into collection `c` (edit only
+// for a whole copy; a member's own role still caps it).
+function collRoleSelect(share, c, i) {
+  const role = share.grants.find(g => g.collection_id === c.id)?.role || 'view';
+  return `<select class="share-grant-role coll-item-role" data-i="${i}" title="What its members can do">
+    <option value="view" ${role === 'view' ? 'selected' : ''}>can view</option>
+    <option value="edit" ${role === 'edit' ? 'selected' : ''} ${share.whole ? '' : 'disabled'}>can edit</option>
+  </select>`;
+}
+
 async function collectionItemsSection(c) {
   const box = document.createElement('div');
   box.className = 'coll-items';
@@ -4743,9 +4919,21 @@ async function collectionItemsSection(c) {
     box.innerHTML = '<div class="share-title">Items</div>'
       + (mineFailed ? '<div class="coll-meta coll-items-error">Your items in it could not be loaded. <button type="button" class="coll-link coll-items-retry">Retry</button></div>' : '')
       + (rows.length
-        ? rows.map((r, i) => `<div class="share-grant"><span><b>${esc(r.title || 'Untitled')}</b> · ${esc(r.by)}</span>${r.share ? `<button type="button" class="btn-del coll-unshare" data-i="${i}">Remove from collection</button>` : ''}</div>`).join('')
+        ? rows.map((r, i) => `<div class="share-grant"><span><b>${esc(r.title || 'Untitled')}</b> · ${esc(r.by)}${r.share ? ` · ${collRoleSelect(r.share, c, i)}` : ''}</span>${r.share ? `<button type="button" class="btn-del coll-unshare" data-i="${i}">Remove from collection</button>` : ''}</div>`).join('')
         : (mineFailed ? '' : '<div class="coll-meta">Nothing here yet. Share items into it from their editor in the Vault (Share…).</div>'));
     box.querySelector('.coll-items-retry')?.addEventListener('click', async () => box.replaceWith(await collectionItemsSection(c)));
+    // What the collection's members can do with an item of mine in it.
+    box.querySelectorAll('.coll-item-role').forEach(sel => sel.addEventListener('change', async () => {
+      sel.disabled = true;
+      try {
+        await VaultShares.setRole(rows[+sel.dataset.i].share.id, { collection_id: c.id }, sel.value);
+        sharingChanged();
+        setStatus(`"${c.name}" ${sel.value === 'edit' ? 'can edit' : 'can view'} it now`);
+      } catch (err) {
+        setStatus(err?.status === 404 ? 'It was removed from the collection meanwhile' : 'Could not change it — check your connection', false);
+      }
+      box.replaceWith(await collectionItemsSection(c));
+    }));
     if (_convertNotSynced) {
       const note = document.createElement('div');
       note.className = 'coll-meta coll-items-error coll-convert-sync';

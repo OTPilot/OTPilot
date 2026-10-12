@@ -49,15 +49,6 @@ test('a password-only login (no 2FA) is fine on Home', async ({ context, extensi
   await expect(page.locator('#home-creds .home-cred')).toHaveCount(2);
 });
 
-test('the editor can generate a password', async ({ context, extensionId }) => {
-  const page = await popupWith(context, extensionId, [{ name: 'GitHub', email: '', secret: TEST_SECRET, urls: '' }]);
-  await page.click('#nav-settings');
-  await page.locator('.acc-head', { hasText: 'GitHub' }).click();
-  await page.click('.btn-gen-password');
-  await expect(page.locator('.acc-password')).toHaveValue(/^.{16}$/);
-  await expect(page.locator('.acc-password')).toHaveAttribute('type', 'text');
-});
-
 test('changing the password keeps the previous one in the item history', async ({ context, extensionId }) => {
   const page = await popupWith(context, extensionId, []);
   await writeAccounts(page, [{ name: 'GitHub', email: '', secret: '', urls: '', password: 'old-one' }]);
@@ -119,16 +110,6 @@ test('Home rows change when username and password swap a "|" between them', asyn
   await expect(page.locator('#home-creds .home-cred').first()).toContainText('a|b');
   await page.evaluate(async () => { accounts[0] = { ...accounts[0], email: 'a', password: 'b|c' }; refreshDisplay(); });
   await expect(page.locator('#home-creds .home-cred-value').first()).toHaveText('a');
-});
-
-test('the generate button shows the eye as "revealed"', async ({ context, extensionId }) => {
-  const page = await popupWith(context, extensionId, [{ name: 'GitHub', email: '', secret: TEST_SECRET, urls: '' }]);
-  await page.click('#nav-settings');
-  await page.locator('.acc-head', { hasText: 'GitHub' }).click();
-  const eyeBefore = await page.locator('.acc-password ~ .btn-eye').first().innerHTML();
-  await page.click('.btn-gen-password');
-  const eyeAfter = await page.locator('.acc-password ~ .btn-eye').first().innerHTML();
-  expect(eyeAfter).not.toBe(eyeBefore);
 });
 
 test('pages never receive passwords', async ({ context, extensionId }) => {

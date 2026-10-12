@@ -92,7 +92,7 @@ test('a secure note with a category and more tags is saved as a note item', asyn
     rows.filter(r => r.style.display !== 'none').length)).toBe(1);
 });
 
-test('a server: template fields, masked password with show, generate and copy', async ({ context, extensionId }) => {
+test('a server: template fields, masked password with show and copy', async ({ context, extensionId }) => {
   const page = await vault(context, extensionId);
   await page.click('#btn-add');
   await page.click('[data-add-type="server"]');
@@ -102,10 +102,10 @@ test('a server: template fields, masked password with show, generate and copy', 
   await page.fill('#acc-detail .item-field[data-id="username"]', 'admin');
   const pw = page.locator('#acc-detail .item-field[data-id="password"]');
   await expect(pw).toHaveAttribute('type', 'password');
-  await pw.locator('xpath=..').locator('.btn-gen-password').click();
+  const generated = 'Pg-s3cret-pass!';
+  await pw.fill(generated);
+  await pw.locator('xpath=..').locator('.btn-eye:not(.btn-copy-field)').first().click();
   await expect(pw).toHaveAttribute('type', 'text');
-  const generated = await pw.inputValue();
-  expect(generated).toHaveLength(16);
   await pw.locator('xpath=..').locator('.btn-copy-field').click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(generated);
   await page.click('#btn-save-all');

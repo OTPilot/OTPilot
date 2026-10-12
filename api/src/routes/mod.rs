@@ -3,6 +3,7 @@ pub mod auth;
 pub mod billing;
 pub mod collections;
 pub mod devices;
+pub mod feedback;
 pub mod icons;
 pub mod notifications;
 pub mod shares;
