@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
@@ -27,11 +27,13 @@ export default function AgentConnect() {
   // Signed in from another tab (an email link opens one): this tab picks
   // the session up and continues with its own pairing.
   const [signedIn, setSignedIn] = useState(0)
+  const kind = useRef(state.kind)
+  kind.current = state.kind
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       // Only a page still waiting for sign-in reloads: one already
       // confirming or connected keeps what it shows.
-      if (event === 'SIGNED_IN') setState(cur => { if (cur.kind === 'need-auth') setSignedIn(n => n + 1); return cur })
+      if (event === 'SIGNED_IN' && kind.current === 'need-auth') setSignedIn(n => n + 1)
     })
     return () => subscription.unsubscribe()
   }, [])
