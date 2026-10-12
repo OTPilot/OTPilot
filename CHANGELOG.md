@@ -1,6 +1,32 @@
 # Changelog
 
 
+## v2.1.0
+
+**OTPilot for AI agents**: Claude Code, Codex, Cursor or any MCP agent can sign in to websites and run commands with the accounts you allow — passwords and 2FA codes — without the agent ever seeing them.
+
+### Extension
+
+- **Agents** (new rail item): AI agents waiting to connect show their verification code (derived from the agent's own key; approve only if your terminal shows the same one). A connected agent gets no accounts until you allow them, one by one: just the 2FA code, the whole sign-in, or chosen fields; for an hour, a day, a week or until revoked; optionally "ask me every time" and "only with these commands". Agents can ask for an account as they work; you pick it here. Activity log, revoke an agent or a single account.
+- Each allowed account is a copy holding only what you allowed, encrypted on your device for that agent's key: the server only stores ciphertext. Copies follow your edits; deleting an item removes its grants. A key is only encrypted to on a device where you checked its code, and only for what you approved there.
+- **AI agents** section in the login editor; agents waiting are counted in the bell and on the toolbar badge (re-checked every 30 s while one waits).
+- Free plan: one agent with up to 3 accounts; Personal and Team: unlimited.
+
+### MCP server (`@otpilot/mcp`, new)
+
+- `npx -y @otpilot/mcp connect` pairs an agent (keypair in the OS keychain); `status`, `disconnect`, `serve`.
+- Tools that never return a value: `list_accounts`, `request_access`, `check_request`, `browser_login` (signs in itself — username, password, 2FA, only on the account's own site — and returns a Playwright session file), `run` (secrets as environment variables from `account/field` references, output scrubbed).
+- Claude Code plugin with a skill (`/plugin install otpilot --marketplace OTPilot/OTPilot`).
+
+### API
+
+- Agents: pairing, approval, grants (with encrypted labels), requests, activity (migrations 0023–0024); agents waiting in `GET /notifications`.
+
+### Web
+
+- `/ai-agents` (feature page and setup for Claude Code, Codex, Cursor), `/agents/connect` (claim an agent after checking its code), a landing section, NEW lines in pricing, and comparison pages (AI agents vs 1Password and Bitwarden, 1Password and LastPass alternatives).
+
+
 ## v2.0.0
 
 OTPilot becomes a **password manager with built-in 2FA**: one encrypted vault for logins, secure notes, servers and API credentials, with password and 2FA autofill on any site, import/export, team collections, and Personal as a subscription.
