@@ -301,8 +301,16 @@ function renderAgentRequest(detail, r) {
   allow.addEventListener('click', () => agentAct(box, () => Agents.decide(r, 'allow', { agent: a, item: chosen, opts: readGrantForm(box) })));
 }
 
+// A message for an agent's page, shown once after it re-renders.
+let _agentsNote = null;
+
 function renderActiveAgent(detail, a) {
+  // Shown on its own agent's page only (another agent may be open meanwhile).
+  const note = _agentsNote?.agentId === a.id ? _agentsNote.text : null;
+  if (note) _agentsNote = null;
   const activity = (_agentsData.activity || []).filter(u => u.agent_id === a.id).slice(0, 8);
+  // Its requests for an account still waiting: an account added here can answer one.
+  const asks = (_agentsData.requests || []).filter(r => r.agent_id === a.id && !r.item_id);
   const time = iso => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const grantRow = g => {
     const item = itemById(g.item_id);
@@ -328,6 +336,9 @@ function renderActiveAgent(detail, a) {
       : !a.pinned ? `<div class="ag-request"><div class="ag-text">Approved on another device. Before this device updates what it can use, check its code: run <span class="ag-mono">npx -y @otpilot/mcp status</span>.</div>
         <div class="ag-code"><span class="code">${esc(a.code)}</span><span class="hint">Same code in the terminal?</span></div>
         <div class="ag-btns"><span class="ag-grow"></span><button class="ag-btn primary" data-act="pin">Codes match</button></div></div>` : ''}
+    ${note ? `<div class="ag-err">${esc(note)}</div>` : ''}
+    ${asks.map(r => `<div class="ag-request" data-req="${esc(r.id)}"><div class="ag-btns"><div class="ag-text ag-grow">Asks for <b>${esc(r.query || 'an account')}</b> · ${esc(noticeAgo(r.created_at))}</div>
+      <button class="ag-btn primary sm" data-act="review">Review</button></div></div>`).join('')}
     <div>
       <div class="ag-sec-head">Accounts it can use <button class="ag-btn link sm" data-act="add"${a.pinned ? '' : ' disabled'}>+ Add account</button></div>
       <div class="ag-adding"></div>
@@ -343,6 +354,10 @@ function renderActiveAgent(detail, a) {
     if (!confirm(`Revoke ${a.name}? It loses every account you allowed. What it already used can't be taken back: change those passwords if you no longer trust it.`)) return;
     agentAct(detail, async () => { await Agents.remove(a.id); _agentsSel = null; });
   });
+  detail.querySelectorAll('.ag-request[data-req] [data-act=review]').forEach(b => b.addEventListener('click', () => {
+    _agentsSel = { kind: 'request', id: b.closest('[data-req]').dataset.req };
+    renderAgentsPanel();
+  }));
   detail.querySelector('[data-act=pin]')?.addEventListener('click', () => agentAct(detail, () => Agents.pin(a)));
   detail.querySelectorAll('.ag-card-row[data-item]').forEach(row => {
     row.querySelector('.ag-x').addEventListener('click', () => agentAct(row, () => Agents.ungrant(a.id, row.dataset.item)));
@@ -350,7 +365,9 @@ function renderActiveAgent(detail, a) {
   const openAdd = () => {
     const box = detail.querySelector('.ag-adding');
     const have = new Set(a.grants.map(g => g.item_id));
+    const ask = asks[asks.length - 1];
     box.innerHTML = `<div class="ag-request" style="margin-bottom:8px"><div class="ag-picker"></div><div class="ag-grant"></div>
+      ${ask ? `<label class="ag-text"><input type="checkbox" class="ag-answers" checked> Answers its request for <b>${esc(ask.query || 'an account')}</b></label>` : ''}
       <div class="ag-btns"><button class="ag-btn" data-act="cancel">Cancel</button><span class="ag-grow"></span><button class="ag-btn primary" data-act="allow" disabled>Allow</button></div></div>`;
     const card = box.firstElementChild;
     let chosen = null;
@@ -362,7 +379,18 @@ function renderActiveAgent(detail, a) {
       allow.disabled = false;
     });
     card.querySelector('[data-act=cancel]').addEventListener('click', () => { box.innerHTML = ''; });
-    allow.addEventListener('click', () => agentAct(card, () => Agents.grant(a, chosen, readGrantForm(card, a.grants.find(g => g.item_id === chosen.id)))));
+    allow.addEventListener('click', () => agentAct(card, async () => {
+      const answers = ask && card.querySelector('.ag-answers')?.checked;
+      await Agents.grant(a, chosen, readGrantForm(card, a.grants.find(g => g.item_id === chosen.id)));
+      if (!answers) return;
+      // The account is added either way. A request that expired or was
+      // answered elsewhere meanwhile has nothing left to answer; any other
+      // failure leaves it waiting, and the page says so.
+      await Agents.answer(ask, 'allow', chosen.id).catch(e => {
+        const gone = e.status === 404 || (e.status === 400 && /already answered|expired/.test(e.message));
+        if (!gone) _agentsNote = { agentId: a.id, text: `${chosen.title || 'The account'} is added, but its request couldn't be answered (${agentError(e)}). Answer it from Pending.` };
+      });
+    }));
   };
   detail.querySelector('[data-act=add]').addEventListener('click', openAdd);
   if (_agentsSel.adding && a.pinned) { _agentsSel.adding = false; openAdd(); }

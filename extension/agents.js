@@ -191,9 +191,14 @@ const Agents = (() => {
   // account) or deny.
   async function decide(request, decision, grantArgs) {
     if (decision === 'allow' && grantArgs) await grant(grantArgs.agent, grantArgs.item, grantArgs.opts);
+    await answer(request, decision, grantArgs?.item?.id);
+  }
+
+  // Only the answer (the grant, when one is needed, is already written).
+  async function answer(request, decision, itemId) {
     await ok(`/agents/requests/${request.id}`, {
       method: 'POST',
-      body: JSON.stringify({ decision, item_id: grantArgs?.item?.id ?? request.item_id ?? null }),
+      body: JSON.stringify({ decision, item_id: itemId ?? request.item_id ?? null }),
     });
   }
 
@@ -257,7 +262,7 @@ const Agents = (() => {
   }
 
   return {
-    code, list, approve, pin, remove, grant, ungrant, decide, candidates, syncCopies,
+    code, list, approve, pin, remove, grant, ungrant, decide, answer, candidates, syncCopies,
     defaultScope, scopeSummary, partsOf, copyOf, vaultItems, SCOPE_LABELS,
   };
 })();
