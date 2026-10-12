@@ -62,7 +62,11 @@ export default function AgentConnect() {
   }
 
   function signIn() {
-    sessionStorage.setItem('auth_next', window.location.pathname + window.location.search)
+    const next = window.location.pathname + window.location.search
+    sessionStorage.setItem('auth_next', next)
+    // An email sign-in link may open in another tab, which has no
+    // sessionStorage: the callback also looks here (for 15 minutes).
+    try { localStorage.setItem('auth_next_shared', JSON.stringify({ next, at: Date.now() })) } catch { /* private mode */ }
     window.location.href = '/auth/login'
   }
 
