@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../../lib/api'
 import { decryptVault, buildShare, type VaultAccount } from '../../lib/teamCrypto'
+import TeamSharing from './TeamSharing'
 
 type Me = { id: string; plan: string }
 type Team = { id: string; name: string; owner_id: string; seat_limit: number }
@@ -35,7 +36,7 @@ export default function Team() {
       <div className="space-y-4">
         <h1 className="text-xl font-bold text-zinc-100">Team</h1>
         <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-6 text-center space-y-3">
-          <p className="text-sm text-zinc-400">Share TOTP codes with your team — securely.</p>
+          <p className="text-sm text-zinc-400">Share logins, 2FA codes and collections with your team, end-to-end encrypted.</p>
           <a href="/dashboard/billing" className="inline-block px-4 py-2 rounded-lg bg-teal-500 text-black text-sm font-semibold hover:bg-teal-400">
             Upgrade to Team
           </a>
@@ -153,8 +154,11 @@ function TeamView({ teamId, meId }: { teamId: string; meId: string }) {
         ))}
       </Section>
 
+      {/* Collections and shared items (2.0) */}
+      {detail && <TeamSharing teamId={teamId} meId={meId} teammates={detail.members} />}
+
       {/* Codes I'm sharing */}
-      <Section title="Codes I'm sharing" action={
+      <Section title="2FA codes I'm sharing" action={
         <button onClick={() => setShareOpen(true)} className="px-3 py-1 rounded bg-white/10 text-white text-xs font-semibold hover:bg-white/15">+ Share a code</button>
       }>
         {myShares.length === 0 && <p className="text-xs text-zinc-600 px-1">Nothing shared yet.</p>}
@@ -168,7 +172,7 @@ function TeamView({ teamId, meId }: { teamId: string; meId: string }) {
       </Section>
 
       {/* Shared with me */}
-      <Section title="Shared with me">
+      <Section title="2FA codes shared with me">
         {sharedWithMe.length === 0 && <p className="text-xs text-zinc-600 px-1">No codes shared with you.</p>}
         {sharedWithMe.map((c) => (
           <Row key={c.id}>

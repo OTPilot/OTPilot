@@ -208,7 +208,7 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | `/dashboard` | `Overview.tsx` | Plan info, sync stats; calls `POST /auth/sync-user` |
 | `/dashboard/billing` | `Billing.tsx` | Stripe upgrade |
 | `/dashboard/devices` | `Devices.tsx` | Device management (disconnect / erase) |
-| `/dashboard/team` | `Team.tsx` | Stub — Phase 3 |
+| `/dashboard/team` | `Team.tsx` + `TeamSharing.tsx` | Members, invites, 2FA codes (2-of-2), and 2.0 collections + item sharing (`TeamSharing`): membership / roles / removing work on plain server data; names, titles, creating collections, adding members and sharing need the vault, unlocked in the tab with the recovery key (`lib/teamVault.ts` `unlock`: checks it against the synced v1 blob, which carries the team private key) |
 | `/dashboard/settings` | `Settings.tsx` | Account settings, deletion |
 | `/privacy` | `Privacy.tsx` | |
 | `/tos` | `Tos.tsx` | |
@@ -216,6 +216,8 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | `/refunds` | `Refunds.tsx` | |
 
 `apiFetch()` in `web/src/lib/api.ts` appends the Supabase JWT automatically to every request.
+
+**Invariant:** `web/src/lib/vaultCrypto.ts` mirrors the extension's `vaultCrypto.js` (item records, collection names / keys under a collection key, AAD strings) and `keys.js` ECIES wrapping; `web/src/lib/teamVault.ts` mirrors `vaultCollections.js` / `vaultShares.js` (a whole share's copy = `project()`; the share key stored in the item with `updatedAt` kept, written back with `base_revision`, 409 retried; `countsForLimit` from `vault.js`). Change both sides together. The web shares whole items only (chosen parts stay in the extension).
 
 ### Billing
 `POST /billing/checkout` (body `{annual}`) creates a Stripe Checkout **subscription** for Personal ($3/mo or $30/yr, `STRIPE_PERSONAL_MONTHLY_PRICE_ID` / `STRIPE_PERSONAL_ANNUAL_PRICE_ID`; optional — checkout answers 503 until set). Both checkouts tag the session and subscription with `metadata.plan` (`personal` / `team_lite`) so the webhook can tell them apart. Stripe calls `POST /billing/webhook`; the webhook verifies the signature and sets `users.plan`. Plan values: `free`, `personal`, `team_lite`, `team_pro`.
