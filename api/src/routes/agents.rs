@@ -483,6 +483,8 @@ async fn remove_agent(
 #[derive(Deserialize)]
 struct GrantRequest {
     record: Value,
+    /// The item's title and sites, encrypted like `record` (always handed out).
+    label: Value,
     wrapped_key: String,
     scope: Value,
     #[serde(default)]
@@ -514,6 +516,7 @@ async fn put_grant(
     Json(body): Json<GrantRequest>,
 ) -> Result<Json<Value>> {
     let record = validate_record(&body.record)?;
+    let label = validate_record(&body.label)?;
     if body.wrapped_key.is_empty() || body.wrapped_key.len() > MAX_KEY_BYTES {
         return Err(ApiError::BadRequest(format!(
             "wrapped_key must be 1-{MAX_KEY_BYTES} bytes"
@@ -557,10 +560,10 @@ async fn put_grant(
     let commands: Vec<String> = body.commands.iter().map(|c| c.trim().to_string()).collect();
     let revision: i64 = sqlx::query_scalar(
         "INSERT INTO agent_grants
-           (agent_id, item_id, scope, encrypted_item, wrapped_key, expires_at, ask_every_time, commands)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           (agent_id, item_id, scope, encrypted_item, wrapped_key, expires_at, ask_every_time, commands, label)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (agent_id, item_id) DO UPDATE SET
-           scope = EXCLUDED.scope, encrypted_item = EXCLUDED.encrypted_item,
+           scope = EXCLUDED.scope, encrypted_item = EXCLUDED.encrypted_item, label = EXCLUDED.label,
            wrapped_key = EXCLUDED.wrapped_key, expires_at = EXCLUDED.expires_at,
            ask_every_time = EXCLUDED.ask_every_time, commands = EXCLUDED.commands,
            revision = nextval('vault_revision_seq'), updated_at = NOW()
@@ -574,6 +577,7 @@ async fn put_grant(
     .bind(body.expires_at)
     .bind(body.ask_every_time)
     .bind(&commands)
+    .bind(&label)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -712,6 +716,7 @@ struct AgentGrantRow {
     item_id: Uuid,
     scope: Value,
     encrypted_item: String,
+    label: String,
     wrapped_key: String,
     expires_at: Option<DateTime<Utc>>,
     ask_every_time: bool,
@@ -721,10 +726,11 @@ struct AgentGrantRow {
 }
 
 /// The agent's grants. An expired grant isn't listed; an "ask every time"
-/// grant is listed without its copy unless a one-time approval is live.
+/// grant is listed with its label (title, sites) but without its copy unless
+/// a one-time approval is live.
 async fn agent_grants(State(state): State<AppState>, agent: AgentAuth) -> Result<Json<Value>> {
     let rows = sqlx::query_as::<_, AgentGrantRow>(
-        "SELECT g.item_id, g.scope, g.encrypted_item, g.wrapped_key, g.expires_at,
+        "SELECT g.item_id, g.scope, g.encrypted_item, g.label, g.wrapped_key, g.expires_at,
                 g.ask_every_time, g.commands, g.revision,
                 EXISTS(SELECT 1 FROM agent_requests r
                        WHERE r.agent_id = g.agent_id AND r.item_id = g.item_id
@@ -744,7 +750,8 @@ async fn agent_grants(State(state): State<AppState>, agent: AgentAuth) -> Result
                 "ask_every_time": g.ask_every_time, "commands": g.commands,
                 "revision": g.revision,
                 "record": if open { serde_json::from_str::<Value>(&g.encrypted_item).unwrap_or(Value::Null) } else { Value::Null },
-                "wrapped_key": if open { Value::from(g.wrapped_key.as_str()) } else { Value::Null },
+                "label": serde_json::from_str::<Value>(&g.label).unwrap_or(Value::Null),
+                "wrapped_key": g.wrapped_key,
             })
         }).collect::<Vec<_>>(),
     })))
@@ -924,6 +931,11 @@ mod tests {
         json!({ "v": 1, "key": { "iv": "a", "ct": "b" }, "data": { "iv": "c", "ct": "d" } })
     }
 
+    // A label distinct from record(): a swap between the two would show.
+    fn label() -> Value {
+        json!({ "v": 1, "key": { "iv": "l", "ct": "m" }, "data": { "iv": "n", "ct": "o" } })
+    }
+
     fn app(db: sqlx::PgPool) -> Router {
         router()
             .merge(crate::routes::notifications::router())
@@ -1026,8 +1038,7 @@ mod tests {
         item: Uuid,
         extra: Value,
     ) -> (StatusCode, Value) {
-        let mut body =
-            json!({ "record": record(), "wrapped_key": "wk", "scope": { "kind": "2fa" } });
+        let mut body = json!({ "record": record(), "label": label(), "wrapped_key": "wk", "scope": { "kind": "2fa" } });
         for (k, v) in extra.as_object().unwrap() {
             body[k] = v.clone();
         }
@@ -1254,6 +1265,12 @@ mod tests {
         assert_eq!(grants.len(), 1, "the expired grant isn't listed");
         assert_eq!(grants[0]["item_id"], json!(ask));
         assert_eq!(grants[0]["record"], Value::Null);
+        assert_eq!(
+            grants[0]["label"],
+            label(),
+            "its name is readable to ask for it"
+        );
+        assert_eq!(grants[0]["wrapped_key"], "wk");
 
         // The agent asks for one use; the user allows it.
         let (s, r) = raw(
@@ -1287,6 +1304,21 @@ mod tests {
         .await;
         assert_eq!(st["status"], "allowed");
         let (_, b) = raw(&app, Some(&token), Method::GET, "/agent/grants", None).await;
+        assert_eq!(b["grants"][0]["record"], record());
+        assert_eq!(b["grants"][0]["label"], label());
+        // Rewritten: the label follows the new value, apart from the copy.
+        let new_label =
+            json!({ "v": 1, "key": { "iv": "x", "ct": "y" }, "data": { "iv": "z", "ct": "w" } });
+        grant(
+            &app,
+            ana,
+            agent,
+            ask,
+            json!({ "ask_every_time": true, "label": new_label }),
+        )
+        .await;
+        let (_, b) = raw(&app, Some(&token), Method::GET, "/agent/grants", None).await;
+        assert_eq!(b["grants"][0]["label"], new_label);
         assert_eq!(b["grants"][0]["record"], record());
         // Asking for an item it has no grant for isn't possible.
         let (s, _) = raw(
