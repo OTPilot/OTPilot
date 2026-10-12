@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod agents;
 pub mod auth;
 pub mod billing;
 pub mod collections;

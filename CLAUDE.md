@@ -89,6 +89,10 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 | `share_grants` | `share_id`, `user_id` or `collection_id`, `role` (`view`/`edit`, edit only for `whole`), `wrapped_key` | Who can open a share: a teammate (share key wrapped to their public key) or a collection (share key under the collection key); a collection member's role caps the grant |
 | `notifications` | `user_id`, `kind`, `team_id`, `actor_id`, `target_id`, `role` | In-extension notices (`collection_added` / `item_shared`, a direct grant only), one per (user, kind, target): `notifications::announce` upserts it on a new member / new grantee (not a role change) and emails in the background (`email::send` queues to a bounded channel — 500 waiting, 8 sending, overflow dropped with a warning; a replaced notice gets a new id). Dismissing deletes it; `GET /notifications` deletes the caller's ones >30 days old or whose target no longer reaches them. Invites aren't stored here (read live from `pending_invites`) |
 | `uninstall_feedback` | `reason`, `site`, `comment`, `version`, `days_installed`, `plan` | Anonymous answers of the /goodbye form (nothing identifies the user); read from the database directly |
+| `agents` | `id`, `user_id`, `name`, `machine`, `public_key`, `status` (`pairing`/`pending`/`active`), `pair_secret_hash`, `token_hash` | 2.1 AI agents (docs/agents/plan.md): an OTPilot MCP server with its own ECDH key; pairing → claimed by a signed-in user → approved in the extension (15 min, then forgotten); the bearer (`otpa_…`, `AgentAuth`) is collected once; denied / revoked = deleted |
+| `agent_grants` | `agent_id`, `item_id`, `scope`, `encrypted_item`, `wrapped_key`, `expires_at`, `ask_every_time`, `commands` | A copy of one of the user's items for one agent, under a key wrapped to the agent's public key; expired ones aren't handed out, "ask every time" ones only after a one-time approval (2 min). Free: 1 agent, 3 grants (`FREE_AGENTS` / `FREE_AGENT_ITEMS`). Deleted with the item (`DELETE /vault/items`; Free vaults don't sync, so the extension deletes them too) |
+| `agent_requests` | `agent_id`, `query`, `reason`, `tool`, `item_id`, `status`, `released_until` | An agent asking for an account (free text, matched by the extension) or for one use of an "ask every time" grant; unanswered after 10 min = denied |
+| `agent_uses` | `agent_id`, `item_id`, `action`, `detail` | Activity log (never a value), last 200 per agent |
 | `domain_icons` | `domain` (PK), `status`, `storage_key`, `fetched_at` | Shared favicon cache, one row per domain; `status='none'` is a negative cache. Bytes live in S3/R2 |
 
 ### Extension JS modules
@@ -189,13 +193,23 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | PUT/PATCH/DELETE | `/shares/:id/grants` | Add or change a grant with its key (owner) / change only an existing grant's role (owner; 404 when it's gone — never re-adds one; used by the role selects in the extension and the web) / remove one (owner, or a grantee leaving their direct grant); the share goes with its last grant |
 | GET | `/shares/mine`, `/shares/with-me` | My shares with their grants / every share I can open (direct or via a collection), whole list each time with revisions, my effective role and the wrapped key(s) |
 | POST | `/feedback/uninstall` | **Public**: the /goodbye form's answer (`reason` one of a fixed list, optional `site` / `comment` capped, `version` / `days_installed` / `plan` validated or dropped); 5 per hour per `X-Forwarded-For`, 500 per hour overall |
+| POST | `/agents/pair` | **Public** (rate-limited): an MCP server registers `{ public_key, name, machine }` → `{ id, pair_secret, connect_url }` |
+| POST | `/agent/pair/:id/token` | MCP polls with its pair secret: 202 while waiting, its `otpa_` token once approved (only once), 404 denied / expired |
+| GET / POST | `/agents/pair/:id`, `/agents/pair/:id/claim` | The connect page shows / claims an unclaimed pairing (Free: refused when an agent is already connected) |
+| GET | `/agents` | Agents (pending too) with their grants (no ciphertext), pending requests, recent activity, `limits` |
+| POST / DELETE | `/agents/:id/approve`, `/agents/:id` | Approve a claimed agent / deny or revoke (grants go with it) |
+| PUT / DELETE | `/agents/:id/grants/:item_id` | Write / remove the agent's copy of an item (Free limit on new ones) |
+| POST | `/agents/requests/:id` | `{ decision: allow \| deny, item_id? }` — allowing a new account needs its grant written first |
+| GET | `/agent/me`, `/agent/grants` | (agent token) Who it is / its grants with the copies it may open now |
+| POST / GET | `/agent/requests`, `/agent/requests/:id` | (agent token) Ask for an account or one use; poll the answer |
+| POST | `/agent/uses` | (agent token) Record a use for the activity log |
 | POST | `/icons/resolve` | Resolve favicons for a batch of domains; fetches + stores any missing in S3/R2, returns `{domain: {status, url?}}` (**public** — so free / not-signed-in users get icons; abuse bounded by SSRF guards, 50-domain cap, negative cache, and a global fetch semaphore) |
 | POST/GET | `/teams` | Create (idempotent, team plan) / get the user's team |
 | GET/PATCH/DELETE | `/teams/:id` | Detail (members + seats) / rename / delete (downgrades all) |
 | POST | `/teams/:id/invite` | Invite by email (seat check + Resend email) |
 | POST | `/teams/accept/:token` | Accept an invite (auto-accepted in `sync-user` only for an account created after it) |
 | POST | `/teams/decline/:token` | The invitee declines (deletes the invite, frees its seat). Competes with an accept for the invite row (accept locks team → invite in one transaction), so only one wins |
-| GET | `/notifications` | `{ invites, notices }`: pending invites to my email + unread notices |
+| GET | `/notifications` | `{ invites, notices, agents: { pending, requests } }`: pending invites to my email + unread notices + AI agents waiting for me |
 | POST | `/notifications/:id/read` | Dismiss a notice (deleted) |
 | DELETE | `/teams/:id/leave`, `/teams/:id/members/:uid` | Leave / remove (downgrade) |
 | GET | `/teams/:id/audit` | Team activity log (owner) |
