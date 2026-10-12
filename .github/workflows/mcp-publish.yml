@@ -1,7 +1,8 @@
 name: MCP publish
 
 # Publishes @otpilot/mcp to npm from a tag mcp-v<version> (the version in
-# mcp/package.json), with provenance. Needs the NPM_TOKEN secret.
+# mcp/package.json), with provenance. No token: npm trusts this workflow
+# (trusted publishing, OIDC — set on the package's npm settings page).
 on:
   push:
     tags: ['mcp-v*']
@@ -21,7 +22,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Trusted publishing needs npm >= 11.5.1.
+          node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: mcp/package-lock.json
@@ -35,5 +37,3 @@ jobs:
 
       - name: Publish
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
