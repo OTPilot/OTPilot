@@ -10,15 +10,7 @@ export default function Callback() {
 
   useEffect(() => {
     function redirectAfterLogin() {
-      // Where to go back to: this tab's, or (an email link opened in another
-      // tab) one saved for all tabs in the last 15 minutes. Paths only.
-      let shared: string | null = null
-      try {
-        const s = JSON.parse(localStorage.getItem('auth_next_shared') || 'null')
-        if (s && Date.now() - s.at < 15 * 60_000) shared = s.next
-        localStorage.removeItem('auth_next_shared')
-      } catch { /* none */ }
-      const saved = sessionStorage.getItem('auth_next') || shared
+      const saved = sessionStorage.getItem('auth_next')
       const next = saved && saved.startsWith('/') && !saved.startsWith('//') ? saved : null
       sessionStorage.removeItem('auth_next')
       navigate(next || '/dashboard', { replace: true })

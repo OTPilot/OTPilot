@@ -24,6 +24,16 @@ export default function AgentConnect() {
   const [state, setState] = useState<State>({ kind: 'loading' })
   const [netError, setNetError] = useState(false)
 
+  // Signed in from another tab (an email link opens one): this tab picks
+  // the session up and continues with its own pairing.
+  const [signedIn, setSignedIn] = useState(0)
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN') setSignedIn(n => n + 1)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
   useEffect(() => {
     ;(async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -44,7 +54,7 @@ export default function AgentConnect() {
       const pairing: Pairing = await res.json()
       setState({ kind: 'confirm', pairing, code: await agentCode(pairing.public_key) })
     })()
-  }, [id])
+  }, [id, signedIn])
 
   async function claim() {
     if (state.kind !== 'confirm') return
@@ -62,11 +72,7 @@ export default function AgentConnect() {
   }
 
   function signIn() {
-    const next = window.location.pathname + window.location.search
-    sessionStorage.setItem('auth_next', next)
-    // An email sign-in link may open in another tab, which has no
-    // sessionStorage: the callback also looks here (for 15 minutes).
-    try { localStorage.setItem('auth_next_shared', JSON.stringify({ next, at: Date.now() })) } catch { /* private mode */ }
+    sessionStorage.setItem('auth_next', window.location.pathname + window.location.search)
     window.location.href = '/auth/login'
   }
 
@@ -85,6 +91,7 @@ export default function AgentConnect() {
             <p className="text-sm text-zinc-400 leading-relaxed">
               Sign in to OTPilot to connect this agent to your account. A free account works.
             </p>
+            <p className="text-xs text-zinc-500">Signing in with an email link? Keep this tab open: it continues here once you're in.</p>
             <button onClick={signIn} className="w-full py-2.5 rounded-xl bg-teal-500 text-black text-sm font-semibold hover:bg-teal-400">
               Sign in
             </button>
