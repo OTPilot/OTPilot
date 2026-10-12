@@ -28,6 +28,8 @@ CREATE TABLE agents (
   CHECK ((status = 'pairing') = (user_id IS NULL))
 );
 CREATE INDEX agents_user ON agents (user_id) WHERE user_id IS NOT NULL;
+-- expire(): unfinished pairings past their wait.
+CREATE INDEX agents_unfinished ON agents (created_at) WHERE status IN ('pairing', 'pending');
 
 CREATE TABLE agent_grants (
   agent_id       UUID        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -68,6 +70,8 @@ CREATE TABLE agent_requests (
   decided_at     TIMESTAMPTZ
 );
 CREATE INDEX agent_requests_agent ON agent_requests (agent_id, created_at);
+-- expire(): pending requests past their wait.
+CREATE INDEX agent_requests_pending ON agent_requests (created_at) WHERE status = 'pending';
 
 -- What each agent did with which item (never a value). Trimmed to the last
 -- 200 per agent on insert.

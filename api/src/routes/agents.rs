@@ -91,10 +91,12 @@ fn valid_public_key(k: &str) -> bool {
     k.len() <= 200
         && base64::engine::general_purpose::STANDARD
             .decode(k)
-            .is_ok_and(|b| b.len() == 65 && b[0] == 4)
+            .is_ok_and(|b| {
+                b.len() == 65 && b[0] == 4 && p256::PublicKey::from_sec1_bytes(&b).is_ok()
+            })
 }
 
-async fn is_free(db: &sqlx::PgPool, user: Uuid) -> Result<bool> {
+async fn is_free<'e, E: sqlx::PgExecutor<'e>>(db: E, user: Uuid) -> Result<bool> {
     let plan: Option<String> = sqlx::query_scalar("SELECT plan FROM users WHERE id = $1")
         .bind(user)
         .fetch_optional(db)
@@ -285,7 +287,7 @@ async fn claim(
     expire(&state.db).await?;
     let mut tx = state.db.begin().await?;
     lock_user(&mut tx, auth.id).await?;
-    if is_free(&state.db, auth.id).await? {
+    if is_free(&mut *tx, auth.id).await? {
         let agents: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM agents WHERE user_id = $1 AND status = 'active'",
         )
@@ -440,7 +442,7 @@ async fn approve(
         "active" => return Ok(Json(json!({ "id": id, "status": "active" }))),
         _ => return Err(ApiError::NotFound),
     }
-    if is_free(&state.db, auth.id).await? {
+    if is_free(&mut *tx, auth.id).await? {
         let agents: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM agents WHERE user_id = $1 AND status = 'active'",
         )
@@ -540,7 +542,7 @@ async fn put_grant(
     .bind(item_id)
     .fetch_one(&mut *tx)
     .await?;
-    if !exists && is_free(&state.db, auth.id).await? {
+    if !exists && is_free(&mut *tx, auth.id).await? {
         let items: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM agent_grants g JOIN agents a ON a.id = g.agent_id
              WHERE a.user_id = $1",
@@ -583,6 +585,7 @@ async fn remove_grant(
     auth: AuthUser,
     Path((id, item_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>> {
+    let mut tx = state.db.begin().await?;
     let done = sqlx::query(
         "DELETE FROM agent_grants g USING agents a
          WHERE g.agent_id = $1 AND g.item_id = $2 AND a.id = g.agent_id AND a.user_id = $3",
@@ -590,12 +593,23 @@ async fn remove_grant(
     .bind(id)
     .bind(item_id)
     .bind(auth.id)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
     if done == 0 {
         return Err(ApiError::NotFound);
     }
+    // A one-time approval belongs to the grant it answered: a grant written
+    // again later needs a new one.
+    sqlx::query(
+        "UPDATE agent_requests SET released_until = NULL
+         WHERE agent_id = $1 AND item_id = $2 AND released_until IS NOT NULL",
+    )
+    .bind(id)
+    .bind(item_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -616,8 +630,8 @@ async fn decide_request(
     Json(body): Json<DecideRequest>,
 ) -> Result<Json<Value>> {
     let mut tx = state.db.begin().await?;
-    let row: Option<(Uuid, Option<Uuid>, String)> = sqlx::query_as(
-        "SELECT r.agent_id, r.item_id, r.status FROM agent_requests r
+    let row: Option<(Uuid, Option<Uuid>, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT r.agent_id, r.item_id, r.status, r.created_at FROM agent_requests r
          JOIN agents a ON a.id = r.agent_id
          WHERE r.id = $1 AND a.user_id = $2 FOR UPDATE OF r",
     )
@@ -625,9 +639,13 @@ async fn decide_request(
     .bind(auth.id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (agent_id, requested_item, status) = row.ok_or(ApiError::NotFound)?;
+    let (agent_id, requested_item, status, created_at) = row.ok_or(ApiError::NotFound)?;
     if status != "pending" {
         return Err(ApiError::BadRequest("already answered".into()));
+    }
+    // Past its wait, a request is denied whether or not expire() ran yet.
+    if Utc::now() - created_at > chrono::Duration::minutes(REQUEST_MINUTES.into()) {
+        return Err(ApiError::BadRequest("this request has expired".into()));
     }
     match body.decision.as_str() {
         "deny" => {
@@ -643,17 +661,18 @@ async fn decide_request(
             let item = requested_item
                 .or(body.item_id)
                 .ok_or_else(|| ApiError::BadRequest("item_id is required".into()))?;
-            let granted: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM agent_grants WHERE agent_id = $1 AND item_id = $2)",
+            // Allowing hands out the copy once when the grant asks every time
+            // (whether the request asked for that use or for a new account).
+            let ask_every_time: Option<bool> = sqlx::query_scalar(
+                "SELECT ask_every_time FROM agent_grants WHERE agent_id = $1 AND item_id = $2",
             )
             .bind(agent_id)
             .bind(item)
-            .fetch_one(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await?;
-            if !granted {
+            let Some(release) = ask_every_time else {
                 return Err(ApiError::BadRequest("write the grant first".into()));
-            }
-            let release = requested_item.is_some();
+            };
             sqlx::query(&format!(
                 "UPDATE agent_requests SET status = 'allowed', decided_at = NOW(), item_id = $2,
                    released_until = CASE WHEN $3 THEN NOW() + INTERVAL '{RELEASE_SECONDS} seconds' END
@@ -892,12 +911,13 @@ mod tests {
     use axum::http::{Method, Request};
     use tower::ServiceExt;
 
-    // A valid-looking raw P-256 point (0x04 + 64 bytes).
+    // A real P-256 public key (raw point), from a fixed secret scalar.
     fn pubkey() -> String {
         use base64::Engine;
-        let mut b = vec![4u8];
-        b.extend(std::iter::repeat_n(7u8, 64));
-        base64::engine::general_purpose::STANDARD.encode(b)
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        let secret = p256::SecretKey::from_slice(&[7u8; 32]).unwrap();
+        let point = secret.public_key().to_encoded_point(false);
+        base64::engine::general_purpose::STANDARD.encode(point.as_bytes())
     }
 
     fn record() -> Value {
@@ -1098,6 +1118,22 @@ mod tests {
         )
         .await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
+        // 65 bytes starting with 0x04, but not a point on the curve.
+        let bogus = {
+            use base64::Engine;
+            let mut b = vec![4u8];
+            b.extend(std::iter::repeat_n(7u8, 64));
+            base64::engine::general_purpose::STANDARD.encode(b)
+        };
+        let (s, _) = raw(
+            &app,
+            None,
+            Method::POST,
+            "/agents/pair",
+            Some(json!({ "public_key": bogus, "name": "x" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
         let (_, p) = raw(
             &app,
             None,
@@ -1294,6 +1330,81 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         let (_, b) = raw(&app, Some(&token), Method::GET, "/agent/grants", None).await;
         assert_eq!(b["grants"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn a_new_ask_every_time_grant_is_released_once_and_removing_it_ends_the_release() {
+        let db = test_db().await;
+        let app = app(db.pool.clone());
+        let ana = create_user(&db.pool, "personal").await;
+        let (agent, token) = connect(&app, ana).await;
+        let (_, r) = raw(
+            &app,
+            Some(&token),
+            Method::POST,
+            "/agent/requests",
+            Some(json!({ "query": "bank" })),
+        )
+        .await;
+        let rid = r["id"].as_str().unwrap().to_string();
+        let item = Uuid::new_v4();
+        grant(&app, ana, agent, item, json!({ "ask_every_time": true })).await;
+        let (s, _) = call(
+            &app,
+            ana,
+            Method::POST,
+            &format!("/agents/requests/{rid}"),
+            Some(json!({ "decision": "allow", "item_id": item })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, b) = raw(&app, Some(&token), Method::GET, "/agent/grants", None).await;
+        assert_eq!(b["grants"][0]["record"], record(), "released for this use");
+        // Removed and written again: the old approval doesn't open the new one.
+        call(
+            &app,
+            ana,
+            Method::DELETE,
+            &format!("/agents/{agent}/grants/{item}"),
+            None,
+        )
+        .await;
+        grant(&app, ana, agent, item, json!({ "ask_every_time": true })).await;
+        let (_, b) = raw(&app, Some(&token), Method::GET, "/agent/grants", None).await;
+        assert_eq!(b["grants"][0]["record"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn an_expired_request_cant_be_answered() {
+        let db = test_db().await;
+        let app = app(db.pool.clone());
+        let ana = create_user(&db.pool, "personal").await;
+        let (_, token) = connect(&app, ana).await;
+        let (_, r) = raw(
+            &app,
+            Some(&token),
+            Method::POST,
+            "/agent/requests",
+            Some(json!({ "query": "x" })),
+        )
+        .await;
+        let rid: Uuid = r["id"].as_str().unwrap().parse().unwrap();
+        sqlx::query(
+            "UPDATE agent_requests SET created_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
+        )
+        .bind(rid)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let (s, b) = call(
+            &app,
+            ana,
+            Method::POST,
+            &format!("/agents/requests/{rid}"),
+            Some(json!({ "decision": "deny" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
     }
 
     #[tokio::test]

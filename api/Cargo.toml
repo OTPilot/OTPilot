@@ -33,6 +33,8 @@ psl = "2"  # embedded Public Suffix List → registrable domain (eTLD+1) for the
 totp-rs = "5"
 aes-gcm = "0.10"
 base64 = "0.22"
+# AI agents: validate a pairing's P-256 public key (already in the tree via jsonwebtoken).
+p256 = "0.13"
 sentry = { version = "0.48", features = ["anyhow", "tracing", "tower", "tower-axum-matched-path", "logs"] }
 
 [features]
