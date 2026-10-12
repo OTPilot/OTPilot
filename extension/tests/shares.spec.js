@@ -181,6 +181,65 @@ test('the Share panel: teammates, what to share, Can edit only with everything; 
   expect(await page.evaluate(() => fakeShares.shares.size)).toBe(0);
 });
 
+test('the Share panel: a collection that has it shows as shared, a partial copy can\'t be made editable, a share whose key is elsewhere shows a plain label, and changing a role never recreates a removed share', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [site]);
+  // Collections first: the shares fake passes everything else on to it.
+  await installFakeCollections(page);
+  await installFakeShares(page);
+  const ids = await page.evaluate(async () => {
+    const c = await VaultCollections.create('team-1', 'Infra');
+    const key = await VaultKeys.getKey();
+    const id = accounts.find(a => a.name === 'DigitalOcean')._id;
+    const bob = (await Sharing.getMembers('team-1')).find(m => m.user_id === 'user-bob');
+    let stored = await VaultStore.get(id, key);
+    stored = await VaultShares.share(stored, null, [{ collection: c, role: 'edit' }]);
+    stored = await VaultShares.share(stored, ['urls'], [{ user: bob, role: 'view' }]);
+    await VaultShares.attach(id, stored.shares, key);
+    // Made on another device: on the server, its key not in the item here.
+    await VaultShares.share(stored, ['notes'], [{ user: { ...bob, user_id: 'user-new', public_key: bob.public_key }, role: 'view' }]);
+    await refreshSharedItems();
+    return { item: id, whole: stored.shares.find(s => s.whole).id, shares: stored.shares.map(s => s.id) };
+  });
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'DigitalOcean' }).click();
+  await page.click('#acc-detail .btn-share-item');
+  const panel = page.locator('#acc-detail .share-panel');
+  await expect(panel.locator('.share-grant')).toHaveCount(3);
+  // The collection has it: shown as shared, not offered again.
+  const infra = panel.locator('label.share-recip', { hasText: 'Collection "Infra"' });
+  await expect(infra).toContainText('(shared)');
+  await expect(infra.locator('input')).toBeChecked();
+  await expect(infra.locator('input')).toBeDisabled();
+  // The partial copy: view only.
+  const partial = panel.locator('.share-grant', { hasText: 'Websites' });
+  await expect(partial.locator('.share-grant-role option[value="edit"]')).toBeDisabled();
+  // The one whose key isn't here: a plain label, no select.
+  const elsewhere = panel.locator('.share-grant', { hasText: 'some fields' });
+  await expect(elsewhere).toContainText('can view');
+  await expect(elsewhere.locator('.share-grant-role')).toHaveCount(0);
+
+  // A role change touches only that grant: the item's share keys stay.
+  const coll = panel.locator('.share-grant', { hasText: 'Collection "Infra"' });
+  // What the panel said (a sync's own status can replace it on screen).
+  await page.evaluate(() => { window.__said = []; const show = setStatus; window.setStatus = (...a) => { window.__said.push(a[0]); return show(...a); }; });
+  const said = () => page.evaluate(() => window.__said.join(' | '));
+  await coll.locator('.share-grant-role').selectOption('view');
+  await expect.poll(said).toContain('Collection "Infra" can view it now');
+  const after = await page.evaluate(async ({ item, whole }) => ({
+    keys: ((await VaultStore.get(item, await VaultKeys.getKey())).shares || []).map(s => s.id),
+    role: fakeShares.shares.get(whole).grants.find(g => g.collection_id).role,
+  }), ids);
+  expect(after).toEqual({ keys: ids.shares, role: 'view' });
+
+  // Removed on another device meanwhile: changing its role says so and
+  // doesn't bring it back.
+  await page.evaluate(id => fakeShares.shares.delete(id), ids.whole);
+  const before = await page.evaluate(() => fakeShares.shares.size);
+  await panel.locator('.share-grant', { hasText: 'Collection "Infra"' }).locator('.share-grant-role').selectOption('edit');
+  await expect.poll(said).toContain('This share was removed meanwhile');
+  expect(await page.evaluate(() => fakeShares.shares.size)).toBe(before);
+});
+
 test('an item shared with one of my collections opens with the collection key; my member role caps the grant', async ({ context, extensionId }) => {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);

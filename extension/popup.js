@@ -2111,7 +2111,8 @@ async function renderSharePanel(panel, itemId) {
   const parts = VaultShares.parts(item);
   const label = s => {
     const mineShare = (item.shares || []).find(x => x.id === s.id);
-    if (!mineShare || mineShare.whole) return 'everything';
+    if (!mineShare) return s.whole ? 'everything' : 'some fields';
+    if (mineShare.whole) return 'everything';
     return parts.filter(p => (mineShare.parts || []).includes(p.key)).map(p => p.label).join(', ') || 'the name only';
   };
   const current = mine.flatMap(s => s.grants.map(g => ({ s, g })));
@@ -2178,16 +2179,15 @@ async function renderSharePanel(panel, itemId) {
     sel.disabled = true;
     try {
       if (!(target.user || target.collection?.key)) throw new Error('unavailable');
-      const k = await VaultKeys.getKey();
-      const stored = await VaultStore.get(itemId, k);
+      const stored = await VaultStore.get(itemId, await VaultKeys.getKey());
       const theirs = (stored.shares || []).find(x => x.id === s.id);
       if (!theirs) throw new Error('unavailable');
-      // The same parts: VaultShares.share() changes the grant on this share.
-      const next = await VaultShares.share(stored, theirs.whole ? null : theirs.parts, [{ ...target, role: sel.value }]);
-      if (next !== stored) await VaultShares.attach(itemId, next.shares, k);
+      // Just this grant: the item (and its other shares' keys) isn't rewritten.
+      await VaultShares.setRole(theirs, target, sel.value);
       setStatus(`${who(g)} ${sel.value === 'edit' ? 'can edit' : 'can view'} it now`);
     } catch (err) {
-      setStatus(err?.message === 'unavailable' ? 'Their access can\'t be changed from this device — remove and share again' : 'Could not change it — check your connection', false);
+      setStatus(err?.message === 'unavailable' ? 'Their access can\'t be changed from this device — remove and share again'
+        : err?.status === 404 ? 'This share was removed meanwhile' : 'Could not change it — check your connection', false);
     }
     renderSharePanel(panel, itemId);
   }));
