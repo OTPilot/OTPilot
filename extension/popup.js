@@ -2116,14 +2116,30 @@ async function renderSharePanel(panel, itemId) {
   };
   const current = mine.flatMap(s => s.grants.map(g => ({ s, g })));
   const writable = collections.filter(c => c.key && c.role !== 'view');
+  // Who already has it: listed under "Shared with" (where their access is
+  // changed), not offered again — sharing again used to rewrite their grant
+  // with whatever role was picked below.
+  const hasUser = new Set(current.map(({ g }) => g.user_id).filter(Boolean));
+  const hasColl = new Set(current.map(({ g }) => g.collection_id).filter(Boolean));
+  const offer = (cls, id, text, { off = false, note = '' } = {}) => `<label class="share-recip"><input type="checkbox" class="${cls}" value="${esc(id)}" ${off ? 'checked disabled' : ''}${!off && note ? 'disabled' : ''}> ${esc(text)}${off ? ' <span class="share-dim">(shared)</span>' : note ? ` <span class="share-dim">(${note})</span>` : ''}</label>`;
+  // The role of a grant changes in place; editing is for a whole-item copy,
+  // and needs the share key, which lives in the item (a share made on a
+  // device that hasn't synced it yet can only be removed here).
+  const canChange = s => !!(item.shares || []).find(x => x.id === s.id);
+  const roleSelect = ({ s, g }, i) => (canChange(s)
+    ? `<select class="share-grant-role" data-i="${i}" title="Change their access">
+        <option value="view" ${g.role === 'view' ? 'selected' : ''}>can view</option>
+        <option value="edit" ${g.role === 'edit' ? 'selected' : ''} ${s.whole ? '' : 'disabled'}>can edit</option>
+      </select>`
+    : (g.role === 'edit' ? 'can edit' : 'can view'));
   panel.innerHTML = `
     ${current.length ? `<div class="share-section"><div class="share-title">Shared with</div>
       ${current.map(({ s, g }, i) => `<div class="share-grant" data-i="${i}">
-        <span><b>${esc(who(g))}</b> · ${g.role === 'edit' ? 'can edit' : 'can view'} · ${esc(label(s))}</span>
+        <span><b>${esc(who(g))}</b> · ${roleSelect({ s, g }, i)} · ${esc(label(s))}</span>
         <button type="button" class="btn-del share-remove" data-i="${i}">Remove</button></div>`).join('')}</div>` : ''}
     <div class="share-section"><div class="share-title">Share with</div>
-      ${members.length ? members.map(m => `<label class="share-recip"><input type="checkbox" class="share-user" value="${esc(m.user_id)}" ${m.public_key ? '' : 'disabled'}> ${esc(m.email || m.user_id)}${m.public_key ? '' : ' <span class="share-dim">(not set up)</span>'}</label>`).join('') : '<div class="share-msg">No teammates yet.</div>'}
-      ${writable.map(c => `<label class="share-recip"><input type="checkbox" class="share-coll" value="${esc(c.id)}"> Collection "${esc(c.name || 'collection')}"</label>`).join('')}
+      ${members.length ? members.map(m => offer('share-user', m.user_id, m.email || m.user_id, { off: hasUser.has(m.user_id), note: m.public_key ? '' : 'not set up' })).join('') : '<div class="share-msg">No teammates yet.</div>'}
+      ${writable.map(c => offer('share-coll', c.id, `Collection "${c.name || 'collection'}"`, { off: hasColl.has(c.id) })).join('')}
     </div>
     <div class="share-section"><div class="share-title">What to share</div>
       <label class="share-recip"><input type="checkbox" class="share-part" value="" checked disabled> Name</label>
@@ -2156,10 +2172,29 @@ async function renderSharePanel(panel, itemId) {
     } catch { setStatus('Could not remove — check your connection', false); }
     renderSharePanel(panel, itemId);
   }));
+  panel.querySelectorAll('.share-grant-role').forEach(sel => sel.addEventListener('change', async () => {
+    const { s, g } = current[+sel.dataset.i];
+    const target = g.user_id ? { user: members.find(m => m.user_id === g.user_id) } : { collection: collections.find(c => c.id === g.collection_id) };
+    sel.disabled = true;
+    try {
+      if (!(target.user || target.collection?.key)) throw new Error('unavailable');
+      const k = await VaultKeys.getKey();
+      const stored = await VaultStore.get(itemId, k);
+      const theirs = (stored.shares || []).find(x => x.id === s.id);
+      if (!theirs) throw new Error('unavailable');
+      // The same parts: VaultShares.share() changes the grant on this share.
+      const next = await VaultShares.share(stored, theirs.whole ? null : theirs.parts, [{ ...target, role: sel.value }]);
+      if (next !== stored) await VaultShares.attach(itemId, next.shares, k);
+      setStatus(`${who(g)} ${sel.value === 'edit' ? 'can edit' : 'can view'} it now`);
+    } catch (err) {
+      setStatus(err?.message === 'unavailable' ? 'Their access can\'t be changed from this device — remove and share again' : 'Could not change it — check your connection', false);
+    }
+    renderSharePanel(panel, itemId);
+  }));
   panel.querySelector('.share-confirm').addEventListener('click', async e => {
     const btn = e.currentTarget;
-    const users = [...panel.querySelectorAll('.share-user:checked')].map(c => members.find(m => m.user_id === c.value));
-    const colls = [...panel.querySelectorAll('.share-coll:checked')].map(c => collections.find(x => x.id === c.value));
+    const users = [...panel.querySelectorAll('.share-user:checked:not(:disabled)')].map(c => members.find(m => m.user_id === c.value));
+    const colls = [...panel.querySelectorAll('.share-coll:checked:not(:disabled)')].map(c => collections.find(x => x.id === c.value));
     const grants = [...users.map(u => ({ user: u, role: role.value })), ...colls.map(c => ({ collection: c, role: role.value }))];
     if (!grants.length) { setStatus('Pick at least one teammate or collection', false); return; }
     btn.disabled = true;

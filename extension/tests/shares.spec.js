@@ -163,7 +163,19 @@ test('the Share panel: teammates, what to share, Can edit only with everything; 
   await panel.locator('.share-role').selectOption('edit');
   await panel.locator('.share-confirm').click();
   await expect(page.locator('#status-msg')).toContainText('Shared');
-  await expect(panel.locator('.share-grant')).toContainText('bob@team.test · can edit · everything');
+  await expect(panel.locator('.share-grant')).toContainText('bob@team.test');
+  await expect(panel.locator('.share-grant')).toContainText('everything');
+  await expect(panel.locator('.share-grant-role')).toHaveValue('edit');
+  // Bob has it: not offered again (sharing again used to rewrite his grant).
+  await expect(panel.locator('.share-user[value="user-bob"]')).toBeChecked();
+  await expect(panel.locator('.share-user[value="user-bob"]')).toBeDisabled();
+  await panel.locator('.share-confirm').click();
+  await expect(page.locator('#status-msg')).toContainText('Pick at least one');
+  // His access changes in place.
+  await panel.locator('.share-grant-role').selectOption('view');
+  await expect(page.locator('#status-msg')).toContainText('bob@team.test can view it now');
+  await expect(panel.locator('.share-grant-role')).toHaveValue('view');
+  expect(await page.evaluate(() => [...fakeShares.shares.values()][0].grants.map(g => g.role))).toEqual(['view']);
   await panel.locator('.share-remove').click();
   await expect(panel.locator('.share-grant')).toHaveCount(0);
   expect(await page.evaluate(() => fakeShares.shares.size)).toBe(0);
