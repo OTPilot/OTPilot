@@ -156,6 +156,12 @@ const VaultSync = (() => {
           }
           stats.pulled++;
         } else {
+          // Ours wins — and keeps the shares the other side has that ours
+          // doesn't (e.g. one the web dashboard stored while this device
+          // pruned it as not created yet). One the server really dropped is
+          // pruned again by VaultShares.syncOwner.
+          const extra = (theirs.shares || []).filter(t => !(ours.shares || []).some(s => s.id === t.id));
+          if (extra.length) await tx.put(r.id, await VaultCrypto.encryptItem({ ...ours, shares: [...(ours.shares || []), ...extra] }, key));
           state.synced[r.id] = { rev: r.revision, fp: known?.fp ?? null }; // still pushes
         }
         continue;

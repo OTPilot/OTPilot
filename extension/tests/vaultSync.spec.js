@@ -486,6 +486,25 @@ test('a newer version from another device keeps the shares made here (their keys
   expect(r).toEqual({ notes: 'v2 elsewhere', shares: ['s-1'], remoteShares: ['s-1'] });
 });
 
+test('when this device\'s version wins, the shares the server copy has stay too', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const item = Vault.newItem('note', { title: 'Doc', notes: 'v1', updatedAt: '2026-01-01T00:00:00.000Z' });
+    await VaultStore.save(item, key);
+    await VaultSync.sync(key);
+    // The web dashboard stored a share's key in the item (same updatedAt)…
+    await fakeServer.remoteSave({ ...item, shares: [{ id: 's-web', sk: 'k', whole: true, parts: null }] });
+    // …while this device changed it without that share (edited, or pruned it).
+    await VaultStore.save({ ...item, notes: 'v2 here', updatedAt: '2026-02-01T00:00:00.000Z' }, key);
+    await VaultSync.sync(key);
+    const [local] = (await VaultStore.readAll(key)).items;
+    const remote = await fakeServer.read(item.id);
+    return { notes: local.notes, shares: (local.shares || []).map(s => s.id), remote: [remote.notes, (remote.shares || []).map(s => s.id)] };
+  });
+  expect(r).toEqual({ notes: 'v2 here', shares: ['s-web'], remote: ['v2 here', ['s-web']] });
+});
+
 test('pairing a newer local twin with a server login keeps the server copy\'s shares', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
   const r = await page.evaluate(async () => {
