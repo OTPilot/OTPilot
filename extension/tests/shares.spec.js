@@ -10,7 +10,7 @@ async function setup(context, extensionId, accounts = []) {
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
   await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
   // Signed in as user-me: what's shared belongs to an account.
-  await seedUnlocked(page, { accounts: [], userPlan: 'team_lite', cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800 } });
+  await seedUnlocked(page, { accounts: [], userPlan: 'team_lite', cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800000 } });
   await page.reload();
   await waitForVault(page);
   if (accounts.length) await writeAccounts(page, accounts);
@@ -228,7 +228,7 @@ test('a shared login\'s 2FA code fills on its site', async ({ context, extension
     const item = Vault.newItem('login', { title: 'Team 2FA', urls: ['localhost'], totp: { secret, digits: 6, period: 30, algorithm: 'SHA1' } });
     await fakeShares.shareFromBob(item, 'view');
     await VaultShares.refresh();
-    await chrome.storage.local.set({ cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800 } });
+    await chrome.storage.local.set({ cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800000 } });
   }, TEST_SECRET);
   const tab = await context.newPage();
   await tab.goto('http://localhost:8765/test/autofill.html');
