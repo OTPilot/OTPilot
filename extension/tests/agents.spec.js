@@ -93,6 +93,41 @@ test('an agent asking for an account: the match is offered and allowed with its 
   expect(await page.evaluate(() => [...fakeAgents.requests.values()][0].status)).toBe('allowed');
 });
 
+test("an account added from the agent's page answers its open request", async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    fakeAgents.addRequest(a.id, { query: 'an account to test with' });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  const detail = page.locator('#agents-detail');
+  await expect(detail.locator('.ag-request[data-req]')).toContainText('Asks for an account to test with');
+  await detail.getByRole('button', { name: '+ Add account' }).click();
+  await detail.locator('.ag-pick button', { hasText: 'Bank' }).click();
+  await expect(detail.locator('.ag-answers')).toBeChecked();
+  await detail.locator('.ag-adding [data-act=allow]').click();
+  await expect(page.locator('#agents-list')).not.toContainText('asks for');
+  const req = await page.evaluate(() => [...fakeAgents.requests.values()][0]);
+  expect([req.status, req.item_id]).toEqual(['allowed', await itemId(page, 'Bank')]);
+});
+
+test('Review on the agent page opens its request', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    fakeAgents.addRequest(a.id, { query: 'bank' });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  await page.locator('#agents-detail').getByRole('button', { name: 'Review' }).click();
+  await expect(page.locator('#agents-detail')).toContainText('Claude Code asks for bank');
+});
+
 test('an agent approved on another device has to be checked here before writing copies', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
   await page.evaluate(() => fakeAgents.addAgent({ name: 'Cursor', status: 'active' }));
