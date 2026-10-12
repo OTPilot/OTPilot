@@ -81,11 +81,52 @@ describe('shareItem', () => {
     expect(item.shares).toHaveLength(2)
   })
 
-  it('takes the share back when its key can\'t be stored', async () => {
+  it('creates no share when its key can\'t be stored in the item', async () => {
     onPut = async () => [500, { error: 'boom' }]
     await expect(shareItem(await unlocked(), await stored(), [{ user: bob }], 'view')).rejects.toThrow()
     expect(shares.size).toBe(0)
-    expect(server.calls.some((c) => c.startsWith('DELETE /shares/'))).toBe(true)
+    expect(server.calls.some((c) => c === 'POST /shares')).toBe(false)
+  })
+
+  it('removes the key from the item again when creating the share fails', async () => {
+    const handle = server.handle!
+    server.handle = async (r) => (r.path === '/shares' && r.method === 'POST' ? [500, { error: 'boom' }] : handle(r))
+    await expect(shareItem(await unlocked(), await stored(), [{ user: bob }], 'view')).rejects.toThrow()
+    expect((await decryptItem<VaultItem>(vault.record, VK)).shares ?? []).toEqual([])
+  })
+
+  it('puts the key back when a sync dropped it between the two writes', async () => {
+    const handle = server.handle!
+    server.handle = async (r) => {
+      const out = await handle(r)
+      if (r.path === '/shares' && r.method === 'POST') {
+        // The extension synced meanwhile and dropped the then-unknown share.
+        const { shares: _gone, ...rest } = await decryptItem<VaultItem>(vault.record, VK)
+        void _gone
+        vault = { record: await encryptItem(rest, VK), revision: vault.revision + 1 }
+      }
+      return out
+    }
+    await shareItem(await unlocked(), await stored(), [{ user: bob }], 'view')
+    const item = await decryptItem<VaultItem>(vault.record, VK)
+    expect(item.shares?.map((x) => x.id)).toEqual([...shares.keys()])
+  })
+
+  it('takes the share back when the key can\'t be put back', async () => {
+    const handle = server.handle!
+    let puts = 0
+    onPut = async () => (++puts > 1 ? [500, { error: 'boom' }] : null)
+    server.handle = async (r) => {
+      const out = await handle(r)
+      if (r.path === '/shares' && r.method === 'POST') {
+        const { shares: _gone, ...rest } = await decryptItem<VaultItem>(vault.record, VK)
+        void _gone
+        vault = { record: await encryptItem(rest, VK), revision: vault.revision + 1 }
+      }
+      return out
+    }
+    await expect(shareItem(await unlocked(), await stored(), [{ user: bob }], 'view')).rejects.toThrow()
+    expect(shares.size).toBe(0)
   })
 
   it('adds grants to the whole share the item already has', async () => {

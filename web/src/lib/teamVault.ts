@@ -238,40 +238,59 @@ export async function shareItem(u: Unlocked, stored: StoredItem, grantees: Grant
     return
   }
   const s: ShareRef = { id: crypto.randomUUID(), sk: b64e(generateKey()), whole: true, parts: null }
-  await call('/shares', {
-    method: 'POST',
-    body: JSON.stringify({
-      id: s.id, item_id: stored.item.id, whole: true,
-      record: await encryptItem(wholeCopy(stored.item, s.id), s.sk),
-      grants: await Promise.all(grantees.map((g) => grantBody(s.sk, s.id, g, role))),
-    }),
-  })
+  // The key goes into the item first, so there's never a share on the
+  // server its owner has no key for: if creating it fails, the item holds a
+  // reference to a share the server doesn't have, which the extension drops
+  // on its next sync (and we try to remove now).
+  const attached = await attachShare(u, stored, s)
   try {
-    await attachShare(u, stored, s)
+    await call('/shares', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: s.id, item_id: stored.item.id, whole: true,
+        record: await encryptItem(wholeCopy(stored.item, s.id), s.sk),
+        grants: await Promise.all(grantees.map((g) => grantBody(s.sk, s.id, g, role))),
+      }),
+    })
   } catch (e) {
-    // Without its key in the item the owner can't keep the copy current or
-    // change who has it: take the share back rather than leave it orphaned.
+    await attachShare(u, attached, null).catch(() => {})
+    throw e
+  }
+  // An extension sync between the two writes may have dropped the reference
+  // (the share wasn't on the server yet): make sure it's there — writing
+  // against the revision we know, so a newer server version (409) is what
+  // gets checked.
+  try {
+    await attachShare(u, attached, s, true)
+  } catch (e) {
     await call(`/shares/${s.id}`, { method: 'DELETE' }).catch(() => {})
     throw e
   }
 }
 
-// Stores the share (its key) in the item, keeping its updatedAt (only that
-// property changes). On a newer server version (409) it starts again from
-// that version, pruning only shares the server no longer has — read again
-// each time, so one another tab made meanwhile is kept.
-async function attachShare(u: Unlocked, stored: StoredItem, s: ShareRef): Promise<void> {
+// Stores share `s` (its key) in the item — or, with null, removes nothing
+// but stale references — keeping its updatedAt (only `shares` changes).
+// References to shares the server doesn't have are pruned, except `s`
+// itself (it may not be created yet). On a newer server version (409) it
+// starts again from that version, with the server's list read again each
+// time, so a share another tab stored meanwhile is kept. Returns the item as
+// stored. Writes nothing when `shares` wouldn't change — unless `verify`:
+// then the first attempt writes anyway, since `stored` may be out of date.
+async function attachShare(u: Unlocked, stored: StoredItem, s: ShareRef | null, verify = false): Promise<StoredItem> {
   let { item, revision } = stored
   for (let attempt = 0; attempt < 3; attempt++) {
     const onServer = new Set((await mySharesList()).map((x) => x.id))
-    const shares = [...(item.shares || []).filter((x) => onServer.has(x.id) && x.id !== s.id), s]
-    const next = { ...item, shares }
+    const shares = [...(item.shares || []).filter((x) => onServer.has(x.id) && x.id !== s?.id), ...(s ? [s] : [])]
+    const same = JSON.stringify(shares.map((x) => x.id).sort()) === JSON.stringify((item.shares || []).map((x) => x.id).sort())
+    if (same && !(verify && attempt === 0)) return { item, revision }
+    const next: VaultItem = { ...item, shares }
+    if (!shares.length) delete next.shares
     const res = await apiFetch(`/vault/items/${item.id}`, {
       method: 'PUT',
       body: JSON.stringify({ record: await encryptItem(next, u.vaultKey), base_revision: revision, counts_for_limit: countsForLimit(next) }),
     })
-    if (res.ok) return
     const body = await res.json().catch(() => null)
+    if (res.ok) return { item: next, revision: body?.revision ?? revision }
     if (res.status !== 409 || !body?.item?.record) throw new ApiError(res.status, body)
     item = await decryptItem<VaultItem>(body.item.record, u.vaultKey)
     revision = body.item.revision
