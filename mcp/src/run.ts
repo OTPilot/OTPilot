@@ -1,6 +1,7 @@
 // `run`: a command with secrets in its environment, for that process only;
 // what it prints comes back with the secrets scrubbed.
 import { spawn } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import { accessSync, constants, realpathSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, isAbsolute, join, resolve, sep } from 'node:path'
@@ -32,23 +33,28 @@ export function resolveAllowed(command: string, allowed: string[], cwd = process
   if (program.includes('/') || program.includes('\\')) return { error: `${only}, called by name (not a path like ${program}).` }
   if (!allowed.includes(program)) return { error: `${only}, not ${program || 'this command'}.` }
   const avoid = [resolve(cwd), resolve(tmpdir()), '/tmp', '/var/tmp'].map(d => { try { return realpathSync(d) } catch { return d } })
+  // Windows finds `psql` as psql.exe / .cmd / … (PATHEXT).
+  const exts = process.platform === 'win32' ? ['', ...(process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';')] : ['']
   for (const dir of (process.env.PATH || '').split(delimiter)) {
     if (!dir || !isAbsolute(dir)) continue
-    const candidate = join(dir, program)
-    try {
-      accessSync(candidate, constants.X_OK)
-      if (!statSync(candidate).isFile()) continue
-      const real = realpathSync(candidate)
-      if (avoid.some(d => real === d || real.startsWith(d + sep))) continue
-      return { program, path: real, rest: trimmed.slice(program.length) }
-    } catch { /* not here */ }
+    for (const ext of exts) {
+      const candidate = join(dir, program + ext.toLowerCase())
+      try {
+        accessSync(candidate, process.platform === 'win32' ? constants.F_OK : constants.X_OK)
+        if (!statSync(candidate).isFile()) continue
+        const real = realpathSync(candidate)
+        if (avoid.some(d => real === d || real.startsWith(d + sep))) continue
+        return { program, path: real, rest: trimmed.slice(program.length) }
+      } catch { /* not here */ }
+    }
   }
   return { error: `${program} isn't installed here (not found on PATH).` }
 }
 
 export type RunResult = { exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }
 
-const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+// cmd.exe takes double quotes (a path can't contain one there); sh single quotes.
+const shellQuote = (s: string) => (process.platform === 'win32' ? `"${s}"` : `'${s.replace(/'/g, `'\\''`)}'`)
 
 export function runCommand(command: string, env: Record<string, string>, opts: { cwd?: string; timeoutSec?: number; secrets: string[]; program?: { path: string; rest: string } }): Promise<RunResult> {
   // A limited command runs the resolved program by its absolute path.
@@ -60,9 +66,13 @@ export function runCommand(command: string, env: Record<string, string>, opts: {
     let stderr = ''
     let timedOut = false
     let finished = false
-    const take = (cur: string, chunk: Buffer) => (cur.length < MAX_CAPTURE ? cur + chunk.toString('utf8') : cur)
-    child.stdout.on('data', c => { stdout = take(stdout, c) })
-    child.stderr.on('data', c => { stderr = take(stderr, c) })
+    // A streaming decoder per stream: a character split between two chunks
+    // stays whole, so a secret holding it is still found and scrubbed.
+    const decOut = new StringDecoder('utf8')
+    const decErr = new StringDecoder('utf8')
+    const take = (cur: string, chunk: Buffer, dec: StringDecoder) => (cur.length < MAX_CAPTURE ? cur + dec.write(chunk) : cur)
+    child.stdout.on('data', c => { stdout = take(stdout, c, decOut) })
+    child.stderr.on('data', c => { stderr = take(stderr, c, decErr) })
     const out = (s: string) => {
       // Scrub first, then cut: a secret is never left half-removed.
       const clean = redact(s, opts.secrets)
@@ -72,6 +82,8 @@ export function runCommand(command: string, env: Record<string, string>, opts: {
       if (finished) return
       finished = true
       clearTimeout(timer)
+      stdout += decOut.end()
+      stderr += decErr.end()
       done({ exitCode: code, stdout: out(stdout), stderr: out(stderr), timedOut })
     }
     const timer = setTimeout(() => {

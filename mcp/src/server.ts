@@ -126,6 +126,8 @@ export function buildServer(ctx: Ctx): McpServer {
     const values: Record<string, string> = {}
     const secrets: string[] = []
     const used = new Map<string, Grant>()
+    // Each account is opened once per command: one approval covers all its fields.
+    const opened = new Map<string, Awaited<ReturnType<typeof openItem>>>()
     let program: { path: string; rest: string } | undefined
     for (const [name, ref] of Object.entries(env)) {
       const cut = ref.lastIndexOf('/')
@@ -134,7 +136,11 @@ export function buildServer(ctx: Ctx): McpServer {
       const limit = resolveAllowed(command, grant.commands, cwd)
       if (limit && 'error' in limit) return fail(`${grant.title}: ${limit.error}`)
       if (limit) program = limit
-      const item = await openItem(ctx.api, ctx.creds.privateJwk, grant, 'run', reason || '', WAIT_MS)
+      let item = opened.get(grant.itemId)
+      if (!item) {
+        item = await openItem(ctx.api, ctx.creds.privateJwk, grant, 'run', reason || '', WAIT_MS)
+        opened.set(grant.itemId, item)
+      }
       values[name] = await fieldValue(item, ref.slice(cut + 1))
       secrets.push(values[name], ...item.fields.map(f => f.value || ''), item.totp?.secret || '')
       used.set(grant.itemId, grant)

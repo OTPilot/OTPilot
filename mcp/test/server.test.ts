@@ -75,6 +75,20 @@ describe('MCP server', () => {
     expect(r.text).toMatch(/denied/)
   })
 
+  it('one approval covers every field of an ask-every-time account in a command', async () => {
+    const item = loginItem({ title: 'Bank' })
+    let asks = 0
+    const ctx = await connect([{ item, askEveryTime: true, withheld: true }], (m, p) => {
+      if (m === 'POST' && p === '/agent/requests') { asks++; return { body: { id: '00000000-0000-4000-8000-000000000003' } } }
+      if (p.startsWith('/agent/requests/')) return { body: { status: 'allowed' } }
+      return undefined
+    })
+    const r = await ctx.call('run', { command: 'true', env: { U: 'Bank/username', P: 'Bank/password' } })
+    expect(asks).toBe(1)
+    // The fake keeps the copy held back, so the approved reload has none: the point is one request.
+    expect(r.text).toMatch(/approval expired|exit code/)
+  })
+
   it('request_access waits for the answer and lists the new account', async () => {
     const item = loginItem({ title: 'Cloudflare' })
     let answered = false

@@ -80,9 +80,12 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 export async function waitForAnswer(api: Api, requestId: string, waitMs: number): Promise<'allowed' | 'denied' | 'pending'> {
   const until = Date.now() + waitMs
   for (;;) {
-    const r = await api.get<{ status: 'pending' | 'allowed' | 'denied' }>(`/agent/requests/${requestId}`)
-    if (r.status !== 'pending' || Date.now() >= until) return r.status
-    await sleep(2000)
+    const left = until - Date.now()
+    if (left <= 0) return 'pending'
+    // Each check gives up with the deadline, so a stalled reply can't hold the tool past it.
+    const r = await api.get<{ status: 'pending' | 'allowed' | 'denied' }>(`/agent/requests/${requestId}`, Math.min(left, 15_000)).catch(() => ({ status: 'pending' as const }))
+    if (r.status !== 'pending') return r.status
+    await sleep(Math.min(2000, Math.max(0, until - Date.now())))
   }
 }
 

@@ -42,10 +42,20 @@ describe('run', () => {
   })
 })
 
+describe('utf-8 split across chunks', () => {
+  it('a secret with a multibyte character is scrubbed even when the bytes arrive apart', async () => {
+    const secret = 'pässwörd-ñandú'
+    // Two writes, the first ending in the middle of "ä".
+    const cmd = `node -e "const b=Buffer.from(process.env.S); process.stdout.write(b.subarray(0,2)); setTimeout(()=>process.stdout.write(b.subarray(2)),50)"`
+    const r = await runCommand(cmd, { S: secret }, { secrets: [secret] })
+    expect(r.stdout).toBe('[REDACTED]')
+  })
+})
+
 describe('command limits', () => {
   it('a limited account runs only its program, by name, from PATH', () => {
     const ok = resolveAllowed('sh -c "echo hi"', ['sh'])
-    expect(ok && 'path' in ok && ok.path.endsWith('/sh')).toBe(true)
+    expect(ok && 'path' in ok && ok.path.startsWith('/')).toBe(true) // e.g. /bin/sh → /usr/bin/dash
     expect(resolveAllowed('curl https://evil.example', ['psql'])).toEqual({ error: expect.stringMatching(/only be used with psql, not curl/) })
     expect(resolveAllowed('/tmp/psql -c x', ['psql'])).toEqual({ error: expect.stringMatching(/called by name/) })
     expect(resolveAllowed('./psql', ['psql'])).toEqual({ error: expect.stringMatching(/called by name/) })
