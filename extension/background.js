@@ -1077,14 +1077,16 @@ const AUTOLOCK_ALARM = 'otpilot-autolock';
 // ── Uninstall survey ──────────────────────────────────────────────────────────
 // Chrome opens this page right after the extension is removed (nothing of the
 // extension runs then): the web's short, anonymous "why did you leave?" form.
-// Only the version, the days since install and the plan go along — nothing
-// that identifies the user. Kept current at install, startup and plan changes.
+// Only the version, the plan and when it was installed go along — nothing
+// that identifies the user: the install date (the day only — the page turns
+// it into days installed, so it's right whenever the removal happens). Kept
+// current at install, startup and plan changes.
 async function setUninstallSurvey() {
   try {
     const { installedAt, userPlan = 'free' } = await chrome.storage.local.get(['installedAt', 'userPlan']);
     const q = new URLSearchParams({ v: chrome.runtime.getManifest().version, p: userPlan });
     // Unknown for installs from before this was recorded.
-    if (installedAt) q.set('d', String(Math.max(0, Math.floor((Date.now() - installedAt) / 86400000))));
+    if (installedAt) q.set('i', new Date(installedAt).toISOString().slice(0, 10));
     await chrome.runtime.setUninstallURL(`${CONFIG.DASHBOARD_URL}/goodbye?${q}`);
   } catch { /* best effort */ }
 }

@@ -451,6 +451,10 @@ let tabMatchIndex = -1;
 // (activeSharedId); activeIndex keeps pointing at an own account.
 let activeSharedId = null;
 let _tabHost = null; // the active tab's host (a shared login can match it once loaded)
+// A shared login is picked for the tab at most once, and never after the
+// user picked an account themselves.
+let _homeChosen = false;
+let _sharedTabTried = false;
 
 function homeShared() {
   return sharedItems.filter(s => s.item?.type === 'login')
@@ -465,6 +469,7 @@ function homeAccount() {
 }
 
 function selectOwn(i) {
+  _homeChosen = true;
   activeIndex = i;
   activeSharedId = null;
   chrome.storage.local.set({ activeIndex }); // only the selection changed
@@ -473,6 +478,7 @@ function selectOwn(i) {
 }
 
 function selectShared(id) {
+  _homeChosen = true;
   activeSharedId = id;
   renderAccountBar();
   startTimer();
@@ -481,7 +487,8 @@ function selectShared(id) {
 // Once shared items load: with no own account for the active tab, a shared
 // login that matches it is selected (like an own one at popup open).
 function selectSharedForTab() {
-  if (!_tabHost || activeSharedId || tabMatchIndex >= 0) return;
+  if (_sharedTabTried || _homeChosen || !_tabHost || activeSharedId || tabMatchIndex >= 0) return;
+  _sharedTabTried = true;
   const hit = homeShared().find(a => String(a.urls || '').split('\n').map(u => u.trim()).filter(Boolean).some(p => matchesPattern(p, _tabHost)));
   if (hit) { activeSharedId = hit._id; _sharedTabMatch = hit._id; renderAccountBar(); startTimer(); }
 }
@@ -826,7 +833,7 @@ function homeItemRows(item) {
 
 function renderHomeCreds(acc) {
   const related = homeRelated(acc);
-  const key = acc ? JSON.stringify([acc._id, acc.email || '', acc.password || '', acc.urls || '', acc.notes || '', acc.customFields || [],
+  const key = acc ? JSON.stringify([_teamPlan, _sharingRev, acc._id, acc.email || '', acc.password || '', acc.urls || '', acc.notes || '', acc.customFields || [],
     related.map(r => [r.id, r.name, r.item?.updatedAt || r.acc?._updatedAt || '']), [..._homeOpenRelated]]) : '';
   if (key === _homeCredsKey) return;
   _homeCredsKey = key;
@@ -915,6 +922,13 @@ function renderHomeCreds(acc) {
 // item — who it's shared with, and a way to the Share panel. Team plans only.
 // The own shares come from the server, cached for a short while.
 let _mySharesCache = { at: 0, list: null, members: null };
+// Bumped whenever what Home's sharing section shows may have changed (shared
+// items loaded, a share or role changed): part of Home's render key.
+let _sharingRev = 0;
+function sharingChanged() {
+  _mySharesCache.at = 0;
+  _sharingRev++;
+}
 
 async function mySharesCached() {
   if (Date.now() - _mySharesCache.at < 30000 && _mySharesCache.list) return _mySharesCache;
@@ -1162,6 +1176,7 @@ async function refreshSharedItemsNow() {
   }
   sharedItems = [...out, ...await sharedWithMe(true)];
   _sharedKnown = true;
+  sharingChanged();
   if (activeSharedId && !homeShared().some(a => a._id === activeSharedId)) activeSharedId = null; // no longer shared
   refreshAccountsUI();
   selectSharedForTab();
@@ -2233,7 +2248,7 @@ function mountCollectionControls(body, entry) {
 // teammates and collections, what to share (everything by default), and
 // whether they can edit (only when everything is shared).
 async function renderSharePanel(panel, itemId) {
-  _mySharesCache.at = 0; // Home's Sharing section reads the shares again
+  sharingChanged(); // Home's Sharing section reads the shares again
   panel.innerHTML = '<div class="share-msg">Loading…</div>';
   const key = await VaultKeys.getKey();
   const item = key && await VaultStore.get(itemId, key).catch(() => null);
@@ -4908,7 +4923,7 @@ async function collectionItemsSection(c) {
       sel.disabled = true;
       try {
         await VaultShares.setRole(rows[+sel.dataset.i].share.id, { collection_id: c.id }, sel.value);
-        _mySharesCache.at = 0;
+        sharingChanged();
         setStatus(`"${c.name}" ${sel.value === 'edit' ? 'can edit' : 'can view'} it now`);
       } catch (err) {
         setStatus(err?.status === 404 ? 'It was removed from the collection meanwhile' : 'Could not change it — check your connection', false);

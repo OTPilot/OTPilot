@@ -5,8 +5,9 @@ import { CHROME_STORE_URL } from '../lib/browser'
 
 // Opened by Chrome right after the extension is removed
 // (chrome.runtime.setUninstallURL in background.js): a short, anonymous
-// "why did you leave?". The URL carries only the extension version (v), days
-// installed (d) and plan (p); the answer goes to POST /feedback/uninstall.
+// "why did you leave?". The URL carries only the extension version (v), the
+// plan (p) and the install day (i, turned into days installed here); the
+// answer goes to POST /feedback/uninstall.
 
 const API_URL = import.meta.env.VITE_API_URL as string
 
@@ -32,7 +33,9 @@ export default function Goodbye() {
     e.preventDefault()
     if (!reason) return
     setState('sending')
-    const days = Number.parseInt(params.get('d') ?? '', 10)
+    // Days since the install day the extension passed (i=YYYY-MM-DD).
+    const installed = Date.parse(params.get('i') ?? '')
+    const days = Number.isFinite(installed) ? Math.max(0, Math.floor((Date.now() - installed) / 86400000)) : NaN
     try {
       const res = await fetch(`${API_URL}/feedback/uninstall`, {
         method: 'POST',

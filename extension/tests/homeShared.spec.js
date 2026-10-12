@@ -124,22 +124,64 @@ test('a shared item\'s site icon is resolved too', async ({ context, extensionId
   expect(await page.evaluate(() => accountIconDomain(sharedEntryOf(sharedItems[0])))).toBe('github.com');
 });
 
-test('the uninstall survey URL carries only the version, days installed and plan', async ({ context }) => {
+test('the uninstall survey URL carries only the version, plan and install day', async ({ context }) => {
   let [worker] = context.serviceWorkers();
   if (!worker) worker = await context.waitForEvent('serviceworker');
   const url = await worker.evaluate(async () => {
     const set = chrome.runtime.setUninstallURL;
     let got = null;
     chrome.runtime.setUninstallURL = async u => { got = u; };
-    await chrome.storage.local.set({ installedAt: Date.now() - 3 * 86400000 - 1000, userPlan: 'personal' });
+    await chrome.storage.local.set({ installedAt: Date.now() - 3 * 86400000, userPlan: 'personal' });
     try { await setUninstallSurvey(); } finally { chrome.runtime.setUninstallURL = set; }
     return got;
   });
   const u = new URL(url);
   expect(u.pathname).toBe('/goodbye');
-  // (The install's own onInstalled may record installedAt meanwhile: the days are only checked to be a count.)
-  expect(Object.keys(Object.fromEntries(u.searchParams)).sort()).toEqual(['d', 'p', 'v']);
+  expect(Object.keys(Object.fromEntries(u.searchParams)).sort()).toEqual(['i', 'p', 'v']);
   expect(u.searchParams.get('v')).toBe('2.0.3');
   expect(u.searchParams.get('p')).toBe('personal');
-  expect(u.searchParams.get('d')).toMatch(/^\d+$/);
+  expect(u.searchParams.get('i')).toMatch(/^\d{4}-\d{2}-\d{2}$/); // the day only
+});
+
+test('Home\'s sharing section shows up once the team\'s data arrives, and follows a change', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [{ name: 'DigitalOcean', email: 'me@example.com', secret: TEST_SECRET, urls: 'localhost', password: 'pw' }]);
+  // Home rendered before anything team-related loaded.
+  await page.evaluate(() => { _teamPlan = false; sharingChanged(); });
+  await page.click('#nav-home');
+  await page.locator('#home-list .lc-row', { hasText: 'DigitalOcean' }).click();
+  const creds = page.locator('#home-creds');
+  await expect(creds).toContainText('Username');
+  await expect(creds).not.toContainText('Sharing');
+  await page.evaluate(() => refreshSharedItems());
+  await expect(creds).toContainText('Not shared with anyone');
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const id = accounts.find(a => a.name === 'DigitalOcean')._id;
+    const bob = (await Sharing.getMembers('team-1')).find(m => m.user_id === 'user-bob');
+    const next = await VaultShares.share(await VaultStore.get(id, key), null, [{ user: bob, role: 'view' }]);
+    await VaultShares.attach(id, next.shares, key);
+    sharingChanged();
+  });
+  await expect(creds).toContainText('bob@team.test');
+});
+
+test('a shared login matching the tab is picked once, never over the user\'s own choice', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [{ name: 'Mine', email: 'me@x.io', secret: TEST_SECRET, urls: 'mine.example' }]);
+  await page.evaluate(() => { _tabHost = 'localhost'; tabMatchIndex = -1; activeIndex = -1; });
+  await page.click('#nav-home');
+  // The user picks their own account before the shared ones load…
+  await page.locator('#home-list .lc-row', { hasText: 'Mine' }).click();
+  await bobShares(page, { title: 'Team AWS', secret: TEST_SECRET, urls: ['localhost'] });
+  await expect(page.locator('#home-list .lc-row-shared', { hasText: 'Team AWS' })).toBeVisible();
+  // …and keeps it.
+  await expect(page.locator('#account-name')).toContainText('Mine');
+  expect(await page.evaluate(() => activeSharedId)).toBe(null);
+});
+
+test('with no choice made, the shared login for the tab is selected when it loads', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(() => { _tabHost = 'localhost'; tabMatchIndex = -1; activeIndex = -1; _homeChosen = false; _sharedTabTried = false; });
+  await bobShares(page, { title: 'Team AWS', secret: TEST_SECRET, urls: ['localhost'] });
+  await page.click('#nav-home');
+  await expect(page.locator('#account-name')).toContainText('Team AWS');
 });

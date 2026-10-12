@@ -225,7 +225,7 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | `/dashboard/devices` | `Devices.tsx` | Device management (disconnect / erase) |
 | `/dashboard/team` | `Team.tsx` + `TeamSharing.tsx` | Members, invites, 2FA codes (2-of-2), and 2.0 collections + item sharing (`TeamSharing`): membership / roles / removing work on plain server data; names, titles, creating collections, adding members and sharing need the vault, unlocked in the tab with the recovery key (`lib/teamVault.ts` `unlock`: checks it against the synced v1 blob, which carries the team private key) |
 | `/dashboard/settings` | `Settings.tsx` | Account settings, deletion |
-| `/goodbye` | `Goodbye.tsx` | Opened by Chrome after the extension is removed (`setUninstallURL` in `background.js` → `?v=<version>&d=<days installed>&p=<plan>`, nothing else): one-click reason + optional site / comment → `POST /feedback/uninstall`. Client-only, `noindex`, not in the sitemap |
+| `/goodbye` | `Goodbye.tsx` | Opened by Chrome after the extension is removed (`setUninstallURL` in `background.js` → `?v=<version>&p=<plan>&i=<install day>`, nothing else; the page turns the day into days installed): one-click reason + optional site / comment → `POST /feedback/uninstall`. Client-only, `noindex`, not in the sitemap |
 | `/privacy` | `Privacy.tsx` | |
 | `/tos` | `Tos.tsx` | |
 | `/gdpr` | `Gdpr.tsx` | |
