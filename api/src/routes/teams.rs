@@ -43,6 +43,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/teams/{id}/invite", post(invite_member))
         .route("/teams/accept/{token}", post(accept_invite))
+        .route("/teams/decline/{token}", post(decline_invite))
         .route("/teams/{id}/leave", delete(leave_team))
         .route("/teams/{id}/members/{uid}", delete(remove_member))
         .route("/teams/{id}/audit", get(get_audit))
@@ -621,6 +622,36 @@ async fn accept_invite(
     )
     .await;
     Ok(Json(json!({ "ok": true, "team_id": team_id })))
+}
+
+/// The invitee turns an invitation down (from the extension): it's deleted,
+/// which also frees its seat.
+async fn decline_invite(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(token): Path<String>,
+) -> Result<Json<Value>> {
+    let email = auth.email.clone().unwrap_or_default();
+    let team_id: Option<Uuid> = sqlx::query_scalar(
+        "DELETE FROM pending_invites
+         WHERE token = $1 AND lower(email) = lower($2) AND accepted_at IS NULL
+         RETURNING team_id",
+    )
+    .bind(&token)
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await?;
+    let team_id = team_id.ok_or(ApiError::NotFound)?;
+    audit(
+        &state.db,
+        team_id,
+        auth.id,
+        "decline",
+        Some(auth.id),
+        json!({ "email": email.to_lowercase() }),
+    )
+    .await;
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Shared with the auth.rs auto-accept path. Validates token + email, enforces

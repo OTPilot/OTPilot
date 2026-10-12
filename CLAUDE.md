@@ -74,7 +74,7 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 | `accounts` | `user_id`, `encrypted_blob`, `updated_at` | AES-GCM ciphertext only |
 | `teams` | `id`, `name`, `owner_id`, `stripe_subscription_id`, `seat_limit` | Team Lite; 1 team per owner |
 | `team_members` | `team_id`, `user_id`, `role` | `role` = owner/member |
-| `pending_invites` | `email`, `team_id`, `token`, `expires_at`, `accepted_at` | 48h expiry; auto-accepted in `sync-user` by email |
+| `pending_invites` | `email`, `team_id`, `token`, `expires_at`, `accepted_at` | 48h expiry; an existing account accepts / declines it (extension bell or email link); auto-accepted in `sync-user` only for an account created after the invite (signed up from it) |
 | `shared_codes` | `owner_id`, `team_id`, `account_name`, `encrypted_secret`, `sharing_key_iv` | `encrypted_secret` = AES-GCM(secret, K) |
 | `share_access` | `shared_code_id`, `user_id`, `server_share`, `encrypted_user_share` | 2-of-2: `server_share`=K2, `encrypted_user_share`=K1 wrapped to recipient pubkey |
 | `audit_logs` | `team_id`, `actor_id`, `action`, `metadata` | Team activity (invite/share/revoke/totp_access…) |
@@ -86,6 +86,7 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 | `collection_members` | `collection_id`, `user_id`, `role`, `wrapped_key` | `role` = manage/edit/view; `wrapped_key` = collection key wrapped to the member's ECDH public key |
 | `shares` | `id` (client uuid), `team_id`, `owner_id`, `item_id`, `whole`, `encrypted_item`, `revision` | 2.0 sharing (docs/sharing.md): a copy of one of the owner's items (whole, or chosen fields) under a share key the server never sees; deleted with the item, on team departure / dissolution |
 | `share_grants` | `share_id`, `user_id` or `collection_id`, `role` (`view`/`edit`, edit only for `whole`), `wrapped_key` | Who can open a share: a teammate (share key wrapped to their public key) or a collection (share key under the collection key); a collection member's role caps the grant |
+| `notifications` | `user_id`, `kind`, `team_id`, `actor_id`, `target_id`, `role`, `read_at` | In-extension notices (`collection_added` / `item_shared`, a direct grant only), created with the email by `notifications::announce` on a new member / new grantee (not a role change); listed while unread, ≤30 days old and the target still reaches the user. Invites aren't stored here (read live from `pending_invites`) |
 | `domain_icons` | `domain` (PK), `status`, `storage_key`, `fetched_at` | Shared favicon cache, one row per domain; `status='none'` is a negative cache. Bytes live in S3/R2 |
 
 ### Extension JS modules
@@ -129,6 +130,12 @@ Managed from the **Team** tab (`renderTeamCollections`); an open collection list
 
 ### Teams / shared codes (2-of-2)
 Team Lite lets a member share an individual TOTP code. The secret is encrypted client-side with key `K`; per recipient the server stores `K2 = K XOR K1` (`share_access.server_share`) and an opaque `K1` wrapped to the recipient's ECDH public key (`encrypted_user_share`). To produce a live code the recipient sends `K1`; the server reconstructs `K`, decrypts, generates the TOTP (`totp-rs`, `new_unchecked` to allow <128-bit secrets), and discards `K`. **Trust model:** the split protects against an **at-rest DB compromise** (a dump has the ciphertext + `K2` + `K1`-wrapped-to-pubkey, but not the recipient's private key, which lives only in the E2E sync vault → `K1`/`K` unrecoverable from the DB alone). It does **not** protect against a malicious/compromised server at runtime — the server sees the plaintext secret on every `generate_totp` and distributes recipients' public keys with no out-of-band fingerprint, so the runtime server is a trusted party by design (unlike personal sync, which is fully E2E). Revoking a recipient deletes their `share_access` row (orphans their `K1`). Reads of a shared code are audited: explicit actions (`copy`/`autofill`/`refresh`) → `totp_access`; passive display/auto-refresh → `totp_view`, throttled to one entry per 10 min per (viewer, code). **Collections (2.0, "share everything")** are separate from this code-only mode: items in a collection are fully E2E (encrypted under a collection key the server never sees, wrapped per member to their ECDH public key), so members get the whole item. Leaving or being removed from the team deletes the user's collection memberships in the same transaction as the removal (`remove_member_atomic`) — they lose the shared items only, never their own vault; a collection left with no members is deleted, one left without a manager promotes its oldest member. **Share creation** needs the plaintext secret, which is E2E — so it happens where the vault is decrypted: the **extension** (has the synced vault) or the **web dashboard** after the user pastes their recovery key (`web/src/lib/teamCrypto.ts` mirrors the extension crypto). The 2-of-2 logic for TOTP secrets is distinct from the **email-OTP** plan and from personal sync, which stays fully E2E. New env: `STRIPE_TEAM_LITE_*_PRICE_ID`, `STRIPE_EXTRA_SEAT_PRICE_ID`, `APP_BASE_URL`.
+
+### Notices (bell + badge)
+Team invitations and "a teammate added you to a collection / shared an item with you" (`GET /notifications`). The background's `refreshNotices()` fetches them on the poll alarm (every signed-in user, sync or not), at startup, on sign-in (`cloudSession` appearing) and when the popup asks (`refreshNotices` message, extension pages only), and sets the toolbar **badge** count (no system notifications; offline keeps the last count, signed out clears it). The popup's header bell (`#btn-notices`, hidden when empty) lists them (`renderNotices` / `fillNotices`): an invite has Accept / Decline (`answerInvite`; accepting re-runs `sync-user` and opens the Team tab), a notice Open (Team tab / Vault) or Dismiss — both mark it read.
+
+### Emails
+Every email in `api/src/email.rs` fills a `Mail` (title, paragraphs, key facts, one button) rendered by one layout (`Mail::html`, the "code tile" design: logo, white card, facts in a dark monospace tile like a 2FA code) plus a plain-text version (`Mail::text`); every value is HTML-escaped. Collection and share emails can't name the collection / item (encrypted end to end).
 
 ### In-page UI theme
 Overlays, toasts and banners injected by content scripts follow Settings → Appearance. `theme.css` stays the single definition of every theme: the background (`themeVars` message) parses the active block's custom properties and `themeUi(el)` in `content.js` sets them on each OTPilot root element (`data-otpilot-ui`), re-applying on a `theme` change. Inline colors in content scripts are written as `var(--token, <default theme value>)` — never a bare hex — so the default theme renders before the tokens arrive. SVG colors go in `style` (presentation attributes don't take `var()`).
@@ -181,7 +188,10 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | POST/GET | `/teams` | Create (idempotent, team plan) / get the user's team |
 | GET/PATCH/DELETE | `/teams/:id` | Detail (members + seats) / rename / delete (downgrades all) |
 | POST | `/teams/:id/invite` | Invite by email (seat check + Resend email) |
-| POST | `/teams/accept/:token` | Accept an invite (also auto-accepted in `sync-user`) |
+| POST | `/teams/accept/:token` | Accept an invite (auto-accepted in `sync-user` only for an account created after it) |
+| POST | `/teams/decline/:token` | The invitee declines (deletes the invite, frees its seat) |
+| GET | `/notifications` | `{ invites, notices }`: pending invites to my email + unread notices |
+| POST | `/notifications/:id/read` | Mark a notice read |
 | DELETE | `/teams/:id/leave`, `/teams/:id/members/:uid` | Leave / remove (downgrade) |
 | GET | `/teams/:id/audit` | Team activity log (owner) |
 | POST/GET | `/teams/:id/codes` | Share a code (2-of-2 payload) / list codes shared with me |

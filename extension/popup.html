@@ -715,6 +715,33 @@
     .rel-results .rel-hint { padding: 6px 8px; }
     .cf-add-kind:hover { border-color: var(--accent-2); color: var(--accent-2); }
     .cf-add-kind.cf-add { border-color: var(--accent-2); color: var(--accent-2); }
+    /* Header bell: team invitations and "added to a collection / shared with you". */
+    #btn-notices { position: relative; color: var(--accent-2); }
+    .notice-count {
+      position: absolute; top: -6px; right: -8px; min-width: 14px; height: 14px; padding: 0 3px;
+      border-radius: 7px; background: var(--accent); color: var(--on-accent);
+      font-size: 9px; font-weight: 700; line-height: 14px; text-align: center; box-sizing: border-box;
+    }
+    .notices-menu {
+      position: absolute; top: calc(100% + 8px); right: -6px; z-index: 20; width: 280px; max-height: 380px; overflow-y: auto;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 4px; display: flex; flex-direction: column;
+    }
+    .notice { padding: 9px 10px; display: flex; flex-direction: column; gap: 7px; }
+    .notice + .notice { border-top: 1px solid var(--border); }
+    .notice-text { font-size: 12px; line-height: 1.45; color: var(--ink-2); }
+    .notice-text b { color: var(--ink-0); font-weight: 600; }
+    .notice-meta { font-size: 10.5px; color: var(--ink-4); margin-top: 2px; }
+    .notice-actions { display: flex; gap: 6px; align-items: center; }
+    .notice-btn {
+      font: inherit; font-size: 11.5px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+      border: 1px solid var(--border); background: none; color: var(--ink-2);
+    }
+    .notice-btn:hover:not(:disabled) { color: var(--ink-0); border-color: var(--ink-4); }
+    .notice-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+    .notice-btn:disabled { opacity: .5; cursor: default; }
+    .notice-btn.link { border: 0; padding: 4px 4px; margin-left: auto; color: var(--ink-4); }
+    .notice-err { font-size: 11px; color: var(--danger); }
     .add-type-menu-down { top: calc(100% + 8px); bottom: auto; left: auto; right: -6px; }
     .add-type {
       text-align: left; background: none; border: 0; color: var(--ink-1); font: inherit; font-size: 12px;
@@ -1165,6 +1192,15 @@
   </svg>
   <h1>OTPilot</h1>
   <div style="margin-left:auto; display:flex; align-items:center; gap:10px">
+    <div class="add-wrap" id="notices-wrap" hidden>
+      <button id="btn-notices" class="header-btn" title="Notifications">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+        <span id="notices-count" class="notice-count"></span>
+      </button>
+      <div id="notices-menu" class="notices-menu" style="display:none"></div>
+    </div>
     <div class="add-wrap">
       <button id="btn-quick-add" class="header-btn" title="Add to the vault">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">

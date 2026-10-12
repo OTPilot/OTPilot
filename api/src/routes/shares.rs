@@ -32,7 +32,11 @@ use uuid::Uuid;
 use crate::{
     error::{ApiError, Result},
     middleware::auth::AuthUser,
-    routes::{collections::lock_team, vault::validate_record},
+    routes::{
+        collections::lock_team,
+        notifications::{announce, Notice},
+        vault::validate_record,
+    },
     AppState,
 };
 
@@ -354,6 +358,20 @@ async fn create_share(
         insert_grant(&mut tx, body.id, auth.id, g).await?;
     }
     tx.commit().await?;
+    for g in &body.grants {
+        if let Some(uid) = g.user_id {
+            announce(
+                &state,
+                Notice::ItemShared,
+                uid,
+                team_id,
+                &auth,
+                body.id,
+                &g.role,
+            )
+            .await;
+        }
+    }
     Ok(Json(json!({ "id": body.id, "revision": revision })))
 }
 
@@ -466,6 +484,19 @@ async fn put_grant(
     check_grantee(&mut tx, share.team_id, auth.id, &g).await?;
     insert_grant(&mut tx, id, auth.id, &g).await?;
     tx.commit().await?;
+    // A new person only; a changed role or key isn't news.
+    if let (Some(uid), false) = (g.user_id, exists) {
+        announce(
+            &state,
+            Notice::ItemShared,
+            uid,
+            share.team_id,
+            &auth,
+            id,
+            &g.role,
+        )
+        .await;
+    }
     Ok(Json(json!({ "ok": true })))
 }
 

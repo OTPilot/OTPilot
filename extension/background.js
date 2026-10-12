@@ -1026,6 +1026,42 @@ async function handleResolveIcons(rawDomains, hints, prune) {
 }
 
 
+// ── Notices: team invitations, "added to a collection", "shared with you" ──
+// Counted on the toolbar badge (no system notifications); the popup lists
+// them under the header's bell. Refreshed on the poll alarm, at startup, on
+// sign-in and whenever the popup asks (it opens, or acted on one).
+async function refreshNotices() {
+  let data = { invites: [], notices: [] };
+  try {
+    const token = await SupabaseAuth.getAccessToken();
+    if (token) {
+      const res = await fetch(`${API_URL}/notifications`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) return null; // keep the badge as it was
+      data = await res.json();
+    }
+  } catch { return null; } // offline
+  const n = (data.invites?.length || 0) + (data.notices?.length || 0);
+  await chrome.action.setBadgeText({ text: n ? String(Math.min(n, 99)) : '' });
+  if (n) await chrome.action.setBadgeBackgroundColor({ color: '#0284c7' });
+  return data;
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action !== 'refreshNotices') return;
+  if (!fromExtensionPage(sender)) { sendResponse(null); return; }
+  refreshNotices().then(sendResponse);
+  return true;
+});
+
+// Signing in shows the count; signing out clears it. A token refresh also
+// rewrites the session, so only its appearing or going away counts.
+chrome.storage.onChanged.addListener((changes, area) => {
+  const c = changes.cloudSession;
+  if (area !== 'local' || !c || !!c.oldValue === !!c.newValue) return;
+  if (c.newValue) refreshNotices();
+  else chrome.action.setBadgeText({ text: '' });
+});
+
 // Inactivity auto-lock: VaultLock.state() locks the vault once its deadline
 // passes. It also runs on every read of the state, so this alarm only covers
 // the case where nothing asks for a while.
@@ -1037,6 +1073,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  refreshNotices();
   chrome.alarms.get(ALARM_NAME, alarm => {
     if (!alarm) chrome.alarms.create(ALARM_NAME, { periodInMinutes: POLL_MINUTES });
   });
@@ -1054,6 +1091,7 @@ chrome.alarms.onAlarm.addListener(async alarm => {
 
   const session = await SupabaseAuth.getSession();
   if (!session) return;
+  refreshNotices(); // every signed-in user, sync or not (invitees are often on Free)
 
   // syncEnabled is the 2.0 flag; a v1 plaintext syncKey means the same until
   // CloudSync converts it into the vault key on the next popup open.

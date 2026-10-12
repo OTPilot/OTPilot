@@ -419,32 +419,38 @@ async fn put_member(
             ));
         }
     }
-    let updated = match body.wrapped_key.as_deref() {
+    // `added`: a new member (xmax = 0 on a freshly inserted row), not a
+    // role or key change — only they get a notice.
+    let (updated, added) = match body.wrapped_key.as_deref() {
         Some(key) => {
             opaque("wrapped_key", key)?;
-            sqlx::query(
+            let inserted: bool = sqlx::query_scalar(
                 "INSERT INTO collection_members (collection_id, user_id, role, wrapped_key, added_by)
                  VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (collection_id, user_id) DO UPDATE SET role = EXCLUDED.role, wrapped_key = EXCLUDED.wrapped_key",
+                 ON CONFLICT (collection_id, user_id) DO UPDATE SET role = EXCLUDED.role, wrapped_key = EXCLUDED.wrapped_key
+                 RETURNING (xmax = 0)",
             )
             .bind(cid)
             .bind(uid)
             .bind(&body.role)
             .bind(key)
             .bind(auth.id)
+            .fetch_one(&mut *tx)
+            .await?;
+            (1, inserted)
+        }
+        None => (
+            sqlx::query(
+                "UPDATE collection_members SET role = $3 WHERE collection_id = $1 AND user_id = $2",
+            )
+            .bind(cid)
+            .bind(uid)
+            .bind(&body.role)
             .execute(&mut *tx)
             .await?
-            .rows_affected()
-        }
-        None => sqlx::query(
-            "UPDATE collection_members SET role = $3 WHERE collection_id = $1 AND user_id = $2",
-        )
-        .bind(cid)
-        .bind(uid)
-        .bind(&body.role)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected(),
+            .rows_affected(),
+            false,
+        ),
     };
     if updated == 0 {
         return Err(ApiError::BadRequest(
@@ -461,6 +467,18 @@ async fn put_member(
         json!({ "collection_id": cid, "role": body.role }),
     )
     .await;
+    if added && uid != auth.id {
+        crate::routes::notifications::announce(
+            &state,
+            crate::routes::notifications::Notice::CollectionAdded,
+            uid,
+            team_id,
+            &auth,
+            cid,
+            &body.role,
+        )
+        .await;
+    }
     Ok(Json(json!({ "ok": true })))
 }
 
