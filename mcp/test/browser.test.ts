@@ -55,10 +55,10 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}/`
   try {
     const { chromium } = await import('playwright-core')
-    const b = await chromium.launch({ channel: 'chrome' }).catch(() => chromium.launch())
+    const b = await chromium.launch({ channel: 'chrome', timeout: 30_000 }).catch(() => chromium.launch({ timeout: 30_000 }))
     await b.close()
   } catch { browserOk = false }
-})
+}, 90_000) // a cold browser start on a CI runner can take a while
 afterAll(() => new Promise<void>(r => server.close(() => r())))
 
 describe('browser_login', () => {
