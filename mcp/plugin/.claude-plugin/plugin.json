@@ -1,0 +1,10 @@
+{
+  "name": "otpilot",
+  "version": "0.1.0",
+  "description": "Use the accounts you allow in OTPilot — passwords and 2FA codes — to sign in to websites and run commands, without the agent ever seeing them.",
+  "author": { "name": "OTPilot", "url": "https://otpilot.app" },
+  "homepage": "https://otpilot.app/ai-agents",
+  "repository": "https://github.com/OTPilot/OTPilot",
+  "license": "GPL-3.0-only",
+  "keywords": ["passwords", "2fa", "totp", "login", "secrets", "mcp"]
+}

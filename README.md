@@ -15,6 +15,20 @@
 - **Local encrypted backup** — export and import your vault with a password
 - **Cloud sync** *(Personal plan)* — end-to-end encrypted sync across all your devices
 
+## AI agents (new in 2.1)
+
+Let Claude Code, Codex, Cursor or any MCP agent sign in and run commands with the accounts you allow — passwords and 2FA codes — **without the agent ever seeing them**. See [`mcp/`](mcp/README.md).
+
+```bash
+npx -y @otpilot/mcp connect
+```
+
+In Claude Code, the plugin adds the server and a skill:
+
+```
+/plugin install otpilot --marketplace OTPilot/OTPilot
+```
+
 **Coming soon**
 - Firefox and Safari support
 - Team sharing - share TOTP access with teammates without exposing secrets
@@ -28,6 +42,7 @@
 | `extension/` | GPL v3 |
 | `api/` | AGPL v3 |
 | `web/` | MIT |
+| `mcp/` | GPL v3 |
 
 ---
 
