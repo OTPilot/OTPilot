@@ -114,6 +114,45 @@ test("an account added from the agent's page answers its open request", async ({
   expect([req.status, req.item_id]).toEqual(['allowed', await itemId(page, 'Bank')]);
 });
 
+test('unticking "Answers its request" adds the account and leaves the request waiting', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    fakeAgents.addRequest(a.id, { query: 'github' });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  const detail = page.locator('#agents-detail');
+  await detail.getByRole('button', { name: '+ Add account' }).click();
+  await detail.locator('.ag-pick button', { hasText: 'Bank' }).click();
+  await detail.locator('.ag-answers').uncheck();
+  await detail.locator('.ag-adding [data-act=allow]').click();
+  await expect(detail.locator('.ag-card-row[data-item]')).toContainText('Bank');
+  expect(await page.evaluate(() => [...fakeAgents.requests.values()][0].status)).toBe('pending');
+  await expect(page.locator('#agents-list')).toContainText('asks for github');
+});
+
+test('a request answered elsewhere meanwhile still leaves the account added', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    fakeAgents.addRequest(a.id, { query: 'bank' });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  const detail = page.locator('#agents-detail');
+  await detail.getByRole('button', { name: '+ Add account' }).click();
+  await detail.locator('.ag-pick button', { hasText: 'Bank' }).click();
+  await page.evaluate(() => { [...fakeAgents.requests.values()][0].status = 'denied'; }); // answered on another device
+  await detail.locator('.ag-adding [data-act=allow]').click();
+  await expect(detail.locator('.ag-card-row[data-item]')).toContainText('Bank');
+  await expect(detail.locator('.ag-err')).toHaveCount(0);
+});
+
 test('Review on the agent page opens its request', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
   const agentId = await page.evaluate(async () => {

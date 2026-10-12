@@ -372,11 +372,12 @@ function renderActiveAgent(detail, a) {
       allow.disabled = false;
     });
     card.querySelector('[data-act=cancel]').addEventListener('click', () => { box.innerHTML = ''; });
-    allow.addEventListener('click', () => agentAct(card, () => {
-      const opts = readGrantForm(card, a.grants.find(g => g.item_id === chosen.id));
-      return ask && card.querySelector('.ag-answers')?.checked
-        ? Agents.decide(ask, 'allow', { agent: a, item: chosen, opts })
-        : Agents.grant(a, chosen, opts);
+    allow.addEventListener('click', () => agentAct(card, async () => {
+      const answers = ask && card.querySelector('.ag-answers')?.checked;
+      await Agents.grant(a, chosen, readGrantForm(card, a.grants.find(g => g.item_id === chosen.id)));
+      // The account is added either way; a request that expired or was
+      // answered elsewhere meanwhile has nothing left to answer.
+      if (answers) await Agents.answer(ask, 'allow', chosen.id).catch(() => {});
     }));
   };
   detail.querySelector('[data-act=add]').addEventListener('click', openAdd);
