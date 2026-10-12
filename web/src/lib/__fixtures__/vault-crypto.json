@@ -1,0 +1,85 @@
+{
+  "about": "Made by both clients (scripts in the PR); each client must open both sides. Regenerating changes every ciphertext — only do it when the format changes on purpose, in both clients.",
+  "vaultKey": "lSqxGBsNUzn5MTRUm5vF/A7npqliW2Z6XAAWev/gOw8=",
+  "collectionKey": "weDXo8MBj2bDIyShtSH7PtP2TGv41P8zLqDg/tzIugo=",
+  "shareKey": "mJR0pTu34J5FHUrJ6THC9ZUq4S0p131ewDvxFa1Uh9I=",
+  "collectionId": "c0ffee00-0000-4000-8000-000000000002",
+  "shareId": "5ba7e000-0000-4000-8000-000000000003",
+  "privateJwk": {
+    "key_ops": [
+      "deriveKey"
+    ],
+    "ext": true,
+    "kty": "EC",
+    "x": "gCi5KMT7GmjgtWKjQikcTRPBollazM2E3lUYstpKZDI",
+    "y": "923GnMsI837OIK66ENeeOPDndPcAvyaM-a5w7DOw77E",
+    "crv": "P-256",
+    "d": "_fezSbV1k8PyylBSbqIX3Pbi7XlkJ4e-GVhp_6iE3t4"
+  },
+  "publicKey": "BIAouSjE+xpo4LVio0IpHE0TwaJZWszNhN5VGLLaSmQy923GnMsI837OIK66ENeeOPDndPcAvyaM+a5w7DOw77E=",
+  "item": {
+    "id": "7d4f3c2a-0000-4000-8000-000000000001",
+    "type": "login",
+    "title": "GitHub",
+    "urls": [
+      "github.com"
+    ],
+    "fields": [
+      {
+        "id": "username",
+        "value": "octo"
+      },
+      {
+        "id": "password",
+        "value": "hunter2"
+      }
+    ],
+    "totp": {
+      "secret": "JBSWY3DPEHPK3PXP"
+    },
+    "notes": "ñandú ✓",
+    "shares": [
+      {
+        "id": "s-1",
+        "sk": "mJR0pTu34J5FHUrJ6THC9ZUq4S0p131ewDvxFa1Uh9I=",
+        "whole": true,
+        "parts": null
+      }
+    ]
+  },
+  "collectionNameText": "Infra & Ops",
+  "fromExtension": {
+    "item": {
+      "id": "7d4f3c2a-0000-4000-8000-000000000001",
+      "v": 2,
+      "key": {
+        "iv": "st17aEmd5MB8WqSQ",
+        "ct": "ZTnacqDjpsZGyi/anP4vmw6udSQhkJnYkybEw/QO6dzqdve3m8tHoSR4KwnWA14g"
+      },
+      "data": {
+        "iv": "uLKCGvhCc9c6hJ85",
+        "ct": "stcPyRpm8BItDzGzXxH/dIWq74aHdgb9dDHRovt6ttYYqa0tG1skRBbDgMkwwJcfwE7vC8Msw69Z1P8y8/nyPQepnJrGou3NmhUIMj9CXNYx5IeInkxnUAtX/3cSFAtdrSRqowlZZSYsDjW9O4oZX9XQFMXB3kvtNEzCUoeW31Q2pXd45hYrMIN8B0ZLX+50JYWnb+CyJRTgmQoqBt1kxLJfh261olqkpxRgVZFJQPE2mTxlp950Npc5Wx8HJx07S86yWlRmHvVwEzcqrTqlsSeAM23jHvtp2XiCd4lGAYLmVV3SsGEmZC4GCKkxAkq3qWkZEUsF4gZTa5ifkASlu5Y8Jbd4KanA36dZ4TDpKCLc56jl6oy+Dpxs/RlA/mCI/61vhnBqpe6DML3BO9czeZcKdkK62DTvoxacT8LlI5TjdOn0D06BUaCjWSTWLET24DKhkdoaXufKqx23HEHRas3Y7cs="
+      }
+    },
+    "collectionName": "{\"iv\":\"nJLchf5LwzGorlgB\",\"ct\":\"qKfDauY9dBnCfCEjN8T1wp6UP5QM2NAzWmDi\"}",
+    "shareKeyInCollection": "{\"iv\":\"qRluFxsalOec/A+U\",\"ct\":\"fEI7SPifhCmjHs1Vtn1kYEEXP4ypJ0lvR6etWazcctntcuZ3CtytVO8j3dyaH10dqBNcgtEar0HGcT6O\"}",
+    "collectionKeyForMe": "{\"epk\":\"BMmdl5witO1eufoJgT+iJN6HQUaVQ58EF1A5o7By/BUCSjsh6vre+U4mcHt1Z4B1fpgh4tNKVZFc6+37YySz9r4=\",\"iv\":\"pbxgTSTU4ZhEzJf8\",\"ct\":\"Me8T+06+IvPGO2O7GnNJhpyp1ZVUt3CqDErC0ObvJzWwEkkbcvDHMdnDdKIVfbOn\"}"
+  },
+  "fromWeb": {
+    "item": {
+      "id": "7d4f3c2a-0000-4000-8000-000000000001",
+      "v": 2,
+      "key": {
+        "iv": "LXs/Wn3teA5eABVs",
+        "ct": "TcvS/puDbk+8NBYXwkVjVt6L1ewnSGZBnANQgIHPlciRaQkpwqcoO9kEoZH9jM9/"
+      },
+      "data": {
+        "iv": "Kw9ddBt6EVbcUcFn",
+        "ct": "GeOKkYxZMqI+dk8ANcJTo3+82ajQ077BfkhoGes4w+GPqwIiROoZlW+cO3t6QXS5hIEfR1uHyyu3OVsGv5J3VPCxiX7V9EzZwtQIKMt5LafE/pqzad1BrIxHzfJFhrYhz6miM+X9WizSGzMmzN5z6FJdyqVQpGnqoBlfZd0kktMlhByj4+yBJT+PnyuGLYYusZCoYs+k7uUMC45pBYJPwy5r2URpFe1Bb6StBH4bYZwTRmJh9sJaxQfJ90m9o1sUDSWbOtusw2KasO7njUhlLS7gVMXhE5T0gMydPqWCjJim067yM65WyUTm5CrQSL04QqFr7JNifonOlCwLJo1YSnl0srD3IytSpuqyAGzBNGHwVpux91Jd2rSbwd87laN2FlLRu5NdQd0/jZwuywvBvp8QNTK3tA8SqrMh9J3i/ozfTBIoDagmDfDegtncGlhWNKO+IxfRbLHvPA0aJgHpWmb91pE="
+      }
+    },
+    "collectionName": "{\"iv\":\"4HnIihhKUnQ6/Qv5\",\"ct\":\"Q0wzHqf2AtqEhck/eHadSvZZQec2mcSztrnH\"}",
+    "shareKeyInCollection": "{\"iv\":\"vL8MpD0ZoXVLTF+x\",\"ct\":\"5BzBIYLz7HvJF7452ViUY1HdauyamOsFq/qOc3RYO/4A+R+iuhE3WiiNPcSTuOLj27vKjdmQ/e1f4oPE\"}",
+    "collectionKeyForMe": "{\"epk\":\"BLVgEbQMmw2DRwA8md0T3Q6o0wJqkA6FGrlqBm4bfzYY+xkT6OA3KOJKcBVv4lPsGYXA8T2U8lsoixtguzVEBqE=\",\"iv\":\"8oM4RY2fl5alGfcM\",\"ct\":\"mextom6lUdw0BAAaoQyF0K2AEjASk3XLNPxiGwW/8GEjuSzwsTyfMhHXJlOgSn32\"}"
+  }
+}

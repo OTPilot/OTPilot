@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ApiError, addCollectionMember, changeGrant, collectionItemTitles, collectionMembers, createCollection,
@@ -11,6 +11,11 @@ import {
 // 2FA codes. Who has what and with which role is plain server data; names,
 // item titles and sharing need the vault, unlocked here with the recovery
 // key (kept in this page's memory only).
+
+type Run = (fn: () => Promise<unknown>) => Promise<string | null>
+
+// Query-cache prefix of everything decrypted (see TeamSharing).
+const DECRYPTED = 'decrypted'
 
 const ROLE_LABEL: Record<string, string> = { view: 'Can view', edit: 'Can edit', manage: 'Can manage' }
 
@@ -28,25 +33,40 @@ export default function TeamSharing({ teamId, meId, teammates }: { teamId: strin
   const [err, setErr] = useState<string | null>(null)
   const locked = !unlocked
 
-  const collections = useQuery({ queryKey: ['collections', !!unlocked], queryFn: () => listCollections(unlocked) })
+  // Everything decrypted (items with their secrets, collection and share
+  // keys, names) is cached under DECRYPTED, and dropped on Lock and when
+  // leaving the page; what's cached while locked holds no secrets.
+  const scope = (...k: unknown[]) => (unlocked ? [DECRYPTED, ...k] : k)
+  const collections = useQuery({ queryKey: scope('collections'), queryFn: () => listCollections(unlocked) })
   const mine = useQuery({ queryKey: ['shares-mine'], queryFn: mySharesList })
-  const items = useQuery({ queryKey: ['vault-items', !!unlocked], queryFn: () => myItems(unlocked!), enabled: !!unlocked })
+  const items = useQuery({ queryKey: scope('vault-items'), queryFn: () => myItems(unlocked!), enabled: !!unlocked })
   const withMe = useQuery({
-    queryKey: ['shares-with-me', !!unlocked, collections.data?.map((c) => c.id).join()],
+    queryKey: scope('shares-with-me', collections.data?.map((c) => c.id).join()),
     queryFn: () => sharedWithMe(unlocked, collections.data ?? []),
     enabled: !!collections.data,
   })
 
+  const forget = useCallback(() => {
+    qc.cancelQueries({ queryKey: [DECRYPTED] })
+    qc.removeQueries({ queryKey: [DECRYPTED] })
+  }, [qc])
+  useEffect(() => forget, [forget])
+  const lock = () => { forget(); setUnlocked(null) }
+
   const refresh = () => {
-    for (const k of ['collections', 'shares-mine', 'vault-items', 'shares-with-me', 'collection-members', 'collection-items']) {
+    for (const k of [DECRYPTED, 'collections', 'shares-mine', 'shares-with-me', 'collection-members', 'collection-items']) {
       qc.invalidateQueries({ queryKey: [k] })
     }
   }
-  // Runs an action, shows what went wrong, refreshes either way.
-  const run = async (fn: () => Promise<unknown>) => {
+  // Runs an action; returns what went wrong (null when it worked), shown
+  // above the sections too. Refreshes either way.
+  const run = async (fn: () => Promise<unknown>): Promise<string | null> => {
     setErr(null)
-    try { await fn() } catch (e) { setErr(errorText(e)) }
+    let failed: string | null = null
+    try { await fn() } catch (e) { failed = errorText(e) }
+    setErr(failed)
     refresh()
+    return failed
   }
 
   const itemsById = useMemo(() => new Map((items.data ?? []).map((s) => [s.item.id, s])), [items.data])
@@ -54,12 +74,12 @@ export default function TeamSharing({ teamId, meId, teammates }: { teamId: strin
 
   return (
     <div className="space-y-6">
-      <UnlockBar unlocked={unlocked} onUnlock={setUnlocked} onLock={() => setUnlocked(null)} />
+      <UnlockBar unlocked={unlocked} onUnlock={setUnlocked} onLock={lock} />
       {err && <p className="text-sm text-red-400">{err}</p>}
 
       <CollectionsSection
         teamId={teamId} meId={meId} teammates={others} unlocked={unlocked}
-        collections={collections.data ?? []} loading={collections.isLoading}
+        collections={collections.data ?? []} loading={collections.isLoading} error={collections.error} retry={() => collections.refetch()}
         shares={mine.data ?? []} itemsById={itemsById} withMe={withMe.data ?? []} run={run}
       />
 
@@ -70,7 +90,9 @@ export default function TeamSharing({ teamId, meId, teammates }: { teamId: strin
             collections={(collections.data ?? []).filter((c) => c.key && c.role !== 'view')} run={run} />
         )}
       >
-        {(mine.data ?? []).length === 0 && <Empty>Nothing shared yet. Share items here or from the extension (Share… in an item).</Empty>}
+        <Loading q={mine} />
+        {mine.isSuccess && mine.data.length === 0 && <Empty>Nothing shared yet. Share items here or from the extension (Share… in an item).</Empty>}
+        {unlocked && <Loading q={items} what="your vault" />}
         {(mine.data ?? []).map((s) => (
           <MyShareRow key={s.id} share={s} stored={itemsById.get(s.item_id)} locked={locked}
             teammates={others} collections={collections.data ?? []} run={run} />
@@ -78,7 +100,8 @@ export default function TeamSharing({ teamId, meId, teammates }: { teamId: strin
       </Section>
 
       <Section title="Items shared with me">
-        {(withMe.data ?? []).length === 0 && <Empty>No items shared with you.</Empty>}
+        <Loading q={withMe} />
+        {withMe.isSuccess && withMe.data.length === 0 && <Empty>No items shared with you.</Empty>}
         {(withMe.data ?? []).map((s) => (
           <Row key={s.id}>
             <span className="text-sm text-zinc-200 min-w-0 truncate">
@@ -142,9 +165,9 @@ function UnlockBar({ unlocked, onUnlock, onLock }: { unlocked: Unlocked | null; 
 function CollectionsSection(props: {
   teamId: string; meId: string; teammates: Teammate[]; unlocked: Unlocked | null
   collections: Collection[]; loading: boolean; shares: MyShare[]; itemsById: Map<string, StoredItem>
-  withMe: Awaited<ReturnType<typeof sharedWithMe>>; run: (fn: () => Promise<unknown>) => Promise<void>
+  withMe: Awaited<ReturnType<typeof sharedWithMe>>; run: Run; error: unknown; retry: () => void
 }) {
-  const { teamId, unlocked, collections, loading, run } = props
+  const { teamId, unlocked, collections, loading, error, retry, run } = props
   const [name, setName] = useState('')
   return (
     <Section title="Collections" action={unlocked && (
@@ -156,7 +179,8 @@ function CollectionsSection(props: {
       </div>
     )}>
       {loading && <Empty>Loading…</Empty>}
-      {!loading && collections.length === 0 && <Empty>No collections yet. A collection shares items with chosen teammates.</Empty>}
+      {!!error && <Failed retry={retry}>Your collections could not be loaded.</Failed>}
+      {!loading && !error && collections.length === 0 && <Empty>No collections yet. A collection shares items with chosen teammates.</Empty>}
       {collections.map((c) => <CollectionRow key={c.id} c={c} {...props} />)}
     </Section>
   )
@@ -165,7 +189,7 @@ function CollectionsSection(props: {
 function CollectionRow({ c, meId, teammates, unlocked, shares, itemsById, withMe, run }: {
   c: Collection; meId: string; teammates: Teammate[]; unlocked: Unlocked | null; shares: MyShare[]
   itemsById: Map<string, StoredItem>; withMe: Awaited<ReturnType<typeof sharedWithMe>>
-  run: (fn: () => Promise<unknown>) => Promise<void>
+  run: Run
 }) {
   const [open, setOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -174,7 +198,7 @@ function CollectionRow({ c, meId, teammates, unlocked, shares, itemsById, withMe
   const [role, setRole] = useState<Role>('edit')
   const manage = c.role === 'manage'
   const members = useQuery({ queryKey: ['collection-members', c.id], queryFn: () => collectionMembers(c.id), enabled: open })
-  const legacy = useQuery({ queryKey: ['collection-items', c.id, !!c.key], queryFn: () => collectionItemTitles(c), enabled: open && !!c.key })
+  const legacy = useQuery({ queryKey: [DECRYPTED, 'collection-items', c.id], queryFn: () => collectionItemTitles(c), enabled: open && !!c.key })
   const label = c.name ?? (unlocked ? 'A collection you can\'t open here' : 'Locked collection')
   const memberIds = new Set((members.data ?? []).map((m) => m.user_id))
   const addable = teammates.filter((t) => !memberIds.has(t.user_id))
@@ -267,7 +291,7 @@ function CollectionRow({ c, meId, teammates, unlocked, shares, itemsById, withMe
 
 function MyShareRow({ share, stored, locked, teammates, collections, run }: {
   share: MyShare; stored: StoredItem | undefined; locked: boolean; teammates: Teammate[]
-  collections: Collection[]; run: (fn: () => Promise<unknown>) => Promise<void>
+  collections: Collection[]; run: Run
 }) {
   const granteeOf = (g: Grant): Grantee | null => {
     if (g.user_id) { const user = teammates.find((t) => t.user_id === g.user_id); return user ? { user } : null }
@@ -306,7 +330,7 @@ function MyShareRow({ share, stored, locked, teammates, collections, run }: {
 
 function ShareButton({ unlocked, items, teammates, collections, shares, run }: {
   unlocked: Unlocked; items: StoredItem[]; teammates: Teammate[]; collections: Collection[]; shares: MyShare[]
-  run: (fn: () => Promise<unknown>) => Promise<void>
+  run: Run
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -319,7 +343,7 @@ function ShareButton({ unlocked, items, teammates, collections, shares, run }: {
 
 function ShareItemModal({ unlocked, items, teammates, collections, shares, run, onClose }: {
   unlocked: Unlocked; items: StoredItem[]; teammates: Teammate[]; collections: Collection[]; shares: MyShare[]
-  run: (fn: () => Promise<unknown>) => Promise<void>; onClose: () => void
+  run: Run; onClose: () => void
 }) {
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<string | null>(null)
@@ -327,12 +351,13 @@ function ShareItemModal({ unlocked, items, teammates, collections, shares, run, 
   const [colls, setColls] = useState<string[]>([])
   const [role, setRole] = useState<'view' | 'edit'>('view')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const sorted = useMemo(() => [...items].sort((a, b) => (a.item.title || '').localeCompare(b.item.title || '')), [items])
   const shown = sorted.filter((s) => (s.item.title || '').toLowerCase().includes(query.toLowerCase())).slice(0, 50)
   const stored = items.find((s) => s.item.id === picked)
   // Who already has the picked item: shown as shared, not sent again (that
   // would rewrite their role) — their access changes under "Items I share".
-  const granted = shares.filter((s) => s.item_id === picked).flatMap((s) => s.grants)
+  const granted = shares.filter((s) => s.item_id === picked && s.whole).flatMap((s) => s.grants)
   const hasUser = (id: string) => granted.some((g) => g.user_id === id)
   const hasColl = (id: string) => granted.some((g) => g.collection_id === id)
   const toggle = (list: string[], set: (v: string[]) => void, id: string) => set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id])
@@ -344,8 +369,11 @@ function ShareItemModal({ unlocked, items, teammates, collections, shares, run, 
       ...teammates.filter((t) => people.includes(t.user_id) && !hasUser(t.user_id)).map((user) => ({ user })),
       ...collections.filter((c) => colls.includes(c.id) && !hasColl(c.id)).map((collection) => ({ collection })),
     ]
-    await run(async () => { await shareItem(unlocked, stored, grantees, role); onClose() })
+    setError(null)
+    const failed = await run(() => shareItem(unlocked, stored, grantees, role))
     setBusy(false)
+    if (failed) setError(failed)
+    else onClose()
   }
 
   return (
@@ -381,6 +409,7 @@ function ShareItemModal({ unlocked, items, teammates, collections, shares, run, 
             ))}
           </div>
         </div>
+        {error && <p className="text-xs text-red-400">{error}</p>}
         <div className="flex items-center justify-between gap-2 pt-1">
           <select value={role} onChange={(e) => setRole(e.target.value as 'view' | 'edit')}
             className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-300">
@@ -426,6 +455,21 @@ function Section({ title, action, children }: { title: string; action?: React.Re
 
 function Row({ children }: { children: React.ReactNode }) {
   return <div className="flex items-center justify-between gap-3 py-1.5 border-b border-zinc-800/60 last:border-0">{children}</div>
+}
+
+// A query's loading / failed state (its data renders elsewhere).
+function Loading({ q, what = 'this list' }: { q: { isLoading: boolean; isError: boolean; refetch: () => unknown }; what?: string }) {
+  if (q.isLoading) return <Empty>Loading…</Empty>
+  if (q.isError) return <Failed retry={() => q.refetch()}>{`${what[0].toUpperCase()}${what.slice(1)} could not be loaded.`}</Failed>
+  return null
+}
+
+function Failed({ children, retry }: { children: React.ReactNode; retry: () => void }) {
+  return (
+    <p className="text-xs text-red-400 px-1">
+      {children} <button onClick={retry} className="underline hover:text-red-300">Try again</button>
+    </p>
+  )
 }
 
 const Empty = ({ children }: { children: React.ReactNode }) => <p className="text-xs text-zinc-600 px-1">{children}</p>

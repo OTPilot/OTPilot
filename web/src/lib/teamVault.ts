@@ -246,14 +246,24 @@ export async function shareItem(u: Unlocked, stored: StoredItem, grantees: Grant
       grants: await Promise.all(grantees.map((g) => grantBody(s.sk, s.id, g, role))),
     }),
   })
-  await attachShare(u, stored, s, onServer)
+  try {
+    await attachShare(u, stored, s)
+  } catch (e) {
+    // Without its key in the item the owner can't keep the copy current or
+    // change who has it: take the share back rather than leave it orphaned.
+    await call(`/shares/${s.id}`, { method: 'DELETE' }).catch(() => {})
+    throw e
+  }
 }
 
 // Stores the share (its key) in the item, keeping its updatedAt (only that
-// property changes). Retries on a newer server version.
-async function attachShare(u: Unlocked, stored: StoredItem, s: ShareRef, onServer: Set<string>): Promise<void> {
+// property changes). On a newer server version (409) it starts again from
+// that version, pruning only shares the server no longer has — read again
+// each time, so one another tab made meanwhile is kept.
+async function attachShare(u: Unlocked, stored: StoredItem, s: ShareRef): Promise<void> {
   let { item, revision } = stored
   for (let attempt = 0; attempt < 3; attempt++) {
+    const onServer = new Set((await mySharesList()).map((x) => x.id))
     const shares = [...(item.shares || []).filter((x) => onServer.has(x.id) && x.id !== s.id), s]
     const next = { ...item, shares }
     const res = await apiFetch(`/vault/items/${item.id}`, {

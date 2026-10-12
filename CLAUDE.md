@@ -48,6 +48,7 @@ cd web
 npm run dev            # Vite dev server on :5173
 npm run build          # tsc type-check + vite build
 npm run lint           # ESLint
+npm test               # vitest (lib/*.test.ts)
 ```
 Requires `web/.env.local` with `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`.
 
@@ -217,7 +218,7 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 
 `apiFetch()` in `web/src/lib/api.ts` appends the Supabase JWT automatically to every request.
 
-**Invariant:** `web/src/lib/vaultCrypto.ts` mirrors the extension's `vaultCrypto.js` (item records, collection names / keys under a collection key, AAD strings) and `keys.js` ECIES wrapping; `web/src/lib/teamVault.ts` mirrors `vaultCollections.js` / `vaultShares.js` (a whole share's copy = `project()`; the share key stored in the item with `updatedAt` kept, written back with `base_revision`, 409 retried; `countsForLimit` from `vault.js`). Change both sides together. The web shares whole items only (chosen parts stay in the extension).
+**Invariant:** `web/src/lib/vaultCrypto.ts` mirrors the extension's `vaultCrypto.js` (item records, collection names / keys under a collection key, AAD strings) and `keys.js` ECIES wrapping; `web/src/lib/teamVault.ts` mirrors `vaultCollections.js` / `vaultShares.js` (a whole share's copy = `project()`; the share key stored in the item with `updatedAt` kept, written back with `base_revision`, 409 retried; `countsForLimit` from `vault.js`). Change both sides together: `web/src/lib/__fixtures__/vault-crypto.json` holds data made by each client, and both must open both sides (`web` `npm test` → `vaultCrypto.test.ts`; extension `tests/cryptoFixtures.spec.js`). The web shares whole items only (chosen parts stay in the extension); a share whose key can't be stored in the item is deleted again. Decrypted data is cached under the `decrypted` query prefix and removed on Lock / leaving the page.
 
 ### Billing
 `POST /billing/checkout` (body `{annual}`) creates a Stripe Checkout **subscription** for Personal ($3/mo or $30/yr, `STRIPE_PERSONAL_MONTHLY_PRICE_ID` / `STRIPE_PERSONAL_ANNUAL_PRICE_ID`; optional — checkout answers 503 until set). Both checkouts tag the session and subscription with `metadata.plan` (`personal` / `team_lite`) so the webhook can tell them apart. Stripe calls `POST /billing/webhook`; the webhook verifies the signature and sets `users.plan`. Plan values: `free`, `personal`, `team_lite`, `team_pro`.
