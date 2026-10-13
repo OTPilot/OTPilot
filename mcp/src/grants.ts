@@ -118,20 +118,31 @@ export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, t
   // before any wait, so two calls in parallel can't both spend it.
   // Every outstanding request is kept (two calls may each have one); one in
   // use by another call is marked busy, so each is spent once.
-  let stillWaiting: Waiting | undefined
+  let stillWaiting = false
   for (const earlier of [...(waiting.get(grant.itemId) || [])]) {
     if (earlier.busy || earlier.tool !== tool || earlier.reason !== reason) continue
     earlier.busy = true
-    let answer: 'allowed' | 'denied' | 'pending'
-    try { answer = await waitForAnswer(api, earlier.id, 0) } catch (e) { earlier.busy = false; throw e }
-    if (answer === 'pending') { earlier.busy = false; stillWaiting ??= earlier; continue }
-    if (answer === 'allowed') {
+    let r: { status: 'pending' | 'allowed' | 'denied'; released?: boolean }
+    try {
+      r = await api.get(`/agent/requests/${earlier.id}`, 15_000)
+    } catch (e) {
+      // Gone (answered requests are forgotten after a day): ask anew.
+      if (e instanceof ApiError && e.status === 404) { forget(grant.itemId, earlier); continue }
+      earlier.busy = false
+      throw e
+    }
+    if (r.status === 'pending') { earlier.busy = false; stillWaiting = true; continue }
+    // Only this request's own approval, still in its window: another
+    // request's release must never stand in for an expired one.
+    if (r.status === 'allowed' && r.released) {
       let again: Grant | undefined
       // A failed fetch keeps the approval for the next retry.
       try { again = (await loadGrants(api, privateJwk)).find(g => g.itemId === grant.itemId) } catch (e) { earlier.busy = false; throw e }
       forget(grant.itemId, earlier)
       if (again?.item) return again.item
-    } else forget(grant.itemId, earlier) // denied: that one is done
+      continue
+    }
+    forget(grant.itemId, earlier) // denied, or its approval expired
   }
   // One still waits for the user: point at one that's still saved and free
   // (another retry may have spent the one seen above meanwhile).

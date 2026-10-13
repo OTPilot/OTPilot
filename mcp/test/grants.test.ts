@@ -14,7 +14,7 @@ describe('ask every time', () => {
     const api = new FakeApi((m, p) => {
       if (p === '/agent/grants') return { body: { grants: [status === 'allowed' ? released : held] } }
       if (m === 'POST' && p === '/agent/requests') { asks++; return { body: { id: `00000000-0000-4000-8000-00000000000${asks}` } } }
-      if (p.startsWith('/agent/requests/')) return { body: { status } }
+      if (p.startsWith('/agent/requests/')) return { body: { status, released: status === 'allowed' } }
       return undefined
     })
     const grant = (await loadGrants(api, keys.privateJwk))[0]
@@ -39,12 +39,12 @@ describe('ask every time, a late approval', () => {
     const keys = await generateKeyPair()
     const held = await grantRow(item, keys.publicKey, { askEveryTime: true, withheld: true })
     const released = await grantRow(item, keys.publicKey, { askEveryTime: true })
-    const s = { asks: 0, status: 'pending', failGrants: false, onlyFirst: false }
+    const s = { asks: 0, status: 'pending', failGrants: false, onlyFirst: false, expired: false, gone: false }
     const FIRST = '00000000-0000-4000-8000-000000000011'
     const api = new FakeApi((m, p) => {
       if (p === '/agent/grants') return s.failGrants ? { status: 500, body: { error: 'down' } } : { body: { grants: [s.status === 'allowed' ? released : held] } }
       if (m === 'POST' && p === '/agent/requests') { s.asks++; return { body: { id: `00000000-0000-4000-8000-00000000001${s.asks}` } } }
-      if (p.startsWith('/agent/requests/')) return { body: { status: s.onlyFirst && !p.endsWith(FIRST) ? 'pending' : s.status } }
+      if (p.startsWith('/agent/requests/')) { const st = s.onlyFirst && !p.endsWith(FIRST) ? 'pending' : s.status; return s.gone ? { status: 404, body: { error: 'not found' } } : { body: { status: st, released: st === 'allowed' && !s.expired } } }
       return undefined
     })
     const grant = (await loadGrants(api, keys.privateJwk))[0]
@@ -70,6 +70,23 @@ describe('ask every time, a late approval', () => {
     expect(s.asks).toBe(2)
   })
 
+  it('is not used once its own window passed, even while another release is live', async () => {
+    const { s, open } = await setup()
+    s.status = 'allowed'
+    s.expired = true // its two minutes are over; the grants list still shows a released copy
+    s.onlyFirst = true // the new request stays waiting
+    await expect(open()).rejects.toBeInstanceOf(PendingApproval)
+    expect(s.asks).toBe(2)
+  })
+
+  it('a request the server forgot (404) is dropped and asked anew', async () => {
+    const { s, open } = await setup()
+    s.gone = true
+    await expect(open()).rejects.toThrow() // the new ask's poll is 404 too here
+    s.gone = false
+    expect(s.asks).toBe(2)
+  })
+
   it('survives a failed fetch of the released copy', async () => {
     const { s, open } = await setup()
     s.status = 'allowed'
@@ -92,7 +109,7 @@ describe('ask every time, parallel retries', () => {
     const api = new FakeApi((m, p) => {
       if (p === '/agent/grants') return { body: { grants: [Object.values(status).includes('allowed') ? released : held] } }
       if (m === 'POST' && p === '/agent/requests') { asks++; const id = `00000000-0000-4000-8000-00000000002${asks}`; status[id] = 'pending'; return { body: { id } } }
-      if (p.startsWith('/agent/requests/')) return { body: { status: status[p.split('/').pop()!] } }
+      if (p.startsWith('/agent/requests/')) { const st = status[p.split('/').pop()!]; return { body: { status: st, released: st === 'allowed' } } }
       return undefined
     })
     const grant = (await loadGrants(api, keys.privateJwk))[0]
