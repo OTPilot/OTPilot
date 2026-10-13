@@ -103,7 +103,8 @@ export function buildServer(ctx: Ctx): McpServer {
     if (grant.scope.kind === '2fa') return fail(`"${grant.title}" only allows its 2FA code, not signing in. Use run with "${grant.title}/totp", or ask the user to allow its sign-in.`)
     const item = await openItem(ctx.api, ctx.creds.privateJwk, grant, 'browser_login', reason || '', WAIT_MS)
     const result = await browserLogin(item, { url, outDir: `${process.cwd()}/.otpilot`, show: show_browser ?? 'auto' })
-    await report(ctx, grant.itemId, 'browser_login', new URL(result.url).hostname)
+    // A sign-in that didn't finish is logged as a try (it still used the password).
+    await report(ctx, grant.itemId, result.status === 'signed_in' ? 'browser_login' : 'login_attempt', new URL(result.url).hostname)
     const secrets = [item.fields.map(f => f.value || ''), item.totp?.secret || ''].flat().filter(Boolean)
     const body = result.status === 'signed_in'
       ? `Signed in to ${result.url} ("${result.title}").\nSession: ${result.storageState}\nLoad it with Playwright: browser.newContext({ storageState: '${result.storageState}' }). Keep the file out of git (.otpilot/).`

@@ -866,7 +866,7 @@ async fn agent_use(
     agent: AgentAuth,
     Json(body): Json<UseBody>,
 ) -> Result<Json<Value>> {
-    if !matches!(body.action.as_str(), "browser_login" | "run" | "totp") {
+    if !matches!(body.action.as_str(), "browser_login" | "login_attempt" | "run" | "totp") {
         return Err(ApiError::BadRequest("unknown action".into()));
     }
     let mut tx = state.db.begin().await?;
