@@ -96,14 +96,15 @@ export function buildServer(ctx: Ctx): McpServer {
       account: z.string().min(1).describe('The account, as list_accounts names it.'),
       url: z.string().url().optional().describe('The page to start from (must be one of the account\'s sites). Defaults to its first saved site.'),
       reason: z.string().max(500).optional().describe('Why, shown to the user if this account asks every time.'),
-      show_browser: z.boolean().optional().describe('Open a visible browser window (default: headless).'),
+      show_browser: z.boolean().optional().describe('true: sign in in a visible browser window; false: never open one. Default: headless, and a visible window only when the site shows a bot check (the user may have to solve it there).'),
     },
   }, ({ account, url, reason, show_browser }) => guard(async () => {
     const grant = findGrant(await loadGrants(ctx.api, ctx.creds.privateJwk), account)
     if (grant.scope.kind === '2fa') return fail(`"${grant.title}" only allows its 2FA code, not signing in. Use run with "${grant.title}/totp", or ask the user to allow its sign-in.`)
     const item = await openItem(ctx.api, ctx.creds.privateJwk, grant, 'browser_login', reason || '', WAIT_MS)
-    const result = await browserLogin(item, { url, outDir: `${process.cwd()}/.otpilot`, headless: !show_browser })
-    await report(ctx, grant.itemId, 'browser_login', new URL(result.url).hostname)
+    const result = await browserLogin(item, { url, outDir: `${process.cwd()}/.otpilot`, show: show_browser ?? 'auto' })
+    // A sign-in that didn't finish is logged as a try (it still used the password).
+    await report(ctx, grant.itemId, result.status === 'signed_in' ? 'browser_login' : 'login_attempt', new URL(result.url).hostname)
     const secrets = [item.fields.map(f => f.value || ''), item.totp?.secret || ''].flat().filter(Boolean)
     const body = result.status === 'signed_in'
       ? `Signed in to ${result.url} ("${result.title}").\nSession: ${result.storageState}\nLoad it with Playwright: browser.newContext({ storageState: '${result.storageState}' }). Keep the file out of git (.otpilot/).`

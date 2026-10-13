@@ -5,12 +5,12 @@
   "description": "Use the accounts you allow in OTPilot (passwords, 2FA codes) to sign in and run commands, without seeing them.",
   "websiteUrl": "https://otpilot.app/ai-agents",
   "repository": { "url": "https://github.com/OTPilot/OTPilot", "source": "github", "subfolder": "mcp" },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@otpilot/mcp",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "transport": { "type": "stdio" }
     }
   ]

@@ -14,7 +14,7 @@ const AGENT_DURATIONS = [
   ['1d', '1 day'],
   ['7d', '1 week'],
 ];
-const AGENT_ACTIONS = { browser_login: 'signed in to', run: 'ran a command with', totp: 'got a 2FA code for' };
+const AGENT_ACTIONS = { browser_login: 'signed in to', login_attempt: 'tried to sign in to', run: 'ran a command with', totp: 'got a 2FA code for' };
 
 let _agentsData = null;     // last Agents.list()
 let _agentsItems = [];      // vault items (decrypted) for names and pickers
@@ -203,6 +203,9 @@ function agentGrantFormHTML(item, current) {
   const opt = (v, label, on, dis) => `<option value="${v}"${on ? ' selected' : ''}${dis ? ' disabled' : ''}>${label}</option>`;
   const parts = VaultShares.parts(item);
   const chosen = new Set(scope.kind === 'fields' ? scope.parts : []);
+  // An expired grant being renewed has no time left to keep: an hour by default.
+  const expired = current?.expires_at && new Date(current.expires_at).getTime() <= Date.now();
+  const keep = current?.expires_at && !expired;
   return `<div class="ag-form">
     <label>It can use
       <select class="ag-scope">
@@ -216,8 +219,8 @@ function agentGrantFormHTML(item, current) {
     </div>
     <label>For
       <select class="ag-duration">
-        ${current?.expires_at ? opt('keep', `As now (${esc(agentExpiry(current.expires_at))})`, true) : ''}
-        ${AGENT_DURATIONS.map(([v, l]) => opt(v, l, !v && !current?.expires_at)).join('')}
+        ${keep ? opt('keep', `As now (${esc(agentExpiry(current.expires_at))})`, true) : ''}
+        ${AGENT_DURATIONS.map(([v, l]) => opt(v, l, expired ? v === '1h' : !v && !current?.expires_at)).join('')}
       </select>
       <span style="margin-left:8px"><input type="checkbox" class="ag-ask"${current?.ask_every_time ? ' checked' : ''}> Ask me every time</span>
     </label>
@@ -321,6 +324,7 @@ function renderActiveAgent(detail, a) {
           <span class="ag-pill">${esc(item ? Agents.scopeSummary(item, g.scope) : Agents.SCOPE_LABELS[g.scope.kind])}</span>
           ${g.ask_every_time ? '<span class="ag-pill warn">Asks every time</span>' : ''}
           ${exp ? `<span class="ag-pill muted">${esc(exp)}</span>` : ''}
+          ${exp === 'expired' && item && a.pinned ? '<button class="ag-btn link sm" data-act="renew">Renew</button>' : ''}
           ${g.commands.length ? `<span class="ag-pill muted">only ${esc(g.commands.join(', '))}</span>` : ''}
         </div></div>
       <button class="ag-x" title="Stop letting ${esc(a.name)} use this">✕</button>
@@ -361,23 +365,29 @@ function renderActiveAgent(detail, a) {
   detail.querySelector('[data-act=pin]')?.addEventListener('click', () => agentAct(detail, () => Agents.pin(a)));
   detail.querySelectorAll('.ag-card-row[data-item]').forEach(row => {
     row.querySelector('.ag-x').addEventListener('click', () => agentAct(row, () => Agents.ungrant(a.id, row.dataset.item)));
+    row.querySelector('[data-act=renew]')?.addEventListener('click', () => openAdd(itemById(row.dataset.item)));
   });
-  const openAdd = () => {
+  // `renew`: an account it already has (an expired one), its form open with its settings.
+  const openAdd = renew => {
     const box = detail.querySelector('.ag-adding');
     const have = new Set(a.grants.map(g => g.item_id));
-    const ask = asks[asks.length - 1];
+    const ask = renew ? null : asks[asks.length - 1];
     box.innerHTML = `<div class="ag-request" style="margin-bottom:8px"><div class="ag-picker"></div><div class="ag-grant"></div>
       ${ask ? `<label class="ag-text"><input type="checkbox" class="ag-answers" checked> Answers its request for <b>${esc(ask.query || 'an account')}</b></label>` : ''}
-      <div class="ag-btns"><button class="ag-btn" data-act="cancel">Cancel</button><span class="ag-grow"></span><button class="ag-btn primary" data-act="allow" disabled>Allow</button></div></div>`;
+      <div class="ag-btns"><button class="ag-btn" data-act="cancel">Cancel</button><span class="ag-grow"></span><button class="ag-btn primary" data-act="allow" disabled>${renew ? 'Renew' : 'Allow'}</button></div></div>`;
     const card = box.firstElementChild;
     let chosen = null;
     const allow = card.querySelector('[data-act=allow]');
-    mountItemPicker(card.querySelector('.ag-picker'), _agentsItems.filter(i => i.type === 'login' && !have.has(i.id)).slice(0, 8), item => {
+    const pick = item => {
       chosen = item;
       card.querySelector('.ag-grant').innerHTML = agentGrantFormHTML(item, a.grants.find(g => g.item_id === item.id));
       mountGrantForm(card);
       allow.disabled = false;
-    });
+    };
+    if (renew) {
+      card.querySelector('.ag-picker').innerHTML = `<div class="ag-t1">${esc(renew.title || 'Untitled')}</div>`;
+      pick(renew);
+    } else mountItemPicker(card.querySelector('.ag-picker'), _agentsItems.filter(i => i.type === 'login' && !have.has(i.id)).slice(0, 8), pick);
     card.querySelector('[data-act=cancel]').addEventListener('click', () => { box.innerHTML = ''; });
     allow.addEventListener('click', () => agentAct(card, async () => {
       const answers = ask && card.querySelector('.ag-answers')?.checked;
@@ -392,7 +402,7 @@ function renderActiveAgent(detail, a) {
       });
     }));
   };
-  detail.querySelector('[data-act=add]').addEventListener('click', openAdd);
+  detail.querySelector('[data-act=add]').addEventListener('click', () => openAdd());
   if (_agentsSel.adding && a.pinned) { _agentsSel.adding = false; openAdd(); }
 }
 

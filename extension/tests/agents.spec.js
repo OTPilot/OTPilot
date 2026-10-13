@@ -327,3 +327,26 @@ test('approvals written at the same time are all kept', async ({ context, extens
   });
   expect(n).toBe(2);
 });
+
+test('an expired account is renewed in place, with its settings', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    const item = (await Agents.vaultItems(await VaultKeys.getKey())).find(i => i.title === 'GitHub');
+    await Agents.grant(a, item, { scope: { kind: 'login' }, expiresAt: new Date(Date.now() - 60e3).toISOString(), commands: ['gh'] });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  const detail = page.locator('#agents-detail');
+  await expect(detail).toContainText('expired');
+  await detail.getByRole('button', { name: 'Renew' }).first().click();
+  await expect(detail.locator('.ag-duration')).toHaveValue('1h');
+  await expect(detail.locator('.ag-commands')).toHaveValue('gh');
+  await detail.locator('.ag-adding').getByRole('button', { name: 'Renew' }).click();
+  await expect(detail).toContainText('1 h left');
+  const g = await page.evaluate(id => [...fakeAgents.agents.get(id).grants.values()][0], agentId);
+  expect(g.commands).toEqual(['gh']);
+  expect(new Date(g.expires_at).getTime()).toBeGreaterThan(Date.now());
+});
