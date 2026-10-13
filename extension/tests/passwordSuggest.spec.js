@@ -77,3 +77,17 @@ test('the suggestion opens under the new-password field, and its badge brings it
   await site.locator('.otpilot-field-badge[data-kind="generate"]').first().click();
   await expect(offer).toBeVisible();
 });
+
+test('a reset page that doesn\'t mark its fields still gets the suggestion, for both fields', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/reset-password.html`);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(2);
+  await site.focus('input[name="password"]');
+  const offer = site.locator('#otpilot-password-suggest');
+  await expect(offer).toBeVisible();
+  const value = await offer.locator('.otpilot-gen-value').textContent();
+  await offer.locator('.otpilot-gen-use').click();
+  await expect(site.locator('input[name="password"]')).toHaveValue(value);
+  await expect(site.locator('input[name="password2"]')).toHaveValue(value);
+});
