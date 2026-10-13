@@ -72,6 +72,12 @@ beforeAll(async () => {
       <script>document.querySelector('[name=email]').addEventListener('keydown', e => { if (e.key !== 'Enter') return
         err.textContent = 'Something went wrong'; setTimeout(() => { location.href = '/user-ok' }, 23000) })</script>`)
     if (url.pathname === '/user-ok') return html('<form method="post" action="/pass"><input type="password" name="pw"><button>Sign in</button></form>')
+    // The code step answers slowly, and only then sets the session cookie.
+    if (url.pathname === '/slow') return html('<form method="post" action="/otp-slow"><input name="code" autocomplete="one-time-code"><button>Verify</button></form>')
+    if (url.pathname === '/otp-slow') {
+      await new Promise(r => setTimeout(r, 2500))
+      return form.get('code') === (await generateTOTP(SECRET)) ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=slow; Path=/' }) : html('bad code')
+    }
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return form.get('code') === (await generateTOTP(SECRET))
       ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=signed-in; Path=/' })
@@ -173,6 +179,14 @@ describe('browser_login', () => {
     if (!browserOk) ctx.skip()
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}boxes-still`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
     expect(r.status).toBe('signed_in')
+  }, 40_000)
+
+  it('waits for a slow sign-in response before saving the session (its cookie included)', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}slow`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
+    expect(r.status).toBe('signed_in')
+    const state = JSON.parse(readFileSync(r.storageState!, 'utf8'))
+    expect(state.cookies.map((c: { name: string; value: string }) => `${c.name}=${c.value}`)).toContain('session=slow')
   }, 40_000)
 
   it('reports a rejected password instead of claiming success', async ctx => {
