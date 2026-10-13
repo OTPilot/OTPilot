@@ -5211,23 +5211,40 @@ async function renderCollectionBody(body, c, team, teamMembers, myId) {
     if (candidates.length) {
       const add = document.createElement('div');
       add.className = 'coll-add';
+      // Nothing picked up front and view by default: adding someone gives
+      // them everything in the collection, so it's never one stray click.
       const who = document.createElement('select');
       who.className = 'who';
+      who.add(new Option('Add a teammate…', '', true, true));
+      who.options[0].disabled = true;
       for (const t of candidates) who.add(new Option(`${t.email || t.user_id}${t.public_key ? '' : ' (not signed in yet)'}`, t.user_id));
       const role = document.createElement('select');
       role.className = 'coll-new-role';
-      for (const r of ['view', 'edit', 'manage']) role.add(new Option(ROLE_LABELS[r], r, false, r === 'edit'));
+      for (const r of ['view', 'edit', 'manage']) role.add(new Option(ROLE_LABELS[r], r, false, r === 'view'));
       const btn = document.createElement('button');
       btn.className = 'btn-crypto-ok coll-add-btn';
       btn.textContent = 'Add';
+      btn.disabled = true;
+      const note = document.createElement('div');
+      note.className = 'coll-meta coll-add-note';
+      const say = () => {
+        const user = candidates.find(t => t.user_id === who.value);
+        btn.disabled = !user;
+        note.textContent = user
+          ? `${user.email || 'They'} will see everything in "${c.name || 'this collection'}", and what's added to it later (${ROLE_LABELS[role.value].toLowerCase()}).`
+          : '';
+      };
+      who.addEventListener('change', say);
+      role.addEventListener('change', say);
       btn.addEventListener('click', async () => {
         const user = candidates.find(t => t.user_id === who.value);
+        if (!user) return;
         btn.disabled = true;
         try { await VaultCollections.addMember(c, user, role.value); setStatus(`Added ${user.email || 'teammate'}`); rerender(); }
         catch (e) { setStatus(e.message || 'Could not add them', false); btn.disabled = false; }
       });
       add.append(who, role, btn);
-      body.appendChild(add);
+      body.append(add, note);
     }
   }
 
