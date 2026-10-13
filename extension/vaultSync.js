@@ -228,7 +228,7 @@ const VaultSync = (() => {
 
   async function push(state, key, stats) {
     const taken = [];
-    let conflicted = false;
+    const conflicted = [];
     const local = await VaultStore.listRecords();
     const creates = [];
     for (const [id, rec] of Object.entries(local)) {
@@ -263,7 +263,7 @@ const VaultSync = (() => {
         stats.pushed++;
       }
       taken.push(...(body.taken || []));
-      if ((body.conflicts || []).length) conflicted = true;
+      conflicted.push(...(body.conflicts || []));
       await saveStateFor(state, key);
       batch = [];
       bytes = 0;
@@ -278,11 +278,11 @@ const VaultSync = (() => {
     // `conflicts`: ids of mine already on the server that this device never
     // pulled (its cursor moved past them): pull everything again next time,
     // where the newer edit wins. Left alone they'd retry here forever.
-    if (conflicted) { state.cursor = 0; await saveStateFor(state, key); }
+    if (conflicted.length) { state.cursor = 0; await saveStateFor(state, key); }
     // `taken`: ids another account (or a collection) holds — e.g. this
     // browser was signed in to another OTPilot account with the same vault.
     // They can never go up under those ids.
-    if (taken.length) stats.rehomed = await rehome(taken, state, key, stats);
+    if (taken.length) stats.rehomed = await rehome(taken, conflicted, key, stats);
 
     // Local deletions.
     const tombs = await VaultStore.listTombstones();
@@ -315,7 +315,7 @@ const VaultSync = (() => {
   // synced here (the same account, migrated twice) is dropped — that one
   // stays; any other gets a new id (re-encrypted: the id is bound into the
   // record) and goes up on the next push. Items linking a moved one follow.
-  async function rehome(ids, state, key, stats) {
+  async function rehome(ids, unsettled, key, stats) {
     let moved = 0;
     await VaultStore.transaction(async tx => {
       await checkKey(key);
@@ -325,25 +325,35 @@ const VaultSync = (() => {
       for (const [id, rec] of Object.entries(recs)) items[id] = await decryptOrNull(rec, key);
       // Exact copies are looked for among every other item here (synced or
       // not): a move cut short last time left the old record beside its new
-      // one, and that old record is dropped now instead of moved twice.
+      // one, and that old record is dropped now instead of moved twice. Not
+      // among items still in conflict with the server: the pull may yet
+      // replace them.
+      const skip = new Set(unsettled);
       const others = new Map();
-      for (const [id, item] of Object.entries(items)) if (item && !taken.has(id)) others.set(content(item), id);
+      for (const [id, item] of Object.entries(items)) if (item && !taken.has(id) && !skip.has(id)) others.set(content(item), id);
+      // Where each one goes first, so moved items linking each other follow too.
       const to = {};
-      const puts = [];
+      const fresh = [];
       for (const id of ids) {
         const item = items[id];
         if (!item) continue;
         const twin = others.get(content(item));
         if (twin) { to[id] = twin; continue; }
-        const fresh = crypto.randomUUID();
-        puts.push([fresh, await VaultCrypto.encryptItem({ ...item, id: fresh }, key)]);
-        to[id] = fresh;
+        to[id] = crypto.randomUUID();
+        fresh.push(id);
       }
       moved = Object.keys(to).length;
       if (!moved) return;
+      const relink = item => [...new Set((item.links || []).map(l => to[l] || l))];
+      const puts = [];
+      for (const id of fresh) {
+        const item = items[id];
+        const links = relink(item).filter(l => l !== to[id]);
+        puts.push([to[id], await VaultCrypto.encryptItem({ ...item, id: to[id], ...(item.links ? { links } : {}) }, key)]);
+      }
       for (const [id, item] of Object.entries(items)) {
         if (taken.has(id) || !item?.links?.some(l => to[l])) continue;
-        const links = [...new Set(item.links.map(l => to[l] || l))].filter(l => l !== id);
+        const links = relink(item).filter(l => l !== id);
         // A dated change: an older edit from another device doesn't bring the old id back.
         puts.push([id, await VaultCrypto.encryptItem({ ...item, links, updatedAt: new Date().toISOString() }, key)]);
       }

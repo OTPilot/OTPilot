@@ -620,3 +620,26 @@ test('a move cut short (the old record left beside its new one) is finished, not
   expect(await localTitles(page)).toEqual(['AWS']);
   expect(await page.evaluate(() => fakeServer.items.size)).toBe(1);
 });
+
+test('two taken items linking each other keep the link under their new ids', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const login = Vault.newItem('login', { title: 'AWS' });
+    const note = Vault.newItem('note', { title: 'AWS notes' });
+    login.links = [note.id];
+    note.links = [login.id];
+    await VaultStore.save(login, key);
+    await VaultStore.save(note, key);
+    fakeServer.foreign.add(login.id);
+    fakeServer.foreign.add(note.id);
+  });
+  await sync(page);
+  const r = await page.evaluate(async () => {
+    const items = (await VaultStore.readAll(await VaultKeys.getKey())).items;
+    const a = items.find(i => i.title === 'AWS'); const n = items.find(i => i.title === 'AWS notes');
+    return { a: a.links, n: n.links, aId: a.id, nId: n.id };
+  });
+  expect(r.a).toEqual([r.nId]);
+  expect(r.n).toEqual([r.aId]);
+});
