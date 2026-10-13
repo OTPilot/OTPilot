@@ -144,8 +144,11 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
 async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, headless: boolean): Promise<LoginResult> {
   // After a submit: in a visible window a bot check showing up then is the
   // person's to clear, so it waits for them (never submitting again).
+  // One deadline for all the waiting on the person, wherever it starts.
+  let humanUntil = 0
+  const humanLeft = () => (humanUntil ||= Date.now() + HUMAN_MS) - Date.now()
   const submitted = async (page: Page, field: Locator, next: string | null) =>
-    (await moveOn(page, field, next)) || (!headless && (await botCheck(page)) && (await moveOn(page, field, next, HUMAN_MS)))
+    (await moveOn(page, field, next)) || (!headless && (await botCheck(page)) && (await moveOn(page, field, next, Math.max(0, humanLeft()))))
   const username = Vault.getValue(item, 'username')
   const password = Vault.getValue(item, 'password')
   // Only on the account's sites, and only over HTTPS — plain HTTP just for a
@@ -243,15 +246,22 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     // button, a captcha under the form) is the person's to finish: OTPilot
     // never submits again, it waits for the page to move on, and fills a 2FA
     // code that shows up then.
-    if (!headless && filledSomething && (await asking())) {
-      const until = Date.now() + HUMAN_MS
-      while (Date.now() < until && (await asking())) {
-        if (item.totp?.secret && !tried.has('otp') && tried.has('password') && (await firstVisible(page, OTP))) { await drive(); break }
+    // Not done while a field still asks, a submitted username hasn't led to
+    // the password yet, or a bot check is up (its fields hidden is no success).
+    const pending = async () => (await asking()) || (covers(page.url())
+      && ((lastStep === 'username' && !!(await firstVisible(page, USER))) || (await botCheck(page))))
+    if (!headless && filledSomething && (await pending())) {
+      while (humanLeft() > 0 && (await pending())) {
+        // The next step showed up once the person got through: OTPilot fills
+        // it (each step still submitted once).
+        const next = (lastStep === 'username' && !tried.has('password') && (await firstVisible(page, PASSWORD)))
+          || (item.totp?.secret && tried.has('password') && !tried.has('otp') && (await firstVisible(page, OTP)))
+        if (next) { await drive(); continue }
         await page.waitForTimeout(1000)
       }
       await settle(page)
     }
-    const stillAsking = await asking()
+    const stillAsking = await pending()
     debug(`done: still asking ${stillAsking}, last step ${lastStep}`)
     // A sign-in that never got past the username (rejected, or a step OTPilot
     // can't see) isn't one: only a submitted password or code counts.

@@ -65,6 +65,11 @@ beforeAll(async () => {
     // Boxes that don't move the focus by themselves, with a button to send.
     if (url.pathname === '/boxes-still') return html(`<form method="post" action="/otp" onsubmit="this.code.value = [...document.querySelectorAll('.d')].map(x => x.value).join('')">
       <input type="hidden" name="code">${'<input class="d" maxlength="1" autocomplete="one-time-code">'.repeat(6)}<button>Verify</button></form>`)
+    // The username turned down, then the person gets it through: the password page.
+    if (url.pathname === '/user-turned-down') return html(`<input name="email" type="email" autocomplete="username"><p id="err"></p>
+      <script>document.querySelector('[name=email]').addEventListener('keydown', e => { if (e.key !== 'Enter') return
+        err.textContent = 'Something went wrong'; setTimeout(() => { location.href = '/user-ok' }, 23000) })</script>`)
+    if (url.pathname === '/user-ok') return html('<form method="post" action="/pass"><input type="password" name="pw"><button>Sign in</button></form>')
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return form.get('code') === (await generateTOTP(SECRET))
       ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=signed-in; Path=/' })
@@ -147,6 +152,12 @@ describe('browser_login', () => {
   it('in a visible window, waits for the person to get a turned-down submit through, then fills the code', async ctx => { // after the 20 s a submit gets
     if (!browserOk || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}turned-down`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`), show: true })
+    expect(r.status).toBe('signed_in')
+  }, 90_000)
+
+  it('in a visible window, goes on to the password once the person gets a turned-down username through', async ctx => {
+    if (!browserOk || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}user-turned-down`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`), show: true })
     expect(r.status).toBe('signed_in')
   }, 90_000)
 
