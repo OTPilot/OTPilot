@@ -16,6 +16,7 @@ let browserOk = true
 // HEADLESS=1: skip the tests that open a visible window (so none pops up while you work).
 const windows = !process.env.HEADLESS
 let spaLogins = 0
+let autoSubmits = 0
 
 // Like real sites, a code from the previous 30-second window still counts
 // (the window can turn between filling and the server checking it).
@@ -88,6 +89,15 @@ beforeAll(async () => {
       const valid = await validCode(form.get('code'))
       await new Promise(r => setTimeout(r, 2500))
       return valid ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=slow; Path=/' }) : html('bad code')
+    }
+    // The code field sends itself on the sixth digit, and the answer takes a while.
+    if (url.pathname === '/auto') return html(`<form method="post" action="/otp-auto"><input name="code" maxlength="6" autocomplete="one-time-code"></form>
+      <script>document.querySelector('[name=code]').addEventListener('input', e => { if (e.target.value.length === 6) document.forms[0].submit() })</script>`)
+    if (url.pathname === '/otp-auto') {
+      autoSubmits++
+      const valid = await validCode(form.get('code'))
+      await new Promise(r => setTimeout(r, 1500))
+      return valid ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=auto; Path=/' }) : html('bad code')
     }
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return (await validCode(form.get('code')))
@@ -198,6 +208,13 @@ describe('browser_login', () => {
     expect(r.status).toBe('signed_in')
     const state = JSON.parse(readFileSync(r.storageState!, 'utf8'))
     expect(state.cookies.map((c: { name: string; value: string }) => `${c.name}=${c.value}`)).toContain('session=slow')
+  }, 40_000)
+
+  it('a code field that sends itself on the last digit gets the code once', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}auto`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
+    expect(r.status).toBe('signed_in')
+    expect(autoSubmits).toBe(1)
   }, 40_000)
 
   it('reports a rejected password instead of claiming success', async ctx => {

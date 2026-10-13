@@ -97,7 +97,8 @@ async function moveOn(page: Page, field: Locator, next: string | null, ms = 20_0
  * pasted value. One box per digit gets each digit in its own box, whether or
  * not the page moves the focus; Enter only goes in if nothing happened.
  */
-async function typeCode(page: Page, field: Locator, code: string) {
+async function typeCode(page: Page, field: Locator, code: string, navigations: () => number) {
+  const before = navigations()
   // The boxes from this one on, in page order, only the ones showing (the
   // same list the digits go into).
   const boxes = await field.evaluate(el => {
@@ -119,7 +120,16 @@ async function typeCode(page: Page, field: Locator, code: string) {
   }
   // Enter only if the page didn't take the code on the last digit (a field
   // gone, a new page): never a second submit.
-  if (!(await moveOn(page, field, null, 600))) await page.keyboard.press('Enter').catch(() => {})
+  // Enter only if, after a moment, the page neither sent the code itself (a
+  // navigation started — it may take a while to answer) nor moved on: never
+  // the same code twice.
+  const until = Date.now() + 2000
+  while (Date.now() < until) {
+    if (navigations() > before) return
+    if (await moveOn(page, field, null, 200)) return
+  }
+  if (navigations() > before) return
+  await page.keyboard.press('Enter').catch(() => {})
 }
 
 /** A bot check (Cloudflare, reCAPTCHA, hCaptcha…) standing in front of the page. */
@@ -166,6 +176,7 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
   // response is what sets the session cookie, so nothing is looked at or
   // saved while one is under way.
   let navs = 0
+  let navsStarted = 0
   const settled = async (page: Page) => {
     const until = Date.now() + 20_000
     while (navs > 0 && Date.now() < until) await page.waitForTimeout(100)
@@ -205,7 +216,7 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     const page = await context.newPage()
     page.on('close', () => { closed = true })
     const nav = (r: import('playwright-core').Request) => r.isNavigationRequest() && r.frame() === page.mainFrame()
-    page.on('request', r => { if (nav(r)) { navs++; debug(`nav start ${r.method()} ${r.url()} (${navs})`) } })
+    page.on('request', r => { if (nav(r)) { navs++; navsStarted++; debug(`nav start ${r.method()} ${r.url()} (${navs})`) } })
     const answered = (r: import('playwright-core').Request) => { if (nav(r)) { navs = Math.max(0, navs - 1); debug(`nav done ${r.url()} (${navs})`) } }
     page.on('requestfinished', answered)
     page.on('requestfailed', answered)
@@ -241,7 +252,7 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
       if (otp && (!pass || tried.has('password'))) {
         if (tried.has('otp')) break
         const code = await generateTOTP(item.totp!.secret, item.totp!.period || 30, item.totp!.digits || 6)
-        await typeCode(page, otp, code)
+        await typeCode(page, otp, code, () => navsStarted)
         filledSomething = true
         tried.add('otp')
         lastStep = 'otp'
