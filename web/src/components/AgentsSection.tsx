@@ -25,7 +25,7 @@ export default function AgentsSection() {
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-violet-400/25 bg-violet-500/10 text-violet-300 text-xs font-medium mb-6">
             <span className="px-1.5 py-0.5 rounded-md bg-violet-400 text-black text-[10px] font-bold tracking-wider">NEW</span>
-            OTPilot for AI agents
+            Agentic sign-in · OTPilot for AI agents
           </div>
           <h2 className="text-3xl md:text-5xl font-bold text-white tracking-tight leading-[1.1] mb-5">
             Your AI agent can sign in.{' '}

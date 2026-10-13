@@ -132,7 +132,7 @@ export default function AiAgents() {
   return (
     <div className="min-h-screen bg-[#0a0a0f]">
       <Seo
-        title="OTPilot for AI agents — let agents sign in without seeing your passwords"
+        title="OTPilot for AI agents — agentic sign-in without seeing your passwords"
         description="Let Claude Code, Codex, Cursor or any MCP agent sign in with your passwords and 2FA codes without ever seeing them. Approve each agent and each account. Free to start."
         path="/ai-agents"
         image="https://otpilot.app/og-agents.png"
@@ -156,7 +156,7 @@ export default function AiAgents() {
         <div className="relative max-w-6xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-violet-400/25 bg-violet-500/10 text-violet-300 text-xs font-medium mb-8">
             <span className="px-1.5 py-0.5 rounded-md bg-violet-400 text-black text-[10px] font-bold tracking-wider">NEW</span>
-            OTPilot 2.1 · for AI agents
+            OTPilot 2.1 · agentic sign-in for AI agents
           </div>
           <h1 className="text-5xl md:text-7xl font-bold text-white tracking-tight leading-[1.05] mb-6">
             Give your agents your logins.
