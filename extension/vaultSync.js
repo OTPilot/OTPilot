@@ -19,6 +19,7 @@
 const VaultSync = (() => {
   const STATE = 'vaultSyncState';
   const REHOME = 'vaultRehome'; // old id → new id of a move to a new id under way
+  const REMAPPED = 'vaultRemapped'; // every finished move, old id → new id: links coming from elsewhere follow
   const BATCH_MAX = 500;
   const BATCH_BYTES = 6 * 1024 * 1024; // under the API's 8 MiB body cap
 
@@ -206,6 +207,21 @@ const VaultSync = (() => {
       stats.pulled++;
     }
 
+    // What came in linking an id this device moved to a new one (another
+    // device's older version) links the new id — pushed like any edit.
+    const remapped = (await chrome.storage.local.get(REMAPPED))[REMAPPED] || {};
+    if (Object.keys(remapped).length) {
+      const now = await tx.listRecords();
+      for (const id of touched) {
+        const item = now[id] && await decryptOrNull(now[id], key);
+        if (!item?.links?.some(l => remapped[l])) continue;
+        const last = l => { const seen = new Set(); while (remapped[l] && !seen.has(l)) { seen.add(l); l = remapped[l]; } return l; };
+        const links = [...new Set(item.links.map(last))].filter(l => l !== id);
+        await tx.put(id, await VaultCrypto.encryptItem({ ...item, links }, key));
+        if (state.synced[id]) state.synced[id] = { ...state.synced[id], fp: null };
+      }
+    }
+
     // Items here that link a login this pull moved to the server's id link
     // the new id (re-encrypted: the change is pushed like any edit).
     const moved = stats.remapped;
@@ -371,14 +387,19 @@ const VaultSync = (() => {
       for (const [id, item] of Object.entries(items)) {
         if (taken.has(id) || written.has(id) || !item?.links?.some(l => to[l])) continue;
         const links = relink(item).filter(l => l !== id);
-        // A dated change: an older edit from another device doesn't bring the old id back.
-        puts.push([id, await VaultCrypto.encryptItem({ ...item, links, updatedAt: new Date().toISOString() }, key)]);
+        // Not dated as an edit (a newer edit elsewhere must still win): a pulled
+        // version linking the old id is translated on the way in instead.
+        puts.push([id, await VaultCrypto.encryptItem({ ...item, links }, key)]);
       }
       // The mapping first (a retry finds the replacements by it), then the new
       // records and every link to them in one write, then the old records:
       // nothing ever links an id that's gone, and nothing is moved twice.
       await chrome.storage.local.set({ [REHOME]: { ...pending, ...to } });
       if (puts.length) await tx.putMany(puts);
+      // Kept flat: an earlier move to an id moved now points at the newest.
+      const done = (await chrome.storage.local.get(REMAPPED))[REMAPPED] || {};
+      for (const [from, dest] of Object.entries(done)) if (to[dest]) done[from] = to[dest];
+      await chrome.storage.local.set({ [REMAPPED]: { ...done, ...to } });
       await tx.dropMany(Object.keys(to));
       const left = { ...pending, ...to };
       for (const id of Object.keys(to)) delete left[id];

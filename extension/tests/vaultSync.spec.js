@@ -682,3 +682,27 @@ test('an edit made to the old record after a cut-short move is kept in its repla
   const items = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => [i.notes || '', (i.shares || []).map(x => x.id)]));
   expect(items).toEqual([['edited later', ['share-1']]]); // the replacement's share key stays
 });
+
+test('a version from another device linking an id this device moved links the new id', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const ids = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const note = Vault.newItem('note', { title: 'Notes' });
+    await fakeServer.remoteSave(note);
+    await VaultSync.sync(key);
+    // Moved twice (A → B, then B → C): links to A end at C.
+    const old = crypto.randomUUID(), mid = crypto.randomUUID(), fresh = crypto.randomUUID();
+    await chrome.storage.local.set({ vaultRemapped: { [old]: mid, [mid]: fresh } });
+    // Another device saves the note, still linking the old id.
+    await fakeServer.remoteSave({ ...note, notes: 'newer', links: [old], updatedAt: new Date(Date.now() + 5000).toISOString() });
+    return { note: note.id, fresh };
+  });
+  await sync(page);
+  const r = await page.evaluate(async id => {
+    const local = await VaultStore.get(id, await VaultKeys.getKey());
+    return { links: local.links, notes: local.notes, server: (await fakeServer.read(id)).links };
+  }, ids.note);
+  expect(r.notes).toBe('newer');
+  expect(r.links).toEqual([ids.fresh]);
+  expect(r.server).toEqual([ids.fresh]);
+});

@@ -52,7 +52,9 @@ function updateAgentsDot(n) {
   document.getElementById('nav-agents-dot').hidden = !n;
 }
 
-async function renderAgentsPanel() {
+// `fresh`: the list already fetched (the timer's), so nothing changes between
+// its last check and the redraw.
+async function renderAgentsPanel(fresh = null) {
   const list = document.getElementById('agents-list');
   const detail = document.getElementById('agents-detail');
   const session = await SupabaseAuth.getSession().catch(() => null);
@@ -72,7 +74,7 @@ async function renderAgentsPanel() {
   }
   try {
     const key = await VaultKeys.getKey();
-    [_agentsData, _agentsItems] = await Promise.all([Agents.list(), key ? Agents.vaultItems(key) : []]);
+    [_agentsData, _agentsItems] = await Promise.all([fresh || Agents.list(), key ? Agents.vaultItems(key) : []]);
   } catch (e) {
     detail.innerHTML = `<div class="ag-empty">${esc(agentError(e))}</div>`;
     return;
@@ -204,7 +206,8 @@ function agentGrantFormHTML(item, current) {
   const parts = VaultShares.parts(item);
   const chosen = new Set(scope.kind === 'fields' ? scope.parts : []);
   // An expired grant being renewed has no time left to keep: an hour by default.
-  const expired = current?.expires_at && new Date(current.expires_at).getTime() <= Date.now();
+  // The same rule the list shows "expired" by (its last half minute counts).
+  const expired = current?.expires_at && agentExpiry(current.expires_at) === 'expired';
   const keep = current?.expires_at && !expired;
   return `<div class="ag-form">
     <label>It can use
@@ -407,6 +410,27 @@ function renderActiveAgent(detail, a) {
 }
 
 document.getElementById('nav-agents').addEventListener('click', () => showView('agents'));
+
+// While the Agents view is open, new requests and agents waiting show up on
+// their own (every 10 s): redrawn only when that changed, and never under a
+// form the user is filling in.
+const agentsShape = d => JSON.stringify([
+  (d?.agents || []).map(a => [a.id, a.status, a.grants.map(g => [g.item_id, g.revision, g.expires_at, g.ask_every_time])]),
+  (d?.requests || []).map(r => r.id),
+  (d?.activity || []).slice(0, 8).map(u => u.id ?? u.created_at),
+]);
+const agentsBusy = panel => panel.querySelector('.ag-adding:not(:empty), .ag-grant:not(:empty)')
+  || (panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName));
+setInterval(async () => {
+  const panel = document.getElementById('agents-panel');
+  if (!panel || panel.style.display === 'none' || document.visibilityState !== 'visible' || !_agentsData) return;
+  if (agentsBusy(panel)) return;
+  let fresh;
+  try { fresh = await Agents.list(); } catch { return; }
+  // Checked again: a form may have opened while the list loaded.
+  if (agentsShape(fresh) === agentsShape(_agentsData) || agentsBusy(panel) || panel.style.display === 'none') return;
+  renderAgentsPanel(fresh);
+}, 10_000);
 document.getElementById('agents-connect').addEventListener('click', () => {
   _agentsSel = { kind: 'connect' };
   renderAgentsPanel();

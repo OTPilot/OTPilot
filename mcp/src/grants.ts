@@ -98,7 +98,9 @@ export async function waitForAnswer(api: Api, requestId: string, waitMs: number)
 
 /** The grant's values, asking the user for this one use when it asks every time. */
 export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, tool: string, reason: string, waitMs: number): Promise<VaultItem> {
-  if (grant.item) return grant.item
+  // "Ask every time" means every use: a copy still released by an earlier
+  // approval (the API keeps it for a couple of minutes) is never reused.
+  if (grant.item && !grant.askEveryTime) return grant.item
   let req: { id: string }
   try {
     req = await api.post<{ id: string }>('/agent/requests', { item_id: grant.itemId, tool, reason })

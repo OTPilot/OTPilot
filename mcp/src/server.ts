@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 // The MCP server: the only way an agent reaches OTPilot. No tool returns a
 // password, a 2FA code or any other value: they use them and return results.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -10,7 +11,8 @@ import { redact } from './redact.js'
 import { resolveAllowed, runCommand } from './run.js'
 import type { Credentials } from './store.js'
 
-export const VERSION = '0.1.0'
+// From package.json, so --version and the MCP handshake always match the release.
+export const VERSION: string = createRequire(import.meta.url)('../package.json').version
 
 export const INSTRUCTIONS = `OTPilot lets you use the user's accounts (passwords, 2FA codes, other fields) without ever seeing them.
 - Never ask the user to paste a password, a 2FA code or a secret into the chat: use OTPilot instead.
@@ -105,7 +107,7 @@ export function buildServer(ctx: Ctx): McpServer {
     const result = await browserLogin(item, { url, outDir: `${process.cwd()}/.otpilot`, show: show_browser ?? 'auto' })
     // A sign-in that didn't finish is logged as a try (it still used the password).
     await report(ctx, grant.itemId, result.status === 'signed_in' ? 'browser_login' : 'login_attempt', new URL(result.url).hostname)
-    const secrets = [item.fields.map(f => f.value || ''), item.totp?.secret || ''].flat().filter(Boolean)
+    const secrets = [item.fields.map(f => f.value || ''), item.totp?.secret || '', result.sent || []].flat().filter(Boolean)
     const body = result.status === 'signed_in'
       ? `Signed in to ${result.url} ("${result.title}").\nSession: ${result.storageState}\nLoad it with Playwright: browser.newContext({ storageState: '${result.storageState}' }). Keep the file out of git (.otpilot/).`
       : `Could not finish signing in at ${result.url}: ${result.note}`

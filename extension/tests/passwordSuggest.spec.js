@@ -115,3 +115,28 @@ test('two separate sign-in panels without a form are not new-password fields', a
   await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
   await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
 });
+
+test('a change-password page with just current and new: Use fills only the new one', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/change-password-two.html`);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(1);
+  await site.focus('input[name="p2"]');
+  const offer = site.locator('#otpilot-password-suggest');
+  const value = await offer.locator('.otpilot-gen-value').textContent();
+  await offer.locator('.otpilot-gen-use').click();
+  await expect(site.locator('input[name="p1"]')).toHaveValue('');
+  await expect(site.locator('input[name="p2"]')).toHaveValue(value);
+});
+
+test('a field labelled "Confirm current password" is never filled with the new one', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/change-password-confirm-current.html`);
+  await site.focus('input[name="b"]');
+  const offer = site.locator('#otpilot-password-suggest');
+  const value = await offer.locator('.otpilot-gen-value').textContent();
+  await offer.locator('.otpilot-gen-use').click();
+  await expect(site.locator('input[name="a"]')).toHaveValue('');
+  await expect(site.locator('input[name="b"]')).toHaveValue(value);
+});

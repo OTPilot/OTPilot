@@ -361,7 +361,9 @@ function pruneFilters(list, { types = true } = {}) {
 // there's more than one), tags — with counts. Changes apply at once.
 function renderFilters({ button, chips, list, types = false, onChange }) {
   if (!button || !chips) return;
-  pruneFilters(list, { types });
+  // Only the Vault sees every item: Home (logins) never drops a filter on a
+  // tag only notes or other items carry.
+  if (types) pruneFilters(list, { types });
   const kinds = types ? [...new Set(list.map(entryType))] : [];
   const tags = getCategories(list);
   const n = filterCount({ types });

@@ -17,7 +17,12 @@ export type LoginResult = {
   note?: string
   /** Stopped by a bot check before anything was sent: a visible window may get through. */
   blocked?: boolean
+  /** The 2FA codes it sent (for the caller to scrub from what it returns; never shown). */
+  sent?: string[]
 }
+
+/** A page address without its query or fragment: a form sent with GET puts the password or code there. */
+export const bare = (url: string) => { try { const u = new URL(url); return `${u.origin}${u.pathname}` } catch { return url } }
 
 const USER = [
   'input[autocomplete="username"]',
@@ -216,22 +221,23 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     const page = await context.newPage()
     page.on('close', () => { closed = true })
     const nav = (r: import('playwright-core').Request) => r.isNavigationRequest() && r.frame() === page.mainFrame()
-    page.on('request', r => { if (nav(r)) { navs++; navsStarted++; debug(`nav start ${r.method()} ${r.url()} (${navs})`) } })
-    const answered = (r: import('playwright-core').Request) => { if (nav(r)) { navs = Math.max(0, navs - 1); debug(`nav done ${r.url()} (${navs})`) } }
+    page.on('request', r => { if (nav(r)) { navs++; navsStarted++; debug(`nav start ${r.method()} ${bare(r.url())} (${navs})`) } })
+    const answered = (r: import('playwright-core').Request) => { if (nav(r)) { navs = Math.max(0, navs - 1); debug(`nav done ${bare(r.url())} (${navs})`) } }
     page.on('requestfinished', answered)
     page.on('requestfailed', answered)
     await page.goto(start, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     await settle(page)
-    debug(`loaded ${page.url()}`)
+    debug(`loaded ${bare(page.url())}`)
     const formShown = async () => !!((await firstVisible(page, PASSWORD)) || (await firstVisible(page, USER)) || (item.totp?.secret && (await firstVisible(page, OTP))))
     if (!(await formShown()) && (await botCheck(page))) {
       const note = 'The site shows a bot check (captcha) before its sign-in form.'
-      if (headless) return { status: 'needs_user', url: page.url(), title: await page.title(), note, blocked: true }
+      if (headless) return { status: 'needs_user', url: bare(page.url()), title: await page.title(), note, blocked: true }
       // A visible window: the check often passes by itself, or the person clears it.
       const until = Date.now() + HUMAN_MS
       while (Date.now() < until && !(await formShown())) await page.waitForTimeout(1000)
-      if (!(await formShown())) return { status: 'needs_user', url: page.url(), title: await page.title(), note: `${note} It wasn't cleared in the window OTPilot opened: ask the user to sign in.` }
+      if (!(await formShown())) return { status: 'needs_user', url: bare(page.url()), title: await page.title(), note: `${note} It wasn't cleared in the window OTPilot opened: ask the user to sign in.` }
     }
+    const sent: string[] = []
     let filledSomething = false
     let submittedPassword = false
     let lastStep: 'username' | 'password' | 'otp' | null = null
@@ -246,12 +252,13 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
       }
       const otp = item.totp?.secret ? await firstVisible(page, OTP) : null
       const pass = await firstVisible(page, PASSWORD)
-      debug(`step ${step} on ${page.url()}: ${otp ? 'code field' : ''} ${pass ? 'password field' : ''} tried ${[...tried].join(',')}`)
+      debug(`step ${step} on ${bare(page.url())}: ${otp ? 'code field' : ''} ${pass ? 'password field' : ''} tried ${[...tried].join(',')}`)
       // The code once the password went in, even if the password field
       // lingers on the page beside it.
       if (otp && (!pass || tried.has('password'))) {
         if (tried.has('otp')) break
         const code = await generateTOTP(item.totp!.secret, item.totp!.period || 30, item.totp!.digits || 6)
+        sent.push(code)
         await typeCode(page, otp, code, () => navsStarted)
         filledSomething = true
         tried.add('otp')
@@ -313,13 +320,14 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     if (!filledSomething || stillAsking || unfinished) {
       return {
         status: 'needs_user',
-        url: page.url(),
+        sent,
+        url: bare(page.url()),
         title: await page.title(),
         note: note || (filledSomething
           ? (headless
             ? 'The site is still asking for credentials or a code (wrong password, a captcha, or a step OTPilot doesn\'t handle). Ask the user to sign in.'
             : 'The site is still asking for credentials or a code after the window OTPilot opened waited for the user (wrong password, or a check nobody cleared). Ask the user to sign in.')
-          : `No sign-in form found on ${page.url()}. If the sign-in is on another page of the site, pass its address as url.`),
+          : `No sign-in form found on ${bare(page.url())}. If the sign-in is on another page of the site, pass its address as url.`),
       }
     }
     mkdirSync(opts.outDir, { recursive: true, mode: 0o700 })
@@ -328,7 +336,7 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     const file = resolve(join(opts.outDir, `${slug}-${item.id.slice(0, 8)}-${Date.now()}.json`))
     writeFileSync(file, JSON.stringify(await context.storageState()), { mode: 0o600 })
     chmodSync(file, 0o600)
-    return { status: 'signed_in', url: page.url(), title: await page.title(), storageState: file }
+    return { status: 'signed_in', url: bare(page.url()), title: await page.title(), storageState: file, sent }
   } catch (e) {
     // The person closed the window OTPilot opened: nothing more to do there.
     if (closed || !browser.isConnected()) return { status: 'needs_user', url: start, title: '', note: 'The sign-in window was closed before the sign-in finished. Ask the user to sign in, or call browser_login again when they\'re ready to clear the site\'s check.' }

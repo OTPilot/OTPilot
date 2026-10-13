@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, waitForVault, writeAccounts, TEST_PASSWORD, TEST_SECRET } from './fixtures.js';
+import { test, expect, seedUnlocked, waitForVault, writeAccounts, TEST_PASSWORD, TEST_SECRET, UNLOCK_MS } from './fixtures.js';
 
 // Saving a submitted sign-in (forms.js capture + background
 // vaultCaptureLogin / vaultPendingLogin / vaultResolvePendingLogin).
@@ -144,7 +144,7 @@ test('locked: the offer unlocks in the extension frame, then saves', async ({ co
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
   const offer = site.locator('#otpilot-login-save');
-  await expect(offer).toContainText('Save this login for localhost?');
+  await expect(offer).toContainText('Save this login for localhost?', { timeout: UNLOCK_MS });
   await offer.locator('.otpilot-save-confirm').click();
   await expect.poll(async () => (await logins(popup)).map(l => l.password)).toEqual(['l4te']);
 });
