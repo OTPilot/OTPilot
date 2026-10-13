@@ -14,7 +14,8 @@ async function setup(context, extensionId, accounts = []) {
   await page.reload();
   await waitForVault(page);
   await page.evaluate(() => {
-    const S = window.fakeServer = { rev: 0, items: new Map(), calls: [], pageSize: 1000, counts: {} };
+    // `foreign`: ids another account holds (never listed, never overwritten).
+    const S = window.fakeServer = { rev: 0, items: new Map(), calls: [], pageSize: 1000, counts: {}, foreign: new Set() };
     S.remoteSave = async item => {
       const record = await VaultCrypto.encryptItem(item, await VaultKeys.getKey());
       S.items.set(item.id, { record, revision: ++S.rev, deleted: false });
@@ -41,14 +42,15 @@ async function setup(context, extensionId, accounts = []) {
         });
       }
       if (method === 'POST' && url.pathname === '/vault/items/batch') {
-        const created = [], conflicts = [];
+        const created = [], conflicts = [], taken = [];
         for (const it of body.items) {
+          if (S.foreign.has(it.id)) { taken.push(it.id); continue; }
           if (S.items.has(it.id)) { conflicts.push(it.id); continue; }
           S.items.set(it.id, { record: it.record, revision: ++S.rev, deleted: false });
           S.counts[it.id] = it.counts_for_limit;
           created.push({ id: it.id, revision: S.rev });
         }
-        return reply(200, { created, conflicts });
+        return reply(200, { created, conflicts, taken });
       }
       const id = url.pathname.split('/').pop();
       const cur = S.items.get(id);
@@ -524,4 +526,66 @@ test('pairing a newer local twin with a server login keeps the server copy\'s sh
     return { count: items.length, id: items[0].id === theirs.id, notes: items[0].notes, shares: (items[0].shares || []).map(s => s.id) };
   });
   expect(r).toEqual({ count: 1, id: true, notes: 'newer here', shares: ['s-1'] });
+});
+
+test('items whose id another account holds: an exact copy of a synced one is dropped, any other goes up under a new id', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const ids = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    // Synced from this account.
+    const mine = Vault.newItem('login', { title: 'GitHub' });
+    mine.totp = { secret: 'JBSWY3DPEHPK3PXP' };
+    await fakeServer.remoteSave(mine);
+    await VaultSync.sync(key);
+    // The same two accounts migrated here while another account was signed in.
+    const copy = { ...mine, id: crypto.randomUUID() };
+    const other = Vault.newItem('login', { title: 'AWS' });
+    const note = Vault.newItem('note', { title: 'AWS notes' });
+    note.links = [other.id];
+    for (const i of [copy, other, note]) await VaultStore.save(i, key);
+    fakeServer.foreign.add(copy.id);
+    fakeServer.foreign.add(other.id);
+    return { copy: copy.id, other: other.id, note: note.id };
+  });
+  const stats = await sync(page);
+  expect(stats.rehomed).toBe(2);
+  expect(await localTitles(page)).toEqual(['AWS', 'AWS notes', 'GitHub']);
+  const after = await page.evaluate(async ids => {
+    const items = (await VaultStore.readAll(await VaultKeys.getKey())).items;
+    const aws = items.find(i => i.title === 'AWS');
+    return {
+      awsId: aws.id, noteLinks: items.find(i => i.title === 'AWS notes').links,
+      onServer: [...fakeServer.items.keys()].length, awsUp: fakeServer.items.has(aws.id),
+      oldGone: !items.some(i => i.id === ids.copy || i.id === ids.other),
+    };
+  }, ids);
+  expect(after.awsId).not.toBe(ids.other);
+  expect(after.noteLinks).toEqual([after.awsId]);
+  expect(after.awsUp).toBe(true);
+  expect(after.onServer).toBe(3); // GitHub, AWS (new id), the note — no second GitHub
+  expect(after.oldGone).toBe(true);
+  // Nothing left retrying.
+  expect(await sync(page)).toEqual({ pulled: 0, pushed: 0, deleted: 0, unreadable: 0, remapped: {} });
+});
+
+test('an id of mine already on the server that this device skipped is pulled again, not retried forever', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const item = Vault.newItem('login', { title: 'Old' });
+    await fakeServer.remoteSave(item);
+    await VaultSync.sync(key);
+    // The record is lost here and the sync state forgets it, but the cursor stays past it.
+    const st = (await chrome.storage.local.get('vaultSyncState')).vaultSyncState;
+    delete st.synced[item.id];
+    await chrome.storage.local.set({ vaultSyncState: st });
+    await VaultStore.save({ ...item, title: 'Old', updatedAt: new Date(Date.now() + 1000).toISOString() }, key);
+  });
+  await sync(page); // batch: conflict → cursor reset
+  await sync(page); // pulls it again: known from now on
+  const st = await page.evaluate(async () => (await chrome.storage.local.get('vaultSyncState')).vaultSyncState);
+  expect(Object.keys(st.synced)).toHaveLength(1);
+  const calls = await page.evaluate(() => fakeServer.calls.filter(c => c.startsWith('POST')).length);
+  await sync(page);
+  expect(await page.evaluate(() => fakeServer.calls.filter(c => c.startsWith('POST')).length)).toBe(calls);
 });

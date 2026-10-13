@@ -227,6 +227,8 @@ const VaultSync = (() => {
   }
 
   async function push(state, key, stats) {
+    const taken = [];
+    let conflicted = false;
     const local = await VaultStore.listRecords();
     const creates = [];
     for (const [id, rec] of Object.entries(local)) {
@@ -260,9 +262,9 @@ const VaultSync = (() => {
         state.synced[c.id] = { rev: c.revision, fp: fp(byId[c.id]) };
         stats.pushed++;
       }
+      taken.push(...(body.taken || []));
+      if ((body.conflicts || []).length) conflicted = true;
       await saveStateFor(state, key);
-      // `conflicts`: the id already exists on the server; the next pull brings
-      // that version and the newer edit wins.
       batch = [];
       bytes = 0;
     };
@@ -273,6 +275,14 @@ const VaultSync = (() => {
       bytes += size;
     }
     await flush();
+    // `conflicts`: ids of mine already on the server that this device never
+    // pulled (its cursor moved past them): pull everything again next time,
+    // where the newer edit wins. Left alone they'd retry here forever.
+    if (conflicted) { state.cursor = 0; await saveStateFor(state, key); }
+    // `taken`: ids another account (or a collection) holds — e.g. this
+    // browser was signed in to another OTPilot account with the same vault.
+    // They can never go up under those ids.
+    if (taken.length) stats.rehomed = await rehome(taken, state, key, stats);
 
     // Local deletions.
     const tombs = await VaultStore.listTombstones();
@@ -293,6 +303,54 @@ const VaultSync = (() => {
     if (done.length) await VaultStore.dropTombstones(done);
   }
 
+  // What an item is, for "the same account": its type, title, fields' values,
+  // 2FA secret, sites and notes (not its id, dates or shares).
+  const content = item => JSON.stringify([item.type, item.title || '', (item.fields || []).map(f => [f.id, f.value ?? '']),
+    item.totp?.secret || '', item.urls || [], item.notes || '']);
+
+  // Items whose id is taken on the server: one that's exactly an item already
+  // synced here (the same account, migrated twice) is dropped — that one
+  // stays; any other gets a new id (re-encrypted: the id is bound into the
+  // record) and goes up on the next push. Items linking a moved one follow.
+  async function rehome(ids, state, key, stats) {
+    let moved = 0;
+    await VaultStore.transaction(async tx => {
+      await checkKey(key);
+      const recs = await tx.listRecords();
+      const synced = new Map();
+      for (const [id, rec] of Object.entries(recs)) {
+        if (!state.synced[id]) continue;
+        const item = await decryptOrNull(rec, key);
+        if (item) synced.set(content(item), id);
+      }
+      const to = {};
+      for (const id of ids) {
+        const item = recs[id] && await decryptOrNull(recs[id], key);
+        if (!item) continue;
+        const twin = synced.get(content(item));
+        if (twin) {
+          await tx.drop(id);
+          to[id] = twin;
+        } else {
+          const fresh = crypto.randomUUID();
+          await tx.put(fresh, await VaultCrypto.encryptItem({ ...item, id: fresh }, key));
+          await tx.drop(id);
+          to[id] = fresh;
+        }
+        stats.remapped[id] = to[id];
+        moved++;
+      }
+      if (!moved) return;
+      for (const [id, rec] of Object.entries(await tx.listRecords())) {
+        const item = await decryptOrNull(rec, key);
+        if (!item?.links?.some(l => to[l])) continue;
+        const links = [...new Set(item.links.map(l => to[l] || l))].filter(l => l !== id);
+        await tx.put(id, await VaultCrypto.encryptItem({ ...item, links }, key));
+      }
+    });
+    return moved;
+  }
+
   // Pull, then push. One sync at a time per browser (Web Lock).
   function sync(key) {
     return navigator.locks.request('otpilot-vault-sync', async () => {
@@ -300,6 +358,8 @@ const VaultSync = (() => {
       const state = await loadState();
       await pull(state, key, stats);
       await push(state, key, stats);
+      // Items that got a new id go up now, not on the next sync.
+      if (stats.rehomed) await push(state, key, stats);
       await saveStateFor(state, key);
       return stats;
     });
