@@ -13,7 +13,19 @@ const SECRET = 'JBSWY3DPEHPK3PXP'
 let server: Server
 let base = ''
 let browserOk = true
+// HEADLESS=1: skip the tests that open a visible window (so none pops up while you work).
+const windows = !process.env.HEADLESS
 let spaLogins = 0
+let autoSubmits = 0
+
+// Like real sites, a code from the previous 30-second window still counts
+// (the window can turn between filling and the server checking it).
+const recent: { code: string; at: number }[] = []
+const note = async () => { recent.push({ code: await generateTOTP(SECRET), at: Date.now() }) }
+void note()
+setInterval(note, 1000).unref()
+const validCode = async (code: string | null) => !!code
+  && (code === (await generateTOTP(SECRET)) || recent.some(r => r.code === code && Date.now() - r.at < 35_000))
 
 const page = (body: string) => `<!doctype html><html><head><title>Acme</title></head><body>${body}</body></html>`
 
@@ -70,8 +82,25 @@ beforeAll(async () => {
       <script>document.querySelector('[name=email]').addEventListener('keydown', e => { if (e.key !== 'Enter') return
         err.textContent = 'Something went wrong'; setTimeout(() => { location.href = '/user-ok' }, 23000) })</script>`)
     if (url.pathname === '/user-ok') return html('<form method="post" action="/pass"><input type="password" name="pw"><button>Sign in</button></form>')
+    // The code step answers slowly, and only then sets the session cookie.
+    if (url.pathname === '/slow') return html('<form method="post" action="/otp-slow"><input name="code" autocomplete="one-time-code"><button>Verify</button></form>')
+    if (url.pathname === '/otp-slow') {
+      // Checked before the delay: the 30-second window may turn meanwhile.
+      const valid = await validCode(form.get('code'))
+      await new Promise(r => setTimeout(r, 2500))
+      return valid ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=slow; Path=/' }) : html('bad code')
+    }
+    // The code field sends itself on the sixth digit, and the answer takes a while.
+    if (url.pathname === '/auto') return html(`<form method="post" action="/otp-auto"><input name="code" maxlength="6" autocomplete="one-time-code"></form>
+      <script>document.querySelector('[name=code]').addEventListener('input', e => { if (e.target.value.length === 6) document.forms[0].submit() })</script>`)
+    if (url.pathname === '/otp-auto') {
+      autoSubmits++
+      const valid = await validCode(form.get('code'))
+      await new Promise(r => setTimeout(r, 1500))
+      return valid ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=auto; Path=/' }) : html('bad code')
+    }
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
-    if (url.pathname === '/otp') return form.get('code') === (await generateTOTP(SECRET))
+    if (url.pathname === '/otp') return (await validCode(form.get('code')))
       ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=signed-in; Path=/' })
       : html('bad code')
     res.writeHead(404); res.end()
@@ -142,7 +171,7 @@ describe('browser_login', () => {
   })
 
   it('retries a bot check in a visible window, where it clears (or says there is no display)', async ctx => {
-    if (!browserOk) ctx.skip()
+    if (!browserOk || !windows) ctx.skip()
     const display = process.platform !== 'linux' || !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}bot-clears`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
     if (display) expect(r.status).toBe('signed_in')
@@ -150,13 +179,13 @@ describe('browser_login', () => {
   }, 90_000)
 
   it('in a visible window, waits for the person to get a turned-down submit through, then fills the code', async ctx => { // after the 20 s a submit gets
-    if (!browserOk || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
+    if (!browserOk || !windows || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}turned-down`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`), show: true })
     expect(r.status).toBe('signed_in')
   }, 90_000)
 
   it('in a visible window, goes on to the password once the person gets a turned-down username through', async ctx => {
-    if (!browserOk || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
+    if (!browserOk || !windows || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}user-turned-down`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`), show: true })
     expect(r.status).toBe('signed_in')
   }, 90_000)
@@ -171,6 +200,21 @@ describe('browser_login', () => {
     if (!browserOk) ctx.skip()
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}boxes-still`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
     expect(r.status).toBe('signed_in')
+  }, 40_000)
+
+  it('waits for a slow sign-in response before saving the session (its cookie included)', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}slow`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
+    expect(r.status).toBe('signed_in')
+    const state = JSON.parse(readFileSync(r.storageState!, 'utf8'))
+    expect(state.cookies.map((c: { name: string; value: string }) => `${c.name}=${c.value}`)).toContain('session=slow')
+  }, 40_000)
+
+  it('a code field that sends itself on the last digit gets the code once', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}auto`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
+    expect(r.status).toBe('signed_in')
+    expect(autoSubmits).toBe(1)
   }, 40_000)
 
   it('reports a rejected password instead of claiming success', async ctx => {

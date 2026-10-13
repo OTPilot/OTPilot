@@ -78,7 +78,12 @@ async function moveOn(page: Page, field: Locator, next: string | null, ms = 20_0
     await page.waitForTimeout(400)
     if (page.url() !== url) return true
     const sameDoc = await page.evaluate(() => (window as unknown as { __otpilot?: boolean }).__otpilot === true).catch(() => false)
-    if (!sameDoc) return true
+    if (!sameDoc) {
+      // A navigation under way: wait for the new page (and the cookies its
+      // response sets) before anyone looks at it or saves the session.
+      await page.waitForLoadState('load', { timeout: 15_000 }).catch(() => {})
+      return true
+    }
     if (!(await field.isVisible().catch(() => false))) return true
     if (!(await field.inputValue({ timeout: 2000 }).catch(() => ''))) return true
     if (next && (await firstVisible(page, next))) return true
@@ -92,7 +97,8 @@ async function moveOn(page: Page, field: Locator, next: string | null, ms = 20_0
  * pasted value. One box per digit gets each digit in its own box, whether or
  * not the page moves the focus; Enter only goes in if nothing happened.
  */
-async function typeCode(page: Page, field: Locator, code: string) {
+async function typeCode(page: Page, field: Locator, code: string, navigations: () => number) {
+  const before = navigations()
   // The boxes from this one on, in page order, only the ones showing (the
   // same list the digits go into).
   const boxes = await field.evaluate(el => {
@@ -114,7 +120,16 @@ async function typeCode(page: Page, field: Locator, code: string) {
   }
   // Enter only if the page didn't take the code on the last digit (a field
   // gone, a new page): never a second submit.
-  if (!(await moveOn(page, field, null, 2000))) await page.keyboard.press('Enter').catch(() => {})
+  // Enter only if, after a moment, the page neither sent the code itself (a
+  // navigation started — it may take a while to answer) nor moved on: never
+  // the same code twice.
+  const until = Date.now() + 2000
+  while (Date.now() < until) {
+    if (navigations() > before) return
+    if (await moveOn(page, field, null, 200)) return
+  }
+  if (navigations() > before) return
+  await page.keyboard.press('Enter').catch(() => {})
 }
 
 /** A bot check (Cloudflare, reCAPTCHA, hCaptcha…) standing in front of the page. */
@@ -157,8 +172,21 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
   // One deadline for all the waiting on the person, wherever it starts.
   let humanUntil = 0
   const humanLeft = () => (humanUntil ||= Date.now() + HUMAN_MS) - Date.now()
-  const submitted = async (page: Page, field: Locator, next: string | null) =>
-    (await moveOn(page, field, next)) || (!headless && (await botCheck(page)) && (await moveOn(page, field, next, Math.max(0, humanLeft()))))
+  // Main-frame navigations still waiting for their response: a submit's
+  // response is what sets the session cookie, so nothing is looked at or
+  // saved while one is under way.
+  let navs = 0
+  let navsStarted = 0
+  const settled = async (page: Page) => {
+    const until = Date.now() + 20_000
+    while (navs > 0 && Date.now() < until) await page.waitForTimeout(100)
+    await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => {})
+  }
+  const submitted = async (page: Page, field: Locator, next: string | null) => {
+    const moved = (await moveOn(page, field, next)) || (!headless && (await botCheck(page)) && (await moveOn(page, field, next, Math.max(0, humanLeft()))))
+    await settled(page)
+    return moved
+  }
   const username = Vault.getValue(item, 'username')
   const password = Vault.getValue(item, 'password')
   // Only on the account's sites, and only over HTTPS — plain HTTP just for a
@@ -187,6 +215,11 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     context.setDefaultTimeout(10_000)
     const page = await context.newPage()
     page.on('close', () => { closed = true })
+    const nav = (r: import('playwright-core').Request) => r.isNavigationRequest() && r.frame() === page.mainFrame()
+    page.on('request', r => { if (nav(r)) { navs++; navsStarted++; debug(`nav start ${r.method()} ${r.url()} (${navs})`) } })
+    const answered = (r: import('playwright-core').Request) => { if (nav(r)) { navs = Math.max(0, navs - 1); debug(`nav done ${r.url()} (${navs})`) } }
+    page.on('requestfinished', answered)
+    page.on('requestfailed', answered)
     await page.goto(start, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     await settle(page)
     debug(`loaded ${page.url()}`)
@@ -219,7 +252,7 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
       if (otp && (!pass || tried.has('password'))) {
         if (tried.has('otp')) break
         const code = await generateTOTP(item.totp!.secret, item.totp!.period || 30, item.totp!.digits || 6)
-        await typeCode(page, otp, code)
+        await typeCode(page, otp, code, () => navsStarted)
         filledSomething = true
         tried.add('otp')
         lastStep = 'otp'
@@ -271,6 +304,7 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
       }
       await settle(page)
     }
+    await settled(page)
     const stillAsking = await pending()
     debug(`done: still asking ${stillAsking}, last step ${lastStep}`)
     // A sign-in that never got past the username (rejected, or a step OTPilot
@@ -300,6 +334,7 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     if (closed || !browser.isConnected()) return { status: 'needs_user', url: start, title: '', note: 'The sign-in window was closed before the sign-in finished. Ask the user to sign in, or call browser_login again when they\'re ready to clear the site\'s check.' }
     throw e
   } finally {
-    await browser.close().catch(() => {})
+    // A close Chrome never answers mustn't hold up the result.
+    await Promise.race([browser.close().catch(() => {}), new Promise(r => setTimeout(r, 5000).unref())])
   }
 }
