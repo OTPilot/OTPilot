@@ -64,6 +64,9 @@ export default function AgentConnect() {
     if (state.kind !== 'confirm') return
     setNetError(false)
     setState({ ...state, kind: 'claiming' })
+    // A first sign-in lands here straight from Google: the API's account row
+    // is made by sync-user, which claiming needs.
+    await apiFetch('/auth/sync-user', { method: 'POST' }).catch(() => null)
     const res = await apiFetch(`/agents/pair/${id}/claim`, { method: 'POST' }).catch(() => null)
     if (!res) {
       setState({ ...state, kind: 'confirm' })
@@ -76,7 +79,10 @@ export default function AgentConnect() {
   }
 
   function signIn() {
-    sessionStorage.setItem('auth_next', window.location.pathname + window.location.search)
+    const next = window.location.pathname + window.location.search
+    sessionStorage.setItem('auth_next', next)
+    // The email link opens a new tab: it finds its way back here too.
+    try { localStorage.setItem('auth_next', JSON.stringify({ path: next, at: Date.now() })) } catch { /* private mode */ }
     window.location.href = '/auth/login'
   }
 
@@ -95,7 +101,7 @@ export default function AgentConnect() {
             <p className="text-sm text-zinc-400 leading-relaxed">
               Sign in to OTPilot to connect this agent to your account. A free account works.
             </p>
-            <p className="text-xs text-zinc-500">Signing in with an email link? Keep this tab open: it continues here once you're in.</p>
+            <p className="text-xs text-zinc-500">Signing in with an email link? It brings you back here to finish.</p>
             <button onClick={signIn} className="w-full py-2.5 rounded-xl bg-teal-500 text-black text-sm font-semibold hover:bg-teal-400">
               Sign in
             </button>

@@ -326,3 +326,17 @@ test('a type picked in the Vault doesn\'t show as a filter on Home', async ({ co
   await expect(page.locator('#home-cat-bar')).toBeHidden();
   await expect(page.locator('#home-filter .flt-n')).toHaveText('');
 });
+
+test('a tag filter set in the Vault on a note-only tag survives a visit to Home', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => new Promise(r => chrome.storage.local.set({
+    listFilters: { tags: ['research'], types: [], twofa: false },
+    accounts: [{ name: 'GitHub', secret, urls: '', email: '', category: 'Work' }],
+  }, r)), [TEST_SECRET]);
+  await page.reload();
+  await expect(page.locator('#home-cat-bar .flt-chip')).toHaveText([/research/]);
+  const saved = await page.evaluate(async () => (await chrome.storage.local.get('listFilters')).listFilters.tags);
+  expect(saved).toEqual(['research']);
+});

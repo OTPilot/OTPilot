@@ -40,6 +40,8 @@
   // two password fields side by side (password + confirmation; with a third,
   // the first is the current one). Never one marked current-password.
   const NEW_PW_HINT = /new[-_ ]?(pass|pw|pwd)|\bnew\b|confirm|repeat|retype|\bagain\b|nuev|repet|nouveau|nouvelle/i;
+  const CURRENT_PW_HINT = /current|\bold\b|old[-_ ]?(pass|pw|pwd)|existing|actual|anterior|viej|ancien|aktuell/i;
+  const CHANGE_PW_PAGE = /(change|update)[-_]?pass/i;
   const NEW_PW_PAGE = /(reset|change|new|set|create|update|forgot|recover)[-_]?pass|sign[-_]?up|register|registr|create[-_]?account/i;
   // The password fields that go with this one: its form's, else the ones in
   // the nearest container (up to a few levels) that holds more than one — two
@@ -71,7 +73,11 @@
     const group = passwordGroup(el);
     if (group.length > 2 && group[0] === el) return false;
     const label = el.labels?.[0]?.textContent || '';
-    if (NEW_PW_HINT.test(`${el.name} ${el.id} ${el.placeholder} ${el.getAttribute('aria-label') || ''} ${label}`)) return true;
+    const hints = `${el.name} ${el.id} ${el.placeholder} ${el.getAttribute('aria-label') || ''} ${label}`;
+    if (NEW_PW_HINT.test(hints)) return true;
+    if (CURRENT_PW_HINT.test(hints)) return false;
+    // A change-password page with two unnamed fields: current, then new.
+    if (CHANGE_PW_PAGE.test(location.pathname) && group.length === 2 && group[0] === el) return false;
     if (NEW_PW_PAGE.test(location.pathname)) return true;
     return group.length >= 2;
   };

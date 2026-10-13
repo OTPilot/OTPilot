@@ -54,10 +54,17 @@ function queueVaultSync() {
   return _vaultSyncRun;
 }
 
-// A page changed the vault: upload it, and let an open popup redraw.
+// A page changed the vault: upload it, and let an open popup redraw. Agents'
+// copies follow the change right away even without vault sync (Free, or
+// sync off): they're written straight from the local vault.
 function vaultChangedByPage() {
   chrome.runtime.sendMessage({ action: 'serverDataChanged' }).catch(() => {});
-  queueVaultSync();
+  queueVaultSync().then(async () => {
+    if (await vaultSyncReady().catch(() => false)) return; // the sync just did it
+    if ((await VaultLock.state()) !== 'unlocked') return;
+    const key = await VaultKeys.getKey();
+    if (key) await Agents.syncCopies(key).catch(() => {});
+  }).catch(() => {});
 }
 
 // Accounts for content scripts. Unlocked: the decrypted list. Locked: only the

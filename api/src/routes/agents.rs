@@ -136,6 +136,15 @@ async fn expire(db: &sqlx::PgPool) -> Result<()> {
     ))
     .execute(db)
     .await?;
+    // Answered requests are kept a day, then forgotten (the activity log is
+    // `agent_uses`): never one whose released copy is still in use.
+    sqlx::query(
+        "DELETE FROM agent_requests WHERE status <> 'pending'
+           AND COALESCE(decided_at, created_at) < NOW() - INTERVAL '1 day'
+           AND (released_until IS NULL OR released_until < NOW())",
+    )
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -493,6 +502,11 @@ struct GrantRequest {
     ask_every_time: bool,
     #[serde(default)]
     commands: Vec<String>,
+    /// Rewriting a copy the client read (an item changed): only while the
+    /// grant is still there at this revision — one the user removed or
+    /// changed meanwhile is never brought back (404).
+    #[serde(default)]
+    base_revision: Option<i64>,
 }
 
 fn check_scope(scope: &Value) -> Result<()> {
@@ -538,13 +552,17 @@ async fn put_grant(
     if own_agent(&mut tx, auth.id, id).await? != "active" {
         return Err(ApiError::NotFound);
     }
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM agent_grants WHERE agent_id = $1 AND item_id = $2)",
+    let current: Option<i64> = sqlx::query_scalar(
+        "SELECT revision FROM agent_grants WHERE agent_id = $1 AND item_id = $2 FOR UPDATE",
     )
     .bind(id)
     .bind(item_id)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
+    if body.base_revision.is_some() && body.base_revision != current {
+        return Err(ApiError::NotFound);
+    }
+    let exists = current.is_some();
     if !exists && is_free(&mut *tx, auth.id).await? {
         let items: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM agent_grants g JOIN agents a ON a.id = g.agent_id
@@ -1053,6 +1071,53 @@ mod tests {
             Some(body),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn a_rewrite_never_brings_back_a_removed_or_changed_grant() {
+        let db = test_db().await;
+        let app = app(db.pool.clone());
+        let ana = create_user(&db.pool, "personal").await;
+        let (agent, _token) = connect(&app, ana).await;
+        let item = Uuid::new_v4();
+        let (s, first) = grant(&app, ana, agent, item, json!({})).await;
+        assert_eq!(s, StatusCode::OK);
+        let rev = first["revision"].as_i64().unwrap();
+        // Changed meanwhile (the user narrowed it): a rewrite of the old revision is refused.
+        let (_, second) = grant(
+            &app,
+            ana,
+            agent,
+            item,
+            json!({ "scope": { "kind": "login" } }),
+        )
+        .await;
+        let (s, _) = grant(&app, ana, agent, item, json!({ "base_revision": rev })).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        // Removed meanwhile: not recreated.
+        call(
+            &app,
+            ana,
+            Method::DELETE,
+            &format!("/agents/{agent}/grants/{item}"),
+            None,
+        )
+        .await;
+        let (s, _) = grant(
+            &app,
+            ana,
+            agent,
+            item,
+            json!({ "base_revision": second["revision"] }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_grants WHERE agent_id = $1")
+            .bind(agent)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
     }
 
     #[tokio::test]

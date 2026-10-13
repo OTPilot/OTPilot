@@ -204,7 +204,8 @@ function agentGrantFormHTML(item, current) {
   const parts = VaultShares.parts(item);
   const chosen = new Set(scope.kind === 'fields' ? scope.parts : []);
   // An expired grant being renewed has no time left to keep: an hour by default.
-  const expired = current?.expires_at && new Date(current.expires_at).getTime() <= Date.now();
+  // The same rule the list shows "expired" by (its last half minute counts).
+  const expired = current?.expires_at && agentExpiry(current.expires_at) === 'expired';
   const keep = current?.expires_at && !expired;
   return `<div class="ag-form">
     <label>It can use
@@ -407,6 +408,19 @@ function renderActiveAgent(detail, a) {
 }
 
 document.getElementById('nav-agents').addEventListener('click', () => showView('agents'));
+
+// While the Agents view is open, new requests and agents waiting show up on
+// their own (every 10 s): redrawn only when that changed, and never under a
+// form the user is filling in.
+const agentsShape = d => JSON.stringify([(d?.agents || []).map(a => [a.id, a.status, a.grants.length]), (d?.requests || []).map(r => r.id)]);
+setInterval(async () => {
+  const panel = document.getElementById('agents-panel');
+  if (!panel || panel.style.display === 'none' || document.visibilityState !== 'visible' || !_agentsData) return;
+  if (panel.querySelector('.ag-adding:not(:empty), .ag-grant:not(:empty)') || panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  let fresh;
+  try { fresh = await Agents.list(); } catch { return; }
+  if (agentsShape(fresh) !== agentsShape(_agentsData)) renderAgentsPanel();
+}, 10_000);
 document.getElementById('agents-connect').addEventListener('click', () => {
   _agentsSel = { kind: 'connect' };
   renderAgentsPanel();

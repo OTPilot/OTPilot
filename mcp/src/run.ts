@@ -1,6 +1,6 @@
 // `run`: a command with secrets in its environment, for that process only;
 // what it prints comes back with the secrets scrubbed.
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import { accessSync, constants, realpathSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -88,7 +88,12 @@ export function runCommand(command: string, env: Record<string, string>, opts: {
     }
     const timer = setTimeout(() => {
       timedOut = true
-      try { process.kill(-child.pid!, 'SIGKILL') } catch { child.kill('SIGKILL') }
+      if (process.platform === 'win32') {
+        // No process groups on Windows: taskkill /T takes the shell's whole tree.
+        try { execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { child.kill('SIGKILL') }
+      } else {
+        try { process.kill(-child.pid!, 'SIGKILL') } catch { child.kill('SIGKILL') }
+      }
       // Don't wait on pipes a stray process might still hold.
       setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); finish(null) }, 1000)
     }, Math.min(opts.timeoutSec ?? 120, 600) * 1000)
