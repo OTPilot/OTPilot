@@ -643,3 +643,26 @@ test('two taken items linking each other keep the link under their new ids', asy
   expect(r.a).toEqual([r.nId]);
   expect(r.n).toEqual([r.aId]);
 });
+
+test('a move of linked items cut short before the old records went is finished from the saved mapping, no extra copies', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const login = Vault.newItem('login', { title: 'AWS' });
+    const note = Vault.newItem('note', { title: 'AWS notes' });
+    login.links = [note.id];
+    note.links = [login.id];
+    // The state a cut-short move leaves: mapping saved, replacements written (links rewritten), old ones still there.
+    const map = { [login.id]: crypto.randomUUID(), [note.id]: crypto.randomUUID() };
+    await chrome.storage.local.set({ vaultRehome: map });
+    for (const i of [login, note]) await VaultStore.save(i, key);
+    await VaultStore.save({ ...login, id: map[login.id], links: [map[note.id]] }, key);
+    await VaultStore.save({ ...note, id: map[note.id], links: [map[login.id]] }, key);
+    fakeServer.foreign.add(login.id);
+    fakeServer.foreign.add(note.id);
+  });
+  await sync(page);
+  expect(await localTitles(page)).toEqual(['AWS', 'AWS notes']);
+  expect(await page.evaluate(() => fakeServer.items.size)).toBe(2);
+  expect(await page.evaluate(async () => (await chrome.storage.local.get('vaultRehome')).vaultRehome)).toEqual({});
+});

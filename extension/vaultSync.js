@@ -18,6 +18,7 @@
 // The fingerprint is the pair of IVs, fresh on every encryption.
 const VaultSync = (() => {
   const STATE = 'vaultSyncState';
+  const REHOME = 'vaultRehome'; // old id → new id of a move to a new id under way
   const BATCH_MAX = 500;
   const BATCH_BYTES = 6 * 1024 * 1024; // under the API's 8 MiB body cap
 
@@ -331,12 +332,17 @@ const VaultSync = (() => {
       const skip = new Set(unsettled);
       const others = new Map();
       for (const [id, item] of Object.entries(items)) if (item && !taken.has(id) && !skip.has(id)) others.set(content(item), id);
-      // Where each one goes first, so moved items linking each other follow too.
+      // Where each one goes first, so moved items linking each other follow
+      // too. A move cut short last time already wrote its replacement (with
+      // its links rewritten, so it no longer matches as a copy): the saved
+      // mapping sends the old record there.
+      const pending = (await chrome.storage.local.get(REHOME))[REHOME] || {};
       const to = {};
       const fresh = [];
       for (const id of ids) {
         const item = items[id];
         if (!item) continue;
+        if (pending[id] && items[pending[id]]) { to[id] = pending[id]; continue; }
         const twin = others.get(content(item));
         if (twin) { to[id] = twin; continue; }
         to[id] = crypto.randomUUID();
@@ -357,10 +363,15 @@ const VaultSync = (() => {
         // A dated change: an older edit from another device doesn't bring the old id back.
         puts.push([id, await VaultCrypto.encryptItem({ ...item, links, updatedAt: new Date().toISOString() }, key)]);
       }
-      // The new records and every link to them in one write, then the old
-      // records: nothing ever links an id that's gone.
+      // The mapping first (a retry finds the replacements by it), then the new
+      // records and every link to them in one write, then the old records:
+      // nothing ever links an id that's gone, and nothing is moved twice.
+      await chrome.storage.local.set({ [REHOME]: { ...pending, ...to } });
       if (puts.length) await tx.putMany(puts);
       await tx.dropMany(Object.keys(to));
+      const left = { ...pending, ...to };
+      for (const id of Object.keys(to)) delete left[id];
+      await chrome.storage.local.set({ [REHOME]: left });
       Object.assign(stats.remapped, to);
     });
     return moved;
