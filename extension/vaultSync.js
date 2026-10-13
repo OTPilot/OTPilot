@@ -339,10 +339,17 @@ const VaultSync = (() => {
       const pending = (await chrome.storage.local.get(REHOME))[REHOME] || {};
       const to = {};
       const fresh = [];
+      const late = [];
       for (const id of ids) {
         const item = items[id];
         if (!item) continue;
-        if (pending[id] && items[pending[id]]) { to[id] = pending[id]; continue; }
+        if (pending[id] && items[pending[id]]) {
+          to[id] = pending[id];
+          // Edited here since its replacement was written: the edit goes on
+          // in the replacement (links through the mapping) before it's dropped.
+          if ((item.updatedAt || '') > (items[pending[id]].updatedAt || '')) late.push(id);
+          continue;
+        }
         const twin = others.get(content(item));
         if (twin) { to[id] = twin; continue; }
         to[id] = crypto.randomUUID();
@@ -352,13 +359,14 @@ const VaultSync = (() => {
       if (!moved) return;
       const relink = item => [...new Set((item.links || []).map(l => to[l] || l))];
       const puts = [];
-      for (const id of fresh) {
+      for (const id of [...fresh, ...late]) {
         const item = items[id];
         const links = relink(item).filter(l => l !== to[id]);
         puts.push([to[id], await VaultCrypto.encryptItem({ ...item, id: to[id], ...(item.links ? { links } : {}) }, key)]);
       }
+      const written = new Set(puts.map(([id]) => id));
       for (const [id, item] of Object.entries(items)) {
-        if (taken.has(id) || !item?.links?.some(l => to[l])) continue;
+        if (taken.has(id) || written.has(id) || !item?.links?.some(l => to[l])) continue;
         const links = relink(item).filter(l => l !== id);
         // A dated change: an older edit from another device doesn't bring the old id back.
         puts.push([id, await VaultCrypto.encryptItem({ ...item, links, updatedAt: new Date().toISOString() }, key)]);

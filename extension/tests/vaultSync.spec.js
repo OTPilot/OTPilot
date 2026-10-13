@@ -666,3 +666,19 @@ test('a move of linked items cut short before the old records went is finished f
   expect(await page.evaluate(() => fakeServer.items.size)).toBe(2);
   expect(await page.evaluate(async () => (await chrome.storage.local.get('vaultRehome')).vaultRehome)).toEqual({});
 });
+
+test('an edit made to the old record after a cut-short move is kept in its replacement', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const old = Vault.newItem('note', { title: 'Plan' });
+    const fresh = crypto.randomUUID();
+    await chrome.storage.local.set({ vaultRehome: { [old.id]: fresh } });
+    await VaultStore.save({ ...old, id: fresh, updatedAt: '2026-01-01T00:00:00Z' }, key);
+    await VaultStore.save({ ...old, notes: 'edited later', updatedAt: '2026-02-01T00:00:00Z' }, key);
+    fakeServer.foreign.add(old.id);
+  });
+  await sync(page);
+  const items = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => i.notes || ''));
+  expect(items).toEqual(['edited later']);
+});
