@@ -88,6 +88,10 @@ export const test = base.extend({
 
 export { expect } from '@playwright/test';
 
+// An unlock runs PBKDF2 (600k iterations): on a busy CI runner it can take
+// well over the default 5 s, so what follows one waits longer.
+export const UNLOCK_MS = 20_000;
+
 // 2.0 lock (vaultLock.js): a vault key wrapped with master password "test",
 // precomputed so tests don't pay 600k PBKDF2 iterations to seed state.
 export const TEST_PASSWORD = 'test';

@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, waitForVault, writeAccounts, TEST_PASSWORD, TEST_SECRET } from './fixtures.js';
+import { test, expect, seedUnlocked, waitForVault, writeAccounts, TEST_PASSWORD, TEST_SECRET, UNLOCK_MS } from './fixtures.js';
 
 // In-page sign-in form fill (forms.js + background vaultLoginsForPage /
 // vaultFillLogin).
@@ -102,7 +102,7 @@ test('locked: the offer unlocks in the extension frame, then fills', async ({ co
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
 
-  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!', { timeout: UNLOCK_MS });
   await expect(site.locator('input[name="email"]')).toHaveValue('me@example.com');
   await expect(overlay).toHaveCount(0);
 });
@@ -271,7 +271,7 @@ test('locked: the dropdown unlocks in the extension frame, then fills', async ({
   await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
-  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!', { timeout: UNLOCK_MS });
 });
 
 test('with many logins in a short window the dropdown stays on screen and scrolls', async ({ context, extensionId }) => {
@@ -319,7 +319,7 @@ test('locked: a long list after unlocking in the dropdown can still scroll to ev
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
   const drop = site.locator('#otpilot-login-dropdown');
-  await expect(drop.locator('.otpilot-login-choice')).toHaveCount(10);
+  await expect(drop.locator('.otpilot-login-choice')).toHaveCount(10, { timeout: UNLOCK_MS });
   expect(await drop.evaluate(el => getComputedStyle(el).overflowY)).toBe('auto');
   await drop.locator('.otpilot-login-choice').last().scrollIntoViewIfNeeded();
   await drop.locator('.otpilot-login-choice').last().click();
