@@ -215,7 +215,8 @@ const VaultSync = (() => {
       for (const id of touched) {
         const item = now[id] && await decryptOrNull(now[id], key);
         if (!item?.links?.some(l => remapped[l])) continue;
-        const links = [...new Set(item.links.map(l => remapped[l] || l))].filter(l => l !== id);
+        const last = l => { const seen = new Set(); while (remapped[l] && !seen.has(l)) { seen.add(l); l = remapped[l]; } return l; };
+        const links = [...new Set(item.links.map(last))].filter(l => l !== id);
         await tx.put(id, await VaultCrypto.encryptItem({ ...item, links }, key));
         if (state.synced[id]) state.synced[id] = { ...state.synced[id], fp: null };
       }
@@ -395,7 +396,9 @@ const VaultSync = (() => {
       // nothing ever links an id that's gone, and nothing is moved twice.
       await chrome.storage.local.set({ [REHOME]: { ...pending, ...to } });
       if (puts.length) await tx.putMany(puts);
+      // Kept flat: an earlier move to an id moved now points at the newest.
       const done = (await chrome.storage.local.get(REMAPPED))[REMAPPED] || {};
+      for (const [from, dest] of Object.entries(done)) if (to[dest]) done[from] = to[dest];
       await chrome.storage.local.set({ [REMAPPED]: { ...done, ...to } });
       await tx.dropMany(Object.keys(to));
       const left = { ...pending, ...to };

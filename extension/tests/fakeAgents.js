@@ -86,8 +86,12 @@ export function installFakeAgents(page, { free = false } = {}) {
         if (method === 'DELETE') return reply(a.grants.delete(itemId) ? 200 : 404, { ok: true });
         if (a.status !== 'active') return reply(404, {});
         const total = [...S.agents.values()].reduce((n, x) => n + x.grants.size, 0);
-        if (free && !a.grants.has(itemId) && total >= 3) return reply(400, { error: 'free plan limit: three accounts for agents' });
-        if (body.base_revision != null && a.grants.get(itemId)?.revision !== body.base_revision) return reply(404, { error: 'not found' });
+        if (free && !body.move_from && !a.grants.has(itemId) && total >= 3) return reply(400, { error: 'free plan limit: three accounts for agents' });
+        if (body.move_from) {
+          const src = a.grants.get(body.move_from);
+          if (!src || (body.base_revision != null && src.revision !== body.base_revision)) return reply(404, { error: 'not found' });
+          a.grants.delete(body.move_from);
+        } else if (body.base_revision != null && a.grants.get(itemId)?.revision !== body.base_revision) return reply(404, { error: 'not found' });
         a.grants.set(itemId, { ...body, revision: ++S.rev });
         return reply(200, { item_id: itemId, revision: S.rev });
       }

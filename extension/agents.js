@@ -176,10 +176,15 @@ const Agents = (() => {
       label: await VaultCrypto.encryptItem(label, VaultCrypto.b64e(sk)),
       wrapped_key: await TeamKeys.wrapUserShare(sk, p.key),
       ...(opts.baseRevision != null ? { base_revision: opts.baseRevision } : {}),
+      ...(opts.moveFrom ? { move_from: opts.moveFrom } : {}),
     };
     await ok(`/agents/${agent.id}/grants/${item.id}`, { method: 'PUT', body: JSON.stringify(body) });
     await noteApproved(`${agent.id}:${item.id}`, scope);
     await notePublished([[`${agent.id}:${item.id}`, await fingerprint(copy, meta)]]);
+    if (opts.moveFrom) {
+      await notePublished([[`${agent.id}:${opts.moveFrom}`, null]]);
+      await noteApproved(`${agent.id}:${opts.moveFrom}`, null);
+    }
   }
 
   async function ungrant(agentId, itemId) {
@@ -238,6 +243,8 @@ const Agents = (() => {
     // Items sync gave a new id (their old one belonged to another account):
     // the grant moves to the new id.
     const moved = (await chrome.storage.local.get('vaultRemapped')).vaultRemapped || {};
+    // Followed to the last move (A → B → C).
+    const finalId = id => { const seen = new Set(); while (moved[id] && !seen.has(id)) { seen.add(id); id = moved[id]; } return id; };
     const pub = await published();
     let written = 0;
     for (const agent of agents) {
@@ -246,13 +253,14 @@ const Agents = (() => {
         const mine = ok_[`${agent.id}:${g.item_id}`];
         if (!mine || !sameScope(mine, g.scope)) continue;
         const item = byId.get(g.item_id);
-        const now = !item && moved[g.item_id] && byId.get(moved[g.item_id]);
+        const now = !item && moved[g.item_id] && byId.get(finalId(g.item_id));
         if (now) {
-          if (!agent.grants.some(x => x.item_id === now.id)) {
-            await grant(agent, now, { scope: g.scope, expiresAt: g.expires_at, askEveryTime: g.ask_every_time, commands: g.commands });
+          if (agent.grants.some(x => x.item_id === now.id)) { await ungrant(agent.id, g.item_id).catch(() => {}); continue; }
+          // One step on the server: only the grant as read, and no new slot.
+          try {
+            await grant(agent, now, { scope: g.scope, expiresAt: g.expires_at, askEveryTime: g.ask_every_time, commands: g.commands, baseRevision: g.revision, moveFrom: g.item_id });
             written++;
-          }
-          await ungrant(agent.id, g.item_id).catch(() => {});
+          } catch (e) { if (e.status !== 404) throw e; }
           continue;
         }
         if (!item) {

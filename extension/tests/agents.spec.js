@@ -229,14 +229,15 @@ test('copies follow the vault: an edited password is re-sent, a deleted item los
   expect(await page.evaluate(a => [...fakeAgents.agents.get(a).grants.keys()], agentId)).toEqual([gh]);
 });
 
-test('a grant follows its item to the new id sync gave it', async ({ context, extensionId }) => {
-  const page = await setup(context, extensionId);
+test('a grant follows its item to the new id sync gave it (Free, all slots used)', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, { free: true });
   const agentId = await page.evaluate(async () => {
     const a = await fakeAgents.addAgent({ status: 'active' });
     await Agents.pin(a);
     const key = await VaultKeys.getKey();
     const item = (await Agents.vaultItems(key)).find(i => i.title === 'GitHub');
     await Agents.grant(a, item, { scope: { kind: 'login' }, commands: ['gh'] });
+    for (let i = 0; i < 2; i++) a.grants.set(crypto.randomUUID(), { scope: { kind: '2fa' }, commands: [], revision: 0 });
     // Sync moved it to a new id (its old one was another account's).
     const fresh = crypto.randomUUID();
     await VaultStore.save([{ ...item, id: fresh }], key);
@@ -246,9 +247,9 @@ test('a grant follows its item to the new id sync gave it', async ({ context, ex
   });
   expect(await page.evaluate(async () => Agents.syncCopies(await VaultKeys.getKey()))).toBe(1);
   const grants = await page.evaluate(a => [...fakeAgents.agents.get(a).grants.entries()].map(([id, g]) => [id, g.commands]), agentId);
-  expect(grants).toHaveLength(1);
-  expect(grants[0][1]).toEqual(['gh']);
-  expect(await page.evaluate(async id => !!(await VaultStore.get(id, await VaultKeys.getKey())), grants[0][0])).toBe(true);
+  expect(grants).toHaveLength(3);
+  const gh = grants.find(([, c]) => c[0] === 'gh');
+  expect(await page.evaluate(async id => !!(await VaultStore.get(id, await VaultKeys.getKey())), gh[0])).toBe(true);
 });
 
 test('free plan: the limit shows and a fourth account is refused', async ({ context, extensionId }) => {

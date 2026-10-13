@@ -690,8 +690,9 @@ test('a version from another device linking an id this device moved links the ne
     const note = Vault.newItem('note', { title: 'Notes' });
     await fakeServer.remoteSave(note);
     await VaultSync.sync(key);
-    const old = crypto.randomUUID(), fresh = crypto.randomUUID();
-    await chrome.storage.local.set({ vaultRemapped: { [old]: fresh } });
+    // Moved twice (A → B, then B → C): links to A end at C.
+    const old = crypto.randomUUID(), mid = crypto.randomUUID(), fresh = crypto.randomUUID();
+    await chrome.storage.local.set({ vaultRemapped: { [old]: mid, [mid]: fresh } });
     // Another device saves the note, still linking the old id.
     await fakeServer.remoteSave({ ...note, notes: 'newer', links: [old], updatedAt: new Date(Date.now() + 5000).toISOString() });
     return { note: note.id, fresh };

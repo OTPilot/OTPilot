@@ -74,8 +74,9 @@
     if (group.length > 2 && group[0] === el) return false;
     const label = el.labels?.[0]?.textContent || '';
     const hints = `${el.name} ${el.id} ${el.placeholder} ${el.getAttribute('aria-label') || ''} ${label}`;
-    if (NEW_PW_HINT.test(hints)) return true;
+    // "Confirm current password" is the current one: that check comes first.
     if (CURRENT_PW_HINT.test(hints)) return false;
+    if (NEW_PW_HINT.test(hints)) return true;
     // A change-password page with two unnamed fields: current, then new.
     if (CHANGE_PW_PAGE.test(location.pathname) && group.length === 2 && group[0] === el) return false;
     if (NEW_PW_PAGE.test(location.pathname)) return true;
