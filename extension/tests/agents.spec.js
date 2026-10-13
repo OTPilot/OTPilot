@@ -373,3 +373,23 @@ test('an expired account is renewed in place, with its settings', async ({ conte
   expect(g.commands).toEqual(['gh']);
   expect(new Date(g.expires_at).getTime()).toBeGreaterThan(Date.now());
 });
+
+test('the Agents view picks up a new request on its own, and never redraws over an open form', async ({ context, extensionId }) => {
+  test.setTimeout(60_000); // waits out the 10 s refresh
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  const detail = page.locator('#agents-detail');
+  await detail.getByRole('button', { name: '+ Add account' }).click();
+  await expect(detail.locator('.ag-adding .ag-picker')).toBeVisible();
+  await page.evaluate(a => fakeAgents.addRequest(a, { query: 'bank' }), agentId);
+  await page.waitForTimeout(11_000);
+  await expect(detail.locator('.ag-adding .ag-picker')).toBeVisible(); // the form stayed
+  await detail.getByRole('button', { name: 'Cancel' }).click();
+  await expect(detail).toContainText('Asks for bank', { timeout: 15_000 });
+});

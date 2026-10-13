@@ -74,7 +74,11 @@ async function renderAgentsPanel(fresh = null) {
   }
   try {
     const key = await VaultKeys.getKey();
-    [_agentsData, _agentsItems] = await Promise.all([fresh || Agents.list(), key ? Agents.vaultItems(key) : []]);
+    const [data, items] = await Promise.all([fresh || Agents.list(), key ? Agents.vaultItems(key) : []]);
+    // A timer redraw: a form opened during those waits stays as it is.
+    const panel = document.getElementById('agents-panel');
+    if (fresh && panel && agentsBusy(panel)) return;
+    [_agentsData, _agentsItems] = [data, items];
   } catch (e) {
     detail.innerHTML = `<div class="ag-empty">${esc(agentError(e))}</div>`;
     return;

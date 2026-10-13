@@ -79,8 +79,9 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 /** Polls a request until the user answers or `waitMs` passes. */
 export async function waitForAnswer(api: Api, requestId: string, waitMs: number): Promise<'allowed' | 'denied' | 'pending'> {
   const until = Date.now() + waitMs
-  for (;;) {
-    const left = until - Date.now()
+  // Always asked at least once (a retry checks an earlier request with no wait).
+  for (let first = true; ; first = false) {
+    const left = Math.max(until - Date.now(), first ? 5_000 : 0)
     if (left <= 0) return 'pending'
     // Each check gives up with the deadline, so a stalled reply can't hold the tool past it.
     // A timeout, a network blip or a server error (5xx, 429) is retried
@@ -92,15 +93,32 @@ export async function waitForAnswer(api: Api, requestId: string, waitMs: number)
         return { status: 'pending' as const }
       })
     if (r.status !== 'pending') return r.status
+    if (Date.now() >= until) return 'pending'
     await sleep(Math.min(2000, Math.max(0, until - Date.now())))
   }
 }
+
+/** Requests that timed out waiting (item id → request id): a retry finishes that one instead of asking again. */
+const waiting = new Map<string, string>()
 
 /** The grant's values, asking the user for this one use when it asks every time. */
 export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, tool: string, reason: string, waitMs: number): Promise<VaultItem> {
   // "Ask every time" means every use: a copy still released by an earlier
   // approval (the API keeps it for a couple of minutes) is never reused.
   if (grant.item && !grant.askEveryTime) return grant.item
+  // A request that timed out earlier and the user answered since: its
+  // approval is used once, for this retry; one still waiting stays the one.
+  const earlier = waiting.get(grant.itemId)
+  if (earlier) {
+    const answer = await waitForAnswer(api, earlier, 0).catch(() => 'denied' as const)
+    if (answer === 'pending') throw new PendingApproval(earlier, `use "${grant.title}" this time`)
+    waiting.delete(grant.itemId)
+    if (answer === 'allowed') {
+      const again = (await loadGrants(api, privateJwk)).find(g => g.itemId === grant.itemId)
+      if (again?.item) return again.item
+    }
+    // Denied, or its approval expired: ask anew.
+  }
   let req: { id: string }
   try {
     req = await api.post<{ id: string }>('/agent/requests', { item_id: grant.itemId, tool, reason })
@@ -110,7 +128,10 @@ export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, t
   }
   const answer = await waitForAnswer(api, req.id, waitMs)
   if (answer === 'denied') throw new Error(`The user denied using "${grant.title}" this time.`)
-  if (answer === 'pending') throw new PendingApproval(req.id, `use "${grant.title}" this time`)
+  if (answer === 'pending') {
+    waiting.set(grant.itemId, req.id)
+    throw new PendingApproval(req.id, `use "${grant.title}" this time`)
+  }
   const again = (await loadGrants(api, privateJwk)).find(g => g.itemId === grant.itemId)
   if (!again?.item) throw new Error(`"${grant.title}" was approved but its approval expired. Try again.`)
   return again.item
