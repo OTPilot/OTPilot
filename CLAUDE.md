@@ -263,6 +263,12 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 
 `apiFetch()` in `web/src/lib/api.ts` appends the Supabase JWT automatically to every request.
 
+**Every new user-facing feature or release updates what describes OTPilot outside the app**, in the same PR:
+- `web/public/llms.txt`: what search engines and LLMs read — its Versions section, Key features, the feature's own section when it's big, Plans, Links
+- the sitemap: a new public page goes in `PUBLIC_PAGES` (`web/vite.config.ts`), which prerenders it and lists it in the generated `sitemap.xml`
+- `extension/manifest.json` `description`: the Chrome Web Store's short summary (≤132 characters)
+- the store's long description (not in the repo): say what to change in the PR
+
 **Invariant:** `web/src/lib/vaultCrypto.ts` mirrors the extension's `vaultCrypto.js` (item records, collection names / keys under a collection key, AAD strings) and `keys.js` ECIES wrapping; `web/src/lib/teamVault.ts` mirrors `vaultCollections.js` / `vaultShares.js` (a whole share's copy = `project()`; the share key stored in the item with `updatedAt` kept, written back with `base_revision`, 409 retried; `countsForLimit` from `vault.js`). Change both sides together: `web/src/lib/__fixtures__/vault-crypto.json` holds data made by each client, and both must open both sides (`web` `npm test` → `vaultCrypto.test.ts`; extension `tests/cryptoFixtures.spec.js`). The web shares whole items only (chosen parts stay in the extension); the share key is stored in the item before the share is created (a failed create leaves a reference the extension drops), then verified against the server (a share whose key can't be put back is deleted). Decrypted data is cached under the `decrypted` query prefix and removed on Lock / leaving the page.
 
 ### Billing
