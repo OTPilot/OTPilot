@@ -133,8 +133,12 @@ export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, t
       if (again?.item) return again.item
     } else forget(grant.itemId, earlier) // denied: that one is done
   }
-  // One of them still waits for the user: that's the one to approve.
-  if (stillWaiting) throw new PendingApproval(stillWaiting.id, `use "${grant.title}" this time`)
+  // One still waits for the user: point at one that's still saved and free
+  // (another retry may have spent the one seen above meanwhile).
+  if (stillWaiting) {
+    const open = (waiting.get(grant.itemId) || []).find(w => !w.busy && w.tool === tool && w.reason === reason)
+    if (open) throw new PendingApproval(open.id, `use "${grant.title}" this time`)
+  }
   // None left (denied, or an approval expired): ask anew.
   let req: { id: string }
   try {
