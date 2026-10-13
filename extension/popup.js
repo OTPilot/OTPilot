@@ -326,7 +326,8 @@ function saveFilters() {
   chrome.storage.local.set({ listFilters: filters });
 }
 
-const filterCount = () => filters.tags.length + filters.types.length + (filters.twofa ? 1 : 0);
+// Types only count where they apply (the Vault); Home keeps them for it.
+const filterCount = ({ types = true } = {}) => filters.tags.length + (types ? filters.types.length : 0) + (filters.twofa ? 1 : 0);
 const hasTwofa = e => !!(e?.secret || e?.item?.totp?.secret);
 
 function matchesFilters(e, { types = true } = {}) {
@@ -349,10 +350,10 @@ const filterTag = () => (filters.tags.length === 1 ? filters.tags[0] : '');
 function pruneFilters(list, { types = true } = {}) {
   const tags = new Set(getCategories(list));
   const kinds = new Set(list.map(entryType));
-  const before = filterCount();
+  const before = filterCount({ types });
   filters.tags = filters.tags.filter(t => tags.has(t));
   if (types) filters.types = filters.types.filter(t => kinds.has(t));
-  if (filterCount() !== before) saveFilters();
+  if (filterCount({ types }) !== before) saveFilters();
 }
 
 // The Filter button beside a search box, the active filters as chips under
@@ -363,7 +364,7 @@ function renderFilters({ button, chips, list, types = false, onChange }) {
   pruneFilters(list, { types });
   const kinds = types ? [...new Set(list.map(entryType))] : [];
   const tags = getCategories(list);
-  const n = filterCount();
+  const n = filterCount({ types });
   button.classList.toggle('on', n > 0);
   button.querySelector('.flt-n').textContent = n || '';
   button.hidden = !tags.length && kinds.length < 2 && !list.some(hasTwofa) && !n;
@@ -378,7 +379,7 @@ function renderFilters({ button, chips, list, types = false, onChange }) {
   };
   chips.innerHTML = '';
   if (filters.twofa) chips.appendChild(chip('2FA code', '', () => { filters.twofa = false; }));
-  for (const t of filters.types) chips.appendChild(chip(`${typeLabel(t)}s`, '', () => { filters.types = filters.types.filter(x => x !== t); }));
+  if (types) for (const t of filters.types) chips.appendChild(chip(`${typeLabel(t)}s`, '', () => { filters.types = filters.types.filter(x => x !== t); }));
   for (const t of filters.tags) chips.appendChild(chip(t, catDot(t), () => { filters.tags = filters.tags.filter(x => x !== t); }));
   chips.style.display = n ? '' : 'none';
 }
@@ -580,7 +581,8 @@ function selectSharedForTab() {
 let _sharedTabMatch = null;
 
 function renderAccountBar() {
-  renderFilters({ button: document.getElementById('home-filter'), chips: document.getElementById('home-cat-bar'), list: accounts, onChange: renderAccountBar });
+  // Home lists shared logins too: they count for the 2FA filter.
+  renderFilters({ button: document.getElementById('home-filter'), chips: document.getElementById('home-cat-bar'), list: [...accounts, ...homeShared()], onChange: renderAccountBar });
 
   const list = document.getElementById('home-list');
   const countEl = document.getElementById('home-count');
@@ -598,7 +600,7 @@ function renderAccountBar() {
 
   countEl.textContent = q
     ? `${entries.length + shared.length} result${entries.length + shared.length === 1 ? '' : 's'}`
-    : filterCount() ? `${entries.length + shared.length} of ${total} accounts`
+    : filterCount({ types: false }) ? `${entries.length + shared.length} of ${total} accounts`
       : `${total} account${total === 1 ? '' : 's'}`;
 
   list.innerHTML = '';

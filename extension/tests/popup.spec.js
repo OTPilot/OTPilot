@@ -312,3 +312,17 @@ test('the 2FA filter shows only accounts with a code, and its chip removes it', 
   await page.locator('#home-cat-bar .flt-chip', { hasText: '2FA code' }).locator('button').click();
   await expect(page.locator('#home-list .lc-row')).toHaveCount(2);
 });
+
+test('a type picked in the Vault doesn\'t show as a filter on Home', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => new Promise(r => chrome.storage.local.set({
+    listFilters: { tags: [], types: ['note'], twofa: false },
+    accounts: [{ name: 'GitHub', secret, urls: '', email: '', category: 'Work' }],
+  }, r)), [TEST_SECRET]);
+  await page.reload();
+  await expect(page.locator('#home-list .lc-row')).toHaveCount(1);
+  await expect(page.locator('#home-cat-bar')).toBeHidden();
+  await expect(page.locator('#home-filter .flt-n')).toHaveText('');
+});
