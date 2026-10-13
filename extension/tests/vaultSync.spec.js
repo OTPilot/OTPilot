@@ -606,3 +606,17 @@ test('a taken copy holding something the synced one lacks (password history) is 
     .filter(i => i.title === 'GitHub').map(i => (i.passwordHistory || []).length).sort());
   expect(kept).toEqual([0, 1]);
 });
+
+test('a move cut short (the old record left beside its new one) is finished, not moved twice', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const old = Vault.newItem('login', { title: 'AWS' });
+    await VaultStore.save(old, key);
+    await VaultStore.save({ ...old, id: crypto.randomUUID() }, key); // its new copy, already written
+    fakeServer.foreign.add(old.id);
+  });
+  await sync(page);
+  expect(await localTitles(page)).toEqual(['AWS']);
+  expect(await page.evaluate(() => fakeServer.items.size)).toBe(1);
+});

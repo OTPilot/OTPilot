@@ -320,37 +320,38 @@ const VaultSync = (() => {
     await VaultStore.transaction(async tx => {
       await checkKey(key);
       const recs = await tx.listRecords();
-      const synced = new Map();
-      for (const [id, rec] of Object.entries(recs)) {
-        if (!state.synced[id]) continue;
-        const item = await decryptOrNull(rec, key);
-        if (item) synced.set(content(item), id);
-      }
+      const taken = new Set(ids);
+      const items = {};
+      for (const [id, rec] of Object.entries(recs)) items[id] = await decryptOrNull(rec, key);
+      // Exact copies are looked for among every other item here (synced or
+      // not): a move cut short last time left the old record beside its new
+      // one, and that old record is dropped now instead of moved twice.
+      const others = new Map();
+      for (const [id, item] of Object.entries(items)) if (item && !taken.has(id)) others.set(content(item), id);
       const to = {};
+      const puts = [];
       for (const id of ids) {
-        const item = recs[id] && await decryptOrNull(recs[id], key);
+        const item = items[id];
         if (!item) continue;
-        const twin = synced.get(content(item));
-        if (twin) {
-          await tx.drop(id);
-          to[id] = twin;
-        } else {
-          const fresh = crypto.randomUUID();
-          await tx.put(fresh, await VaultCrypto.encryptItem({ ...item, id: fresh }, key));
-          await tx.drop(id);
-          to[id] = fresh;
-        }
-        stats.remapped[id] = to[id];
-        moved++;
+        const twin = others.get(content(item));
+        if (twin) { to[id] = twin; continue; }
+        const fresh = crypto.randomUUID();
+        puts.push([fresh, await VaultCrypto.encryptItem({ ...item, id: fresh }, key)]);
+        to[id] = fresh;
       }
+      moved = Object.keys(to).length;
       if (!moved) return;
-      for (const [id, rec] of Object.entries(await tx.listRecords())) {
-        const item = await decryptOrNull(rec, key);
-        if (!item?.links?.some(l => to[l])) continue;
+      for (const [id, item] of Object.entries(items)) {
+        if (taken.has(id) || !item?.links?.some(l => to[l])) continue;
         const links = [...new Set(item.links.map(l => to[l] || l))].filter(l => l !== id);
         // A dated change: an older edit from another device doesn't bring the old id back.
-        await tx.put(id, await VaultCrypto.encryptItem({ ...item, links, updatedAt: new Date().toISOString() }, key));
+        puts.push([id, await VaultCrypto.encryptItem({ ...item, links, updatedAt: new Date().toISOString() }, key)]);
       }
+      // The new records and every link to them in one write, then the old
+      // records: nothing ever links an id that's gone.
+      if (puts.length) await tx.putMany(puts);
+      await tx.dropMany(Object.keys(to));
+      Object.assign(stats.remapped, to);
     });
     return moved;
   }
