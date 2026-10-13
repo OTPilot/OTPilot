@@ -75,8 +75,10 @@ beforeAll(async () => {
     // The code step answers slowly, and only then sets the session cookie.
     if (url.pathname === '/slow') return html('<form method="post" action="/otp-slow"><input name="code" autocomplete="one-time-code"><button>Verify</button></form>')
     if (url.pathname === '/otp-slow') {
+      // Checked before the delay: the 30-second window may turn meanwhile.
+      const valid = form.get('code') === (await generateTOTP(SECRET))
       await new Promise(r => setTimeout(r, 2500))
-      return form.get('code') === (await generateTOTP(SECRET)) ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=slow; Path=/' }) : html('bad code')
+      return valid ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=slow; Path=/' }) : html('bad code')
     }
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return form.get('code') === (await generateTOTP(SECRET))
