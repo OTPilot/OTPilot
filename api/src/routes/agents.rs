@@ -575,6 +575,15 @@ async fn put_grant(
             .bind(from)
             .execute(&mut *tx)
             .await?;
+        // As when a grant is removed: an approval of the old item releases nothing later.
+        sqlx::query(
+            "UPDATE agent_requests SET released_until = NULL
+             WHERE agent_id = $1 AND item_id = $2 AND released_until IS NOT NULL",
+        )
+        .bind(id)
+        .bind(from)
+        .execute(&mut *tx)
+        .await?;
         true // a replacement: no new slot
     } else {
         let current: Option<i64> = revision_of(item_id).fetch_optional(&mut *tx).await?;
