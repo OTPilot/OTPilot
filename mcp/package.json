@@ -1,6 +1,6 @@
 {
   "name": "@otpilot/mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "mcpName": "io.github.OTPilot/otpilot",
   "description": "OTPilot for AI agents: let Claude Code, Codex, Cursor or any MCP agent sign in and run commands with the accounts you allow \u2014 without ever seeing the passwords or 2FA codes.",
   "license": "GPL-3.0-only",

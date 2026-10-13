@@ -45,6 +45,16 @@ beforeAll(async () => {
       <input name="code" autocomplete="one-time-code" style="display:none"><button>Go</button></form>
       <script>document.querySelector('[name=pw]').addEventListener('keydown', e => { if (e.key !== 'Enter' || document.querySelector('[name=code]').style.display !== 'none') return
         e.preventDefault(); document.querySelector('[name=code]').style.display = '' })</script>`)
+    // A bot check that stays (headless never gets through it).
+    if (url.pathname === '/bot') return html('<h1>Verify you are human</h1><p>Performing security verification</p>')
+    // A bot check that clears by itself after a moment, then the sign-in form.
+    if (url.pathname === '/bot-clears') return html(`<h1>Verify you are human</h1><script>setTimeout(() => { document.body.innerHTML =
+      '<form method="post" action="/pass"><input name="email" type="email" autocomplete="username"><input type="password" name="pw"><button>Sign in</button></form>' }, 2500)</script>`)
+    // The submit turned down (a bot check on the button), then the person gets it through: the 2FA step.
+    if (url.pathname === '/turned-down') return html(`<input name="email" type="email" autocomplete="username"><input type="password" name="pw"><p id="err"></p>
+      <script>document.querySelector('[name=pw]').addEventListener('keydown', e => { if (e.key !== 'Enter') return
+        err.textContent = 'Something went wrong'; setTimeout(() => { location.href = '/pass-ok' }, 23000) })</script>`)
+    if (url.pathname === '/pass-ok') return html('<form method="post" action="/otp"><input name="code" autocomplete="one-time-code"><button>Verify</button></form>')
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return form.get('code') === (await generateTOTP(SECRET))
       ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=signed-in; Path=/' })
@@ -108,6 +118,27 @@ describe('browser_login', () => {
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}both`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
     expect(r.status).toBe('signed_in')
   }, 40_000)
+
+  it('stops at a bot check without sending anything, and says so', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'] }), { url: `${base}bot`, outDir: tmpdir(), show: false })
+    expect(r).toMatchObject({ status: 'needs_user', blocked: true })
+    expect(r.note).toMatch(/bot check/)
+  })
+
+  it('retries a bot check in a visible window, where it clears (or says there is no display)', async ctx => {
+    if (!browserOk) ctx.skip()
+    const display = process.platform !== 'linux' || !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}bot-clears`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
+    if (display) expect(r.status).toBe('signed_in')
+    else expect(r.note).toMatch(/no display/)
+  }, 60_000)
+
+  it('in a visible window, waits for the person to get a turned-down submit through, then fills the code', async ctx => { // after the 20 s a submit gets
+    if (!browserOk || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}turned-down`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`), show: true })
+    expect(r.status).toBe('signed_in')
+  }, 60_000)
 
   it('reports a rejected password instead of claiming success', async ctx => {
     if (!browserOk) ctx.skip()

@@ -15,6 +15,8 @@ export type LoginResult = {
   title: string
   storageState?: string
   note?: string
+  /** Stopped by a bot check before anything was sent: a visible window may get through. */
+  blocked?: boolean
 }
 
 const USER = [
@@ -40,7 +42,7 @@ async function firstVisible(page: Page, selector: string): Promise<Locator | nul
   const n = Math.min(await all.count(), 10)
   for (let i = 0; i < n; i++) {
     const el = all.nth(i)
-    if (await el.isVisible().catch(() => false) && await el.isEditable().catch(() => false)) return el
+    if (await el.isVisible().catch(() => false) && await el.isEditable({ timeout: 2000 }).catch(() => false)) return el
   }
   return null
 }
@@ -78,14 +80,45 @@ async function moveOn(page: Page, field: Locator, next: string | null, ms = 20_0
     const sameDoc = await page.evaluate(() => (window as unknown as { __otpilot?: boolean }).__otpilot === true).catch(() => false)
     if (!sameDoc) return true
     if (!(await field.isVisible().catch(() => false))) return true
-    if (!(await field.inputValue().catch(() => ''))) return true
+    if (!(await field.inputValue({ timeout: 2000 }).catch(() => ''))) return true
     if (next && (await firstVisible(page, next))) return true
   }
   return false
 }
 
-/** Signs in to `item`'s site and saves the session under `outDir`. */
-export async function browserLogin(item: VaultItem, opts: { url?: string; outDir: string; headless?: boolean }): Promise<LoginResult> {
+/** A bot check (Cloudflare, reCAPTCHA, hCaptcha…) standing in front of the page. */
+const botCheck = (page: Page) => page.evaluate(() =>
+  /just a moment|attention required|verify you are human|security (verification|check)|are you a robot/i.test(`${document.title} ${(document.body?.innerText || '').slice(0, 3000)}`)
+  || !!document.querySelector('iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], #challenge-form, #challenge-stage'),
+).catch(() => false)
+
+/** Whether this machine can show a window (a VPS usually can't). */
+const canShow = () => process.platform !== 'linux' || !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
+
+/** How long a visible window waits for the person to clear a bot check. */
+const HUMAN_MS = 120_000
+
+/**
+ * Signs in to `item`'s site and saves the session under `outDir`. Headless
+ * first; a site behind a bot check (which headless browsers rarely pass) is
+ * retried once in a visible window — only if nothing was sent yet — where a
+ * real Chrome often passes on its own and the person can clear a captcha.
+ * `show`: true = visible from the start, false = never.
+ */
+export async function browserLogin(item: VaultItem, opts: { url?: string; outDir: string; show?: boolean | 'auto' }): Promise<LoginResult> {
+  const show = opts.show ?? 'auto'
+  if (show === true) return attempt(item, opts, false)
+  const r = await attempt(item, opts, true)
+  if (!r.blocked || show === false) return r
+  if (!canShow()) return { ...r, note: `${r.note} This machine has no display to open a window on: ask the user to sign in.` }
+  return attempt(item, opts, false)
+}
+
+async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, headless: boolean): Promise<LoginResult> {
+  // After a submit: in a visible window a bot check showing up then is the
+  // person's to clear, so it waits for them (never submitting again).
+  const submitted = async (page: Page, field: Locator, next: string | null) =>
+    (await moveOn(page, field, next)) || (!headless && (await botCheck(page)) && (await moveOn(page, field, next, HUMAN_MS)))
   const username = Vault.getValue(item, 'username')
   const password = Vault.getValue(item, 'password')
   // Only on the account's sites, and only over HTTPS — plain HTTP just for a
@@ -104,12 +137,24 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
   if (!covers(start)) throw new Error(`${start} isn't one of "${item.title}"'s saved sites over HTTPS; OTPilot only signs in there.`)
   if (!password && !item.totp?.secret) throw new Error(`"${item.title}" gives this agent nothing to sign in with (allow its sign-in in OTPilot).`)
 
-  const browser = await launch(opts.headless !== false)
+  const browser = await launch(headless)
   try {
     const context = await browser.newContext()
+    // Playwright's locators wait without limit by default: a field the site
+    // replaces mid-check (a bot check taking over the page) would hang here.
+    context.setDefaultTimeout(10_000)
     const page = await context.newPage()
     await page.goto(start, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     await settle(page)
+    const formShown = async () => !!((await firstVisible(page, PASSWORD)) || (await firstVisible(page, USER)) || (item.totp?.secret && (await firstVisible(page, OTP))))
+    if (!(await formShown()) && (await botCheck(page))) {
+      const note = 'The site shows a bot check (captcha) before its sign-in form.'
+      if (headless) return { status: 'needs_user', url: page.url(), title: await page.title(), note, blocked: true }
+      // A visible window: the check often passes by itself, or the person clears it.
+      const until = Date.now() + HUMAN_MS
+      while (Date.now() < until && !(await formShown())) await page.waitForTimeout(1000)
+      if (!(await formShown())) return { status: 'needs_user', url: page.url(), title: await page.title(), note: `${note} It wasn't cleared in the window OTPilot opened: ask the user to sign in.` }
+    }
     let filledSomething = false
     let submittedPassword = false
     let lastStep: 'username' | 'password' | 'otp' | null = null
@@ -117,7 +162,7 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
     // Each step is submitted at most once: a page still asking for the same
     // thing after it means it was rejected (or needs a person), never a retry.
     const tried = new Set<'username' | 'password' | 'otp'>()
-    for (let step = 0; step < 5; step++) {
+    const drive = async () => { for (let step = 0; step < 5; step++) {
       if (!covers(page.url())) {
         if (!filledSomething) throw new Error(`The site sent the browser to ${new URL(page.url()).hostname}, which isn't one of "${item.title}"'s saved sites. Nothing was filled.`)
         break // signed in and redirected elsewhere (an app domain): done
@@ -133,7 +178,7 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
         filledSomething = true
         tried.add('otp')
         lastStep = 'otp'
-        if (!(await moveOn(page, otp, null))) break
+        if (!(await submitted(page, otp, null))) break
       } else if (pass) {
         if (tried.has('password')) break
         if (!password) { note = 'This agent may only use the 2FA code: sign in with the password yourself first.'; break }
@@ -145,7 +190,7 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
         submittedPassword = true
         tried.add('password')
         lastStep = 'password'
-        if (!(await moveOn(page, pass, item.totp?.secret ? OTP : null))) break
+        if (!(await submitted(page, pass, item.totp?.secret ? OTP : null))) break
       } else {
         const user = await firstVisible(page, USER)
         if (user && username && (await user.inputValue()) !== username && !tried.has('username')) {
@@ -155,13 +200,26 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
           filledSomething = true
           tried.add('username')
           lastStep = 'username'
-          if (!(await moveOn(page, user, PASSWORD))) break
+          if (!(await submitted(page, user, PASSWORD))) break
         } else break
       }
       await settle(page)
+    } }
+    const asking = async () => covers(page.url()) && !!((await firstVisible(page, PASSWORD)) || (item.totp?.secret && (await firstVisible(page, OTP))))
+    await drive()
+    // In a visible window, a submit the site turned down (a bot check on the
+    // button, a captcha under the form) is the person's to finish: OTPilot
+    // never submits again, it waits for the page to move on, and fills a 2FA
+    // code that shows up then.
+    if (!headless && filledSomething && (await asking())) {
+      const until = Date.now() + HUMAN_MS
+      while (Date.now() < until && (await asking())) {
+        if (item.totp?.secret && !tried.has('otp') && tried.has('password') && (await firstVisible(page, OTP))) { await drive(); break }
+        await page.waitForTimeout(1000)
+      }
+      await settle(page)
     }
-    const onSite = covers(page.url())
-    const stillAsking = onSite && ((await firstVisible(page, PASSWORD)) || (item.totp?.secret && (await firstVisible(page, OTP))))
+    const stillAsking = await asking()
     // A sign-in that never got past the username (rejected, or a step OTPilot
     // can't see) isn't one: only a submitted password or code counts.
     const unfinished = lastStep === 'username' || (!submittedPassword && lastStep !== 'otp')
@@ -171,8 +229,10 @@ export async function browserLogin(item: VaultItem, opts: { url?: string; outDir
         url: page.url(),
         title: await page.title(),
         note: note || (filledSomething
-          ? 'The site is still asking for credentials or a code (wrong password, a captcha, or a step OTPilot doesn\'t handle). Ask the user to sign in.'
-          : 'No sign-in form found on the page.'),
+          ? (headless
+            ? 'The site is still asking for credentials or a code (wrong password, a captcha, or a step OTPilot doesn\'t handle). Ask the user to sign in.'
+            : 'The site is still asking for credentials or a code after the window OTPilot opened waited for the user (wrong password, or a check nobody cleared). Ask the user to sign in.')
+          : `No sign-in form found on ${page.url()}. If the sign-in is on another page of the site, pass its address as url.`),
       }
     }
     mkdirSync(opts.outDir, { recursive: true, mode: 0o700 })
