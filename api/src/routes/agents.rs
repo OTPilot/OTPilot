@@ -885,16 +885,19 @@ async fn agent_request_status(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>> {
     expire(&state.db).await?;
-    let row: Option<(String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT status, item_id FROM agent_requests WHERE id = $1 AND agent_id = $2",
+    // `released`: this request's approval still releases the copy now (an
+    // allowed request whose window passed isn't one to use any more).
+    let row: Option<(String, Option<Uuid>, bool)> = sqlx::query_as(
+        "SELECT status, item_id, COALESCE(released_until > NOW(), false)
+         FROM agent_requests WHERE id = $1 AND agent_id = $2",
     )
     .bind(id)
     .bind(agent.agent_id)
     .fetch_optional(&state.db)
     .await?;
-    let (status, item_id) = row.ok_or(ApiError::NotFound)?;
+    let (status, item_id, released) = row.ok_or(ApiError::NotFound)?;
     Ok(Json(
-        json!({ "id": id, "status": status, "item_id": item_id }),
+        json!({ "id": id, "status": status, "item_id": item_id, "released": released }),
     ))
 }
 
@@ -1636,7 +1639,8 @@ mod tests {
         .await;
         assert_eq!(
             st,
-            json!({ "id": rid, "status": "allowed", "item_id": item })
+            // A request for a new account releases no copy.
+            json!({ "id": rid, "status": "allowed", "item_id": item, "released": false })
         );
         // Answered once.
         let (s, _) = call(
