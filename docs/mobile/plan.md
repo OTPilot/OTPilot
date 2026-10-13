@@ -5,6 +5,10 @@
 > - **Free en el celular:** la app funciona completa y **solo local**, sin sync. Un usuario Free usa el navegador **o** el celular. Para pasar los datos de uno al otro, exporta un backup cifrado y lo importa (el mismo formato v2 de la extensión). El sync entre dispositivos sigue siendo de Personal y Team.
 > - **Temas:** solo **dark** y **light** (sigue al sistema, con override en Settings). Los temas de la extensión (Original, Sepia, etc.) no van.
 > - **Safari / Firefox:** no por ahora. Edge ya funciona porque es compatible con Chrome. Safari, cuando algún usuario lo pida.
+> - **Inicio:** los códigos en su **propio tab** (mockup 05A), y además el Vault muestra el código en vivo en cada login que tiene 2FA (como el 05B). Es una mezcla: 5 tabs (Codes · Vault · Generate · Agents · Settings).
+> - **Pedidos de agentes:** las **dos** formas. Pantalla completa (13A) para "preguntar cada vez", que se aprueba con Face ID. Hoja inferior (13B) para un pedido de cuenta nueva, donde hay que elegir cuenta, alcance y duración.
+> - **Free sin límite de dispositivos:** cada instalación es un vault local independiente. Lo que da pagar es el sync.
+> - **Pagos desde el celular con las tiendas (IAP),** como Pomodoso (sección 4.1). Comprar desde la app pasa por Apple/Google; desde la web y la extensión sigue siendo Stripe.
 >
 > Mockups: ver la sección 9.
 
@@ -145,7 +149,7 @@ Leyenda de **Fase**: M1 = primera versión publicada, M2 = autofill, M3 = parida
 | Recovery key (mostrar una vez, revelar con la master password, recuperar) | Igual | M1 |
 | Reset del dispositivo ("empezar de cero") | Igual | M1 |
 | Sign in (Google / magic link), sign out | Igual | M1 |
-| Plan y upgrade (Stripe) | Link a la web para pagar (como Pomodoso hoy); IAP nativo más adelante (ADR 0003 de Pomodoso) | M1 link, después IAP |
+| Plan y upgrade (Stripe) | **Compra dentro de la app con la tienda (IAP)**, con "Restore purchases" (sección 4.1) | M1 |
 | Captura de pantalla | Bloqueada en pantallas con secretos (Android `FLAG_SECURE`; iOS: ocultar al pasar a background / app switcher) | M1 |
 
 ### 2.6 Sync y datos
@@ -207,7 +211,28 @@ Todo lo que vive en content scripts dentro de una página:
 | Agentes | 1 agente, 3 cuentas | ilimitados | ilimitados |
 | Compartir | — | — | ✅ |
 
-**Para decidir:** en Free, ¿el celular es "otro dispositivo" o comparte el límite? Hoy Free no tiene límite de dispositivos porque no sincroniza. Propuesta: **no limitar**. Cada instalación es un vault local independiente, y la diferencia con pagar es el sync.
+**Decidido:** Free no limita dispositivos. Cada instalación es un vault local independiente, y la diferencia con pagar es el sync.
+
+### 4.1 Pagos en el celular: compras de la tienda (como Pomodoso, ADR 0003 + 0004)
+
+Un link a la web para pagar viola la regla 3.1.1 de App Store fuera de EE. UU. (el precedente es el rechazo de HEY). Por eso, **dentro de la app se compra con la tienda**, como **segunda fuente de pago** que escribe el mismo `users.plan`. Stripe sigue siendo el medio en la web y la extensión, y ninguno de los dos manda sobre el otro.
+
+- **iOS:** StoreKit 2 en un módulo Swift propio. El de Pomodoso (`mobile/modules/pomodoso-iap`, unas 170 líneas) se puede reusar casi tal cual.
+- **Verificación en nuestra API (Rust), sin intermediarios (ADR 0004 de Pomodoso):**
+  - `POST /iap/verify`: la app manda la transacción recién comprada y se aplica al instante;
+  - `POST /webhooks/app-store`: App Store Server Notifications V2, que es la fuente de verdad para renovaciones, cancelaciones y reembolsos;
+  - la firma JWS se verifica contra el Apple Root CA G3 (`apple/jws.rs` de Pomodoso, con tests de falsificaciones). Se trae el mismo código: OTPilot también es Axum.
+- **Identidad:** `appAccountToken` = el `users.id` de OTPilot, puesto al comprar. Para comprar hay que haber iniciado sesión.
+- **Proveniencia:** se agregan `payment_provider` (`stripe` | `apple` | `google`), `store_transaction_id` y `store_product_id`. Sirve para el botón "administrar suscripción" (Stripe portal vs. ajustes del sistema), **nunca** para habilitar features.
+- **Reglas que muerden:**
+  - `CANCELLATION` no quita el acceso: dura hasta `EXPIRATION`;
+  - un evento viejo de la tienda nunca baja una suscripción de Stripe vigente;
+  - la transacción se "finaliza" recién cuando el backend la aceptó;
+  - el sandbox está rechazado por defecto (`APPLE_ACCEPT_SANDBOX`).
+- **Paywall:** primero mira el plan. Si ya es Personal por Stripe, no ofrece comprar (Apple no nos deja reembolsar un doble cobro). Tiene **Restore purchases**, porque Apple rechaza sin eso.
+- **Productos:** solo Personal mensual y anual. **Team sigue en la web** (es por workspace, con asientos).
+- **Comisión:** 15% con el Small Business Program de Apple y la tasa equivalente de Google, solo sobre las compras hechas desde el celular. El embudo principal sigue siendo extensión/web → Stripe.
+- **Android:** Google Play Billing va aparte (Real-time Developer Notifications por Pub/Sub más la Play Developer API). Puede ser `expo-iap` en el cliente, como Pomodoso pensó reconsiderar al llegar a Android.
 
 ## 5. Pantallas
 
@@ -248,6 +273,7 @@ Ver mockups (sección 9). Lista completa:
 - Generador.
 - Free local + backup cifrado export/import; sync para Personal/Team con el core compartido; registro como dispositivo.
 - Dark/light.
+- IAP en iOS (StoreKit 2 + verificación en la API, sección 4.1) y paywall con "Restore purchases". El IAP de Android puede salir en M1 o en M4.
 
 ### M2 — Autofill del sistema
 - iOS Credential Provider (contraseñas + códigos en iOS 18), Android AutofillService (+ Credential Manager).
@@ -261,7 +287,8 @@ Ver mockups (sección 9). Lista completa:
 ### M4 — Agentes y extras
 - Push remoto (APNs/FCM): pedidos de agentes y "preguntar cada vez" aprobados con Face ID.
 - Lista, detalle, agregar cuenta, actividad, revocar.
-- Tarjeta y Wi-Fi como tipos nuevos (si se decide), IAP.
+- Tarjeta y Wi-Fi como tipos nuevos (si se decide).
+- Google Play Billing (si en M1 se sale solo con iOS IAP).
 
 ## 7. Riesgos
 
@@ -285,7 +312,8 @@ Ver mockups (sección 9). Lista completa:
 ## 9. Mockups
 
 Canvas de diseño: https://claude.ai/artifact/DPzox3yJ2hx5gfYYrVCp19 (privado; compartirlo desde su menú Share). Tiene 22 pantallas, una por artboard. Cada una tiene un tweak **dark** para verla en el otro tema: el canvas muestra algunas en dark y otras en light. Hay opciones donde hay que decidir:
-- **Inicio:** 05A, los códigos en su propio tab (5 tabs: Codes · Vault · Generate · Agents · Settings), vs. 05B, una sola lista con el código en vivo en cada fila (4 tabs).
-- **Pedido de un agente:** 13A, pantalla completa con "Allow with Face ID" (un pedido de "preguntar cada vez"), vs. 13B, una hoja inferior (un pedido de cuenta nueva, eligiendo la cuenta, el alcance y la duración).
+- **Inicio — elegido:** 05A (los códigos en su propio tab) y el Vault (06) con el código en vivo en cada login con 2FA, como el 05B. El 05B queda en el canvas como referencia.
+- **Pedido de un agente — elegidos los dos:** 13A para "preguntar cada vez", 13B para una cuenta nueva.
+- **Cuenta (17):** el paywall nativo con los precios de la tienda y "Restore purchases".
 
 Paleta: la de la extensión (dark navy con acento cielo; light claro con acento azul oscuro, que tiene contraste AA sobre blanco).
