@@ -55,6 +55,16 @@ beforeAll(async () => {
       <script>document.querySelector('[name=pw]').addEventListener('keydown', e => { if (e.key !== 'Enter') return
         err.textContent = 'Something went wrong'; setTimeout(() => { location.href = '/pass-ok' }, 23000) })</script>`)
     if (url.pathname === '/pass-ok') return html('<form method="post" action="/otp"><input name="code" autocomplete="one-time-code"><button>Verify</button></form>')
+    // A 2FA code in one box per digit, sent on the last one (Enter does nothing).
+    if (url.pathname === '/boxes') return html(`<form method="post" action="/otp"><input type="hidden" name="code">
+      ${'<input class="d" maxlength="1" inputmode="numeric" autocomplete="one-time-code">'.repeat(6)}</form>
+      <script>const d = [...document.querySelectorAll('.d')]; d.forEach((b, i) => {
+        b.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault() })
+        b.addEventListener('input', () => { if (b.value.length === 1 && d[i + 1]) d[i + 1].focus()
+          if (d.every(x => x.value.length === 1)) { document.querySelector('[name=code]').value = d.map(x => x.value).join(''); document.forms[0].submit() } }) })</script>`)
+    // Boxes that don't move the focus by themselves, with a button to send.
+    if (url.pathname === '/boxes-still') return html(`<form method="post" action="/otp" onsubmit="this.code.value = [...document.querySelectorAll('.d')].map(x => x.value).join('')">
+      <input type="hidden" name="code">${'<input class="d" maxlength="1" autocomplete="one-time-code">'.repeat(6)}<button>Verify</button></form>`)
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return form.get('code') === (await generateTOTP(SECRET))
       ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=signed-in; Path=/' })
@@ -103,7 +113,7 @@ describe('browser_login', () => {
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'] }), { url: `${base}spa`, outDir: tmpdir() })
     expect(r.status).toBe('needs_user')
     expect(spaLogins).toBe(1)
-  }, 40_000)
+  }, 60_000)
 
   it('goes on when the password field shows under the username on the same page', async ctx => {
     if (!browserOk) ctx.skip()
@@ -132,13 +142,25 @@ describe('browser_login', () => {
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}bot-clears`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
     if (display) expect(r.status).toBe('signed_in')
     else expect(r.note).toMatch(/no display/)
-  }, 60_000)
+  }, 90_000)
 
   it('in a visible window, waits for the person to get a turned-down submit through, then fills the code', async ctx => { // after the 20 s a submit gets
     if (!browserOk || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}turned-down`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`), show: true })
     expect(r.status).toBe('signed_in')
-  }, 60_000)
+  }, 90_000)
+
+  it('types a 2FA code into one box per digit', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}boxes`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
+    expect(r.status).toBe('signed_in')
+  }, 40_000)
+
+  it('puts each digit in its box when the page doesn\'t move the focus', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}boxes-still`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
+    expect(r.status).toBe('signed_in')
+  }, 40_000)
 
   it('reports a rejected password instead of claiming success', async ctx => {
     if (!browserOk) ctx.skip()

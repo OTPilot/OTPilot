@@ -86,11 +86,38 @@ async function moveOn(page: Page, field: Locator, next: string | null, ms = 20_0
   return false
 }
 
+/**
+ * Types a 2FA code key by key, as a person does: pages react to keystrokes
+ * (moving to the next box, submitting on the last digit) and some ignore a
+ * pasted value. One box per digit gets each digit in its own box, whether or
+ * not the page moves the focus; Enter only goes in if nothing happened.
+ */
+async function typeCode(page: Page, field: Locator, code: string) {
+  const boxes = page.locator('input[maxlength="1"]:visible')
+  const split = (await field.evaluate(el => (el as HTMLInputElement).maxLength === 1).catch(() => false)) && (await boxes.count()) >= code.length
+  if (!split) {
+    await field.fill('')
+    await field.pressSequentially(code, { delay: 60 })
+    await field.press('Enter')
+    return
+  }
+  const first = await field.evaluate(el => [...document.querySelectorAll('input[maxlength="1"]')].filter(b => (b as HTMLElement).offsetParent).indexOf(el as HTMLInputElement))
+  for (let i = 0; i < code.length; i++) {
+    const box = boxes.nth(first + i)
+    if (!(await box.evaluate(el => el === document.activeElement).catch(() => false))) await box.focus().catch(() => {})
+    await page.keyboard.type(code[i], { delay: 60 })
+  }
+  if (!(await moveOn(page, field, null, 2000))) await page.keyboard.press('Enter')
+}
+
 /** A bot check (Cloudflare, reCAPTCHA, hCaptcha…) standing in front of the page. */
 const botCheck = (page: Page) => page.evaluate(() =>
   /just a moment|attention required|verify you are human|security (verification|check)|are you a robot/i.test(`${document.title} ${(document.body?.innerText || '').slice(0, 3000)}`)
   || !!document.querySelector('iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], #challenge-form, #challenge-stage'),
 ).catch(() => false)
+
+/** Steps (never values) to stderr with OTPILOT_DEBUG=1, for a sign-in that misbehaves. */
+const debug = (m: string) => { if (process.env.OTPILOT_DEBUG) process.stderr.write(`[otpilot] ${new Date().toISOString().slice(11, 23)} ${m}\n`) }
 
 /** Whether this machine can show a window (a VPS usually can't). */
 const canShow = () => process.platform !== 'linux' || !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
@@ -137,15 +164,19 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
   if (!covers(start)) throw new Error(`${start} isn't one of "${item.title}"'s saved sites over HTTPS; OTPilot only signs in there.`)
   if (!password && !item.totp?.secret) throw new Error(`"${item.title}" gives this agent nothing to sign in with (allow its sign-in in OTPilot).`)
 
+  debug(`launch ${headless ? 'headless' : 'visible'}`)
   const browser = await launch(headless)
+  let closed = false
   try {
     const context = await browser.newContext()
     // Playwright's locators wait without limit by default: a field the site
     // replaces mid-check (a bot check taking over the page) would hang here.
     context.setDefaultTimeout(10_000)
     const page = await context.newPage()
+    page.on('close', () => { closed = true })
     await page.goto(start, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     await settle(page)
+    debug(`loaded ${page.url()}`)
     const formShown = async () => !!((await firstVisible(page, PASSWORD)) || (await firstVisible(page, USER)) || (item.totp?.secret && (await firstVisible(page, OTP))))
     if (!(await formShown()) && (await botCheck(page))) {
       const note = 'The site shows a bot check (captcha) before its sign-in form.'
@@ -169,12 +200,13 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
       }
       const otp = item.totp?.secret ? await firstVisible(page, OTP) : null
       const pass = await firstVisible(page, PASSWORD)
+      debug(`step ${step} on ${page.url()}: ${otp ? 'code field' : ''} ${pass ? 'password field' : ''} tried ${[...tried].join(',')}`)
       // The code once the password went in, even if the password field
       // lingers on the page beside it.
       if (otp && (!pass || tried.has('password'))) {
         if (tried.has('otp')) break
-        await otp.fill(await generateTOTP(item.totp!.secret, item.totp!.period || 30, item.totp!.digits || 6))
-        await otp.press('Enter')
+        const code = await generateTOTP(item.totp!.secret, item.totp!.period || 30, item.totp!.digits || 6)
+        await typeCode(page, otp, code)
         filledSomething = true
         tried.add('otp')
         lastStep = 'otp'
@@ -220,6 +252,7 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
       await settle(page)
     }
     const stillAsking = await asking()
+    debug(`done: still asking ${stillAsking}, last step ${lastStep}`)
     // A sign-in that never got past the username (rejected, or a step OTPilot
     // can't see) isn't one: only a submitted password or code counts.
     const unfinished = lastStep === 'username' || (!submittedPassword && lastStep !== 'otp')
@@ -242,6 +275,10 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     writeFileSync(file, JSON.stringify(await context.storageState()), { mode: 0o600 })
     chmodSync(file, 0o600)
     return { status: 'signed_in', url: page.url(), title: await page.title(), storageState: file }
+  } catch (e) {
+    // The person closed the window OTPilot opened: nothing more to do there.
+    if (closed || !browser.isConnected()) return { status: 'needs_user', url: start, title: '', note: 'The sign-in window was closed before the sign-in finished. Ask the user to sign in, or call browser_login again when they\'re ready to clear the site\'s check.' }
+    throw e
   } finally {
     await browser.close().catch(() => {})
   }
