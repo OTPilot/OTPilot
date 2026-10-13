@@ -34,10 +34,52 @@
 
   const autocompleteOf = el => (el.getAttribute('autocomplete') || '').toLowerCase();
 
+  // A field for a new password: autocomplete="new-password", or — on the
+  // many pages that don't say so — a field named / labelled like one (new,
+  // confirm, repeat…), a reset / change-password or sign-up page, or one of
+  // two password fields side by side (password + confirmation; with a third,
+  // the first is the current one). Never one marked current-password.
+  const NEW_PW_HINT = /new[-_ ]?(pass|pw|pwd)|\bnew\b|confirm|repeat|retype|\bagain\b|nuev|repet|nouveau|nouvelle/i;
+  const NEW_PW_PAGE = /(reset|change|new|set|create|update|forgot|recover)[-_]?pass|sign[-_]?up|register|registr|create[-_]?account/i;
+  // The password fields that go with this one: its form's, else the ones in
+  // the nearest container (up to a few levels) that holds more than one — two
+  // sign-in panels elsewhere on the page aren't one group.
+  const passwordGroup = el => {
+    const visible = root => [...root.querySelectorAll('input[type="password"]')].filter(isVisible);
+    if (el.form) return visible(el.form);
+    let node = el.parentElement;
+    for (let i = 0; node && i < 5; i++, node = node.parentElement) {
+      const group = visible(node);
+      if (group.length < 2) continue;
+      // A username / email field between two password fields means two
+      // sign-ins side by side, not a password and its confirmation.
+      const inputs = [...node.querySelectorAll('input')].filter(isVisible);
+      const from = inputs.indexOf(group[0]);
+      const to = inputs.indexOf(group[group.length - 1]);
+      const split = inputs.slice(from, to).some(i => ['text', 'email', 'tel'].includes(i.type));
+      return split ? [el] : group;
+    }
+    return [el];
+  };
+  const isNewPassword = el => {
+    if (!(el instanceof HTMLInputElement) || el.type !== 'password') return false;
+    const ac = autocompleteOf(el);
+    if (ac.includes('new-password')) return true;
+    if (ac.includes('current-password')) return false;
+    // Current, new, confirmation: the first of three is the current one,
+    // whatever the page says.
+    const group = passwordGroup(el);
+    if (group.length > 2 && group[0] === el) return false;
+    const label = el.labels?.[0]?.textContent || '';
+    if (NEW_PW_HINT.test(`${el.name} ${el.id} ${el.placeholder} ${el.getAttribute('aria-label') || ''} ${label}`)) return true;
+    if (NEW_PW_PAGE.test(location.pathname)) return true;
+    return group.length >= 2;
+  };
+
   // The sign-in password field and its username field (or null).
   function findLoginFields() {
     const password = [...document.querySelectorAll('input[type="password"]')]
-      .find(el => isVisible(el) && !autocompleteOf(el).includes('new-password'));
+      .find(el => isVisible(el) && !isNewPassword(el));
     if (!password) return null;
     const scope = password.form || document;
     const before = [...scope.querySelectorAll('input')].filter(el =>
@@ -148,7 +190,7 @@
   function findSubmittedFields(root = document) {
     const filled = [...root.querySelectorAll('input[type="password"]')].filter(el => el.value && isVisible(el));
     if (!filled.length) return null;
-    const password = filled.find(el => autocompleteOf(el).includes('new-password')) || filled[0];
+    const password = filled.find(isNewPassword) || filled[0];
     const scope = password.form || document;
     const before = [...scope.querySelectorAll('input')].filter(el =>
       ['text', 'email', 'tel'].includes(el.type) && el.value
@@ -366,9 +408,6 @@
   // the confirmation field next to it; saving happens on submit, as above.
   const GEN_ID = 'otpilot-password-suggest';
   let _genDismissed = false;
-
-  const isNewPassword = el => el instanceof HTMLInputElement && el.type === 'password'
-    && autocompleteOf(el).includes('new-password');
 
   // Shown under the field (its badge opens it again after a dismissal).
   async function suggestPassword(field, { force = false } = {}) {

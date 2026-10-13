@@ -12,8 +12,12 @@ export const test = base.extend({
     // Fresh isolated profile per test — prevents session-restore from stale tabs
     // and lock conflicts when tests run in parallel.
     const userDataDir = mkdtempSync(path.join(tmpdir(), 'otpilot-test-'));
+    // HEADLESS=1: Chrome's new headless mode, which loads extensions — no
+    // windows popping up while you work. CI runs headed under xvfb.
+    const headless = !!process.env.HEADLESS;
     const launch = () => chromium.launchPersistentContext(userDataDir, {
-      headless: false,
+      headless,
+      ...(headless ? { channel: 'chromium' } : {}),
       args: [
         `--disable-extensions-except=${extensionPath}`,
         `--load-extension=${extensionPath}`,
@@ -45,11 +49,19 @@ export const test = base.extend({
       }
       try { writeFileSync(testInfo.outputPath('console.txt'), logs.join('\n') || '(no console output)'); } catch { /* ignore */ }
     }
-    await context.close();
+    // Headless Chrome sometimes never answers the close: don't let that eat the test's time.
+    await Promise.race([context.close(), new Promise(r => setTimeout(r, headless ? 2000 : 600000))]);
     try { rmSync(userDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
   },
 
   extensionId: async ({ context }, use) => {
+    // Headless: chrome://extensions may not render; the background worker's
+    // URL carries the id.
+    if (process.env.HEADLESS) {
+      const sw = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
+      await use(new URL(sw.url()).host);
+      return;
+    }
     const page = await context.newPage();
     await page.goto('chrome://extensions/');
 

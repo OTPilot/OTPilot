@@ -81,13 +81,15 @@ test('a secure note with a category and more tags is saved as a note item', asyn
   // The list shows it with its type, and the type filter appears.
   await page.click('#nav-settings');
   await expect(page.locator('.acc-row', { hasText: 'Wifi oficina' }).locator('.type-tag')).toHaveText('Secure note');
-  await expect(page.locator('#vault-type-bar .type-pill')).toHaveText([/All\s*2/, /Logins\s*1/, /Secure notes\s*1/]);
-  await page.locator('#vault-type-bar .type-pill', { hasText: 'Secure notes' }).click();
+  await page.click('#vault-filter');
+  await expect(page.locator('#flt-panel .flt-grid .flt-row')).toHaveText([/Logins\s*1/, /Secure notes\s*1/]);
+  await page.locator('#flt-panel .flt-row', { hasText: 'Secure notes' }).click();
   await expect.poll(() => page.locator('.acc-row').evaluateAll(rows =>
     rows.filter(r => r.style.display !== 'none').map(r => r.querySelector('.acc-head-name').textContent))).toEqual(['Wifi oficina']);
   // Any tag filters, not only the first.
-  await page.locator('#vault-type-bar .type-pill', { hasText: 'All' }).click();
-  await page.locator('#vault-cat-bar .cat-pill', { hasText: 'network' }).click();
+  await page.locator('#flt-panel .flt-row', { hasText: 'Secure notes' }).click();
+  await page.locator('#flt-panel .flt-row', { hasText: 'network' }).click();
+  await page.locator('#flt-panel .flt-done').click();
   await expect.poll(() => page.locator('.acc-row').evaluateAll(rows =>
     rows.filter(r => r.style.display !== 'none').length)).toBe(1);
 });
@@ -156,7 +158,8 @@ test('logins get more tags too, and the category bar offers them', async ({ cont
   await page.click('#btn-save-all');
   await expect.poll(async () => (await stored(page))[0].tags).toEqual(['Work', 'oss', 'critical']);
   await page.click('#nav-settings');
-  await expect(page.locator('#vault-cat-bar .cat-pill')).toHaveText([/All/, /critical/, /oss/, /Work/]);
+  await page.click('#vault-filter');
+  await expect(page.locator('#flt-panel .flt-tags .flt-label')).toHaveText(['critical', 'oss', 'Work']);
 });
 
 test('an item changed by a sync while the editor is open, but untouched here, keeps the synced version', async ({ context, extensionId }) => {
@@ -705,7 +708,9 @@ test('a note created from a login links back to it, and each shows the other as 
 
 test('a note created under a tag filter takes the login\'s tags and stays in view', async ({ context, extensionId }) => {
   const page = await vault(context, extensionId, { accounts: [{ name: 'Bank', email: 'me@example.com', secret: '', urls: 'bank.example', password: 'pw', category: 'Personal', moreTags: ['Work'] }] });
-  await page.locator('#vault-cat-bar .cat-pill', { hasText: 'Work' }).click();
+  await page.click('#vault-filter');
+  await page.locator('#flt-panel .flt-row', { hasText: 'Work' }).click();
+  await page.locator('#flt-panel .flt-done').click();
   await page.locator('.acc-head', { hasText: 'Bank' }).click();
   await page.click('#acc-detail .rel-new-note');
   await expect(page.locator('.acc-row:visible .acc-head', { hasText: 'Bank notes' })).toHaveCount(1);

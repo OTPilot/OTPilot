@@ -49,7 +49,12 @@ test('Team tab: create a collection, add a teammate with a role, a not-yet-signe
   await expect(row).toBeVisible();
   await expect(row.locator('.coll-member')).toContainText(['me@team.test (you)']);
 
+  // Nobody is picked up front, and Add waits for a choice.
+  await expect(row.locator('.coll-add select.who')).toHaveValue('');
+  await expect(row.locator('.coll-add-btn')).toBeDisabled();
+  await expect(row.locator('.coll-new-role')).toHaveValue('view');
   await row.locator('.coll-add select.who').selectOption('user-new');
+  await expect(row.locator('.coll-add-note')).toContainText('will see everything in "Infra"');
   await row.locator('.coll-add-btn').click();
   await expect(page.locator('#status-msg')).toContainText('sign in to OTPilot once');
 

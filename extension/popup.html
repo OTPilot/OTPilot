@@ -57,6 +57,7 @@
     /* A view that uses the list+detail pattern (Home, Accounts). */
     .app-split { flex: 1; display: flex; min-height: 0; }
     .lc-col {
+      position: relative;
       width: 210px; flex-shrink: 0;
       border-right: 1px solid var(--border);
       background: var(--bg-deep);
@@ -167,6 +168,25 @@
 
     .share-msg { font-size: 11px; color: var(--ink-4); line-height: 1.5; }
     .share-panel { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 6px; background: var(--bg); }
+    /* The Share sheet: over the item editor, its own button; the vault's Save hides meanwhile. */
+    #acc-detail { position: relative; }
+    #share-sheet { position: absolute; inset: 0; z-index: 20; background: var(--bg); display: flex; flex-direction: column; }
+    #settings-panel:has(#share-sheet) .settings-footer-actions { visibility: hidden; }
+    .ss-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .ss-back { background: none; border: 0; color: var(--ink-2); font-size: 16px; cursor: pointer; padding: 2px 6px; font-family: inherit; }
+    .ss-grow { flex: 1; min-width: 0; }
+    .ss-title { font-weight: 700; font-size: 13px; color: var(--ink-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ss-sub { font-size: 11px; color: var(--ink-4); }
+    #share-sheet .share-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 0; border-radius: 0; margin: 0; padding: 0; background: none; }
+    .ss-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px; }
+    .ss-presets { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 4px; }
+    .ss-preset { background: none; border: 1px solid var(--border); border-radius: 14px; color: var(--ink-3); font-size: 11px; font-weight: 600; padding: 3px 9px; cursor: pointer; font-family: inherit; }
+    .ss-preset:hover { color: var(--ink-1); border-color: var(--accent-2); }
+    .ss-can { display: flex; align-items: center; gap: 8px; }
+    .ss-can .share-title { flex: 1; margin: 0; }
+    .ss-foot { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--border); background: var(--bg-deep); }
+    .ss-summary { flex: 1; min-width: 0; font-size: 11px; color: var(--ink-2); }
+    .share-confirm:disabled { opacity: .5; cursor: default; }
     .share-section { margin-bottom: 8px; }
     .share-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-5); margin-bottom: 4px; }
     .share-grant { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; color: var(--ink-2); padding: 3px 0; }
@@ -241,6 +261,44 @@
       padding: 3px 8px; font-family: inherit; flex-shrink: 0;
     }
     .shared-copy:hover { color: var(--accent-2); border-color: var(--accent-2); }
+
+    /* ── Filters: a button beside the search, chips for what's on, a panel ── */
+    .lc-search-row { display: flex; gap: 6px; align-items: center; margin: 10px 10px 0; flex-shrink: 0; }
+    .lc-search-row .lc-search-wrap { margin: 0; flex: 1; min-width: 0; }
+    .flt-btn {
+      position: relative; display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+      height: 28px; padding: 0 8px; border-radius: 6px; cursor: pointer; font-family: inherit;
+      background: var(--bg); border: 1px solid var(--border); color: var(--ink-3);
+    }
+    .flt-btn[hidden] { display: none; }
+    .flt-btn svg { width: 14px; height: 14px; }
+    .flt-btn:hover { color: var(--ink-1); border-color: var(--surface-2); }
+    .flt-btn.on { color: var(--accent-2); border-color: var(--accent-2); background: rgba(var(--accent-2-rgb),0.08); }
+    .flt-n:empty { display: none; }
+    .flt-n { font-size: 10px; font-weight: 700; background: var(--accent-2); color: var(--on-accent); border-radius: 8px; padding: 0 5px; line-height: 15px; }
+    .flt-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+    .flt-chip {
+      display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px 2px 9px;
+      border: 1px solid var(--accent-2); background: rgba(var(--accent-2-rgb),0.08); border-radius: 20px;
+      color: var(--ink-1); font-size: 11px; font-weight: 600;
+    }
+    .flt-chip button { background: none; border: 0; color: var(--accent-2); cursor: pointer; font-size: 10px; padding: 1px 4px; font-family: inherit; }
+    #flt-panel {
+      position: absolute; left: 10px; right: 10px; z-index: 30; max-height: 380px; overflow: auto;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      box-shadow: 0 14px 34px rgba(0,0,0,.4); padding: 8px; display: flex; flex-direction: column; gap: 2px;
+    }
+    .flt-sec { font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-4); padding: 8px 6px 4px; }
+    .flt-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; }
+    .flt-row { display: flex; align-items: center; gap: 7px; padding: 6px; border-radius: 6px; cursor: pointer; color: var(--ink-2); font-size: 12px; }
+    .flt-row:hover { background: var(--surface-2); }
+    .flt-row.on { background: rgba(var(--accent-2-rgb),0.1); color: var(--ink-0); }
+    .flt-row input { margin: 0; accent-color: var(--accent-2); }
+    .flt-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .flt-count { color: var(--ink-5); font-size: 11px; font-weight: 700; }
+    .flt-foot { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); margin-top: 6px; padding: 8px 2px 0; }
+    .flt-clear { background: none; border: 0; color: var(--ink-4); font-size: 12px; cursor: pointer; font-family: inherit; }
+    .flt-done { background: var(--accent-2); color: var(--on-accent); border: 0; border-radius: 6px; font-weight: 700; font-size: 12px; padding: 6px 12px; cursor: pointer; font-family: inherit; }
 
     /* ── Category filter bar ── */
     .cat-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; vertical-align: middle; }
@@ -512,7 +570,8 @@
       border-bottom: 1px solid var(--border);
       background: var(--surface);
     }
-    .acc-search-wrap { position: relative; }
+    .acc-search-wrap { position: relative; flex: 1; min-width: 0; }
+    .acc-search { display: flex; gap: 6px; align-items: center; }
     .acc-search-icon {
       position: absolute; left: 8px; top: 50%;
       transform: translateY(-50%);
@@ -1352,11 +1411,14 @@
 <!-- Home view -->
 <div id="home-view" class="app-split">
   <div class="lc-col">
-    <div class="lc-search-wrap">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="text" id="home-search" class="lc-search" placeholder="Search accounts…" autocomplete="off">
+    <div class="flt-search-row lc-search-row">
+      <div class="lc-search-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="home-search" class="lc-search" placeholder="Search accounts…" autocomplete="off">
+      </div>
+      <button type="button" id="home-filter" class="flt-btn" title="Filter" aria-label="Filter" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg><span class="flt-n"></span></button>
     </div>
-    <div id="home-cat-bar" class="cat-bar" style="display:none"></div>
+    <div id="home-cat-bar" class="flt-chips" style="display:none"></div>
     <div class="lc-count" id="home-count"></div>
     <div id="home-list" class="lc-list"></div>
   </div>
@@ -1403,9 +1465,9 @@
           </span>
           <input id="acc-search" type="text" placeholder="Search the vault…" autocomplete="off">
         </div>
+        <button type="button" id="vault-filter" class="flt-btn" title="Filter" aria-label="Filter" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg><span class="flt-n"></span></button>
       </div>
-      <div id="vault-type-bar" class="cat-bar type-bar" style="display:none"></div>
-      <div id="vault-cat-bar" class="cat-bar" style="display:none"></div>
+      <div id="vault-cat-bar" class="flt-chips" style="display:none"></div>
       <div class="acc-toolbar">
         <span class="acc-count" id="acc-count"></span>
       </div>

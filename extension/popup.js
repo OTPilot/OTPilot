@@ -167,11 +167,11 @@ async function loadState() {
   _loadedIds = new Set(vaultAccounts.map(a => a._id));
   otherItems = key ? await VaultAccounts.loadOthers(key) : [];
   return new Promise(r =>
-    chrome.storage.local.get(['activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'categoryFilter', 'iconCache'], d => {
+    chrome.storage.local.get(['activeIndex', 'obfuscated', 'userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'categoryFilter', 'listFilters', 'iconCache'], d => {
       accounts       = vaultAccounts;
       activeIndex    = Math.min(d.activeIndex ?? 0, Math.max(accounts.length - 1, 0));
       obfuscated     = d.obfuscated ?? true;
-      categoryFilter = d.categoryFilter ?? '';
+      filters = loadFilters(d.listFilters, d.categoryFilter);
       iconCache      = d.iconCache ?? {};
       localChangedAt = d.localChangedAt ?? null;
       lastSyncedAt   = d.lastSyncedAt   ?? null;
@@ -281,7 +281,10 @@ function categoryColor(name) {
   return CATEGORY_COLORS[Math.abs(h) % CATEGORY_COLORS.length];
 }
 
-let categoryFilter = ''; // '' = All
+// Filters, shared by Home and the Vault (saved as `listFilters`): any of
+// the picked tags, any of the picked types (Vault only), and "has a 2FA code".
+let filters = { tags: [], types: [], twofa: false };
+
 
 // Unique, sorted category labels present in a list of accounts (defaults to the
 // saved set; the vault passes its in-progress `draft` so counts match the rows).
@@ -309,40 +312,119 @@ function catDot(name) {
   return `<span class="cat-dot" style="background:${categoryColor(name)}"></span>`;
 }
 
-// Builds a filter pill bar (All + one pill per category). Hidden when there are
-// no categories. `onPick` re-renders the relevant view after updating the filter.
-function renderCategoryBar(barEl, onPick, source = accounts) {
-  if (!barEl) return;
-  const cats = getCategories(source);
-
-  // A previously-selected category that no longer exists falls back to All.
-  // Must run even when `cats` is empty — otherwise a stale filter survives
-  // the last account losing its category tag and hides everything.
-  if (categoryFilter && !cats.includes(categoryFilter)) categoryFilter = '';
-
-  if (cats.length === 0) { barEl.style.display = 'none'; barEl.innerHTML = ''; return; }
-
-  barEl.style.display = '';
-  barEl.innerHTML = '';
-
-  const mkPill = (label, value, dot, count) => {
-    const pill = document.createElement('button');
-    pill.className = 'cat-pill' + (categoryFilter === value ? ' active' : '');
-    pill.innerHTML = `${dot}${esc(label)} <span class="count">${count}</span>`;
-    pill.addEventListener('click', () => {
-      categoryFilter = value;
-      chrome.storage.local.set({ categoryFilter });
-      onPick();
-    });
-    return pill;
-  };
-
-  barEl.appendChild(mkPill('All', '', `<span class="cat-dot" style="background:var(--ink-4)"></span>`, source.length));
-  for (const c of cats) barEl.appendChild(mkPill(c, c, catDot(c), categoryCount(c, source)));
+function loadFilters(saved, legacyCategory) {
+  const f = { tags: [], types: [], twofa: false };
+  if (saved && typeof saved === 'object') {
+    f.tags = Array.isArray(saved.tags) ? saved.tags.map(String) : [];
+    f.types = Array.isArray(saved.types) ? saved.types.map(String) : [];
+    f.twofa = !!saved.twofa;
+  } else if (legacyCategory) f.tags = [String(legacyCategory)]; // 2.0's single category
+  return f;
 }
 
-function accountMatchesFilter(acc) {
-  return !categoryFilter || tagsOf(acc).includes(categoryFilter);
+function saveFilters() {
+  chrome.storage.local.set({ listFilters: filters });
+}
+
+// Types only count where they apply (the Vault); Home keeps them for it.
+const filterCount = ({ types = true } = {}) => filters.tags.length + (types ? filters.types.length : 0) + (filters.twofa ? 1 : 0);
+const hasTwofa = e => !!(e?.secret || e?.item?.totp?.secret);
+
+function matchesFilters(e, { types = true } = {}) {
+  if (filters.twofa && !hasTwofa(e)) return false;
+  if (filters.tags.length && !tagsOf(e).some(t => filters.tags.includes(t))) return false;
+  if (types && filters.types.length && !filters.types.includes(entryType(e))) return false;
+  return true;
+}
+
+function clearFilters() {
+  filters = { tags: [], types: [], twofa: false };
+  saveFilters();
+}
+
+// The tag a new item gets so it stays visible under the filters (one tag picked).
+const filterTag = () => (filters.tags.length === 1 ? filters.tags[0] : '');
+
+// Drops filters on tags / types the list no longer has, so a stale one can't
+// hide everything.
+function pruneFilters(list, { types = true } = {}) {
+  const tags = new Set(getCategories(list));
+  const kinds = new Set(list.map(entryType));
+  const before = filterCount({ types });
+  filters.tags = filters.tags.filter(t => tags.has(t));
+  if (types) filters.types = filters.types.filter(t => kinds.has(t));
+  if (filterCount({ types }) !== before) saveFilters();
+}
+
+// The Filter button beside a search box, the active filters as chips under
+// it (each with ✕), and the panel the button opens: 2FA, types (Vault, when
+// there's more than one), tags — with counts. Changes apply at once.
+function renderFilters({ button, chips, list, types = false, onChange }) {
+  if (!button || !chips) return;
+  pruneFilters(list, { types });
+  const kinds = types ? [...new Set(list.map(entryType))] : [];
+  const tags = getCategories(list);
+  const n = filterCount({ types });
+  button.classList.toggle('on', n > 0);
+  button.querySelector('.flt-n').textContent = n || '';
+  button.hidden = !tags.length && kinds.length < 2 && !list.some(hasTwofa) && !n;
+  button.onclick = () => toggleFilterPanel(button, { list, types, kinds, tags, onChange });
+
+  const chip = (label, dot, remove) => {
+    const el = document.createElement('span');
+    el.className = 'flt-chip';
+    el.innerHTML = `${dot}${esc(label)}<button type="button" aria-label="Remove ${esc(label)} filter">✕</button>`;
+    el.querySelector('button').addEventListener('click', () => { remove(); saveFilters(); onChange(); });
+    return el;
+  };
+  chips.innerHTML = '';
+  if (filters.twofa) chips.appendChild(chip('2FA code', '', () => { filters.twofa = false; }));
+  if (types) for (const t of filters.types) chips.appendChild(chip(`${typeLabel(t)}s`, '', () => { filters.types = filters.types.filter(x => x !== t); }));
+  for (const t of filters.tags) chips.appendChild(chip(t, catDot(t), () => { filters.tags = filters.tags.filter(x => x !== t); }));
+  chips.style.display = n ? '' : 'none';
+}
+
+function toggleFilterPanel(button, opts) {
+  const open = document.getElementById('flt-panel');
+  if (open) { open.remove(); if (open.dataset.for === button.id) return; }
+  const { list, types, kinds, onChange } = opts;
+  const panel = document.createElement('div');
+  panel.id = 'flt-panel';
+  panel.dataset.for = button.id;
+  const order = Object.keys(Vault.TYPES);
+  const row = (cls, value, label, count, on, dot = '') => `<label class="flt-row${on ? ' on' : ''}"><input type="checkbox" class="${cls}" value="${esc(value)}"${on ? ' checked' : ''}>${dot}<span class="flt-label">${esc(label)}</span><span class="flt-count">${count}</span></label>`;
+  const render = () => {
+    const shown = list.filter(e => matchesFilters(e, { types })).length;
+    panel.innerHTML = `
+      <div class="flt-sec">Show only</div>
+      ${row('flt-2fa', '1', 'With a 2FA code', list.filter(hasTwofa).length, filters.twofa)}
+      ${kinds.length > 1 ? `<div class="flt-sec">Type</div><div class="flt-grid">${kinds.sort((a, b) => order.indexOf(a) - order.indexOf(b))
+        .map(t => row('flt-type', t, `${typeLabel(t)}s`, list.filter(e => entryType(e) === t).length, filters.types.includes(t))).join('')}</div>` : ''}
+      ${opts.tags.length ? `<div class="flt-sec">Tags</div><div class="flt-tags">${opts.tags
+        .map(t => row('flt-tag', t, t, categoryCount(t, list), filters.tags.includes(t), catDot(t))).join('')}</div>` : ''}
+      <div class="flt-foot"><button type="button" class="flt-clear">Clear all</button><button type="button" class="flt-done">Show ${shown} item${shown === 1 ? '' : 's'}</button></div>`;
+    panel.querySelectorAll('input').forEach(i => i.addEventListener('change', () => {
+      const pick = (arr, v) => (i.checked ? [...new Set([...arr, v])] : arr.filter(x => x !== v));
+      if (i.classList.contains('flt-2fa')) filters.twofa = i.checked;
+      if (i.classList.contains('flt-type')) filters.types = pick(filters.types, i.value);
+      if (i.classList.contains('flt-tag')) filters.tags = pick(filters.tags, i.value);
+      saveFilters();
+      onChange();
+      render();
+    }));
+    panel.querySelector('.flt-clear').addEventListener('click', () => { clearFilters(); onChange(); render(); });
+    panel.querySelector('.flt-done').addEventListener('click', () => panel.remove());
+  };
+  render();
+  button.closest('.lc-col, .acc-col, .acc-list-col, #accounts-view, #home-view').appendChild(panel);
+  const r = button.getBoundingClientRect();
+  const host = panel.offsetParent?.getBoundingClientRect() || { top: 0, left: 0 };
+  panel.style.top = `${r.bottom - host.top + 6}px`;
+  const close = ev => {
+    if (!document.body.contains(panel)) return document.removeEventListener('mousedown', close, true);
+    if (!panel.contains(ev.target) && !button.contains(ev.target)) { panel.remove(); document.removeEventListener('mousedown', close, true); }
+  };
+  document.addEventListener('mousedown', close, true);
 }
 
 // ── Site icons ────────────────────────────────────────────────────────────────
@@ -499,7 +581,8 @@ function selectSharedForTab() {
 let _sharedTabMatch = null;
 
 function renderAccountBar() {
-  renderCategoryBar(document.getElementById('home-cat-bar'), renderAccountBar);
+  // Home lists shared logins too: they count for the 2FA filter.
+  renderFilters({ button: document.getElementById('home-filter'), chips: document.getElementById('home-cat-bar'), list: [...accounts, ...homeShared()], onChange: renderAccountBar });
 
   const list = document.getElementById('home-list');
   const countEl = document.getElementById('home-count');
@@ -508,22 +591,23 @@ function renderAccountBar() {
   const matchesQuery = acc => !q || (acc.name || '').toLowerCase().includes(q) || (acc.email || '').toLowerCase().includes(q);
   const entries = accounts
     .map((acc, i) => ({ acc, i }))
-    .filter(e => accountMatchesFilter(e.acc))
+    .filter(e => matchesFilters(e.acc, { types: false }))
     .filter(e => matchesQuery(e.acc));
   const allShared = homeShared();
-  // Shared logins carry no tags of this user's: hidden while a category is picked.
-  const shared = categoryFilter ? [] : allShared.filter(matchesQuery);
+  // Shared logins carry no tags of this user's: hidden while a tag is picked.
+  const shared = allShared.filter(a => !filters.tags.length && matchesFilters(a, { types: false })).filter(matchesQuery);
   const total = accounts.length + allShared.length;
 
   countEl.textContent = q
     ? `${entries.length + shared.length} result${entries.length + shared.length === 1 ? '' : 's'}`
-    : `${total} account${total === 1 ? '' : 's'}`;
+    : filterCount({ types: false }) ? `${entries.length + shared.length} of ${total} accounts`
+      : `${total} account${total === 1 ? '' : 's'}`;
 
   list.innerHTML = '';
   if (!entries.length && !shared.length) {
     const empty = document.createElement('div');
     empty.className = 'lc-empty';
-    empty.textContent = total ? `No account matches "${q}"` : 'No accounts yet — add one in Settings';
+    empty.textContent = !total ? 'No accounts yet — add one in Settings' : q ? `No account matches "${q}"` : 'No account matches the filters';
     list.appendChild(empty);
     return;
   }
@@ -1098,7 +1182,6 @@ const entryType = e => (e?._kind ? e.type : 'login');
 const typeLabel = type => Vault.TYPES[type]?.label || type;
 // The fields that summarize an item on its row.
 const ITEM_SUMMARY = { server: ['host', 'username'], api: ['environment', 'clientId'] };
-let typeFilter = ''; // '' = every type
 
 function itemSummary(item) {
   return (ITEM_SUMMARY[item.type] || []).map(id => Vault.getValue(item, id)).filter(Boolean).join(' · ');
@@ -1203,13 +1286,8 @@ function renderAccountsList(openTargetIdx = -1, { preserveSearch = false, openIt
   // A leftover category filter from a previous Accounts-view visit could hide
   // the very row we're jumping to — clear it so the shortcut always lands
   // somewhere visible.
-  if (openAccIdx >= 0 && typeFilter && entryType(draft[openAccIdx]) !== typeFilter) typeFilter = '';
-  if (openAccIdx >= 0 && categoryFilter) {
-    categoryFilter = '';
-    chrome.storage.local.set({ categoryFilter });
-  }
-  renderVaultTypeBar();
-  renderVaultCatBar();
+  if (openAccIdx >= 0 && !matchesFilters(draft[openAccIdx])) clearFilters();
+  renderVaultFilters();
   rebuildAccountsDOM();
   applyVaultSearch();
   renderAccDetail();
@@ -1279,43 +1357,17 @@ function applyVaultSearch() {
     const textMatch = !q
       || (acc.name  || '').toLowerCase().includes(q)
       || (acc.email || '').toLowerCase().includes(q);
-    const catMatch = !categoryFilter || tagsOf(acc).includes(categoryFilter);
-    const typeMatch = !typeFilter || entryType(acc) === typeFilter;
-    row.style.display = (textMatch && catMatch && typeMatch) ? '' : 'none';
+    row.style.display = (textMatch && matchesFilters(acc)) ? '' : 'none';
   });
   updateVaultCount();
 }
 
-// Type filter (All · Logins · Secure notes · …): shown once the vault holds
-// more than one type.
-function renderVaultTypeBar() {
-  const bar = document.getElementById('vault-type-bar');
-  const types = [...new Set(draft.map(entryType))];
-  if (typeFilter && !types.includes(typeFilter)) typeFilter = '';
-  if (types.length < 2) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
-  bar.style.display = '';
-  bar.innerHTML = '';
-  const order = Object.keys(Vault.TYPES);
-  const options = [['', 'All', draft.length],
-    ...types.sort((a, b) => order.indexOf(a) - order.indexOf(b))
-      .map(t => [t, `${typeLabel(t)}s`, draft.filter(e => entryType(e) === t).length])];
-  for (const [value, label, count] of options) {
-    const pill = document.createElement('button');
-    pill.className = 'cat-pill type-pill' + (typeFilter === value ? ' active' : '');
-    pill.dataset.type = value;
-    pill.innerHTML = `${esc(label)} <span class="count">${count}</span>`;
-    pill.addEventListener('click', () => { typeFilter = value; renderVaultTypeBar(); applyVaultSearch(); });
-    bar.appendChild(pill);
-  }
-}
-
-function renderVaultCatBar() {
-  // Pass `draft` so the pill badge counts match the rows the vault actually
-  // shows (which are filtered through the in-progress draft, not saved state).
-  renderCategoryBar(document.getElementById('vault-cat-bar'), () => {
-    renderVaultCatBar();
-    applyVaultSearch();
-  }, draft);
+function renderVaultFilters() {
+  // `draft`, so the counts match the rows the vault shows.
+  renderFilters({
+    button: document.getElementById('vault-filter'), chips: document.getElementById('vault-cat-bar'), list: draft, types: true,
+    onChange: () => { renderVaultFilters(); applyVaultSearch(); },
+  });
 }
 
 // Renders the left-column list of rows only. The selected row's edit form
@@ -1351,8 +1403,7 @@ function rebuildAccountsDOM() {
       syncOpenAccToDraft();
       openAccIdx = i;
       rebuildAccountsDOM();
-      renderVaultTypeBar();
-      renderVaultCatBar();
+      renderVaultFilters();
       applyVaultSearch();
       renderAccDetail();
     });
@@ -1487,8 +1538,7 @@ ${esc(acc.notes || '')}</textarea>
     draft.splice(openAccIdx, 1);
     openAccIdx = -1;
     rebuildAccountsDOM();
-    renderVaultTypeBar();
-    renderVaultCatBar();
+    renderVaultFilters();
     applyVaultSearch();
     renderAccDetail();
   });
@@ -1735,8 +1785,7 @@ function openMergePanel(body, idx) {
     if (b._id) for (const d of draft) if (d !== merged && linksOf(d).includes(b._id)) setLinks(d, linksOf(d).map(id => (id === b._id ? merged._id : id)));
     openAccIdx = draft.indexOf(merged);
     rebuildAccountsDOM();
-    renderVaultTypeBar();
-    renderVaultCatBar();
+    renderVaultFilters();
     applyVaultSearch();
     renderAccDetail();
     setStatus(`Merged "${b.name || 'login'}" into "${merged.name || 'login'}" — Save to keep it`);
@@ -1952,8 +2001,7 @@ function openDraftEntry(target) {
   if (i < 0) return;
   openAccIdx = i;
   rebuildAccountsDOM();
-  renderVaultTypeBar();
-  renderVaultCatBar();
+  renderVaultFilters();
   applyVaultSearch();
   renderAccDetail();
 }
@@ -2020,7 +2068,7 @@ function mountRelated(body, entry) {
     }));
     setLinks(note, [entry._id]);
     draft.push(note);
-    if (typeFilter && typeFilter !== 'note') typeFilter = '';
+    if (!matchesFilters(note)) clearFilters();
     openDraftEntry(note);
     document.querySelector('#acc-detail .item-notes')?.focus();
   });
@@ -2188,8 +2236,7 @@ ${esc(item.notes || '')}</textarea>
     draft.splice(idx, 1);
     openAccIdx = -1;
     rebuildAccountsDOM();
-    renderVaultTypeBar();
-    renderVaultCatBar();
+    renderVaultFilters();
     applyVaultSearch();
     renderAccDetail();
   });
@@ -2235,18 +2282,34 @@ function collectionControlsHTML(entry) {
   return `<div class="acc-field share-item-field">
     <button type="button" class="btn-share-team btn-share-item">Share…</button>
     <div class="share-hint share-hint-item">Teammates get a copy of the item (or the parts you pick), end-to-end encrypted. What they've seen they can keep, even after you stop sharing.</div>
-    <div class="share-panel" style="display:none"></div>
   </div>`;
 }
 
 function mountCollectionControls(body, entry) {
   body.querySelector('.btn-save-shared')?.addEventListener('click', () => saveSharedEntry(entry));
-  body.querySelector('.btn-share-item')?.addEventListener('click', () => {
-    const panel = body.querySelector('.share-panel');
-    if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
-    panel.style.display = '';
-    renderSharePanel(panel, entry._id);
-  });
+  body.querySelector('.btn-share-item')?.addEventListener('click', () => openShareSheet(entry));
+}
+
+// Sharing has its own sheet over the item editor, with its own Share button:
+// the vault's Cancel / Save are hidden meanwhile (they'd save the item, not
+// the share), and ← goes back to the item as it was.
+function openShareSheet(entry) {
+  closeShareSheet();
+  const sheet = document.createElement('div');
+  sheet.id = 'share-sheet';
+  sheet.innerHTML = `<div class="ss-head">
+      <button type="button" class="ss-back" aria-label="Back to the item">←</button>
+      <div class="ss-grow"><div class="ss-title">Share “${esc(entry.name || 'this item')}”</div>
+        <div class="ss-sub">Nothing is shared until you press Share</div></div>
+    </div>
+    <div class="share-panel"></div>`;
+  document.getElementById('acc-detail').appendChild(sheet);
+  sheet.querySelector('.ss-back').addEventListener('click', closeShareSheet);
+  renderSharePanel(sheet.querySelector('.share-panel'), entry._id);
+}
+
+function closeShareSheet() {
+  document.getElementById('share-sheet')?.remove();
 }
 
 // ── Share an item (docs/sharing.md) ──
@@ -2273,6 +2336,9 @@ async function renderSharePanel(panel, itemId) {
     ? (members.find(m => m.user_id === g.user_id)?.email || 'a teammate')
     : `Collection "${collections.find(c => c.id === g.collection_id)?.name || 'collection'}"`);
   const parts = VaultShares.parts(item);
+  // A login's sign-in: username, password, 2FA, websites.
+  const signinParts = item.type === 'login'
+    ? parts.filter(p => ['f:username', 'f:password', 'totp', 'urls'].includes(p.key)).map(p => p.key) : [];
   const label = s => {
     const mineShare = (item.shares || []).find(x => x.id === s.id);
     if (!mineShare) return s.whole ? 'everything' : 'some fields';
@@ -2294,21 +2360,32 @@ async function renderSharePanel(panel, itemId) {
       <option value="edit" ${g.role === 'edit' ? 'selected' : ''} ${s.whole ? '' : 'disabled'}>can edit</option>
     </select>`;
   panel.innerHTML = `
-    ${current.length ? `<div class="share-section"><div class="share-title">Shared with</div>
+    <div class="ss-body">
+    ${current.length ? `<div class="share-section"><div class="share-title">Already has it</div>
       ${current.map(({ s, g }, i) => `<div class="share-grant" data-i="${i}">
         <span><b>${esc(who(g))}</b> · ${roleSelect({ s, g }, i)} · ${esc(label(s))}</span>
         <button type="button" class="btn-del share-remove" data-i="${i}">Remove</button></div>`).join('')}</div>` : ''}
-    <div class="share-section"><div class="share-title">Share with</div>
+    <div class="share-section"><div class="share-title">1 · With</div>
       ${members.length ? members.map(m => offer('share-user', m.user_id, m.email || m.user_id, { off: hasUser.has(m.user_id), note: m.public_key ? '' : 'not set up' })).join('') : '<div class="share-msg">No teammates yet.</div>'}
       ${writable.map(c => offer('share-coll', c.id, `Collection "${c.name || 'collection'}"`, { off: hasColl.has(c.id) })).join('')}
     </div>
-    <div class="share-section"><div class="share-title">What to share</div>
+    <div class="share-section"><div class="share-title">2 · What</div>
+      <div class="ss-presets">
+        <button type="button" class="ss-preset" data-preset="all">Everything</button>
+        ${signinParts.length && signinParts.length < parts.length ? '<button type="button" class="ss-preset" data-preset="signin">Sign-in only</button>' : ''}
+        <button type="button" class="ss-preset" data-preset="none">Name only</button>
+      </div>
       <label class="share-recip"><input type="checkbox" class="share-part" value="" checked disabled> Name</label>
       ${parts.map(p => `<label class="share-recip"><input type="checkbox" class="share-part" value="${esc(p.key)}" checked> ${esc(p.label)}</label>`).join('')}
       ${parts.some(p => p.key === 'totp') ? '<div class="share-hint share-hint-totp">"2FA code" gives the secret itself: they can keep making codes. To give live codes without the secret, use "Share 2FA code only".</div>' : ''}
     </div>
-    <div class="share-section field-row">
-      <select class="share-role"><option value="view">Can view</option><option value="edit">Can edit</option></select>
+    <div class="share-section ss-can"><div class="share-title">3 · They can</div>
+      <select class="share-role"><option value="view">View</option><option value="edit">Edit</option></select>
+    </div>
+    </div>
+    <div class="ss-foot">
+      <div class="ss-summary"></div>
+      <button type="button" class="btn-cancel ss-cancel">Cancel</button>
       <button type="button" class="btn-crypto-ok share-confirm">Share</button>
     </div>`;
   const role = panel.querySelector('.share-role');
@@ -2320,7 +2397,28 @@ async function renderSharePanel(panel, itemId) {
     editOpt.disabled = !everything();
     if (!everything()) role.value = 'view';
   };
-  panel.querySelectorAll('.share-part').forEach(c => c.addEventListener('change', syncRole));
+  // What pressing Share will do, said before it's pressed.
+  const summary = () => {
+    const n = panel.querySelectorAll('.share-user:checked:not(:disabled)').length;
+    const c = panel.querySelectorAll('.share-coll:checked:not(:disabled)').length;
+    const to = [n ? `${n} ${n === 1 ? 'person' : 'people'}` : '', c ? `${c} collection${c === 1 ? '' : 's'}` : ''].filter(Boolean).join(' + ');
+    const what = everything() ? 'Everything'
+      : signinParts.length && chosenParts().length === signinParts.length && signinParts.every(k => chosenParts().includes(k)) ? 'Sign-in'
+        : chosenParts().length ? `${chosenParts().length} field${chosenParts().length === 1 ? '' : 's'}` : 'The name';
+    panel.querySelector('.ss-summary').innerHTML = to ? `${esc(what)} → <b>${esc(to)}</b>, can ${role.value}` : 'Pick who gets it';
+    panel.querySelector('.share-confirm').disabled = !to;
+  };
+  panel.querySelectorAll('.ss-preset').forEach(b => b.addEventListener('click', () => {
+    const want = b.dataset.preset === 'all' ? parts.map(p => p.key) : b.dataset.preset === 'signin' ? signinParts : [];
+    panel.querySelectorAll('.share-part:not(:disabled)').forEach(c => { c.checked = want.includes(c.value); });
+    syncRole();
+    summary();
+  }));
+  panel.querySelectorAll('.share-part').forEach(c => c.addEventListener('change', () => { syncRole(); summary(); }));
+  panel.querySelectorAll('.share-user, .share-coll').forEach(c => c.addEventListener('change', summary));
+  role.addEventListener('change', summary);
+  panel.querySelector('.ss-cancel').addEventListener('click', closeShareSheet);
+  summary();
   panel.querySelectorAll('.share-remove').forEach(btn => btn.addEventListener('click', async () => {
     const { s, g } = current[+btn.dataset.i];
     btn.disabled = true;
@@ -2381,8 +2479,7 @@ function patchEntries(ids, fresh) {
   _draftBase = [...keep(_draftBase), ...fresh.map(e => structuredClone(e))];
   openAccIdx = -1;
   rebuildAccountsDOM();
-  renderVaultTypeBar();
-  renderVaultCatBar();
+  renderVaultFilters();
   applyVaultSearch();
   renderAccDetail();
 }
@@ -2481,17 +2578,17 @@ function addToDraft(type) {
   // hidden by applyVaultSearch the moment it's created). Same for the type.
   if (type === 'login' || type === '2fa') {
     draft.push({
-      name: '', email: '', secret: '', urls: '', autofill: true, category: categoryFilter, moreTags: [],
+      name: '', email: '', secret: '', urls: '', autofill: true, category: filterTag(), moreTags: [],
       ...(type === '2fa' ? { _compact: true } : {}),
     });
   } else {
-    draft.push(entryOf(Vault.newItem(type, { tags: categoryFilter ? [categoryFilter] : [] })));
+    draft.push(entryOf(Vault.newItem(type, { tags: filterTag() ? [filterTag()] : [] })));
   }
-  if (typeFilter && typeFilter !== (type === '2fa' ? 'login' : type)) typeFilter = '';
+  // A new item has no 2FA code yet, and may be of a type the filters hide.
+  if (filters.twofa || filters.types.length || filters.tags.length > 1) clearFilters();
   openAccIdx = draft.length - 1;
   rebuildAccountsDOM();
-  renderVaultTypeBar();
-  renderVaultCatBar();
+  renderVaultFilters();
   applyVaultSearch();
   renderAccDetail();
   document.getElementById('accounts-list').lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -5116,23 +5213,40 @@ async function renderCollectionBody(body, c, team, teamMembers, myId) {
     if (candidates.length) {
       const add = document.createElement('div');
       add.className = 'coll-add';
+      // Nothing picked up front and view by default: adding someone gives
+      // them everything in the collection, so it's never one stray click.
       const who = document.createElement('select');
       who.className = 'who';
+      who.add(new Option('Add a teammate…', '', true, true));
+      who.options[0].disabled = true;
       for (const t of candidates) who.add(new Option(`${t.email || t.user_id}${t.public_key ? '' : ' (not signed in yet)'}`, t.user_id));
       const role = document.createElement('select');
       role.className = 'coll-new-role';
-      for (const r of ['view', 'edit', 'manage']) role.add(new Option(ROLE_LABELS[r], r, false, r === 'edit'));
+      for (const r of ['view', 'edit', 'manage']) role.add(new Option(ROLE_LABELS[r], r, false, r === 'view'));
       const btn = document.createElement('button');
       btn.className = 'btn-crypto-ok coll-add-btn';
       btn.textContent = 'Add';
+      btn.disabled = true;
+      const note = document.createElement('div');
+      note.className = 'coll-meta coll-add-note';
+      const say = () => {
+        const user = candidates.find(t => t.user_id === who.value);
+        btn.disabled = !user;
+        note.textContent = user
+          ? `${user.email || 'They'} will see everything in "${c.name || 'this collection'}", and what's added to it later (${ROLE_LABELS[role.value].toLowerCase()}).`
+          : '';
+      };
+      who.addEventListener('change', say);
+      role.addEventListener('change', say);
       btn.addEventListener('click', async () => {
         const user = candidates.find(t => t.user_id === who.value);
+        if (!user) return;
         btn.disabled = true;
         try { await VaultCollections.addMember(c, user, role.value); setStatus(`Added ${user.email || 'teammate'}`); rerender(); }
         catch (e) { setStatus(e.message || 'Could not add them', false); btn.disabled = false; }
       });
       add.append(who, role, btn);
-      body.appendChild(add);
+      body.append(add, note);
     }
   }
 

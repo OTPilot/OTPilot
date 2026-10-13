@@ -153,6 +153,8 @@ test('the Share panel: teammates, what to share, Can edit only with everything; 
   await expect(page.locator('#acc-detail .share-hint-item')).toContainText('they can keep');
   await page.click('#acc-detail .btn-share-item');
   const panel = page.locator('#acc-detail .share-panel');
+  // Its own sheet: the vault's Save is out of the way while sharing.
+  await expect(page.locator('#btn-save-all')).toBeHidden();
   await expect(panel.locator('.share-hint-totp')).toContainText('gives the secret itself');
   await expect(panel.locator('.share-user')).toHaveCount(2); // Bob, and someone not set up (disabled)
   await expect(panel.locator('.share-user[value="user-new"]')).toBeDisabled();
@@ -169,8 +171,8 @@ test('the Share panel: teammates, what to share, Can edit only with everything; 
   // Bob has it: not offered again (sharing again used to rewrite his grant).
   await expect(panel.locator('.share-user[value="user-bob"]')).toBeChecked();
   await expect(panel.locator('.share-user[value="user-bob"]')).toBeDisabled();
-  await panel.locator('.share-confirm').click();
-  await expect(page.locator('#status-msg')).toContainText('Pick at least one');
+  await expect(panel.locator('.share-confirm')).toBeDisabled();
+  await expect(panel.locator('.ss-summary')).toHaveText('Pick who gets it');
   // His access changes in place.
   await panel.locator('.share-grant-role').selectOption('view');
   await expect(page.locator('#status-msg')).toContainText('bob@team.test can view it now');
@@ -179,6 +181,27 @@ test('the Share panel: teammates, what to share, Can edit only with everything; 
   await panel.locator('.share-remove').click();
   await expect(panel.locator('.share-grant')).toHaveCount(0);
   expect(await page.evaluate(() => fakeShares.shares.size)).toBe(0);
+  // ← goes back to the item, with Save again.
+  await page.click('#share-sheet .ss-back');
+  await expect(page.locator('#share-sheet')).toHaveCount(0);
+  await expect(page.locator('#btn-save-all')).toBeVisible();
+});
+
+test('the Share sheet says what will be shared before pressing Share, and presets pick the parts', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [site]);
+  await installFakeShares(page);
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'DigitalOcean' }).click();
+  await page.click('#acc-detail .btn-share-item');
+  const panel = page.locator('#acc-detail .share-panel');
+  await panel.locator('.share-user[value="user-bob"]').check();
+  await expect(panel.locator('.ss-summary')).toHaveText('Everything → 1 person, can view');
+  await panel.locator('.ss-preset[data-preset="none"]').click();
+  await expect(panel.locator('.share-part:checked:not(:disabled)')).toHaveCount(0);
+  await expect(panel.locator('.ss-summary')).toHaveText('The name → 1 person, can view');
+  await panel.locator('.ss-preset[data-preset="all"]').click();
+  await panel.locator('.share-role').selectOption('edit');
+  await expect(panel.locator('.ss-summary')).toHaveText('Everything → 1 person, can edit');
 });
 
 test('the Share panel: a collection that has it shows as shared, a partial copy can\'t be made editable, a share whose key is elsewhere still changes role, and changing a role never restores a removed grant or share', async ({ context, extensionId }) => {
