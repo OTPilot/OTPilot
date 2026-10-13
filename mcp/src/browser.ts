@@ -78,7 +78,12 @@ async function moveOn(page: Page, field: Locator, next: string | null, ms = 20_0
     await page.waitForTimeout(400)
     if (page.url() !== url) return true
     const sameDoc = await page.evaluate(() => (window as unknown as { __otpilot?: boolean }).__otpilot === true).catch(() => false)
-    if (!sameDoc) return true
+    if (!sameDoc) {
+      // A navigation under way: wait for the new page (and the cookies its
+      // response sets) before anyone looks at it or saves the session.
+      await page.waitForLoadState('load', { timeout: 15_000 }).catch(() => {})
+      return true
+    }
     if (!(await field.isVisible().catch(() => false))) return true
     if (!(await field.inputValue({ timeout: 2000 }).catch(() => ''))) return true
     if (next && (await firstVisible(page, next))) return true

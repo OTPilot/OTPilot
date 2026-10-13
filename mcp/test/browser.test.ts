@@ -13,6 +13,8 @@ const SECRET = 'JBSWY3DPEHPK3PXP'
 let server: Server
 let base = ''
 let browserOk = true
+// HEADLESS=1: skip the tests that open a visible window (so none pops up while you work).
+const windows = !process.env.HEADLESS
 let spaLogins = 0
 
 const page = (body: string) => `<!doctype html><html><head><title>Acme</title></head><body>${body}</body></html>`
@@ -142,7 +144,7 @@ describe('browser_login', () => {
   })
 
   it('retries a bot check in a visible window, where it clears (or says there is no display)', async ctx => {
-    if (!browserOk) ctx.skip()
+    if (!browserOk || !windows) ctx.skip()
     const display = process.platform !== 'linux' || !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}bot-clears`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`) })
     if (display) expect(r.status).toBe('signed_in')
@@ -150,13 +152,13 @@ describe('browser_login', () => {
   }, 90_000)
 
   it('in a visible window, waits for the person to get a turned-down submit through, then fills the code', async ctx => { // after the 20 s a submit gets
-    if (!browserOk || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
+    if (!browserOk || !windows || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}turned-down`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`), show: true })
     expect(r.status).toBe('signed_in')
   }, 90_000)
 
   it('in a visible window, goes on to the password once the person gets a turned-down username through', async ctx => {
-    if (!browserOk || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
+    if (!browserOk || !windows || process.platform === 'linux' && !(process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) ctx.skip()
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}user-turned-down`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`), show: true })
     expect(r.status).toBe('signed_in')
   }, 90_000)
