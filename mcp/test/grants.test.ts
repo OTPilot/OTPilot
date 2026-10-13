@@ -32,3 +32,51 @@ describe('ask every time', () => {
     expect(asks).toBe(2)
   })
 })
+
+describe('ask every time, a late approval', () => {
+  async function setup() {
+    const item = loginItem({ title: 'Vault' })
+    const keys = await generateKeyPair()
+    const held = await grantRow(item, keys.publicKey, { askEveryTime: true, withheld: true })
+    const released = await grantRow(item, keys.publicKey, { askEveryTime: true })
+    const s = { asks: 0, status: 'pending', failGrants: false, onlyFirst: false }
+    const FIRST = '00000000-0000-4000-8000-000000000011'
+    const api = new FakeApi((m, p) => {
+      if (p === '/agent/grants') return s.failGrants ? { status: 500, body: { error: 'down' } } : { body: { grants: [s.status === 'allowed' ? released : held] } }
+      if (m === 'POST' && p === '/agent/requests') { s.asks++; return { body: { id: `00000000-0000-4000-8000-00000000001${s.asks}` } } }
+      if (p.startsWith('/agent/requests/')) return { body: { status: s.onlyFirst && !p.endsWith(FIRST) ? 'pending' : s.status } }
+      return undefined
+    })
+    const grant = (await loadGrants(api, keys.privateJwk))[0]
+    const open = (tool = 'run', reason = 'deploy') => openItem(api, keys.privateJwk, grant, tool, reason, 50)
+    await expect(open()).rejects.toBeInstanceOf(PendingApproval)
+    return { s, open }
+  }
+
+  it('is spent by only one of two calls in parallel', async () => {
+    const { s, open } = await setup()
+    s.status = 'allowed'
+    s.onlyFirst = true // a new request (the other call's) stays waiting
+    const results = await Promise.allSettled([open(), open()])
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
+    expect(s.asks).toBe(2)
+  })
+
+  it('is not used for another tool or reason', async () => {
+    const { s, open } = await setup()
+    s.status = 'allowed'
+    s.status = 'pending' // the new ask for browser_login waits
+    await expect(open('browser_login', 'deploy')).rejects.toBeInstanceOf(PendingApproval)
+    expect(s.asks).toBe(2)
+  })
+
+  it('survives a failed fetch of the released copy', async () => {
+    const { s, open } = await setup()
+    s.status = 'allowed'
+    s.failGrants = true
+    await expect(open()).rejects.toThrow()
+    s.failGrants = false
+    expect((await open()).title).toBe('Vault')
+    expect(s.asks).toBe(1)
+  })
+})

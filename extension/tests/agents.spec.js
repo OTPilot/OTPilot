@@ -374,21 +374,30 @@ test('an expired account is renewed in place, with its settings', async ({ conte
   expect(new Date(g.expires_at).getTime()).toBeGreaterThan(Date.now());
 });
 
-test('the Agents view picks up a new request on its own, and never redraws over an open form', async ({ context, extensionId }) => {
-  test.setTimeout(60_000); // waits out the 10 s refresh
+test('the Agents view picks up a new request on its own, and never redraws over a form opened mid-refresh', async ({ context, extensionId }) => {
+  test.setTimeout(60_000); // waits for the 10 s refresh
   const page = await setup(context, extensionId);
   const agentId = await page.evaluate(async () => {
     const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
     await Agents.pin(a);
+    // Lets the test hold a redraw halfway (after the list is fetched).
+    const orig = Agents.vaultItems;
+    Agents.vaultItems = async k => {
+      if (window.__hold) { window.__paused = true; await new Promise(r => { window.__release = r; }); }
+      return orig(k);
+    };
     return a.id;
   });
   await page.click('#nav-agents');
   await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
   const detail = page.locator('#agents-detail');
+  await page.evaluate(a => { window.__hold = true; fakeAgents.addRequest(a, { query: 'bank' }); }, agentId);
+  // The timer's redraw is now held halfway; the user opens a form meanwhile.
+  await page.waitForFunction(() => window.__paused, null, { timeout: 15_000 });
   await detail.getByRole('button', { name: '+ Add account' }).click();
   await expect(detail.locator('.ag-adding .ag-picker')).toBeVisible();
-  await page.evaluate(a => fakeAgents.addRequest(a, { query: 'bank' }), agentId);
-  await page.waitForTimeout(11_000);
+  await page.evaluate(() => { window.__hold = false; window.__release(); });
+  await page.waitForTimeout(1000);
   await expect(detail.locator('.ag-adding .ag-picker')).toBeVisible(); // the form stayed
   await detail.getByRole('button', { name: 'Cancel' }).click();
   await expect(detail).toContainText('Asks for bank', { timeout: 15_000 });
