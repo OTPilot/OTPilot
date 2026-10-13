@@ -1639,7 +1639,8 @@ mod tests {
         .await;
         assert_eq!(
             st,
-            json!({ "id": rid, "status": "allowed", "item_id": item })
+            // A request for a new account releases no copy.
+            json!({ "id": rid, "status": "allowed", "item_id": item, "released": false })
         );
         // Answered once.
         let (s, _) = call(
