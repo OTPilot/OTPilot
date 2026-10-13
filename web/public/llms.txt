@@ -4,6 +4,12 @@
 
 OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) codes together. On a login page it fills the username and password, then the 2FA code — no phone, no copying six digits. It also detects 2FA setup pages and saves the account in one click.
 
+## Versions
+
+- 2.1 (October 2026): OTPilot for AI agents — an MCP server (`@otpilot/mcp`) lets Claude Code, Codex, Cursor or any MCP agent sign in and run commands with the accounts the user allows, without the agent seeing a password or a code
+- 2.0: a full password manager — passwords filled on login pages, an end-to-end encrypted vault (passwords, 2FA, notes, servers, API keys, custom fields), sync, team sharing and imports
+- 1.x: 2FA code auto-fill only (accounts move into the 2.0 vault automatically)
+
 ## Key features
 
 - Fills passwords and 2FA codes on login pages; offers to save new sign-ins and updated passwords
@@ -36,6 +42,7 @@ The user manages everything in the extension; the agent only talks to the OTPilo
 - Two approvals: an agent connects with a verification code checked in the extension and gets no accounts; each account is then allowed per agent, with a scope (2FA code only, whole sign-in, chosen fields) and a duration, or "ask every time"
 - Each allowed account is encrypted for that agent's own key (kept in the OS keychain); the server only stores ciphertext; revoking an agent cuts its access
 - Activity log of every use; requests show on the extension's badge
+- Connect an agent: `npx -y @otpilot/mcp connect` (prints a verification code; approve it in the extension's Agents view)
 - Limit: an agent that runs commands decides what they do and could try to reveal a secret on purpose; scrubbing, 2FA-only scopes and per-use approval narrow it
 
 ## Plans
@@ -46,7 +53,13 @@ The user manages everything in the extension; the agent only talks to the OTPilo
 
 ## Links
 
+- Website: https://otpilot.app
+- OTPilot for AI agents: https://otpilot.app/ai-agents
+- MCP server on npm: https://www.npmjs.com/package/@otpilot/mcp
+- Security model: https://otpilot.app/security
 - Chrome Web Store: https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk
-- GitHub: https://github.com/carpe-diem/OTPilot
+- GitHub: https://github.com/OTPilot/OTPilot
+- Compared with: 1Password https://otpilot.app/1password-alternative, Bitwarden https://otpilot.app/bitwarden-alternative, LastPass https://otpilot.app/lastpass-alternative, Authy https://otpilot.app/authy-alternative
+- A password manager for AI agents (guide): https://otpilot.app/ai-agent-password-manager
 - Privacy policy: https://otpilot.app/privacy
 - Terms of service: https://otpilot.app/tos
