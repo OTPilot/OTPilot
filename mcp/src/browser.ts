@@ -93,27 +93,37 @@ async function moveOn(page: Page, field: Locator, next: string | null, ms = 20_0
  * not the page moves the focus; Enter only goes in if nothing happened.
  */
 async function typeCode(page: Page, field: Locator, code: string) {
-  const boxes = page.locator('input[maxlength="1"]:visible')
-  const split = (await field.evaluate(el => (el as HTMLInputElement).maxLength === 1).catch(() => false)) && (await boxes.count()) >= code.length
-  if (!split) {
+  // The boxes from this one on, in page order, only the ones showing (the
+  // same list the digits go into).
+  const boxes = await field.evaluate(el => {
+    const all = [...document.querySelectorAll('input[maxlength="1"]')]
+    const shown = (b: Element) => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(b).visibility !== 'hidden' }
+    if ((el as HTMLInputElement).maxLength !== 1) return null
+    return all.map((b, i) => [b, i] as const).filter(([b]) => shown(b)).map(([, i]) => i).filter(i => i >= all.indexOf(el))
+  }).catch(() => null)
+  if (boxes && boxes.length >= code.length) {
+    const all = page.locator('input[maxlength="1"]')
+    for (let i = 0; i < code.length; i++) {
+      const box = all.nth(boxes[i])
+      if (!(await box.evaluate(el => el === document.activeElement).catch(() => false))) await box.focus().catch(() => {})
+      await page.keyboard.type(code[i], { delay: 60 })
+    }
+  } else {
     await field.fill('')
     await field.pressSequentially(code, { delay: 60 })
-    await field.press('Enter')
-    return
   }
-  const first = await field.evaluate(el => [...document.querySelectorAll('input[maxlength="1"]')].filter(b => (b as HTMLElement).offsetParent).indexOf(el as HTMLInputElement))
-  for (let i = 0; i < code.length; i++) {
-    const box = boxes.nth(first + i)
-    if (!(await box.evaluate(el => el === document.activeElement).catch(() => false))) await box.focus().catch(() => {})
-    await page.keyboard.type(code[i], { delay: 60 })
-  }
-  if (!(await moveOn(page, field, null, 2000))) await page.keyboard.press('Enter')
+  // Enter only if the page didn't take the code on the last digit (a field
+  // gone, a new page): never a second submit.
+  if (!(await moveOn(page, field, null, 2000))) await page.keyboard.press('Enter').catch(() => {})
 }
 
 /** A bot check (Cloudflare, reCAPTCHA, hCaptcha…) standing in front of the page. */
 const botCheck = (page: Page) => page.evaluate(() =>
   /just a moment|attention required|verify you are human|security (verification|check)|are you a robot/i.test(`${document.title} ${(document.body?.innerText || '').slice(0, 3000)}`)
-  || !!document.querySelector('iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], #challenge-form, #challenge-stage'),
+  // Only a check that shows: a solved or invisible captcha frame left in the page isn't one.
+  || [...document.querySelectorAll('iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], #challenge-form, #challenge-stage')]
+    .filter(el => !/size=invisible/.test(el.getAttribute('src') || '')) // reCAPTCHA v3's badge
+    .some(el => { const r = el.getBoundingClientRect(); return r.width > 30 && r.height > 30 && getComputedStyle(el).visibility !== 'hidden' }),
 ).catch(() => false)
 
 /** Steps (never values) to stderr with OTPILOT_DEBUG=1, for a sign-in that misbehaves. */
