@@ -362,7 +362,10 @@ const VaultSync = (() => {
       for (const id of [...fresh, ...late]) {
         const item = items[id];
         const links = relink(item).filter(l => l !== to[id]);
-        puts.push([to[id], await VaultCrypto.encryptItem({ ...item, id: to[id], ...(item.links ? { links } : {}) }, key)]);
+        // Shares the replacement got meanwhile (another device) stay: their keys live only in the item.
+        const theirs = items[to[id]]?.shares || [];
+        const shares = [...(item.shares || []), ...theirs.filter(t => !(item.shares || []).some(x => x.id === t.id))];
+        puts.push([to[id], await VaultCrypto.encryptItem({ ...item, id: to[id], ...(item.links ? { links } : {}), ...(shares.length ? { shares } : {}) }, key)]);
       }
       const written = new Set(puts.map(([id]) => id));
       for (const [id, item] of Object.entries(items)) {

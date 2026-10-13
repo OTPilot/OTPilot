@@ -674,11 +674,11 @@ test('an edit made to the old record after a cut-short move is kept in its repla
     const old = Vault.newItem('note', { title: 'Plan' });
     const fresh = crypto.randomUUID();
     await chrome.storage.local.set({ vaultRehome: { [old.id]: fresh } });
-    await VaultStore.save({ ...old, id: fresh, updatedAt: '2026-01-01T00:00:00Z' }, key);
+    await VaultStore.save({ ...old, id: fresh, shares: [{ id: 'share-1', whole: true }], updatedAt: '2026-01-01T00:00:00Z' }, key);
     await VaultStore.save({ ...old, notes: 'edited later', updatedAt: '2026-02-01T00:00:00Z' }, key);
     fakeServer.foreign.add(old.id);
   });
   await sync(page);
-  const items = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => i.notes || ''));
-  expect(items).toEqual(['edited later']);
+  const items = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.map(i => [i.notes || '', (i.shares || []).map(x => x.id)]));
+  expect(items).toEqual([['edited later', ['share-1']]]); // the replacement's share key stays
 });
