@@ -3,15 +3,18 @@ import { expect as pwExpect } from '@playwright/test';
 
 // Unlocks in the in-page frame, then waits for `done`. On a busy CI runner a
 // click sometimes never reaches the frame's handler (the button stays as it
-// was: no "Verifying…", no error), so the password and click are retried —
-// an unlock is idempotent.
+// was: no "Verifying…", no error): only then are the password and click
+// tried again. Once a click started the unlock (the button disabled, or the
+// frame already gone), it's waited for, up to UNLOCK_MS.
 async function unlockThen(frame, done) {
-  await pwExpect(async () => {
+  for (let i = 0; i < 3; i++) {
     await pwExpect(frame.locator('body')).toHaveAttribute('data-ready', '1');
     await frame.locator('#pw').fill(TEST_PASSWORD);
     await frame.locator('#unlock').click();
-    await done();
-  }).toPass({ timeout: UNLOCK_MS * 1.5, intervals: [2_000, 5_000, 10_000] });
+    const started = await frame.locator('#unlock').evaluate(b => b.disabled, null, { timeout: 1000 }).catch(() => true);
+    if (started) break;
+  }
+  await pwExpect(done).toPass({ timeout: UNLOCK_MS });
 }
 
 // In-page sign-in form fill (forms.js + background vaultLoginsForPage /

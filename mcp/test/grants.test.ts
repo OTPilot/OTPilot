@@ -80,3 +80,31 @@ describe('ask every time, a late approval', () => {
     expect(s.asks).toBe(1)
   })
 })
+
+describe('ask every time, parallel retries', () => {
+  it('two requests waiting at once are both kept: each finishes once its own approval comes', async () => {
+    const item = loginItem({ title: 'Ops' })
+    const keys = await generateKeyPair()
+    const held = await grantRow(item, keys.publicKey, { askEveryTime: true, withheld: true })
+    const released = await grantRow(item, keys.publicKey, { askEveryTime: true })
+    let asks = 0
+    const status: Record<string, string> = {}
+    const api = new FakeApi((m, p) => {
+      if (p === '/agent/grants') return { body: { grants: [Object.values(status).includes('allowed') ? released : held] } }
+      if (m === 'POST' && p === '/agent/requests') { asks++; const id = `00000000-0000-4000-8000-00000000002${asks}`; status[id] = 'pending'; return { body: { id } } }
+      if (p.startsWith('/agent/requests/')) return { body: { status: status[p.split('/').pop()!] } }
+      return undefined
+    })
+    const grant = (await loadGrants(api, keys.privateJwk))[0]
+    const open = () => openItem(api, keys.privateJwk, grant, 'run', 'x', 50)
+    const first = await open().catch(e => e)
+    const [a, b] = await Promise.all([open().catch(e => e), open().catch(e => e)])
+    expect([first, a, b].every(e => e instanceof PendingApproval)).toBe(true)
+    expect(asks).toBe(2) // the first request, and one more for the call that found it busy
+    // The second request is approved: a retry finishes it.
+    const second = Object.keys(status)[1]
+    status[second] = 'allowed'
+    expect((await open()).title).toBe('Ops')
+    expect(asks).toBe(2)
+  })
+})

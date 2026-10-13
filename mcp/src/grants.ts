@@ -99,7 +99,13 @@ export async function waitForAnswer(api: Api, requestId: string, waitMs: number)
 }
 
 /** Requests that timed out waiting (item id → request id): a retry finishes that one instead of asking again. */
-const waiting = new Map<string, { id: string; tool: string; reason: string }>()
+type Waiting = { id: string; tool: string; reason: string; busy: boolean }
+const waiting = new Map<string, Waiting[]>()
+const forget = (itemId: string, w: Waiting) => {
+  const left = (waiting.get(itemId) || []).filter(x => x !== w)
+  if (left.length) waiting.set(itemId, left)
+  else waiting.delete(itemId)
+}
 
 /** The grant's values, asking the user for this one use when it asks every time. */
 export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, tool: string, reason: string, waitMs: number): Promise<VaultItem> {
@@ -110,20 +116,26 @@ export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, t
   // approval is used once, for this retry; one still waiting stays the one.
   // Only for the same purpose the user saw (tool and reason), and claimed
   // before any wait, so two calls in parallel can't both spend it.
-  const earlier = waiting.get(grant.itemId)
-  if (earlier && earlier.tool === tool && earlier.reason === reason) {
-    waiting.delete(grant.itemId)
+  // Every outstanding request is kept (two calls may each have one); one in
+  // use by another call is marked busy, so each is spent once.
+  let stillWaiting: Waiting | undefined
+  for (const earlier of [...(waiting.get(grant.itemId) || [])]) {
+    if (earlier.busy || earlier.tool !== tool || earlier.reason !== reason) continue
+    earlier.busy = true
     let answer: 'allowed' | 'denied' | 'pending'
-    try { answer = await waitForAnswer(api, earlier.id, 0) } catch (e) { waiting.set(grant.itemId, earlier); throw e }
-    if (answer === 'pending') { waiting.set(grant.itemId, earlier); throw new PendingApproval(earlier.id, `use "${grant.title}" this time`) }
+    try { answer = await waitForAnswer(api, earlier.id, 0) } catch (e) { earlier.busy = false; throw e }
+    if (answer === 'pending') { earlier.busy = false; stillWaiting ??= earlier; continue }
     if (answer === 'allowed') {
       let again: Grant | undefined
       // A failed fetch keeps the approval for the next retry.
-      try { again = (await loadGrants(api, privateJwk)).find(g => g.itemId === grant.itemId) } catch (e) { waiting.set(grant.itemId, earlier); throw e }
+      try { again = (await loadGrants(api, privateJwk)).find(g => g.itemId === grant.itemId) } catch (e) { earlier.busy = false; throw e }
+      forget(grant.itemId, earlier)
       if (again?.item) return again.item
-    }
-    // Denied, or its approval expired: ask anew.
+    } else forget(grant.itemId, earlier) // denied: that one is done
   }
+  // One of them still waits for the user: that's the one to approve.
+  if (stillWaiting) throw new PendingApproval(stillWaiting.id, `use "${grant.title}" this time`)
+  // None left (denied, or an approval expired): ask anew.
   let req: { id: string }
   try {
     req = await api.post<{ id: string }>('/agent/requests', { item_id: grant.itemId, tool, reason })
@@ -134,7 +146,7 @@ export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, t
   const answer = await waitForAnswer(api, req.id, waitMs)
   if (answer === 'denied') throw new Error(`The user denied using "${grant.title}" this time.`)
   if (answer === 'pending') {
-    waiting.set(grant.itemId, { id: req.id, tool, reason })
+    waiting.set(grant.itemId, [...(waiting.get(grant.itemId) || []), { id: req.id, tool, reason, busy: false }])
     throw new PendingApproval(req.id, `use "${grant.title}" this time`)
   }
   const again = (await loadGrants(api, privateJwk)).find(g => g.itemId === grant.itemId)
