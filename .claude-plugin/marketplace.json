@@ -1,0 +1,15 @@
+{
+  "name": "otpilot",
+  "description": "OTPilot's Claude Code plugins: use the accounts you allow in OTPilot without the agent seeing passwords or 2FA codes.",
+  "owner": {
+    "name": "OTPilot",
+    "url": "https://otpilot.app"
+  },
+  "plugins": [
+    {
+      "name": "otpilot",
+      "source": "./mcp/plugin",
+      "description": "Sign in to websites and run commands with the accounts you allow in OTPilot \u2014 passwords and 2FA codes \u2014 without the agent seeing them."
+    }
+  ]
+}

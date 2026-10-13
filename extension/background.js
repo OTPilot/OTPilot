@@ -7,6 +7,8 @@ importScripts(
   // vaultUnlock below).
   'vaultCrypto.js', 'vaultKeys.js', 'vaultStore.js', 'vault.js', 'vaultMigration.js',
   'vaultAccounts.js', 'cloudSync.js', 'vaultLock.js', 'vaultSync.js', 'vaultShares.js',
+  // 2.1 AI agents: their copies follow what pages save (keys.js wraps them).
+  'keys.js', 'agents.js',
 );
 
 // Per-item sync (/vault/items) from the worker: after a page saved or changed
@@ -35,6 +37,7 @@ function queueVaultSync() {
           stats = await VaultSync.sync(key);
           // My shared items' copies follow what a page just saved.
           await VaultShares.syncOwner(key).catch(() => {});
+          await Agents.syncCopies(key).catch(() => {});
         } finally {
           // The locked-vault index follows what the pull stored, even when
           // the upload after it failed (the pull's progress is saved, so a
@@ -51,10 +54,17 @@ function queueVaultSync() {
   return _vaultSyncRun;
 }
 
-// A page changed the vault: upload it, and let an open popup redraw.
+// A page changed the vault: upload it, and let an open popup redraw. Agents'
+// copies follow the change right away even without vault sync (Free, or
+// sync off): they're written straight from the local vault.
 function vaultChangedByPage() {
   chrome.runtime.sendMessage({ action: 'serverDataChanged' }).catch(() => {});
-  queueVaultSync();
+  queueVaultSync().then(async () => {
+    if (await vaultSyncReady().catch(() => false)) return; // the sync just did it
+    if ((await VaultLock.state()) !== 'unlocked') return;
+    const key = await VaultKeys.getKey();
+    if (key) await Agents.syncCopies(key).catch(() => {});
+  }).catch(() => {});
 }
 
 // Accounts for content scripts. Unlocked: the decrypted list. Locked: only the
@@ -1047,10 +1057,31 @@ async function refreshNotices() {
     }
   } catch { return null; } // offline
   if ((await noticesAccount()) !== account) return null;
-  const n = (data.invites?.length || 0) + (data.notices?.length || 0);
+  const agentsWaiting = (data.agents?.pending || 0) + (data.agents?.requests || 0);
+  const n = (data.invites?.length || 0) + (data.notices?.length || 0) + agentsWaiting;
   await chrome.action.setBadgeText({ text: n ? String(Math.min(n, 99)) : '' });
   if (n) await chrome.action.setBadgeBackgroundColor({ color: '#0284c7' });
+  // An AI agent is waiting for an answer: check every 30 s (the shortest
+  // alarm) instead of every poll, until nothing waits.
+  if (agentsWaiting) chrome.alarms.create(AGENTS_ALARM, { periodInMinutes: 0.5 });
+  else chrome.alarms.clear(AGENTS_ALARM);
   return data;
+}
+
+const AGENTS_ALARM = 'otpilot-agents-waiting';
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === AGENTS_ALARM) refreshNotices();
+});
+
+// AI agents' copies follow the vault on the poll alarm too — also for Free
+// vaults, which don't sync (needs a session and an unlocked vault).
+async function refreshAgentCopies() {
+  try {
+    if (!(await SupabaseAuth.getSession())) return;
+    if ((await VaultLock.state()) !== 'unlocked') return;
+    const key = await VaultKeys.getKey();
+    if (key) await Agents.syncCopies(key);
+  } catch { /* offline */ }
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -1125,6 +1156,7 @@ chrome.alarms.onAlarm.addListener(async alarm => {
   const session = await SupabaseAuth.getSession();
   if (!session) return;
   refreshNotices(); // every signed-in user, sync or not (invitees are often on Free)
+  refreshAgentCopies();
 
   // syncEnabled is the 2.0 flag; a v1 plaintext syncKey means the same until
   // CloudSync converts it into the vault key on the next popup open.

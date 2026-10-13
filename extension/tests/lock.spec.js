@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, seedLocked, readAccounts, writeAccounts, TEST_SECRET, TEST_PASSWORD, LEGACY_AUTH_TEST } from './fixtures.js';
+import { test, expect, seedUnlocked, seedLocked, readAccounts, writeAccounts, TEST_SECRET, TEST_PASSWORD, LEGACY_AUTH_TEST, UNLOCK_MS } from './fixtures.js';
 
 // 2.0 master-password lock (vaultLock.js): mandatory password that wraps the
 // vault key; unlocked only in chrome.storage.session; inactivity auto-lock.
@@ -162,12 +162,12 @@ test('on a page, a locked vault is unlocked from the overlay and the code is fil
   await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill('wrong');
   await frame.locator('#unlock').click();
-  await expect(frame.locator('#err')).toHaveText('Incorrect password');
+  await expect(frame.locator('#err')).toHaveText('Incorrect password', { timeout: UNLOCK_MS });
 
   await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await frame.locator('#pw').fill(TEST_PASSWORD);
   await frame.locator('#unlock').click();
-  await expect(site.locator('input[name="otp_token"]')).toHaveValue(/^\d{6}$/);
+  await expect(site.locator('input[name="otp_token"]')).toHaveValue(/^\d{6}$/, { timeout: UNLOCK_MS });
   await expect(site.locator('#otpilot-lock')).toHaveCount(0);
   expect(await page.evaluate(() => VaultLock.state())).toBe('unlocked');
 });

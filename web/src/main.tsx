@@ -17,8 +17,10 @@ import Refunds from './pages/legal/Refunds'
 import Gdpr from './pages/legal/Gdpr'
 import Support from './pages/Support'
 import AcceptInvite from './pages/AcceptInvite'
+import AgentConnect from './pages/agents/AgentConnect'
 import Goodbye from './pages/Goodbye'
 import Security from './pages/legal/Security'
+import AiAgents from './pages/AiAgents'
 import GuidePage from './pages/guides/GuidePage'
 import { GUIDES } from './pages/guides/guides'
 import './index.css'
@@ -43,6 +45,8 @@ export const routes: RouteRecord[] = [
         ],
       },
       { path: 'teams/accept/:token', element: <AcceptInvite /> },
+      { path: 'ai-agents', element: <AiAgents /> },
+      { path: 'agents/connect', element: <AgentConnect /> },
       { path: 'security', element: <Security /> },
       { path: 'support', element: <Support /> },
       { path: 'goodbye', element: <Goodbye /> },

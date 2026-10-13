@@ -124,7 +124,9 @@ test('a related login is found by id, even after the list is re-sorted', async (
 test('"Open in vault" shows the item even under another type filter', async ({ context, extensionId }) => {
   const page = await home(context, extensionId);
   await page.click('#nav-settings');
-  await page.locator('#vault-type-bar .type-pill', { hasText: /Server/ }).click();
+  await page.click('#vault-filter');
+  await page.locator('#flt-panel .flt-row', { hasText: /Server/ }).click();
+  await page.locator('#flt-panel .flt-done').click();
   await page.click('#nav-home');
   await page.locator('#home-list .lc-row', { hasText: 'Banco Galicia' }).click();
   const related = page.locator('#home-creds .home-sec', { hasText: 'Related' });

@@ -1,4 +1,21 @@
-import { test, expect, seedUnlocked, waitForVault, writeAccounts, TEST_PASSWORD, TEST_SECRET } from './fixtures.js';
+import { test, expect, seedUnlocked, waitForVault, writeAccounts, TEST_PASSWORD, TEST_SECRET, UNLOCK_MS } from './fixtures.js';
+import { expect as pwExpect } from '@playwright/test';
+
+// Unlocks in the in-page frame, then waits for `done`. On a busy CI runner a
+// click sometimes never reaches the frame's handler (the button stays as it
+// was: no "Verifying…", no error): only then are the password and click
+// tried again. Once a click started the unlock (the button disabled, or the
+// frame already gone), it's waited for, up to UNLOCK_MS.
+async function unlockThen(frame, done) {
+  for (let i = 0; i < 3; i++) {
+    await pwExpect(frame.locator('body')).toHaveAttribute('data-ready', '1');
+    await frame.locator('#pw').fill(TEST_PASSWORD);
+    await frame.locator('#unlock').click();
+    const started = await frame.locator('#unlock').evaluate(b => b.disabled, null, { timeout: 1000 }).catch(() => true);
+    if (started) break;
+  }
+  await pwExpect(done).toPass({ timeout: UNLOCK_MS });
+}
 
 // In-page sign-in form fill (forms.js + background vaultLoginsForPage /
 // vaultFillLogin).
@@ -99,10 +116,7 @@ test('locked: the offer unlocks in the extension frame, then fills', async ({ co
   const frame = site.frameLocator('#otpilot-login-fill iframe');
   await expect(frame.locator('#label')).toContainText('GitHub');
   await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
-  await frame.locator('#pw').fill(TEST_PASSWORD);
-  await frame.locator('#unlock').click();
-
-  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+  await unlockThen(frame, () => pwExpect(site.locator('input[name="password"]')).toHaveValue('hunter2!'));
   await expect(site.locator('input[name="email"]')).toHaveValue('me@example.com');
   await expect(overlay).toHaveCount(0);
 });
@@ -269,9 +283,7 @@ test('locked: the dropdown unlocks in the extension frame, then fills', async ({
   await site.focus('input[name="password"]');
   const frame = site.frameLocator('#otpilot-login-dropdown iframe');
   await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
-  await frame.locator('#pw').fill(TEST_PASSWORD);
-  await frame.locator('#unlock').click();
-  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+  await unlockThen(frame, () => pwExpect(site.locator('input[name="password"]')).toHaveValue('hunter2!'));
 });
 
 test('with many logins in a short window the dropdown stays on screen and scrolls', async ({ context, extensionId }) => {
@@ -316,10 +328,8 @@ test('locked: a long list after unlocking in the dropdown can still scroll to ev
   await site.focus('input[name="email"]');
   const frame = site.frameLocator('#otpilot-login-dropdown iframe');
   await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
-  await frame.locator('#pw').fill(TEST_PASSWORD);
-  await frame.locator('#unlock').click();
   const drop = site.locator('#otpilot-login-dropdown');
-  await expect(drop.locator('.otpilot-login-choice')).toHaveCount(10);
+  await unlockThen(frame, () => pwExpect(drop.locator('.otpilot-login-choice')).toHaveCount(10));
   expect(await drop.evaluate(el => getComputedStyle(el).overflowY)).toBe('auto');
   await drop.locator('.otpilot-login-choice').last().scrollIntoViewIfNeeded();
   await drop.locator('.otpilot-login-choice').last().click();

@@ -10,6 +10,7 @@ import { GUIDES } from './src/pages/guides/guides'
  * sitemap, from this one list. */
 const PUBLIC_PAGES: { path: string; priority: number }[] = [
   { path: '/', priority: 1.0 },
+  { path: '/ai-agents', priority: 0.9 },
   ...GUIDES.map(g => ({ path: g.path, priority: g.kind === 'compare' ? 0.8 : 0.6 })),
   { path: '/security', priority: 0.7 },
   ...['/privacy', '/tos', '/gdpr', '/refunds'].map(path => ({ path, priority: 0.3 })),

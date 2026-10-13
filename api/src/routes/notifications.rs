@@ -7,6 +7,7 @@
 //! notices are `notifications` rows, one per collection membership / direct
 //! grant: dismissing one deletes it, and listing deletes the caller's notices
 //! that are over 30 days old or point at something they can no longer open.
+//! `agents` counts AI agents waiting for approval and their pending requests.
 
 use axum::{
     extract::{Path, State},
@@ -102,7 +103,10 @@ async fn list(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Valu
     .bind(auth.id)
     .fetch_all(&state.db)
     .await?;
+    let (agents_pending, agent_requests) =
+        crate::routes::agents::pending_counts(&state.db, auth.id).await?;
     Ok(Json(json!({
+        "agents": { "pending": agents_pending, "requests": agent_requests },
         "invites": invites.iter().map(|i| json!({
             "token": i.token, "team_id": i.team_id, "team_name": i.team_name,
             "inviter": i.inviter, "expires_at": i.expires_at,

@@ -10,8 +10,19 @@ export default function Callback() {
 
   useEffect(() => {
     function redirectAfterLogin() {
-      const next = sessionStorage.getItem('auth_next')
+      // An email link opens in a new tab, which has no sessionStorage of the
+      // tab that asked: a page that must be continued (connecting an agent)
+      // also leaves it in localStorage for 30 minutes.
+      let saved = sessionStorage.getItem('auth_next')
+      if (!saved) {
+        try {
+          const kept = JSON.parse(localStorage.getItem('auth_next') || 'null')
+          if (kept && Date.now() - kept.at < 30 * 60_000) saved = kept.path
+        } catch { /* nothing kept */ }
+      }
+      const next = saved && saved.startsWith('/') && !saved.startsWith('//') ? saved : null
       sessionStorage.removeItem('auth_next')
+      try { localStorage.removeItem('auth_next') } catch { /* ignore */ }
       navigate(next || '/dashboard', { replace: true })
     }
 

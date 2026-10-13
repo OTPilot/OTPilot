@@ -126,17 +126,18 @@ test('category filter bar narrows the home account chips', async ({ context, ext
 
   await page.reload();
 
-  // Filter bar is visible: All + 3 categories
-  const bar = page.locator('#home-cat-bar');
-  await expect(bar).toBeVisible();
-  await expect(bar.locator('.cat-pill')).toHaveCount(4);
-
-  // "All" is active by default
-  await expect(bar.locator('.cat-pill.active')).toContainText('All');
+  // The Filter button opens a panel with the 3 tags; nothing is on by default
+  await expect(page.locator('#home-cat-bar')).toBeHidden();
+  await page.click('#home-filter');
+  const panel = page.locator('#flt-panel');
+  await expect(panel.locator('.flt-tag')).toHaveCount(3);
 
   // Pick "Work" → only the two Work accounts remain as rows in the home list
-  await bar.locator('.cat-pill', { hasText: 'Work' }).click();
+  await panel.locator('.flt-row', { hasText: 'Work' }).click();
   await expect(page.locator('#home-list .lc-row')).toHaveCount(2);
+  await expect(page.locator('#home-filter .flt-n')).toHaveText('1');
+  await panel.locator('.flt-done').click();
+  await expect(page.locator('#home-cat-bar .flt-chip')).toHaveText([/Work/]);
   await expect(page.locator('#home-list .lc-row-name').first()).toContainText('GitHub');
 
   // Each filtered row carries its category color dot
@@ -209,10 +210,9 @@ test('adding an account while a category filter is active keeps it visible and p
   // …and the new row's chooser is pre-assigned to the active category
   await expect(page.locator('.acc-body.open .cat-choose')).toHaveAttribute('data-value', 'Work');
 
-  // The "Work" pill badge counts the draft (now 3), matching the visible rows
-  await expect(
-    page.locator('#vault-cat-bar .cat-pill', { hasText: 'Work' }).locator('.count')
-  ).toHaveText('3');
+  // The "Work" count in the filter panel counts the draft (now 3), matching the visible rows
+  await page.click('#vault-filter');
+  await expect(page.locator('#flt-panel .flt-row', { hasText: 'Work' }).locator('.flt-count')).toHaveText('3');
 });
 
 // Regression: the "shared with team" badges load asynchronously on open and
@@ -290,4 +290,53 @@ test('regression: a long shared-code row wraps instead of overflowing the popup 
   // than one sized to whatever digits happen to be in it.
   const codeWidth = await row.locator('.shared-code').evaluate(el => el.getBoundingClientRect().width);
   expect(codeWidth).toBeCloseTo(78, 0);
+});
+
+test('the 2FA filter shows only accounts with a code, and its chip removes it', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => new Promise(r => chrome.storage.local.set({
+    accounts: [
+      { name: 'GitHub', secret, urls: '', email: '' },
+      { name: 'Wiki', secret: '', password: 'pw', urls: 'wiki.example', email: 'me' },
+    ],
+  }, r)), [TEST_SECRET]);
+  await page.reload();
+  await expect(page.locator('#home-list .lc-row')).toHaveCount(2);
+  await page.click('#home-filter');
+  await page.locator('#flt-panel .flt-row', { hasText: 'With a 2FA code' }).click();
+  await expect(page.locator('#home-list .lc-row')).toHaveCount(1);
+  await expect(page.locator('#home-list .lc-row-name')).toContainText('GitHub');
+  await page.locator('#flt-panel .flt-done').click();
+  await page.locator('#home-cat-bar .flt-chip', { hasText: '2FA code' }).locator('button').click();
+  await expect(page.locator('#home-list .lc-row')).toHaveCount(2);
+});
+
+test('a type picked in the Vault doesn\'t show as a filter on Home', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => new Promise(r => chrome.storage.local.set({
+    listFilters: { tags: [], types: ['note'], twofa: false },
+    accounts: [{ name: 'GitHub', secret, urls: '', email: '', category: 'Work' }],
+  }, r)), [TEST_SECRET]);
+  await page.reload();
+  await expect(page.locator('#home-list .lc-row')).toHaveCount(1);
+  await expect(page.locator('#home-cat-bar')).toBeHidden();
+  await expect(page.locator('#home-filter .flt-n')).toHaveText('');
+});
+
+test('a tag filter set in the Vault on a note-only tag survives a visit to Home', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(page);
+  await page.evaluate(([secret]) => new Promise(r => chrome.storage.local.set({
+    listFilters: { tags: ['research'], types: [], twofa: false },
+    accounts: [{ name: 'GitHub', secret, urls: '', email: '', category: 'Work' }],
+  }, r)), [TEST_SECRET]);
+  await page.reload();
+  await expect(page.locator('#home-cat-bar .flt-chip')).toHaveText([/research/]);
+  const saved = await page.evaluate(async () => (await chrome.storage.local.get('listFilters')).listFilters.tags);
+  expect(saved).toEqual(['research']);
 });

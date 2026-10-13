@@ -77,3 +77,66 @@ test('the suggestion opens under the new-password field, and its badge brings it
   await site.locator('.otpilot-field-badge[data-kind="generate"]').first().click();
   await expect(offer).toBeVisible();
 });
+
+test('a reset page that doesn\'t mark its fields still gets the suggestion, for both fields', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/reset-password.html`);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(2);
+  await site.focus('input[name="password"]');
+  const offer = site.locator('#otpilot-password-suggest');
+  await expect(offer).toBeVisible();
+  const value = await offer.locator('.otpilot-gen-value').textContent();
+  await offer.locator('.otpilot-gen-use').click();
+  await expect(site.locator('input[name="password"]')).toHaveValue(value);
+  await expect(site.locator('input[name="password2"]')).toHaveValue(value);
+});
+
+test('an unmarked change-password form: the current field is never filled, newPassword-style names count', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/change-password-unmarked.html`);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(2);
+  await site.focus('input[name="newPassword"]');
+  const offer = site.locator('#otpilot-password-suggest');
+  const value = await offer.locator('.otpilot-gen-value').textContent();
+  await offer.locator('.otpilot-gen-use').click();
+  await expect(site.locator('input[name="current"]')).toHaveValue('');
+  await expect(site.locator('input[name="newPassword"]')).toHaveValue(value);
+  await expect(site.locator('input[name="new_password_confirm"]')).toHaveValue(value);
+});
+
+test('two separate sign-in panels without a form are not new-password fields', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/two-signin-panels.html`);
+  await site.focus('input[name="password"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+test('a change-password page with just current and new: Use fills only the new one', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/change-password-two.html`);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(1);
+  await site.focus('input[name="p2"]');
+  const offer = site.locator('#otpilot-password-suggest');
+  const value = await offer.locator('.otpilot-gen-value').textContent();
+  await offer.locator('.otpilot-gen-use').click();
+  await expect(site.locator('input[name="p1"]')).toHaveValue('');
+  await expect(site.locator('input[name="p2"]')).toHaveValue(value);
+});
+
+test('a field labelled "Confirm current password" is never filled with the new one', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/change-password-confirm-current.html`);
+  await site.focus('input[name="b"]');
+  const offer = site.locator('#otpilot-password-suggest');
+  const value = await offer.locator('.otpilot-gen-value').textContent();
+  await offer.locator('.otpilot-gen-use').click();
+  await expect(site.locator('input[name="a"]')).toHaveValue('');
+  await expect(site.locator('input[name="b"]')).toHaveValue(value);
+});

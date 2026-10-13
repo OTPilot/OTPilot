@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
+import { execFileSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const extensionPath = path.resolve(__dirname, '..');
@@ -12,8 +13,12 @@ export const test = base.extend({
     // Fresh isolated profile per test — prevents session-restore from stale tabs
     // and lock conflicts when tests run in parallel.
     const userDataDir = mkdtempSync(path.join(tmpdir(), 'otpilot-test-'));
+    // HEADLESS=1: Chrome's new headless mode, which loads extensions — no
+    // windows popping up while you work. CI runs headed under xvfb.
+    const headless = !!process.env.HEADLESS;
     const launch = () => chromium.launchPersistentContext(userDataDir, {
-      headless: false,
+      headless,
+      ...(headless ? { channel: 'chromium' } : {}),
       args: [
         `--disable-extensions-except=${extensionPath}`,
         `--load-extension=${extensionPath}`,
@@ -45,11 +50,26 @@ export const test = base.extend({
       }
       try { writeFileSync(testInfo.outputPath('console.txt'), logs.join('\n') || '(no console output)'); } catch { /* ignore */ }
     }
-    await context.close();
+    // Headless Chrome sometimes never answers the close: don't let that eat
+    // the test's time — stop that browser (found by its profile) instead.
+    let timer;
+    const closed = await Promise.race([
+      context.close().then(() => true),
+      new Promise(r => { timer = setTimeout(() => r(false), headless ? 2000 : 600000); }),
+    ]);
+    clearTimeout(timer);
+    if (!closed) { try { execFileSync('pkill', ['-f', userDataDir]); } catch { /* already gone */ } }
     try { rmSync(userDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
   },
 
   extensionId: async ({ context }, use) => {
+    // Headless: chrome://extensions may not render; the background worker's
+    // URL carries the id.
+    if (process.env.HEADLESS) {
+      const sw = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
+      await use(new URL(sw.url()).host);
+      return;
+    }
     const page = await context.newPage();
     await page.goto('chrome://extensions/');
 
@@ -67,6 +87,10 @@ export const test = base.extend({
 });
 
 export { expect } from '@playwright/test';
+
+// An unlock runs PBKDF2 (600k iterations): on a busy CI runner it can take
+// well over the default 5 s, so what follows one waits longer.
+export const UNLOCK_MS = 20_000;
 
 // 2.0 lock (vaultLock.js): a vault key wrapped with master password "test",
 // precomputed so tests don't pay 600k PBKDF2 iterations to seed state.

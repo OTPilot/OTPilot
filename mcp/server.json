@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.OTPilot/otpilot",
+  "title": "OTPilot",
+  "description": "Use the accounts you allow in OTPilot (passwords, 2FA codes) to sign in and run commands, without seeing them.",
+  "websiteUrl": "https://otpilot.app/ai-agents",
+  "repository": { "url": "https://github.com/OTPilot/OTPilot", "source": "github", "subfolder": "mcp" },
+  "version": "0.1.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@otpilot/mcp",
+      "version": "0.1.2",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}

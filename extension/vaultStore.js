@@ -135,6 +135,7 @@ const VaultStore = (() => {
       putMany: entries => set(Object.fromEntries(entries.map(([id, rec]) => [RECORD + id, rec])))
         .then(() => del(entries.map(([id]) => TOMB + id))),
       drop: id => del([RECORD + id, TOMB + id]),
+      dropMany: ids => del(ids.flatMap(id => [RECORD + id, TOMB + id])),
       // A user's deletion: the record goes and a tombstone tells sync.
       remove: (id, deletedAt = new Date().toISOString()) => del(RECORD + id).then(() => set({ [TOMB + id]: deletedAt })),
       dropTombstone: id => del(TOMB + id),
