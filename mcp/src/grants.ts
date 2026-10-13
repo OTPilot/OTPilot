@@ -128,8 +128,12 @@ export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, t
     } catch (e) {
       // Gone (answered requests are forgotten after a day): ask anew.
       if (e instanceof ApiError && e.status === 404) { forget(grant.itemId, earlier); continue }
+      // A definite refusal (revoked agent) goes up; a passing failure (network,
+      // 429, 5xx) leaves it waiting, as the first wait treats one.
       earlier.busy = false
-      throw e
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 429) throw e
+      stillWaiting = true
+      continue
     }
     if (r.status === 'pending') { earlier.busy = false; stillWaiting = true; continue }
     // Only this request's own approval, still in its window: another

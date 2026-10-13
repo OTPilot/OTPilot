@@ -39,12 +39,14 @@ describe('ask every time, a late approval', () => {
     const keys = await generateKeyPair()
     const held = await grantRow(item, keys.publicKey, { askEveryTime: true, withheld: true })
     const released = await grantRow(item, keys.publicKey, { askEveryTime: true })
-    const s = { asks: 0, status: 'pending', failGrants: false, onlyFirst: false, expired: false, gone: false }
+    const s = { asks: 0, status: 'pending', failGrants: false, onlyFirst: false, expired: false, gone: false, flaky: false }
     const FIRST = '00000000-0000-4000-8000-000000000011'
     const api = new FakeApi((m, p) => {
       if (p === '/agent/grants') return s.failGrants ? { status: 500, body: { error: 'down' } } : { body: { grants: [s.status === 'allowed' ? released : held] } }
       if (m === 'POST' && p === '/agent/requests') { s.asks++; return { body: { id: `00000000-0000-4000-8000-00000000001${s.asks}` } } }
-      if (p.startsWith('/agent/requests/')) { const st = s.onlyFirst && !p.endsWith(FIRST) ? 'pending' : s.status; return s.gone ? { status: 404, body: { error: 'not found' } } : { body: { status: st, released: st === 'allowed' && !s.expired } } }
+      if (p.startsWith('/agent/requests/')) { const st = s.onlyFirst && !p.endsWith(FIRST) ? 'pending' : s.status; if (s.flaky && p.endsWith(FIRST)) return { status: 503, body: { error: 'unavailable' } }
+        if (s.gone && p.endsWith(FIRST)) return { status: 404, body: { error: 'not found' } }
+        return { body: { status: st, released: st === 'allowed' && !s.expired } } }
       return undefined
     })
     const grant = (await loadGrants(api, keys.privateJwk))[0]
@@ -79,12 +81,24 @@ describe('ask every time, a late approval', () => {
     expect(s.asks).toBe(2)
   })
 
-  it('a request the server forgot (404) is dropped and asked anew', async () => {
+  it('a request the server forgot (404) is dropped; the new one is kept and finishes on retry', async () => {
     const { s, open } = await setup()
-    s.gone = true
-    await expect(open()).rejects.toThrow() // the new ask's poll is 404 too here
-    s.gone = false
+    s.gone = true // only the old request is gone
+    await expect(open()).rejects.toBeInstanceOf(PendingApproval) // the replacement waits
     expect(s.asks).toBe(2)
+    s.status = 'allowed' // the user approves the replacement
+    expect((await open()).title).toBe('Vault')
+    expect(s.asks).toBe(2)
+  })
+
+  it('a passing server error keeps the request waiting, not lost', async () => {
+    const { s, open } = await setup()
+    s.flaky = true
+    await expect(open()).rejects.toBeInstanceOf(PendingApproval)
+    expect(s.asks).toBe(1)
+    s.flaky = false
+    s.status = 'allowed'
+    expect((await open()).title).toBe('Vault')
   })
 
   it('survives a failed fetch of the released copy', async () => {
