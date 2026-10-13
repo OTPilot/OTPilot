@@ -17,6 +17,15 @@ let browserOk = true
 const windows = !process.env.HEADLESS
 let spaLogins = 0
 
+// Like real sites, a code from the previous 30-second window still counts
+// (the window can turn between filling and the server checking it).
+const recent: { code: string; at: number }[] = []
+const note = async () => { recent.push({ code: await generateTOTP(SECRET), at: Date.now() }) }
+void note()
+setInterval(note, 1000).unref()
+const validCode = async (code: string | null) => !!code
+  && (code === (await generateTOTP(SECRET)) || recent.some(r => r.code === code && Date.now() - r.at < 35_000))
+
 const page = (body: string) => `<!doctype html><html><head><title>Acme</title></head><body>${body}</body></html>`
 
 beforeAll(async () => {
@@ -76,12 +85,12 @@ beforeAll(async () => {
     if (url.pathname === '/slow') return html('<form method="post" action="/otp-slow"><input name="code" autocomplete="one-time-code"><button>Verify</button></form>')
     if (url.pathname === '/otp-slow') {
       // Checked before the delay: the 30-second window may turn meanwhile.
-      const valid = form.get('code') === (await generateTOTP(SECRET))
+      const valid = await validCode(form.get('code'))
       await new Promise(r => setTimeout(r, 2500))
       return valid ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=slow; Path=/' }) : html('bad code')
     }
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
-    if (url.pathname === '/otp') return form.get('code') === (await generateTOTP(SECRET))
+    if (url.pathname === '/otp') return (await validCode(form.get('code')))
       ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=signed-in; Path=/' })
       : html('bad code')
     res.writeHead(404); res.end()
