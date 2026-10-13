@@ -352,8 +352,10 @@ struct BatchRequest {
 }
 
 /// Creates many new items at once (the v1 migration, imports). Ids that
-/// already exist are never overwritten — they come back in `conflicts` for the
-/// client to resolve through the single-item endpoint.
+/// already exist are never overwritten: one of the caller's own comes back in
+/// `conflicts` (the client pulls it and settles it), one held by another user
+/// or a collection in `taken` (the client gives its item a new id — never
+/// learning whose it is).
 async fn create_batch(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -374,6 +376,7 @@ async fn create_batch(
     let mut tx = begin_owner_tx(&state, auth.id).await?;
     let mut created = Vec::new();
     let mut conflicts = Vec::new();
+    let mut taken = Vec::new();
     for (item, record) in body.items.iter().zip(&records) {
         let revision: Option<i64> = sqlx::query_scalar(
             "INSERT INTO vault_items (id, owner_id, encrypted_item, counts_for_limit)
@@ -387,14 +390,31 @@ async fn create_batch(
         .await?;
         match revision {
             Some(revision) => created.push(json!({ "id": item.id, "revision": revision })),
-            None => conflicts.push(item.id),
+            None => {
+                let mine: bool = sqlx::query_scalar(
+                    "SELECT owner_id = $2 AND collection_id IS NULL FROM vault_items WHERE id = $1",
+                )
+                .bind(item.id)
+                .bind(auth.id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .flatten()
+                .unwrap_or(false);
+                if mine {
+                    conflicts.push(item.id)
+                } else {
+                    taken.push(item.id)
+                }
+            }
         }
     }
     if !created.is_empty() {
         mark_migrated(&mut tx, auth.id).await?;
     }
     tx.commit().await?;
-    Ok(Json(json!({ "created": created, "conflicts": conflicts })))
+    Ok(Json(
+        json!({ "created": created, "conflicts": conflicts, "taken": taken }),
+    ))
 }
 
 #[cfg(test)]
@@ -600,6 +620,41 @@ mod db_tests {
     }
 
     #[tokio::test]
+    async fn batch_reports_an_id_another_user_holds_as_taken() {
+        let (app, db, _guard) = app().await;
+        let alice = create_user(&db, "personal").await;
+        let bob = create_user(&db, "personal").await;
+        let id = Uuid::new_v4();
+        call(
+            &app,
+            alice,
+            Method::PUT,
+            &format!("/vault/items/{id}"),
+            Some(json!({ "record": record("alice") })),
+        )
+        .await;
+        let (s, body) = call(
+            &app,
+            bob,
+            Method::POST,
+            "/vault/items/batch",
+            Some(json!({ "items": [{ "id": id, "record": record("bob") }] })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body["taken"], json!([id]));
+        assert_eq!(body["conflicts"], json!([]));
+        let ct: String = sqlx::query_scalar(
+            "SELECT encrypted_item::jsonb->'data'->>'ct' FROM vault_items WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(ct, "alice");
+    }
+
+    #[tokio::test]
     async fn batch_creates_new_and_reports_existing() {
         let (app, db, _guard) = app().await;
         let user = create_user(&db, "personal").await;
@@ -627,6 +682,7 @@ mod db_tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(body["created"].as_array().unwrap().len(), 1);
         assert_eq!(body["conflicts"], json!([existing]));
+        assert_eq!(body["taken"], json!([]));
         let (_, list) = call(&app, user, Method::GET, "/vault/items", None).await;
         let old = list["items"]
             .as_array()

@@ -18,6 +18,7 @@
 // The fingerprint is the pair of IVs, fresh on every encryption.
 const VaultSync = (() => {
   const STATE = 'vaultSyncState';
+  const REHOME = 'vaultRehome'; // old id → new id of a move to a new id under way
   const BATCH_MAX = 500;
   const BATCH_BYTES = 6 * 1024 * 1024; // under the API's 8 MiB body cap
 
@@ -227,6 +228,8 @@ const VaultSync = (() => {
   }
 
   async function push(state, key, stats) {
+    const taken = [];
+    const conflicted = [];
     const local = await VaultStore.listRecords();
     const creates = [];
     for (const [id, rec] of Object.entries(local)) {
@@ -260,9 +263,9 @@ const VaultSync = (() => {
         state.synced[c.id] = { rev: c.revision, fp: fp(byId[c.id]) };
         stats.pushed++;
       }
+      taken.push(...(body.taken || []));
+      conflicted.push(...(body.conflicts || []));
       await saveStateFor(state, key);
-      // `conflicts`: the id already exists on the server; the next pull brings
-      // that version and the newer edit wins.
       batch = [];
       bytes = 0;
     };
@@ -273,6 +276,14 @@ const VaultSync = (() => {
       bytes += size;
     }
     await flush();
+    // `conflicts`: ids of mine already on the server that this device never
+    // pulled (its cursor moved past them): pull everything again next time,
+    // where the newer edit wins. Left alone they'd retry here forever.
+    if (conflicted.length) { state.cursor = 0; await saveStateFor(state, key); }
+    // `taken`: ids another account (or a collection) holds — e.g. this
+    // browser was signed in to another OTPilot account with the same vault.
+    // They can never go up under those ids.
+    if (taken.length) stats.rehomed = await rehome(taken, conflicted, key, stats);
 
     // Local deletions.
     const tombs = await VaultStore.listTombstones();
@@ -293,6 +304,90 @@ const VaultSync = (() => {
     if (done.length) await VaultStore.dropTombstones(done);
   }
 
+  // What an item holds, to tell an exact copy: everything but its id and
+  // dates — password history, links and shares included, so dropping a copy
+  // never loses anything only it had.
+  const content = item => {
+    const { id, createdAt, updatedAt, ...rest } = item;
+    return JSON.stringify(rest);
+  };
+
+  // Items whose id is taken on the server: one that's exactly an item already
+  // synced here (the same account, migrated twice) is dropped — that one
+  // stays; any other gets a new id (re-encrypted: the id is bound into the
+  // record) and goes up on the next push. Items linking a moved one follow.
+  async function rehome(ids, unsettled, key, stats) {
+    let moved = 0;
+    await VaultStore.transaction(async tx => {
+      await checkKey(key);
+      const recs = await tx.listRecords();
+      const taken = new Set(ids);
+      const items = {};
+      for (const [id, rec] of Object.entries(recs)) items[id] = await decryptOrNull(rec, key);
+      // Exact copies are looked for among every other item here (synced or
+      // not): a move cut short last time left the old record beside its new
+      // one, and that old record is dropped now instead of moved twice. Not
+      // among items still in conflict with the server: the pull may yet
+      // replace them.
+      const skip = new Set(unsettled);
+      const others = new Map();
+      for (const [id, item] of Object.entries(items)) if (item && !taken.has(id) && !skip.has(id)) others.set(content(item), id);
+      // Where each one goes first, so moved items linking each other follow
+      // too. A move cut short last time already wrote its replacement (with
+      // its links rewritten, so it no longer matches as a copy): the saved
+      // mapping sends the old record there.
+      const pending = (await chrome.storage.local.get(REHOME))[REHOME] || {};
+      const to = {};
+      const fresh = [];
+      const late = [];
+      for (const id of ids) {
+        const item = items[id];
+        if (!item) continue;
+        if (pending[id] && items[pending[id]]) {
+          to[id] = pending[id];
+          // Edited here since its replacement was written: the edit goes on
+          // in the replacement (links through the mapping) before it's dropped.
+          if ((item.updatedAt || '') > (items[pending[id]].updatedAt || '')) late.push(id);
+          continue;
+        }
+        const twin = others.get(content(item));
+        if (twin) { to[id] = twin; continue; }
+        to[id] = crypto.randomUUID();
+        fresh.push(id);
+      }
+      moved = Object.keys(to).length;
+      if (!moved) return;
+      const relink = item => [...new Set((item.links || []).map(l => to[l] || l))];
+      const puts = [];
+      for (const id of [...fresh, ...late]) {
+        const item = items[id];
+        const links = relink(item).filter(l => l !== to[id]);
+        // Shares the replacement got meanwhile (another device) stay: their keys live only in the item.
+        const theirs = items[to[id]]?.shares || [];
+        const shares = [...(item.shares || []), ...theirs.filter(t => !(item.shares || []).some(x => x.id === t.id))];
+        puts.push([to[id], await VaultCrypto.encryptItem({ ...item, id: to[id], ...(item.links ? { links } : {}), ...(shares.length ? { shares } : {}) }, key)]);
+      }
+      const written = new Set(puts.map(([id]) => id));
+      for (const [id, item] of Object.entries(items)) {
+        if (taken.has(id) || written.has(id) || !item?.links?.some(l => to[l])) continue;
+        const links = relink(item).filter(l => l !== id);
+        // A dated change: an older edit from another device doesn't bring the old id back.
+        puts.push([id, await VaultCrypto.encryptItem({ ...item, links, updatedAt: new Date().toISOString() }, key)]);
+      }
+      // The mapping first (a retry finds the replacements by it), then the new
+      // records and every link to them in one write, then the old records:
+      // nothing ever links an id that's gone, and nothing is moved twice.
+      await chrome.storage.local.set({ [REHOME]: { ...pending, ...to } });
+      if (puts.length) await tx.putMany(puts);
+      await tx.dropMany(Object.keys(to));
+      const left = { ...pending, ...to };
+      for (const id of Object.keys(to)) delete left[id];
+      await chrome.storage.local.set({ [REHOME]: left });
+      Object.assign(stats.remapped, to);
+    });
+    return moved;
+  }
+
   // Pull, then push. One sync at a time per browser (Web Lock).
   function sync(key) {
     return navigator.locks.request('otpilot-vault-sync', async () => {
@@ -300,6 +395,8 @@ const VaultSync = (() => {
       const state = await loadState();
       await pull(state, key, stats);
       await push(state, key, stats);
+      // Items that got a new id go up now, not on the next sync.
+      if (stats.rehomed) await push(state, key, stats);
       await saveStateFor(state, key);
       return stats;
     });

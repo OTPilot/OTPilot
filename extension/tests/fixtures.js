@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
+import { execFileSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const extensionPath = path.resolve(__dirname, '..');
@@ -49,8 +50,15 @@ export const test = base.extend({
       }
       try { writeFileSync(testInfo.outputPath('console.txt'), logs.join('\n') || '(no console output)'); } catch { /* ignore */ }
     }
-    // Headless Chrome sometimes never answers the close: don't let that eat the test's time.
-    await Promise.race([context.close(), new Promise(r => setTimeout(r, headless ? 2000 : 600000))]);
+    // Headless Chrome sometimes never answers the close: don't let that eat
+    // the test's time — stop that browser (found by its profile) instead.
+    let timer;
+    const closed = await Promise.race([
+      context.close().then(() => true),
+      new Promise(r => { timer = setTimeout(() => r(false), headless ? 2000 : 600000); }),
+    ]);
+    clearTimeout(timer);
+    if (!closed) { try { execFileSync('pkill', ['-f', userDataDir]); } catch { /* already gone */ } }
     try { rmSync(userDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
   },
 
