@@ -303,10 +303,13 @@ const VaultSync = (() => {
     if (done.length) await VaultStore.dropTombstones(done);
   }
 
-  // What an item is, for "the same account": its type, title, fields' values,
-  // 2FA secret, sites and notes (not its id, dates or shares).
-  const content = item => JSON.stringify([item.type, item.title || '', (item.fields || []).map(f => [f.id, f.value ?? '']),
-    item.totp?.secret || '', item.urls || [], item.notes || '']);
+  // What an item holds, to tell an exact copy: everything but its id and
+  // dates — password history, links and shares included, so dropping a copy
+  // never loses anything only it had.
+  const content = item => {
+    const { id, createdAt, updatedAt, ...rest } = item;
+    return JSON.stringify(rest);
+  };
 
   // Items whose id is taken on the server: one that's exactly an item already
   // synced here (the same account, migrated twice) is dropped — that one
@@ -345,7 +348,8 @@ const VaultSync = (() => {
         const item = await decryptOrNull(rec, key);
         if (!item?.links?.some(l => to[l])) continue;
         const links = [...new Set(item.links.map(l => to[l] || l))].filter(l => l !== id);
-        await tx.put(id, await VaultCrypto.encryptItem({ ...item, links }, key));
+        // A dated change: an older edit from another device doesn't bring the old id back.
+        await tx.put(id, await VaultCrypto.encryptItem({ ...item, links, updatedAt: new Date().toISOString() }, key));
       }
     });
     return moved;

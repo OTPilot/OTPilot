@@ -589,3 +589,20 @@ test('an id of mine already on the server that this device skipped is pulled aga
   await sync(page);
   expect(await page.evaluate(() => fakeServer.calls.filter(c => c.startsWith('POST')).length)).toBe(calls);
 });
+
+test('a taken copy holding something the synced one lacks (password history) is kept under a new id, not dropped', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const mine = Vault.newItem('login', { title: 'GitHub' });
+    await fakeServer.remoteSave(mine);
+    await VaultSync.sync(key);
+    const copy = { ...mine, id: crypto.randomUUID(), passwordHistory: [{ value: 'old-pw', changedAt: '2026-01-01T00:00:00Z' }] };
+    await VaultStore.save(copy, key);
+    fakeServer.foreign.add(copy.id);
+  });
+  expect((await sync(page)).rehomed).toBe(1);
+  const kept = await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items
+    .filter(i => i.title === 'GitHub').map(i => (i.passwordHistory || []).length).sort());
+  expect(kept).toEqual([0, 1]);
+});
