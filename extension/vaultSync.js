@@ -123,7 +123,20 @@ const VaultSync = (() => {
       // Never store what this device can't read (e.g. left over from a
       // previous key): it would only show up as a failed record.
       const theirs = await decryptOrNull(r.record, key);
-      if (!theirs) { stats.unreadable++; continue; }
+      if (!theirs) {
+        // A copy under a key this vault no longer uses (e.g. written before
+        // this account's key changed) of an item this device holds readable
+        // — or deleted: nobody with the vault key can ever open the server's
+        // copy, so ours replaces it (a PUT / DELETE from that revision).
+        // Left alone, the item could never go up again: its id is taken.
+        if ((mine && await decryptOrNull(mine, key)) || (!mine && tombs[r.id])) {
+          state.synced[r.id] = { rev: r.revision, fp: null };
+          stats.replaced = (stats.replaced || 0) + 1;
+        } else {
+          stats.unreadable++;
+        }
+        continue;
+      }
 
       if (mine && fp(mine) === fp(r.record)) {
         // Our own upload coming back: just note its revision.

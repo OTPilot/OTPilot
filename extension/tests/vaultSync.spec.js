@@ -271,6 +271,35 @@ test('records this device cannot decrypt are not stored', async ({ context, exte
   expect(await localTitles(page)).toEqual([]);
 });
 
+// The account's key changed after a device uploaded (migration on 2026-10-08,
+// then a key adoption): the server kept copies under the old key, and this
+// device — holding the same items under the current key, sync state reset —
+// got `conflicts` for them forever. Its readable copy replaces the server's.
+test('a server copy under an old key is replaced by the readable one here', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const old = VaultCrypto.generateKey();
+    const kept = Vault.newItem('note', { title: 'kept here' });
+    const gone = Vault.newItem('note', { title: 'deleted here' });
+    const orphan = Vault.newItem('note', { title: 'only on the server' });
+    for (const it of [kept, gone, orphan]) {
+      const record = await VaultCrypto.encryptItem(it, old);
+      fakeServer.items.set(it.id, { record, revision: ++fakeServer.rev, deleted: false });
+    }
+    await VaultStore.save([kept, gone], key);
+    await VaultStore.remove([gone.id]);
+    const first = await VaultSync.sync(key);
+    const second = await VaultSync.sync(key);
+    return { first, second, kept: (await fakeServer.read(kept.id))?.title, goneDeleted: fakeServer.items.get(gone.id).deleted, ids: [kept.id] };
+  });
+  expect(r.first).toMatchObject({ replaced: 2, unreadable: 1, pushed: 1, deleted: 1 });
+  expect(r.kept).toBe('kept here');
+  expect(r.goneDeleted).toBe(true);
+  expect(r.second).toMatchObject({ pushed: 0, unreadable: 0 }); // settled; the orphan stays on the server, unread
+  expect(r.second.replaced).toBeUndefined();
+});
+
 test('a local deletion of an item the server has but sync state forgot is sent, not undone', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
   const id = await page.evaluate(async () => {
