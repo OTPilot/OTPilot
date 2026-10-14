@@ -27,7 +27,7 @@ const VaultSync = (() => {
 
   async function loadState() {
     const s = (await chrome.storage.local.get(STATE))[STATE];
-    return { cursor: s?.cursor ?? 0, synced: s?.synced ?? {} };
+    return { cursor: s?.cursor ?? 0, synced: s?.synced ?? {}, readRev: s?.readRev ?? 0, stale: s?.stale ?? {} };
   }
 
   function saveState(state) {
@@ -79,6 +79,43 @@ const VaultSync = (() => {
       });
       more = !!body.more;
     }
+    // Once every page is in (`readRev` final), the copies this key couldn't open.
+    if (Object.keys(state.stale).length) {
+      await VaultStore.transaction(async tx => {
+        await checkKey(key);
+        await settleStale(tx, state, key, stats);
+        await saveState(state);
+      });
+    }
+  }
+
+  // A record this key can't open (`state.stale`: id → revision), written
+  // before another device wrote one it can (`readRev`): left under a key the
+  // account no longer uses (e.g. the 2.0 migration's, before a key change).
+  // When this device holds that item readable — or deleted it —, ours
+  // replaces it (a PUT / DELETE from that revision): left alone it could
+  // never go up again, its id is taken. One newer than anything readable may
+  // be another device's under a newer key (this one would be the stale one):
+  // it stays pending, and so does a local deletion of it, until `readRev`
+  // passes it. One this device doesn't hold is forgotten (unreadable here).
+  // The unreadable ids this sync counted (not part of the returned stats).
+  const unread = new WeakMap();
+  const unreadIn = stats => { if (!unread.has(stats)) unread.set(stats, new Set()); return unread.get(stats); };
+
+  async function settleStale(tx, state, key, stats) {
+    const local = await tx.listRecords();
+    const tombs = await tx.listTombstones();
+    for (const [id, rev] of Object.entries(state.stale || {})) {
+      const mine = local[id];
+      const ours = (mine && await decryptOrNull(mine, key)) || (!mine && tombs[id]);
+      if (!ours) { delete state.stale[id]; continue; }
+      if (rev < (state.readRev || 0)) {
+        state.synced[id] = { rev, fp: null };
+        delete state.stale[id];
+        stats.replaced = (stats.replaced || 0) + 1;
+        if (unreadIn(stats).delete(id)) stats.unreadable--; // counted when pulled in this sync
+      }
+    }
   }
 
   // Runs under the vault lock: nothing else writes records between the reads
@@ -107,6 +144,7 @@ const VaultSync = (() => {
       const mine = local[r.id];
 
       if (r.deleted) {
+        delete state.stale[r.id];
         const changedHere = !!mine && (!known || fp(mine) !== known.fp);
         if (changedHere) {
           // Edited here, deleted there: keep the edit and upload it again.
@@ -123,7 +161,12 @@ const VaultSync = (() => {
       // Never store what this device can't read (e.g. left over from a
       // previous key): it would only show up as a failed record.
       const theirs = await decryptOrNull(r.record, key);
-      if (!theirs) { stats.unreadable++; continue; }
+      if (!theirs) { state.stale[r.id] = r.revision; stats.unreadable++; unreadIn(stats).add(r.id); continue; } // settled after the pull
+      delete state.stale[r.id];
+
+      // Another device's record this key opens: the account used this key
+      // at least up to that revision.
+      if (!(mine && fp(mine) === fp(r.record))) state.readRev = Math.max(state.readRev || 0, r.revision);
 
       if (mine && fp(mine) === fp(r.record)) {
         // Our own upload coming back: just note its revision.
@@ -306,7 +349,12 @@ const VaultSync = (() => {
     const done = [];
     for (const id of Object.keys(tombs)) {
       const known = state.synced[id];
-      if (!known) { done.push(id); continue; } // never reached the server
+      if (!known) {
+        // Never reached the server — unless its copy there is one this key
+        // can't open, still pending (settleStale): kept until settled.
+        if (!state.stale[id]) done.push(id);
+        continue;
+      }
       const { status } = await api(`/vault/items/${id}?base_revision=${known.rev}`, { method: 'DELETE' });
       if (status === 200 || status === 404) {
         delete state.synced[id];
