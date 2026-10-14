@@ -40,6 +40,7 @@ Invitation flow:
 The user manages everything in the extension; the agent only talks to the OTPilot MCP server on the user's computer. Its tools never return a secret: it signs in to websites (password + 2FA, on the account's own site only) and hands the session to the agent's browser, or runs a command with secrets injected as environment variables and scrubbed from the output.
 
 - Two approvals: an agent connects with a verification code checked in the extension and gets no accounts; each account is then allowed per agent, with a scope (2FA code only, whole sign-in, chosen fields) and a duration, or "ask every time"
+- Team plans: accounts teammates share with the user (directly or through a collection) can be allowed too; the agent's copy follows the shared item and goes when the user loses access to it
 - Each allowed account is encrypted for that agent's own key (kept in the OS keychain); the server only stores ciphertext; revoking an agent cuts its access
 - Activity log of every use; requests show on the extension's badge
 - Connect an agent: `npx -y @otpilot/mcp connect` (prints a verification code; approve it in the extension's Agents view)

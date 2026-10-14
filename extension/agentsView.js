@@ -8,6 +8,12 @@
 
 const AGENT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="currentColor"/><circle cx="15" cy="14" r="1.2" fill="currentColor"/></svg>';
 const AGENT_CONNECT_CMD = 'npx -y @otpilot/mcp connect';
+// How to add the MCP server to each agent (what `connect` prints, mcp/src/cli.ts).
+const AGENT_SETUP = [
+  ['Claude Code', 'In a terminal', 'claude mcp add otpilot -- npx -y @otpilot/mcp'],
+  ['Codex', 'In ~/.codex/config.toml', '[mcp_servers.otpilot]\ncommand = "npx"\nargs = ["-y", "@otpilot/mcp"]'],
+  ['Cursor', 'In ~/.cursor/mcp.json', '{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp"] } } }'],
+];
 const AGENT_DURATIONS = [
   ['', 'Until I revoke'],
   ['1h', '1 hour'],
@@ -256,7 +262,7 @@ function readGrantForm(box, current) {
   };
 }
 
-// A searchable list of vault items; `onPick(item)`.
+// A searchable list of vault items (and items shared with the user); `onPick(item)`.
 function mountItemPicker(container, initial, onPick) {
   container.innerHTML = `<input type="text" class="ag-search" placeholder="Search the vault…"><div class="ag-pick" style="margin-top:6px"></div>`;
   const input = container.querySelector('.ag-search');
@@ -264,7 +270,7 @@ function mountItemPicker(container, initial, onPick) {
   const show = () => {
     const found = input.value.trim() ? Agents.candidates(input.value, _agentsItems) : initial;
     pick.innerHTML = found.map(i => `<button type="button" data-id="${esc(i.id)}"><span class="ag-grow">${esc(i.title || 'Untitled')}</span>
-      <span class="ag-note">${esc((i.urls || [])[0] || Vault.TYPES[i.type]?.label || '')}</span></button>`).join('')
+      <span class="ag-note">${i._shared ? `Shared · ${esc(i._sharedBy)}${(i.urls || [])[0] ? ' · ' : ''}` : ''}${esc((i.urls || [])[0] || (i._shared ? '' : Vault.TYPES[i.type]?.label || ''))}</span></button>`).join('')
       || '<div class="ag-note">Nothing matches.</div>';
     pick.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
       pick.querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b));
@@ -273,6 +279,33 @@ function mountItemPicker(container, initial, onPick) {
   };
   input.addEventListener('input', show);
   show();
+}
+
+// The accounts that match what an agent asked for — only those: a request
+// never opens the whole vault (adding any other account is the agent page's
+// "+ Add account", the user's own choice). Each says when the agent already
+// has it, and when a login is saved for another host than the one asked
+// (a sign-in there would be refused: add the site to the login first).
+function mountRequestPicker(container, r, agent, onPick) {
+  const found = Agents.candidates(r.query, _agentsItems, Infinity); // no search here: every match
+  const host = Agents.hostOfQuery(r.query);
+  if (!found.length) {
+    container.innerHTML = `<div class="ag-note">No account in your vault matches <b>${esc(r.query || 'this')}</b>. Deny it, or save the login${host ? ` for ${esc(host)}` : ''} first: it shows here.</div>`;
+    return;
+  }
+  const has = new Set((agent?.grants || []).map(g => g.item_id));
+  container.innerHTML = `<div class="ag-pick">${found.map(i => {
+    const elsewhere = host && i.type === 'login' && !Vault.loginCoversHost(i.urls || [], host);
+    return `<button type="button" data-id="${esc(i.id)}"><span class="ag-grow">${esc(i.title || 'Untitled')}
+      ${has.has(i.id) ? '<span class="ag-pill muted">Already allowed</span>' : ''}
+      ${elsewhere ? `<span class="ag-note" style="display:block">Saved for ${esc(Agents.hostOfQuery((i.urls || [])[0]) || 'another site')}, not ${esc(host)}: add the site to it to sign in there</span>` : ''}</span>
+      <span class="ag-note">${i._shared ? `Shared · ${esc(i._sharedBy)}` : esc((i.urls || [])[0] || Vault.TYPES[i.type]?.label || '')}</span></button>`;
+  }).join('')}</div>`;
+  const pick = container.querySelector('.ag-pick');
+  pick.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    pick.querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b));
+    onPick(itemById(b.dataset.id));
+  }));
 }
 
 function renderAgentRequest(detail, r) {
@@ -300,7 +333,7 @@ function renderAgentRequest(detail, r) {
   const box = detail.querySelector('.ag-request');
   let chosen = null;
   const allow = box.querySelector('[data-act=allow]');
-  mountItemPicker(box.querySelector('.ag-picker'), Agents.candidates(r.query, _agentsItems), item => {
+  mountRequestPicker(box.querySelector('.ag-picker'), r, a, item => {
     chosen = item;
     box.querySelector('.ag-grant').innerHTML = agentGrantFormHTML(item);
     mountGrantForm(box);
@@ -330,6 +363,7 @@ function renderActiveAgent(detail, a) {
         <div class="ag-btns" style="margin-top:3px">
           <span class="ag-pill">${esc(item ? Agents.scopeSummary(item, g.scope) : Agents.SCOPE_LABELS[g.scope.kind])}</span>
           ${g.ask_every_time ? '<span class="ag-pill warn">Asks every time</span>' : ''}
+          ${item?._shared ? `<span class="ag-pill muted">Shared · ${esc(item._sharedBy)}</span>` : ''}
           ${exp ? `<span class="ag-pill muted">${esc(exp)}</span>` : ''}
           ${exp === 'expired' && item && a.pinned ? '<button class="ag-btn link sm" data-act="renew">Renew</button>' : ''}
           ${g.commands.length ? `<span class="ag-pill muted">only ${esc(g.commands.join(', '))}</span>` : ''}
@@ -355,6 +389,14 @@ function renderActiveAgent(detail, a) {
       <div class="ag-adding"></div>
       ${a.grants.length ? `<div class="ag-card">${a.grants.map(grantRow).join('')}</div>` : '<div class="ag-note">None yet. Add one, or approve it when the agent asks.</div>'}
     </div>
+    <details class="ag-setup"${a.last_used_at ? '' : ' open'}>
+      <summary class="ag-sec-head">Add it to your agent</summary>
+      <div class="ag-card">${AGENT_SETUP.map(([name, where, cmd], i) => `<div class="ag-card-row" style="align-items:flex-start">
+        <div class="ag-grow" style="min-width:0"><div class="ag-t1">${esc(name)} <span class="ag-note">${esc(where)}</span></div>
+          <pre class="ag-mono" style="margin:4px 0 0;white-space:pre-wrap;word-break:break-all">${esc(cmd)}</pre></div>
+        <button type="button" class="ag-btn link sm" data-copy="${i}">Copy</button></div>`).join('')}</div>
+      <div class="ag-note" style="margin-top:4px">Connected it with <span class="ag-mono">--name</span> or <span class="ag-mono">--profile</span>? Add <span class="ag-mono">--profile &lt;name&gt;</span> after <span class="ag-mono">@otpilot/mcp</span>.</div>
+    </details>
     <div>
       <div class="ag-sec-head">Activity</div>
       ${activity.length ? `<div class="ag-card">${activity.map(u => `<div class="ag-log"><time>${esc(time(u.created_at))}</time>
@@ -368,6 +410,9 @@ function renderActiveAgent(detail, a) {
   detail.querySelectorAll('.ag-request[data-req] [data-act=review]').forEach(b => b.addEventListener('click', () => {
     _agentsSel = { kind: 'request', id: b.closest('[data-req]').dataset.req };
     renderAgentsPanel();
+  }));
+  detail.querySelectorAll('.ag-setup [data-copy]').forEach(b => b.addEventListener('click', async () => {
+    if (await copyText(AGENT_SETUP[b.dataset.copy][2])) setStatus('Copied');
   }));
   detail.querySelector('[data-act=pin]')?.addEventListener('click', () => agentAct(detail, () => Agents.pin(a)));
   detail.querySelectorAll('.ag-card-row[data-item]').forEach(row => {

@@ -315,7 +315,14 @@ const VaultShares = (() => {
   // drops the ones no longer listed. Returns the list with each copy
   // decrypted ({ id, owner, role, whole, revision, via, item | null }).
   // Offline: the last list, for the same user.
-  async function refresh() {
+  // refresh() and saveCopy() write the same copies and list (popup and
+  // background alike): one at a time, server requests included, so an older
+  // listing never lands over a copy just saved.
+  const copiesLock = fn => navigator.locks.request('otpilot-share-copies', fn);
+
+  function refresh() { return copiesLock(refreshNow); }
+
+  async function refreshNow() {
     const userId = await currentUserId();
     let rows;
     try {
@@ -363,7 +370,9 @@ const VaultShares = (() => {
 
   // An editor saves a whole copy (from the revision it was read at).
   // { ok } or { conflict } (the owner's or another editor's newer copy).
-  async function saveCopy(row, item) {
+  function saveCopy(row, item) { return copiesLock(() => saveCopyNow(row, item)); }
+
+  async function saveCopyNow(row, item) {
     const keys = await cachedKeys();
     const sk = keys[row.id];
     if (!sk) throw new Error('This share is not open on this device');

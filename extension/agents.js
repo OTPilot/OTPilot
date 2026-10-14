@@ -15,13 +15,18 @@
 // Another device that didn't pin an agent or approve a grant leaves those
 // copies alone (the device that did keeps them current).
 //
+// Items shared with the user (a teammate's share, `sr:<shareId>`, or a team
+// collection's item, `cr:<cid>:<id>`) can be given to an agent too: a viewer
+// can already read them. Their copy follows the shared item, and goes once
+// the user loses access to it (`from` in `agentsApproved`).
+//
 // Needs vault.js, vaultCrypto.js, vaultStore.js, vaultKeys.js, keys.js,
 // cloudSync.js, vaultShares.js (project()).
 const Agents = (() => {
   const local = chrome.storage.local;
   const PINS = 'agentPins';           // { [agentId]: { key, code } } keys checked on this device
   const PUBLISHED = 'agentsPublished'; // { [agentId:itemId]: fingerprint } what this device last uploaded
-  const APPROVED = 'agentsApproved';   // { [agentId:itemId]: scope } what the user allowed on this device
+  const APPROVED = 'agentsApproved';   // { [agentId:itemId]: scope (+ from) } what the user allowed on this device
 
   // ── Verification code ──────────────────────────────────────────────────
   // First 40 bits of SHA-256 over the raw public key, base32, XXXX-XXXX.
@@ -179,7 +184,7 @@ const Agents = (() => {
       ...(opts.moveFrom ? { move_from: opts.moveFrom } : {}),
     };
     await ok(`/agents/${agent.id}/grants/${item.id}`, { method: 'PUT', body: JSON.stringify(body) });
-    await noteApproved(`${agent.id}:${item.id}`, scope);
+    await noteApproved(`${agent.id}:${item.id}`, item._shared ? { ...scope, from: item._shared } : scope);
     await notePublished([[`${agent.id}:${item.id}`, await fingerprint(copy, meta)]]);
     if (opts.moveFrom) {
       await notePublished([[`${agent.id}:${opts.moveFrom}`, null]]);
@@ -210,18 +215,37 @@ const Agents = (() => {
     });
   }
 
-  // Vault items that may answer a request's free text ("github"): by title,
-  // site or username, logins first.
-  function candidates(query, items) {
+  // Vault items that may answer a request's free text ("github", or a site
+  // like "admin.staging.acme.io"), best first: a login for that very site,
+  // then one for the same domain (another subdomain), then a title, site or
+  // username containing one of its words; logins before other items.
+  const hostOf = u => String(u || '').trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+    .replace(/[/?#].*$/, '').replace(/:\d+$/, '').replace(/^\*\./, '').replace(/^www\./, '');
+  // The last two labels (acme.io); not for a public suffix like co.uk.
+  const domainOf = h => {
+    const d = h.split('.').slice(-2);
+    return d.length === 2 && !['co', 'com', 'net', 'org', 'gov', 'edu', 'ac'].includes(d[0]) ? d.join('.') : null;
+  };
+  function candidates(query, items, limit = 8) {
     const q = String(query || '').trim().toLowerCase();
     const usable = items.filter(i => i.type === 'login' || (i.fields || []).some(f => f.value));
-    if (!q) return usable.slice(0, 8);
+    if (!q) return usable;
+    const host = /^[a-z0-9.-]+\.[a-z]{2,}$/.test(hostOf(q)) ? hostOf(q) : null;
+    // A site asks for its own logins: words then only count when nothing
+    // matches the site or its domain.
     const words = q.split(/\s+/).filter(Boolean);
     const text = i => [i.title, ...(i.urls || []), Vault.getValue(i, 'username')].join(' ').toLowerCase();
+    const score = i => {
+      if (host && Vault.loginCoversHost(i.urls || [], host)) return 3;
+      if (host && domainOf(host) && (i.urls || []).some(u => domainOf(hostOf(u)) === domainOf(host))) return 2;
+      return words.some(w => text(i).includes(w)) ? 1 : 0;
+    };
     return usable
-      .filter(i => words.some(w => text(i).includes(w)))
-      .sort((a, b) => (a.type === 'login' ? 0 : 1) - (b.type === 'login' ? 0 : 1))
-      .slice(0, 8);
+      .map(i => [i, score(i)])
+      .filter(([, n], _, all) => n && (!host || n > 1 || !all.some(([, m]) => m > 1)))
+      .sort(([a, x], [b, y]) => (y - x) || ((a.type === 'login' ? 0 : 1) - (b.type === 'login' ? 0 : 1)))
+      .map(([i]) => i)
+      .slice(0, limit);
   }
 
   // ── Keeping copies current ─────────────────────────────────────────────
@@ -236,9 +260,14 @@ const Agents = (() => {
     const p = await pins();
     if (!Object.keys(p).length) return 0;
     const ok_ = await approved();
+    // Copies of shared items: what's shared is re-read from the server first
+    // (the background may run long after the popup last did), so a revoked
+    // share or a changed password is seen here. A failed refresh changes no
+    // list, so it never reads as lost access.
+    if (Object.values(ok_).some(s => s?.from)) await refreshShared();
     const { agents } = await ok('/agents');
     const { items } = await VaultStore.readAll(key);
-    const byId = new Map(items.map(i => [i.id, i]));
+    const byId = new Map([...items, ...await sharedItems()].map(i => [i.id, i]));
     const deleted = new Set(Object.keys(await VaultStore.listTombstones()));
     // Items sync gave a new id (their old one belonged to another account):
     // the grant moves to the new id.
@@ -265,8 +294,11 @@ const Agents = (() => {
         }
         if (!item) {
           // Only a deletion this device knows of (an unreadable record, or an
-          // item this device never had, isn't one).
-          if (deleted.has(g.item_id)) await ungrant(agent.id, g.item_id).catch(() => {});
+          // item this device never had, isn't one), or a shared item the
+          // user can no longer open.
+          if (deleted.has(g.item_id) || (mine.from && await sharedGone(mine.from, g.item_id))) {
+            await ungrant(agent.id, g.item_id).catch(() => {});
+          }
           continue;
         }
         const meta = { scope: g.scope, expires_at: g.expires_at, ask_every_time: g.ask_every_time, commands: g.commands };
@@ -281,14 +313,78 @@ const Agents = (() => {
     return written;
   }
 
-  // The vault items, decrypted (for the pickers and the editor).
+  // ── Items shared with the user ─────────────────────────────────────────
+  // The ones this session can open (their keys are in chrome.storage.session
+  // once the popup refreshed them), each with `_shared`: { share } or
+  // { collection } — where it comes from — and `_sharedBy` for the UI.
+  async function sharedItems() {
+    if (!(await SupabaseAuth.getSession().catch(() => null))) return [];
+    const { collectionKeys = {}, shareKeys = {} } = await chrome.storage.session.get(['collectionKeys', 'shareKeys']);
+    if (!Object.keys(collectionKeys).length && !Object.keys(shareKeys).length) return [];
+    const all = await local.get(null);
+    const owners = new Map((all.sharesWithMe?.shares || []).map(s => [s.id, s.owner?.email]));
+    const names = new Map();
+    for (const c of all.collectionsList?.collections || []) {
+      if (!collectionKeys[c.id]) continue;
+      try { names.set(c.id, await VaultCrypto.decryptName(c.encrypted_name, collectionKeys[c.id], c.id)); } catch { /* unnamed */ }
+    }
+    const out = [];
+    for (const [k, rec] of Object.entries(all)) {
+      const m = /^cr:([0-9a-f-]{36}):/.exec(k);
+      const sk = m ? collectionKeys[m[1]] : (k.startsWith('sr:') ? shareKeys[k.slice(3)] : null);
+      if (!sk) continue;
+      try {
+        const item = await VaultCrypto.decryptItem(rec, sk);
+        if (item.deleted) continue;
+        out.push(m
+          ? { ...item, _shared: { collection: m[1] }, _sharedBy: names.get(m[1]) || 'a collection' }
+          : { ...item, _shared: { share: k.slice(3) }, _sharedBy: owners.get(k.slice(3)) || 'a teammate' });
+      } catch { /* unreadable: left out */ }
+    }
+    return out;
+  }
+
+  // Pulls the collections (their keys, items, the list) and the shares with
+  // the user, as the popup does when it opens. Each failure is skipped.
+  async function refreshShared() {
+    if (typeof VaultCollections !== 'undefined') {
+      try {
+        for (const c of await VaultCollections.list()) {
+          if (c.key && !c.offline) await VaultCollections.pull(c).catch(() => {});
+        }
+      } catch { /* offline or not on a team: the last lists stay */ }
+    }
+    await VaultShares.refresh().catch(() => {});
+  }
+
+  // Whether the user can no longer open a shared item, by the last lists the
+  // server gave this user (not knowing is never "gone").
+  async function sharedGone(from, itemId) {
+    const userId = (await SupabaseAuth.getSession().catch(() => null))?.user?.id;
+    if (!userId) return false;
+    if (from.share) {
+      const list = (await local.get('sharesWithMe')).sharesWithMe;
+      return list?.userId === userId && !list.shares.some(s => s.id === from.share);
+    }
+    const cid = from.collection;
+    const list = (await local.get('collectionsList')).collectionsList;
+    if (list?.userId !== userId) return false;
+    if (!list.collections.some(c => c.id === cid)) return true;
+    // Still a member: gone once a pull of the collection no longer has it.
+    const state = (await local.get(`cs:${cid}`))[`cs:${cid}`];
+    return !!state?.cursor && !(state.revs && itemId in state.revs);
+  }
+
+  // The vault items, decrypted, then the items shared with the user (for
+  // the pickers and the editor).
   async function vaultItems(key) {
     const { items } = await VaultStore.readAll(key);
-    return items.filter(i => !i.deleted);
+    return [...items.filter(i => !i.deleted), ...await sharedItems()];
   }
 
   return {
     code, list, approve, pin, remove, grant, ungrant, decide, answer, candidates, syncCopies,
+    hostOfQuery: q => { const h = hostOf(q); return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(h) ? h : null; },
     defaultScope, scopeSummary, partsOf, copyOf, vaultItems, SCOPE_LABELS,
   };
 })();

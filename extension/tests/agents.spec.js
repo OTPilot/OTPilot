@@ -402,3 +402,165 @@ test('the Agents view picks up a new request on its own, and never redraws over 
   await detail.getByRole('button', { name: 'Cancel' }).click();
   await expect(detail).toContainText('Asks for bank', { timeout: 15_000 });
 });
+
+// Items shared with the user (a teammate's share, a collection's item) can
+// be given to an agent too; their copy follows them and goes with access.
+async function seedShared(page) {
+  return page.evaluate(async () => {
+    const share = crypto.randomUUID(), cid = crypto.randomUUID(), colItem = crypto.randomUUID();
+    const sk = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const ck = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const login = (id, title, password, urls) => ({ id, type: 'login', title, urls, tags: [], fields: [{ id: 'username', label: 'Username', kind: 'text', value: 'team@acme.io' }, { id: 'password', label: 'Password', kind: 'password', value: password }], totp: null, notes: '', updatedAt: new Date().toISOString() });
+    await chrome.storage.session.set({ shareKeys: { [share]: sk }, collectionKeys: { [cid]: ck } });
+    await chrome.storage.local.set({
+      [`sr:${share}`]: await VaultCrypto.encryptItem(login(share, 'Acme admin', 'acme-pass', ['acme.io']), sk),
+      sharesWithMe: { userId: 'user-me', shares: [{ id: share, owner: { email: 'ana@acme.io' }, role: 'view', whole: true, revision: 1, via: [] }] },
+      [`cr:${cid}:${colItem}`]: await VaultCrypto.encryptItem(login(colItem, 'Ops console', 'ops-pass', ['ops.acme.io']), ck),
+      collectionsList: { userId: 'user-me', collections: [{ id: cid, encrypted_name: await VaultCrypto.encryptName('Ops', ck, cid), role: 'view' }] },
+      [`cs:${cid}`]: { cursor: 5, revs: { [colItem]: 5 } },
+    });
+    return { share, sk, cid, ck, colItem };
+  });
+}
+
+test('items shared with me can be given to an agent, and go when my access does', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const s = await seedShared(page);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  const detail = page.locator('#agents-detail');
+  await detail.getByRole('button', { name: '+ Add account' }).click();
+  await detail.locator('.ag-search').fill('acme');
+  await expect(detail.locator('.ag-pick button', { hasText: 'Acme admin' })).toContainText('Shared · ana@acme.io');
+  await expect(detail.locator('.ag-pick button', { hasText: 'Ops console' })).toContainText('Shared · Ops');
+  await detail.locator('.ag-pick button', { hasText: 'Acme admin' }).click();
+  await detail.locator('.ag-adding [data-act=allow]').click();
+  await expect(detail.locator('.ag-card-row[data-item]', { hasText: 'Acme admin' })).toContainText('Shared · ana@acme.io');
+  const copy = await page.evaluate(({ a, i }) => fakeAgents.openGrant(a, i), { a: agentId, i: s.share });
+  expect(copy.fields.map(f => f.value)).toEqual(['team@acme.io', 'acme-pass']);
+
+  // The collection's item, through the API.
+  await page.evaluate(async ({ a, i }) => {
+    const agent = (await Agents.list()).agents.find(x => x.id === a);
+    const item = (await Agents.vaultItems(await VaultKeys.getKey())).find(x => x.id === i);
+    await Agents.grant(agent, item, { scope: { kind: 'login' } });
+  }, { a: agentId, i: s.colItem });
+
+  // The owner changes the password: the agent's copy follows.
+  await page.evaluate(async ({ share, sk }) => {
+    const rec = (await chrome.storage.local.get(`sr:${share}`))[`sr:${share}`];
+    const item = await VaultCrypto.decryptItem(rec, sk);
+    item.fields[1].value = 'acme-pass-2';
+    await chrome.storage.local.set({ [`sr:${share}`]: await VaultCrypto.encryptItem(item, sk) });
+  }, s);
+  expect(await page.evaluate(async () => Agents.syncCopies(await VaultKeys.getKey()))).toBe(1);
+  expect((await page.evaluate(({ a, i }) => fakeAgents.openGrant(a, i), { a: agentId, i: s.share })).fields[1].value).toBe('acme-pass-2');
+
+  // Not knowing isn't losing access: locked keys (session cleared) keep both.
+  await page.evaluate(() => chrome.storage.session.remove(['shareKeys', 'collectionKeys']));
+  await page.evaluate(async () => Agents.syncCopies(await VaultKeys.getKey()));
+  expect(await page.evaluate(a => [...fakeAgents.agents.get(a).grants.keys()].length, agentId)).toBe(2);
+
+  // Unshared, and the item gone from the collection: both copies go.
+  await page.evaluate(async ({ share, cid }) => {
+    await chrome.storage.local.remove([`sr:${share}`]);
+    await chrome.storage.local.set({ sharesWithMe: { userId: 'user-me', shares: [] }, [`cs:${cid}`]: { cursor: 6, revs: {} } });
+  }, s);
+  await page.evaluate(async () => Agents.syncCopies(await VaultKeys.getKey()));
+  expect(await page.evaluate(a => fakeAgents.agents.get(a).grants.size, agentId)).toBe(0);
+});
+
+test('a connected agent shows how to add it to Claude Code, Codex and Cursor', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+  });
+  await page.click('#nav-agents');
+  const setupBox = page.locator('#agents-detail .ag-setup');
+  await expect(setupBox).toHaveAttribute('open', ''); // nothing used yet: shown open
+  await expect(setupBox).toContainText('claude mcp add otpilot -- npx -y @otpilot/mcp');
+  await expect(setupBox).toContainText('[mcp_servers.otpilot]');
+  await expect(setupBox).toContainText('~/.cursor/mcp.json');
+});
+
+test('a request with a long account name fits the popup (no sideways scroll)', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.setViewportSize({ width: 600, height: 560 });
+  await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'AI agent', status: 'active' });
+    fakeAgents.addRequest(a.id, { query: 'feature-deploy-sec-618-619-hardening.test-counterpart.com', reason: 'Sign in to the Django admin', tool: 'request_access' });
+  });
+  await page.click('#nav-agents');
+  await expect(page.locator('#agents-detail')).toContainText('test-counterpart.com');
+  expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(600);
+});
+
+test('a request for a site offers the logins of that domain, else every account', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await writeAccounts(page, [...ACCOUNTS, { name: 'QA counterpart', email: 'qa@cp.io', password: 'qa-pass', urls: 'qa-counterpart.test-counterpart.com' }]);
+  await page.evaluate(async () => reloadFromVault(await VaultKeys.getKey()));
+  const ranked = await page.evaluate(async () => Agents.candidates('https://feature-x.test-counterpart.com/admin', await Agents.vaultItems(await VaultKeys.getKey())).map(i => i.title));
+  expect(ranked).toEqual(['QA counterpart']);
+  expect(await page.evaluate(async () => Agents.candidates('api.github.com', await Agents.vaultItems(await VaultKeys.getKey())).map(i => i.title))).toEqual(['GitHub']);
+
+  await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'AI agent', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    fakeAgents.addRequest(a.id, { query: 'nothing-like-it.example.org' });
+  });
+  await page.click('#nav-agents');
+  const detail = page.locator('#agents-detail');
+  await expect(detail.locator('.ag-picker')).toContainText('No account in your vault matches nothing-like-it.example.org');
+  await expect(detail.locator('.ag-picker button, .ag-picker input')).toHaveCount(0); // never the whole vault
+  await expect(detail.getByRole('button', { name: 'Allow' })).toBeDisabled();
+});
+
+test('a request lists only its matches, says which the agent has and which are saved for another host', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await writeAccounts(page, [...ACCOUNTS, { name: 'QA counterpart', email: 'qa@cp.io', password: 'qa-pass', urls: 'qa-counterpart.test-counterpart.com' }]);
+  await page.evaluate(async () => reloadFromVault(await VaultKeys.getKey()));
+  await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'AI agent', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    const qa = (await Agents.vaultItems(await VaultKeys.getKey())).find(i => i.title === 'QA counterpart');
+    await Agents.grant(a, qa, { scope: { kind: 'login' } });
+    fakeAgents.addRequest(a.id, { query: 'feature-deploy.test-counterpart.com' });
+  });
+  await page.click('#nav-agents');
+  await page.click('#agents-list .lc-row[data-kind=request]');
+  const pick = page.locator('#agents-detail .ag-pick');
+  await expect(pick.locator('button')).toHaveCount(1);
+  await expect(pick).toContainText('Already allowed');
+  await expect(pick).toContainText('Saved for qa-counterpart.test-counterpart.com, not feature-deploy.test-counterpart.com');
+});
+
+test('a share revoked while the popup was closed: the next copy sync asks the server and removes the grant', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const s = await seedShared(page);
+  const agentId = await page.evaluate(async ({ share }) => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    const item = (await Agents.vaultItems(await VaultKeys.getKey())).find(x => x.id === share);
+    await Agents.grant(a, item, { scope: { kind: 'login' } });
+    return a.id;
+  }, s);
+  // The server now lists no share (the cached list still has it); a failed
+  // collections call changes nothing.
+  await page.evaluate(() => {
+    const prev = CloudSync.api;
+    CloudSync.api = async (path, opts) => {
+      if (path.startsWith('/shares/with-me')) return { status: 200, ok: true, json: async () => ({ shares: [] }) };
+      if (path.startsWith('/collections')) return { status: 503, ok: false, json: async () => ({}) };
+      return prev(path, opts);
+    };
+  });
+  await page.evaluate(async () => Agents.syncCopies(await VaultKeys.getKey()));
+  expect(await page.evaluate(a => fakeAgents.agents.get(a).grants.size, agentId)).toBe(0);
+  expect(await page.evaluate(sh => chrome.storage.local.get(`sr:${sh}`), s.share)).toEqual({});
+});

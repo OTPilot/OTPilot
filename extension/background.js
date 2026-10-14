@@ -7,8 +7,9 @@ importScripts(
   // vaultUnlock below).
   'vaultCrypto.js', 'vaultKeys.js', 'vaultStore.js', 'vault.js', 'vaultMigration.js',
   'vaultAccounts.js', 'cloudSync.js', 'vaultLock.js', 'vaultSync.js', 'vaultShares.js',
-  // 2.1 AI agents: their copies follow what pages save (keys.js wraps them).
-  'keys.js', 'agents.js',
+  // 2.1 AI agents: their copies follow what pages save (keys.js wraps them),
+  // shared items too (vaultCollections.js re-reads a collection's).
+  'keys.js', 'vaultCollections.js', 'agents.js',
 );
 
 // Per-item sync (/vault/items) from the worker: after a page saved or changed
