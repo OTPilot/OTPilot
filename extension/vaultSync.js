@@ -98,6 +98,10 @@ const VaultSync = (() => {
   // be another device's under a newer key (this one would be the stale one):
   // it stays pending, and so does a local deletion of it, until `readRev`
   // passes it. One this device doesn't hold is forgotten (unreadable here).
+  // The unreadable ids this sync counted (not part of the returned stats).
+  const unread = new WeakMap();
+  const unreadIn = stats => { if (!unread.has(stats)) unread.set(stats, new Set()); return unread.get(stats); };
+
   async function settleStale(tx, state, key, stats) {
     const local = await tx.listRecords();
     const tombs = await tx.listTombstones();
@@ -109,7 +113,7 @@ const VaultSync = (() => {
         state.synced[id] = { rev, fp: null };
         delete state.stale[id];
         stats.replaced = (stats.replaced || 0) + 1;
-        if (stats.unreadable) stats.unreadable--; // counted when pulled
+        if (unreadIn(stats).delete(id)) stats.unreadable--; // counted when pulled in this sync
       }
     }
   }
@@ -157,7 +161,7 @@ const VaultSync = (() => {
       // Never store what this device can't read (e.g. left over from a
       // previous key): it would only show up as a failed record.
       const theirs = await decryptOrNull(r.record, key);
-      if (!theirs) { state.stale[r.id] = r.revision; stats.unreadable++; continue; } // settled after the pull
+      if (!theirs) { state.stale[r.id] = r.revision; stats.unreadable++; unreadIn(stats).add(r.id); continue; } // settled after the pull
       delete state.stale[r.id];
 
       // Another device's record this key opens: the account used this key
