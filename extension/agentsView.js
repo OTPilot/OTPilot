@@ -122,7 +122,7 @@ async function renderAgentsPanel(fresh = null) {
   if (active.length) {
     html += '<div class="lc-section">Connected</div>';
     html += active.map(a => row({ kind: 'agent', id: a.id }, false, a.name,
-      `${a.machine ? `${a.machine} · ` : ''}${a.grants.length} account${a.grants.length === 1 ? '' : 's'}`, false)).join('');
+      [Agents.clientLabel(a), a.machine, `${a.grants.length} account${a.grants.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '), false)).join('');
   }
   list.innerHTML = html || '<div class="lc-empty">No agents yet</div>';
   list.querySelectorAll('.lc-row').forEach(b => b.addEventListener('click', () => {
@@ -431,8 +431,9 @@ function renderActiveAgent(detail, a) {
   };
   detail.innerHTML = `
     <div class="ag-head">${agentAv(false, true)}
-      <div class="ag-grow"><div class="ag-t1 lg">${esc(a.name)}</div>
-        <div class="ag-t2">${esc(a.machine || 'Unknown computer')} · connected ${esc(new Date(a.approved_at || a.created_at).toLocaleDateString())}${a.last_used_at ? ` · last used ${esc(noticeAgo(a.last_used_at))}` : ''}</div></div>
+      <div class="ag-grow"><div class="ag-name"><span class="ag-t1 lg">${esc(a.name)}</span>
+          <button type="button" class="ag-btn link sm" data-act="rename" title="Rename this agent">Rename</button></div>
+        <div class="ag-t2">${Agents.clientLabel(a) ? `via <b>${esc(Agents.clientLabel(a))}</b> · ` : ''}${esc(a.machine || 'Unknown computer')} · connected ${esc(new Date(a.approved_at || a.created_at).toLocaleDateString())}${a.last_used_at ? ` · last used ${esc(noticeAgo(a.last_used_at))}` : ''}</div></div>
       <button class="ag-btn danger sm" data-act="revoke">Revoke agent</button>
     </div>
     ${a.keyChanged ? `<div class="ag-request" style="border-color:rgba(var(--danger-rgb),.5)"><div class="ag-text"><b>This agent's key changed</b> since you approved it on this device. Revoke it and connect it again.</div></div>`
@@ -460,6 +461,26 @@ function renderActiveAgent(detail, a) {
       <div class="ag-activity" data-agent="${esc(a.id)}"></div>
     </div>`;
   mountAgentActivity(detail.querySelector('.ag-activity'), a.id);
+  detail.querySelector('[data-act=rename]').addEventListener('click', () => {
+    const wrap = detail.querySelector('.ag-name');
+    wrap.innerHTML = `<input type="text" class="ag-search ag-rename" maxlength="60" value="${esc(a.name)}" aria-label="Agent name">
+      <button type="button" class="ag-btn primary sm" data-act="save-name">Save</button>
+      <button type="button" class="ag-btn link sm" data-act="cancel-name">Cancel</button>`;
+    const input = wrap.querySelector('input');
+    input.focus();
+    input.select();
+    const save = () => {
+      const name = input.value.trim();
+      if (!name || name === a.name) { renderAgentsPanel(); return; }
+      agentAct(wrap, () => Agents.rename(a.id, name));
+    };
+    wrap.querySelector('[data-act=save-name]').addEventListener('click', save);
+    wrap.querySelector('[data-act=cancel-name]').addEventListener('click', () => renderAgentsPanel());
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') save();
+      if (e.key === 'Escape') renderAgentsPanel();
+    });
+  });
   detail.querySelector('[data-act=revoke]').addEventListener('click', () => {
     if (!confirm(`Revoke ${a.name}? It loses every account you allowed. What it already used can't be taken back: change those passwords if you no longer trust it.`)) return;
     agentAct(detail, async () => { await Agents.remove(a.id); _agentsSel = null; });
@@ -521,11 +542,11 @@ document.getElementById('nav-agents').addEventListener('click', () => showView('
 // their own (every 10 s): redrawn only when that changed, and never under a
 // form the user is filling in.
 const agentsShape = d => JSON.stringify([
-  (d?.agents || []).map(a => [a.id, a.status, a.grants.map(g => [g.item_id, g.revision, g.expires_at, g.ask_every_time])]),
+  (d?.agents || []).map(a => [a.id, a.status, a.name, a.client, a.grants.map(g => [g.item_id, g.revision, g.expires_at, g.ask_every_time])]),
   (d?.requests || []).map(r => r.id),
   (d?.activity || []).slice(0, 8).map(u => u.id ?? u.created_at),
 ]);
-const agentsBusy = panel => panel.querySelector('.ag-adding:not(:empty), .ag-grant:not(:empty)')
+const agentsBusy = panel => panel.querySelector('.ag-adding:not(:empty), .ag-grant:not(:empty), .ag-rename')
   || (panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName));
 setInterval(async () => {
   const panel = document.getElementById('agents-panel');

@@ -55,6 +55,12 @@ async function guard<T>(fn: () => Promise<T>) {
 
 export function buildServer(ctx: Ctx): McpServer {
   const server = new McpServer({ name: 'otpilot', version: VERSION }, { instructions: INSTRUCTIONS })
+  // Which client this session runs in (its MCP clientInfo, e.g. claude-code):
+  // the extension shows it, so the user can tell agents apart. Best effort.
+  server.server.oninitialized = () => {
+    const client = server.server.getClientVersion()
+    if (client?.name) void ctx.api.post('/agent/client', { name: client.name, version: client.version ?? '' }).catch(() => {})
+  }
 
   server.registerTool('list_accounts', {
     title: 'List allowed accounts',
