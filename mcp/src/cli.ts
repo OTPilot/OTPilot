@@ -58,10 +58,10 @@ function openUrl(url: string) {
 
 function setupLines(profile: string) {
   const args = profile === 'default' ? '' : ` --profile ${profile}`
-  const argList = JSON.stringify(['-y', '@otpilot/mcp', ...(profile === 'default' ? [] : ['--profile', profile])])
+  const argList = JSON.stringify(['-y', '@otpilot/mcp@latest', ...(profile === 'default' ? [] : ['--profile', profile])])
   return [
     'Add it to your agent:',
-    `  Claude Code   claude mcp add otpilot -- npx -y @otpilot/mcp${args}`,
+    `  Claude Code   claude mcp add otpilot -- npx -y @otpilot/mcp@latest${args}`,
     `  Codex         in ~/.codex/config.toml:  [mcp_servers.otpilot]  command = "npx"  args = ${argList}`,
     `  Cursor        in ~/.cursor/mcp.json:  { "mcpServers": { "otpilot": { "command": "npx", "args": ${argList} } } }`,
   ]
@@ -112,7 +112,7 @@ async function connect(flags: Record<string, string | boolean>) {
 
 async function status(profile: string) {
   const creds = await store.load(profile)
-  if (!creds) { say(`No agent connected here (profile ${profile}). Run: npx -y @otpilot/mcp connect`); process.exit(1) }
+  if (!creds) { say(`No agent connected here (profile ${profile}). Run: npx -y @otpilot/mcp@latest connect`); process.exit(1) }
   say(`"${creds.name}" (profile ${profile}) — verification code ${agentCode(creds.publicKey)}`)
   try {
     const grants = await loadGrants(new Api(creds.apiUrl, creds.token), creds.privateJwk)
@@ -133,7 +133,7 @@ async function main() {
   const creds = await store.load(profile)
   if (!creds) {
     const again = profile === 'default' ? '' : ` --profile ${profile}`
-    say(`OTPilot: no agent connected here (profile ${profile}). Run: npx -y @otpilot/mcp connect${again}`)
+    say(`OTPilot: no agent connected here (profile ${profile}). Run: npx -y @otpilot/mcp@latest connect${again}`)
     process.exit(1)
   }
   await serve({ api: new Api(creds.apiUrl, creds.token), creds })

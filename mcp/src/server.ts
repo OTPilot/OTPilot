@@ -48,7 +48,7 @@ async function guard<T>(fn: () => Promise<T>) {
     return await fn()
   } catch (e) {
     if (e instanceof PendingApproval) return fail(`${e.message} (request ${e.requestId})`)
-    if (e instanceof ApiError && e.status === 401) return fail('This agent is no longer connected to OTPilot (revoked?). Ask the user to run: npx -y @otpilot/mcp connect')
+    if (e instanceof ApiError && e.status === 401) return fail('This agent is no longer connected to OTPilot (revoked?). Ask the user to run: npx -y @otpilot/mcp@latest connect')
     return fail(e instanceof Error ? e.message : String(e))
   }
 }

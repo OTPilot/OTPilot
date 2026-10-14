@@ -484,7 +484,7 @@ test('a connected agent shows how to add it to Claude Code, Codex and Cursor', a
   await page.click('#nav-agents');
   const setupBox = page.locator('#agents-detail .ag-setup');
   await expect(setupBox).toHaveAttribute('open', ''); // nothing used yet: shown open
-  await expect(setupBox).toContainText('claude mcp add otpilot -- npx -y @otpilot/mcp');
+  await expect(setupBox).toContainText('claude mcp add otpilot -- npx -y @otpilot/mcp@latest');
   await expect(setupBox).toContainText('[mcp_servers.otpilot]');
   await expect(setupBox).toContainText('~/.cursor/mcp.json');
 });

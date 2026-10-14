@@ -20,7 +20,7 @@
 Let Claude Code, Codex, Cursor or any MCP agent sign in and run commands with the accounts you allow — passwords and 2FA codes — **without the agent ever seeing them**. See [`mcp/`](mcp/README.md).
 
 ```bash
-npx -y @otpilot/mcp connect
+npx -y @otpilot/mcp@latest connect
 ```
 
 In Claude Code, the plugin adds the server and a skill:

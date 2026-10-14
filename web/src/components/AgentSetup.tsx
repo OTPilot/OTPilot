@@ -1,38 +1,38 @@
 import { useRef, useState, type KeyboardEvent } from 'react'
 
 // How to connect each agent to OTPilot (mirrors mcp/README.md and what
-// `npx -y @otpilot/mcp connect` prints).
+// `npx -y @otpilot/mcp@latest connect` prints).
 const CLIENTS: { id: string; label: string; steps: { text: string; code?: string }[] }[] = [
   {
     id: 'claude',
     label: 'Claude Code',
     steps: [
       { text: 'Install the plugin (the MCP server plus a skill that teaches Claude to use it):', code: '/plugin install otpilot --marketplace OTPilot/OTPilot' },
-      { text: 'Connect it once, then approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp connect --name "Claude Code"' },
+      { text: 'Connect it once, then approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp@latest connect --name "Claude Code"' },
     ],
   },
   {
     id: 'codex',
     label: 'Codex',
     steps: [
-      { text: 'Connect it, then approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp connect --name Codex' },
-      { text: 'Add the server to ~/.codex/config.toml:', code: '[mcp_servers.otpilot]\ncommand = "npx"\nargs = ["-y", "@otpilot/mcp", "--profile", "codex"]' },
+      { text: 'Connect it, then approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp@latest connect --name Codex' },
+      { text: 'Add the server to ~/.codex/config.toml:', code: '[mcp_servers.otpilot]\ncommand = "npx"\nargs = ["-y", "@otpilot/mcp@latest", "--profile", "codex"]' },
     ],
   },
   {
     id: 'cursor',
     label: 'Cursor',
     steps: [
-      { text: 'Connect it, then approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp connect --name Cursor' },
-      { text: 'Add the server to ~/.cursor/mcp.json:', code: '{\n  "mcpServers": {\n    "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp", "--profile", "cursor"] }\n  }\n}' },
+      { text: 'Connect it, then approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp@latest connect --name Cursor' },
+      { text: 'Add the server to ~/.cursor/mcp.json:', code: '{\n  "mcpServers": {\n    "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest", "--profile", "cursor"] }\n  }\n}' },
     ],
   },
   {
     id: 'server',
     label: 'Server / VPS',
     steps: [
-      { text: 'On the machine where your agent runs (Node 20+), connect it. Open the link it prints on any device signed in to OTPilot, and approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp connect --name VPS --no-open' },
-      { text: 'Point your agent at the server over stdio:', code: 'npx -y @otpilot/mcp --profile vps' },
+      { text: 'On the machine where your agent runs (Node 20+), connect it. Open the link it prints on any device signed in to OTPilot, and approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp@latest connect --name VPS --no-open' },
+      { text: 'Point your agent at the server over stdio:', code: 'npx -y @otpilot/mcp@latest --profile vps' },
       { text: 'For browser sign-ins on a server without Chrome, add a headless Chromium. The credentials stay on that machine (a 0600 file when it has no keychain), so only connect machines you trust.', code: 'npx playwright install --with-deps chromium' },
     ],
   },
@@ -40,8 +40,8 @@ const CLIENTS: { id: string; label: string; steps: { text: string; code?: string
     id: 'other',
     label: 'Any MCP agent',
     steps: [
-      { text: 'Connect it with a name of your choice, then approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp connect --name "My agent"' },
-      { text: 'Run the server over stdio with the profile connect printed:', code: 'npx -y @otpilot/mcp --profile my-agent' },
+      { text: 'Connect it with a name of your choice, then approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp@latest connect --name "My agent"' },
+      { text: 'Run the server over stdio with the profile connect printed:', code: 'npx -y @otpilot/mcp@latest --profile my-agent' },
     ],
   },
 ]

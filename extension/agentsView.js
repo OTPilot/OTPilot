@@ -7,12 +7,12 @@
 // noticeAgo, renderNotices).
 
 const AGENT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="currentColor"/><circle cx="15" cy="14" r="1.2" fill="currentColor"/></svg>';
-const AGENT_CONNECT_CMD = 'npx -y @otpilot/mcp connect';
+const AGENT_CONNECT_CMD = 'npx -y @otpilot/mcp@latest connect';
 // How to add the MCP server to each agent (what `connect` prints, mcp/src/cli.ts).
 const AGENT_SETUP = [
-  ['Claude Code', 'In a terminal', 'claude mcp add otpilot -- npx -y @otpilot/mcp'],
-  ['Codex', 'In ~/.codex/config.toml', '[mcp_servers.otpilot]\ncommand = "npx"\nargs = ["-y", "@otpilot/mcp"]'],
-  ['Cursor', 'In ~/.cursor/mcp.json', '{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp"] } } }'],
+  ['Claude Code', 'In a terminal', 'claude mcp add otpilot -- npx -y @otpilot/mcp@latest'],
+  ['Codex', 'In ~/.codex/config.toml', '[mcp_servers.otpilot]\ncommand = "npx"\nargs = ["-y", "@otpilot/mcp@latest"]'],
+  ['Cursor', 'In ~/.cursor/mcp.json', '{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }'],
 ];
 const AGENT_DURATIONS = [
   ['', 'Until I revoke'],
@@ -437,7 +437,7 @@ function renderActiveAgent(detail, a) {
       <button class="ag-btn danger sm" data-act="revoke">Revoke agent</button>
     </div>
     ${a.keyChanged ? `<div class="ag-request" style="border-color:rgba(var(--danger-rgb),.5)"><div class="ag-text"><b>This agent's key changed</b> since you approved it on this device. Revoke it and connect it again.</div></div>`
-      : !a.pinned ? `<div class="ag-request"><div class="ag-text">Approved on another device. Before this device updates what it can use, check its code: run <span class="ag-mono">npx -y @otpilot/mcp status</span>.</div>
+      : !a.pinned ? `<div class="ag-request"><div class="ag-text">Approved on another device. Before this device updates what it can use, check its code: run <span class="ag-mono">npx -y @otpilot/mcp@latest status</span>.</div>
         <div class="ag-code"><span class="code">${esc(a.code)}</span><span class="hint">Same code in the terminal?</span></div>
         <div class="ag-btns"><span class="ag-grow"></span><button class="ag-btn primary" data-act="pin">Codes match</button></div></div>` : ''}
     ${note ? `<div class="ag-err">${esc(note)}</div>` : ''}
@@ -454,7 +454,7 @@ function renderActiveAgent(detail, a) {
         <div class="ag-grow" style="min-width:0"><div class="ag-t1">${esc(name)} <span class="ag-note">${esc(where)}</span></div>
           <pre class="ag-mono" style="margin:4px 0 0;white-space:pre-wrap;word-break:break-all">${esc(cmd)}</pre></div>
         <button type="button" class="ag-btn link sm" data-copy="${i}">Copy</button></div>`).join('')}</div>
-      <div class="ag-note" style="margin-top:4px">Connected it with <span class="ag-mono">--name</span> or <span class="ag-mono">--profile</span>? Add <span class="ag-mono">--profile &lt;name&gt;</span> after <span class="ag-mono">@otpilot/mcp</span>.</div>
+      <div class="ag-note" style="margin-top:4px">Connected it with <span class="ag-mono">--name</span> or <span class="ag-mono">--profile</span>? Add <span class="ag-mono">--profile &lt;name&gt;</span> after <span class="ag-mono">@otpilot/mcp@latest</span>.</div>
     </details>
     <div>
       <div class="ag-sec-head">Activity</div>
