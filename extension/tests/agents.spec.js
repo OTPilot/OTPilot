@@ -564,3 +564,24 @@ test('a share revoked while the popup was closed: the next copy sync asks the se
   expect(await page.evaluate(a => fakeAgents.agents.get(a).grants.size, agentId)).toBe(0);
   expect(await page.evaluate(sh => chrome.storage.local.get(`sr:${sh}`), s.share)).toEqual({});
 });
+
+test("an agent's activity shows ten uses and loads the next ten from the API", async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    for (let i = 0; i < 23; i++) fakeAgents.addUse(a.id, { detail: `cmd ${i}` });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  const box = page.locator(`#agents-detail .ag-activity[data-agent="${agentId}"]`);
+  await expect(box.locator('.ag-log')).toHaveCount(10);
+  await expect(box.locator('.ag-log').first()).toContainText('cmd 22');
+  await box.getByRole('button', { name: 'Show more' }).click();
+  await expect(box.locator('.ag-log')).toHaveCount(20);
+  await box.getByRole('button', { name: 'Show more' }).click();
+  await expect(box.locator('.ag-log')).toHaveCount(23);
+  await expect(box.locator('.ag-log').last()).toContainText('cmd 0');
+  await expect(box.getByRole('button', { name: 'Show more' })).toHaveCount(0);
+  expect(await page.evaluate(id => fakeAgents.calls.filter(c => c === `GET /agents/${id}/activity`).length, agentId)).toBeGreaterThanOrEqual(3);
+});

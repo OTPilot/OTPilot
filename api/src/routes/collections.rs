@@ -863,6 +863,81 @@ mod db_tests {
         json!({ "v": 2, "key": { "iv": "aXY=", "ct": "a2V5" }, "data": { "iv": "aXY=", "ct": tag } })
     }
 
+    // Team activity (teams.rs, tested here for the team helpers): a page at a
+    // time, newest first; without `limit`, the plain list it always was.
+    #[tokio::test]
+    async fn team_activity_comes_a_page_at_a_time() {
+        let (app, pool, _db) = app().await;
+        let owner = create_user(&pool, "team_lite").await;
+        let member = create_user(&pool, "team_lite").await;
+        let tid = team(&pool, owner, &[member]).await;
+        for i in 0..25 {
+            sqlx::query(
+                "INSERT INTO audit_logs (team_id, actor_id, action, metadata, created_at)
+                 VALUES ($1, $2, 'invite', $3, NOW() - make_interval(mins => $4))",
+            )
+            .bind(tid)
+            .bind(owner)
+            .bind(json!({ "n": i }))
+            .bind(i)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let page = |before: Option<Value>| {
+            let app = app.clone();
+            async move {
+                let q = before
+                    .map(|b| format!("&before={}", b.as_str().unwrap()))
+                    .unwrap_or_default();
+                call(
+                    &app,
+                    owner,
+                    Method::GET,
+                    &format!("/teams/{tid}/audit?limit=10{q}"),
+                    None,
+                )
+                .await
+            }
+        };
+        let (s, first) = page(None).await;
+        assert_eq!(s, StatusCode::OK, "{first}");
+        let ns = |b: &Value| {
+            b["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["metadata"]["n"].as_i64().unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ns(&first), (0..10).collect::<Vec<_>>());
+        assert_eq!(first["more"], true);
+        let (_, second) = page(Some(first["items"][9]["id"].clone())).await;
+        assert_eq!(ns(&second), (10..20).collect::<Vec<_>>());
+        let (_, third) = page(Some(second["items"][9]["id"].clone())).await;
+        assert_eq!(ns(&third), (20..25).collect::<Vec<_>>());
+        assert_eq!(third["more"], false);
+
+        let (_, all) = call(
+            &app,
+            owner,
+            Method::GET,
+            &format!("/teams/{tid}/audit"),
+            None,
+        )
+        .await;
+        assert_eq!(all.as_array().unwrap().len(), 25);
+        let (s, _) = call(
+            &app,
+            member,
+            Method::GET,
+            &format!("/teams/{tid}/audit?limit=10"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+    }
+
     async fn new_collection(app: &Router, user: Uuid, team_id: Uuid) -> Uuid {
         let cid = Uuid::new_v4();
         let (s, _) = call(

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../../lib/api'
 import { decryptVault, buildShare, type VaultAccount } from '../../lib/teamCrypto'
 import TeamSharing from './TeamSharing'
@@ -10,7 +10,9 @@ type Member = { user_id: string; email: string | null; role: string; joined_at: 
 type TeamDetail = { team: Team; members: Member[]; used_seats: number }
 type MyShare = { id: string; account_name: string; account_email: string | null; recipients: number }
 type SharedWithMe = { id: string; account_name: string; account_email: string | null; owner_email: string | null }
-type AuditEntry = { actor_email: string | null; action: string; metadata: unknown; created_at: string }
+type AuditEntry = { id: string; actor_email: string | null; action: string; metadata: unknown; created_at: string }
+type AuditPage = { items: AuditEntry[]; more: boolean }
+const AUDIT_PAGE = 10
 
 async function getJSON<T>(path: string): Promise<T> {
   const res = await apiFetch(path)
@@ -78,11 +80,16 @@ function TeamView({ teamId, meId }: { teamId: string; meId: string }) {
   const isOwner = detail?.team.owner_id === meId
 
   // Audit is owner-only on the server — don't even call it for members (it 403s).
-  const { data: audit = [] } = useQuery<AuditEntry[]>({
+  // Ten at a time; "Show more" asks the API for the next page.
+  const auditQuery = useInfiniteQuery({
     queryKey: ['team-audit', teamId],
-    queryFn: () => getJSON(`/teams/${teamId}/audit`),
+    queryFn: ({ pageParam }) => getJSON<AuditPage>(
+      `/teams/${teamId}/audit?limit=${AUDIT_PAGE}${pageParam ? `&before=${pageParam}` : ''}`),
+    initialPageParam: '',
+    getNextPageParam: (last: AuditPage) => (last.more ? last.items[last.items.length - 1]?.id : undefined),
     enabled: isOwner,
   })
+  const audit = auditQuery.data?.pages.flatMap((p) => p.items) ?? []
   const [shareOpen, setShareOpen] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [err, setErr] = useState<string | null>(null)
@@ -188,12 +195,21 @@ function TeamView({ teamId, meId }: { teamId: string; meId: string }) {
       {isOwner && (
         <Section title="Activity">
           {audit.length === 0 && <p className="text-xs text-zinc-600 px-1">No activity yet.</p>}
-          {audit.slice(0, 50).map((a, i) => (
-            <Row key={i}>
+          {audit.map((a) => (
+            <Row key={a.id}>
               <span className="text-xs text-zinc-300">{a.actor_email ?? 'someone'} · {a.action}</span>
               <span className="text-xs text-zinc-600">{new Date(a.created_at).toLocaleString()}</span>
             </Row>
           ))}
+          {auditQuery.hasNextPage && (
+            <button
+              onClick={() => auditQuery.fetchNextPage()}
+              disabled={auditQuery.isFetchingNextPage}
+              className="mt-2 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+            >
+              {auditQuery.isFetchingNextPage ? 'Loading…' : 'Show more'}
+            </button>
+          )}
         </Section>
       )}
 

@@ -18,7 +18,7 @@
 //!     trusted party by design. (Unlike personal sync, which is fully E2E.)
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -808,29 +808,53 @@ async fn remove_member(
 
 #[derive(sqlx::FromRow, Serialize)]
 struct AuditRow {
+    id: Uuid,
     actor_email: Option<String>,
     action: String,
     metadata: Option<Value>,
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Deserialize)]
+struct AuditParams {
+    /// Paged (`{ items, more }`) when given; without it, the last 200 as a
+    /// plain list (what a dashboard from before paging expects).
+    limit: Option<i64>,
+    /// The `id` of the last entry already shown: the page goes on after it.
+    before: Option<Uuid>,
+}
+
 async fn get_audit(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(id): Path<Uuid>,
+    Query(params): Query<AuditParams>,
 ) -> Result<Json<Value>> {
     require_owner(&state.db, id, auth.id).await?;
-    let rows = sqlx::query_as::<_, AuditRow>(
+    let limit = params.limit.map(|l| l.clamp(1, 100)).unwrap_or(200);
+    // Newest first, ties broken by id; `before` continues after that entry
+    // (one of another team's, or gone, gives an empty page).
+    let mut rows = sqlx::query_as::<_, AuditRow>(
         r#"
-        SELECT u.email AS actor_email, a.action, a.metadata, a.created_at
+        SELECT a.id, u.email AS actor_email, a.action, a.metadata, a.created_at
         FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id
-        WHERE a.team_id = $1 ORDER BY a.created_at DESC LIMIT 200
+        WHERE a.team_id = $1
+          AND ($2::UUID IS NULL OR (a.created_at, a.id) < (
+                SELECT b.created_at, b.id FROM audit_logs b WHERE b.id = $2 AND b.team_id = $1))
+        ORDER BY a.created_at DESC, a.id DESC LIMIT $3
         "#,
     )
     .bind(id)
+    .bind(params.before)
+    .bind(limit + 1)
     .fetch_all(&state.db)
     .await?;
-    Ok(Json(json!(rows)))
+    let more = rows.len() as i64 > limit;
+    rows.truncate(limit as usize);
+    if params.limit.is_none() {
+        return Ok(Json(json!(rows)));
+    }
+    Ok(Json(json!({ "items": rows, "more": more })))
 }
 
 // ── Shared codes ────────────────────────────────────────────────────────────────

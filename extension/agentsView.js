@@ -344,6 +344,57 @@ function renderAgentRequest(detail, r) {
   allow.addEventListener('click', () => agentAct(box, () => Agents.decide(r, 'allow', { agent: a, item: chosen, opts: readGrantForm(box) })));
 }
 
+// ── An agent's activity: ten at a time, "Show more" asks for the next ten ──
+// Kept per agent while the popup is open, so a redraw (every 10 s) shows what
+// was loaded and only refreshes the newest page.
+const _agentActivity = new Map(); // agentId → { items, more }
+
+function drawAgentActivity(box, agentId) {
+  const st = _agentActivity.get(agentId);
+  if (!box?.isConnected) return;
+  if (!st) { box.innerHTML = '<div class="ag-note">Loading…</div>'; return; }
+  if (st.error && !st.items.length) { box.innerHTML = `<div class="ag-note">${esc(st.error)}</div>`; return; }
+  const when = iso => {
+    const d = new Date(iso);
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${time}`;
+  };
+  box.innerHTML = st.items.length
+    ? `<div class="ag-card">${st.items.map(u => `<div class="ag-log"><time>${esc(when(u.created_at))}</time>
+        <span>${esc(AGENT_ACTIONS[u.action] || u.action)} <b>${esc(u.item_id ? itemTitle(u.item_id) : '')}</b>${u.detail ? ` · ${esc(u.detail)}` : ''}</span></div>`).join('')}</div>
+      ${st.error ? `<div class="ag-err">${esc(st.error)}</div>` : ''}
+      ${st.more ? '<button type="button" class="ag-btn link sm" data-act="more-activity" style="margin-top:4px">Show more</button>' : ''}`
+    : '<div class="ag-note">Nothing yet.</div>';
+  box.querySelector('[data-act=more-activity]')?.addEventListener('click', async e => {
+    e.target.disabled = true;
+    e.target.textContent = 'Loading…';
+    try {
+      const page = await Agents.activity(agentId, st.items[st.items.length - 1].id);
+      const cur = _agentActivity.get(agentId) || st;
+      const seen = new Set(cur.items.map(u => u.id));
+      _agentActivity.set(agentId, { items: [...cur.items, ...page.items.filter(u => !seen.has(u.id))], more: page.more });
+    } catch (err) {
+      _agentActivity.set(agentId, { ...st, error: agentError(err) });
+    }
+    drawAgentActivity(document.querySelector(`.ag-activity[data-agent="${CSS.escape(agentId)}"]`), agentId);
+  });
+}
+
+async function mountAgentActivity(box, agentId) {
+  drawAgentActivity(box, agentId);
+  try {
+    const page = await Agents.activity(agentId);
+    const cur = _agentActivity.get(agentId);
+    // The newest page, then what was loaded beyond it.
+    const oldest = page.items.length ? page.items[page.items.length - 1].id : Infinity;
+    const older = (cur?.items || []).filter(u => u.id < oldest);
+    _agentActivity.set(agentId, { items: [...page.items, ...older], more: older.length ? cur.more : page.more });
+  } catch (e) {
+    if (!_agentActivity.has(agentId)) _agentActivity.set(agentId, { items: [], more: false, error: agentError(e) });
+  }
+  drawAgentActivity(document.querySelector(`.ag-activity[data-agent="${CSS.escape(agentId)}"]`), agentId);
+}
+
 // A message for an agent's page, shown once after it re-renders.
 let _agentsNote = null;
 
@@ -351,10 +402,8 @@ function renderActiveAgent(detail, a) {
   // Shown on its own agent's page only (another agent may be open meanwhile).
   const note = _agentsNote?.agentId === a.id ? _agentsNote.text : null;
   if (note) _agentsNote = null;
-  const activity = (_agentsData.activity || []).filter(u => u.agent_id === a.id).slice(0, 8);
   // Its requests for an account still waiting: an account added here can answer one.
   const asks = (_agentsData.requests || []).filter(r => r.agent_id === a.id && !r.item_id);
-  const time = iso => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const grantRow = g => {
     const item = itemById(g.item_id);
     const exp = agentExpiry(g.expires_at);
@@ -399,10 +448,9 @@ function renderActiveAgent(detail, a) {
     </details>
     <div>
       <div class="ag-sec-head">Activity</div>
-      ${activity.length ? `<div class="ag-card">${activity.map(u => `<div class="ag-log"><time>${esc(time(u.created_at))}</time>
-        <span>${esc(AGENT_ACTIONS[u.action] || u.action)} <b>${esc(u.item_id ? itemTitle(u.item_id) : '')}</b>${u.detail ? ` · ${esc(u.detail)}` : ''}</span></div>`).join('')}</div>`
-        : '<div class="ag-note">Nothing yet.</div>'}
+      <div class="ag-activity" data-agent="${esc(a.id)}"></div>
     </div>`;
+  mountAgentActivity(detail.querySelector('.ag-activity'), a.id);
   detail.querySelector('[data-act=revoke]').addEventListener('click', () => {
     if (!confirm(`Revoke ${a.name}? It loses every account you allowed. What it already used can't be taken back: change those passwords if you no longer trust it.`)) return;
     agentAct(detail, async () => { await Agents.remove(a.id); _agentsSel = null; });
