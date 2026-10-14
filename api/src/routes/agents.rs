@@ -19,7 +19,7 @@
 use std::time::Duration;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -64,6 +64,7 @@ pub fn router() -> Router<AppState> {
         .route("/agents", get(list))
         .route("/agents/{id}", axum::routing::delete(remove_agent))
         .route("/agents/{id}/approve", post(approve))
+        .route("/agents/{id}/activity", get(agent_activity))
         .route(
             "/agents/{id}/grants/{item_id}",
             put(put_grant).delete(remove_grant),
@@ -160,6 +161,60 @@ async fn own_agent(
         .fetch_optional(&mut **tx)
         .await?
         .ok_or(ApiError::NotFound)
+}
+
+#[derive(Deserialize)]
+struct ActivityParams {
+    limit: Option<i64>,
+    /// The `id` of the last use already shown: the page goes on from there.
+    before: Option<i64>,
+}
+
+#[derive(sqlx::FromRow)]
+struct UsePage {
+    id: i64,
+    item_id: Option<Uuid>,
+    action: String,
+    detail: String,
+    created_at: DateTime<Utc>,
+}
+
+/// One agent's activity, newest first, a page at a time: `{ items, more }`.
+async fn agent_activity(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Query(params): Query<ActivityParams>,
+) -> Result<Json<Value>> {
+    let limit = params.limit.unwrap_or(10).clamp(1, 100);
+    let mine: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1 AND user_id = $2)")
+            .bind(id)
+            .bind(auth.id)
+            .fetch_one(&state.db)
+            .await?;
+    if !mine {
+        return Err(ApiError::NotFound);
+    }
+    let mut rows = sqlx::query_as::<_, UsePage>(
+        "SELECT id, item_id, action, detail, created_at FROM agent_uses
+         WHERE agent_id = $1 AND ($2::BIGINT IS NULL OR id < $2)
+         ORDER BY id DESC LIMIT $3",
+    )
+    .bind(id)
+    .bind(params.before)
+    .bind(limit + 1)
+    .fetch_all(&state.db)
+    .await?;
+    let more = rows.len() as i64 > limit;
+    rows.truncate(limit as usize);
+    Ok(Json(json!({
+        "items": rows.iter().map(|u| json!({
+            "id": u.id, "item_id": u.item_id, "action": u.action,
+            "detail": u.detail, "created_at": u.created_at,
+        })).collect::<Vec<_>>(),
+        "more": more,
+    })))
 }
 
 // ── Pairing ────────────────────────────────────────────────────────────────
@@ -1202,6 +1257,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, 0);
+    }
+
+    #[tokio::test]
+    async fn an_agents_activity_comes_a_page_at_a_time() {
+        let db = test_db().await;
+        let app = app(db.pool.clone());
+        let ana = create_user(&db.pool, "personal").await;
+        let bob = create_user(&db.pool, "personal").await;
+        let (agent, token) = connect(&app, ana).await;
+        for i in 0..13 {
+            let (s, _) = raw(
+                &app,
+                Some(&token),
+                Method::POST,
+                "/agent/uses",
+                Some(json!({ "action": "run", "detail": format!("cmd {i}") })),
+            )
+            .await;
+            assert_eq!(s, StatusCode::OK);
+        }
+        let details = |b: &Value| {
+            b["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|u| u["detail"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        let (s, first) = call(
+            &app,
+            ana,
+            Method::GET,
+            &format!("/agents/{agent}/activity"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{first}");
+        assert_eq!(
+            details(&first),
+            (3..13)
+                .rev()
+                .map(|i| format!("cmd {i}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(first["more"], true);
+        let last = first["items"][9]["id"].as_i64().unwrap();
+        let (_, rest) = call(
+            &app,
+            ana,
+            Method::GET,
+            &format!("/agents/{agent}/activity?before={last}"),
+            None,
+        )
+        .await;
+        assert_eq!(details(&rest), vec!["cmd 2", "cmd 1", "cmd 0"]);
+        assert_eq!(rest["more"], false);
+        let (s, _) = call(
+            &app,
+            bob,
+            Method::GET,
+            &format!("/agents/{agent}/activity"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

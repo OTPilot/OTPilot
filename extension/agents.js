@@ -109,6 +109,12 @@ const Agents = (() => {
     await setPin(agent.id, { key: agent.public_key, code: await code(agent.public_key) });
   }
 
+  // One agent's activity, newest first, ten at a time ({ items, more });
+  // `before`: the id of the last use already shown.
+  function activity(agentId, before = null) {
+    return ok(`/agents/${agentId}/activity?limit=10${before != null ? `&before=${before}` : ''}`);
+  }
+
   // Denies a pending agent or revokes an active one.
   async function remove(agentId) {
     await ok(`/agents/${agentId}`, { method: 'DELETE' });
@@ -383,7 +389,7 @@ const Agents = (() => {
   }
 
   return {
-    code, list, approve, pin, remove, grant, ungrant, decide, answer, candidates, syncCopies,
+    code, list, approve, pin, remove, activity, grant, ungrant, decide, answer, candidates, syncCopies,
     hostOfQuery: q => { const h = hostOf(q); return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(h) ? h : null; },
     defaultScope, scopeSummary, partsOf, copyOf, vaultItems, SCOPE_LABELS,
   };

@@ -20,6 +20,12 @@ export function installFakeAgents(page, { free = false } = {}) {
       S.agents.set(a.id, a);
       return a;
     };
+    // A use the agent reported (newest gets the highest id, as on the server).
+    S.addUse = (agentId, { item_id = null, action = 'run', detail = '' } = {}) => {
+      const u = { id: S.uses.length + 1, agent_id: agentId, item_id, action, detail, created_at: new Date().toISOString() };
+      S.uses.unshift(u);
+      return u;
+    };
     S.addRequest = (agentId, { query = '', reason = '', tool = '', item_id = null } = {}) => {
       const r = { id: crypto.randomUUID(), agent_id: agentId, query, reason, tool, item_id, status: 'pending', created_at: new Date().toISOString() };
       S.requests.set(r.id, r);
@@ -75,6 +81,12 @@ export function installFakeAgents(page, { free = false } = {}) {
       const a = S.agents.get(parts[1]);
       if (!a) return reply(404, {});
       if (parts.length === 2 && method === 'DELETE') { S.agents.delete(a.id); return reply(200, { ok: true }); }
+      if (parts[2] === 'activity') {
+        const before = url.searchParams.get('before');
+        const limit = Number(url.searchParams.get('limit') || 10);
+        const mine = S.uses.filter(u => u.agent_id === a.id && (before == null || u.id < Number(before))).sort((x, y) => y.id - x.id);
+        return reply(200, { items: mine.slice(0, limit), more: mine.length > limit });
+      }
       if (parts[2] === 'approve') {
         if (a.status !== 'pending') return reply(404, {});
         a.status = 'active';

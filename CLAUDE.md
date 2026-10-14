@@ -211,6 +211,7 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | POST | `/agent/pair/:id/token` | MCP polls with its pair secret: 202 while waiting, its `otpa_` token once approved (only once), 404 denied / expired |
 | GET / POST | `/agents/pair/:id`, `/agents/pair/:id/claim` | The connect page shows / claims an unclaimed pairing (Free: refused when an agent is already connected) |
 | GET | `/agents` | Agents (pending too) with their grants (no ciphertext), pending requests, recent activity, `limits` |
+| GET | `/agents/:id/activity?limit=10&before=<id>` | One agent's uses, newest first, a page at a time (`{ items, more }`); the Agents view shows ten and "Show more" |
 | POST / DELETE | `/agents/:id/approve`, `/agents/:id` | Approve a claimed agent / deny or revoke (grants go with it) |
 | PUT / DELETE | `/agents/:id/grants/:item_id` | Write / remove the agent's copy of an item (Free limit on new ones) |
 | POST | `/agents/requests/:id` | `{ decision: allow \| deny, item_id? }` — allowing a new account needs its grant written first |
@@ -226,7 +227,7 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | GET | `/notifications` | `{ invites, notices, agents: { pending, requests } }`: pending invites to my email + unread notices + AI agents waiting for me |
 | POST | `/notifications/:id/read` | Dismiss a notice (deleted) |
 | DELETE | `/teams/:id/leave`, `/teams/:id/members/:uid` | Leave / remove (downgrade) |
-| GET | `/teams/:id/audit` | Team activity log (owner) |
+| GET | `/teams/:id/audit?limit=10&before=<id>` | Team activity log (owner), newest first; with `limit` paged (`{ items, more }`, the dashboard shows ten + "Show more"), without it the last 200 as a list |
 | POST/GET | `/teams/:id/codes` | Share a code (2-of-2 payload) / list codes shared with me |
 | GET | `/teams/:id/codes/mine` | List codes I share |
 | DELETE | `/teams/:id/codes/:cid`, `…/access/:uid` | Revoke a code / one recipient's access |
