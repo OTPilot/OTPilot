@@ -2,7 +2,7 @@
   "mcpServers": {
     "otpilot": {
       "command": "npx",
-      "args": ["-y", "@otpilot/mcp", "--profile", "claude-code"]
+      "args": ["-y", "@otpilot/mcp@latest", "--profile", "claude-code"]
     }
   }
 }

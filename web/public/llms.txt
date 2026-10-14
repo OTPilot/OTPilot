@@ -43,7 +43,7 @@ The user manages everything in the extension; the agent only talks to the OTPilo
 - Team plans: accounts teammates share with the user (directly or through a collection) can be allowed too; the agent's copy follows the shared item and goes when the user loses access to it
 - Each allowed account is encrypted for that agent's own key (kept in the OS keychain); the server only stores ciphertext; revoking an agent cuts its access
 - Activity log of every use; requests show on the extension's badge
-- Connect an agent: `npx -y @otpilot/mcp connect` (prints a verification code; approve it in the extension's Agents view)
+- Connect an agent: `npx -y @otpilot/mcp@latest connect` (prints a verification code; approve it in the extension's Agents view)
 - Limit: an agent that runs commands decides what they do and could try to reveal a secret on purpose; scrubbing, 2FA-only scopes and per-use approval narrow it
 
 ## Plans

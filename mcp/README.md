@@ -3,7 +3,7 @@
 Let **Claude Code, Codex, Cursor** or any MCP agent sign in to websites and run commands with your passwords and 2FA codes — **without the agent ever seeing them**. You choose which accounts each agent may use, in the [OTPilot](https://otpilot.app) browser extension.
 
 ```bash
-npx -y @otpilot/mcp connect
+npx -y @otpilot/mcp@latest connect
 ```
 
 1. It shows a **verification code** and opens a page to sign in to OTPilot (a free account works).
@@ -18,15 +18,15 @@ npx -y @otpilot/mcp connect
 
 (Before Claude Code 2.1.275: `/plugin marketplace add OTPilot/OTPilot`, then `/plugin install otpilot@otpilot`.)
 
-then connect it once: `npx -y @otpilot/mcp connect --name "Claude Code"`.
+then connect it once: `npx -y @otpilot/mcp@latest connect --name "Claude Code"`.
 
 Or add the server to your agent yourself (`connect` prints these for you):
 
 | Agent | |
 |---|---|
-| Claude Code | `claude mcp add otpilot -- npx -y @otpilot/mcp` |
-| Codex | `~/.codex/config.toml`: `[mcp_servers.otpilot]` `command = "npx"` `args = ["-y", "@otpilot/mcp"]` |
-| Cursor | `~/.cursor/mcp.json`: `{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp"] } } }` |
+| Claude Code | `claude mcp add otpilot -- npx -y @otpilot/mcp@latest` |
+| Codex | `~/.codex/config.toml`: `[mcp_servers.otpilot]` `command = "npx"` `args = ["-y", "@otpilot/mcp@latest"]` |
+| Cursor | `~/.cursor/mcp.json`: `{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }` |
 
 For Codex and other agents that read `AGENTS.md`, add a line so they reach for it: *"For passwords, 2FA codes, API keys or any login, use the `otpilot` MCP tools (list_accounts, browser_login, run); never ask me to paste a secret."*
 
@@ -37,8 +37,8 @@ Each agent is its own identity, approved on its own: connect Claude Code and Cod
 Run it where the agent runs — your laptop, a VPS, a container. On a server without a browser, skip the opener and open the printed link on any device signed in to OTPilot, then approve it in the extension if the codes match:
 
 ```bash
-npx -y @otpilot/mcp connect --name VPS --no-open
-npx -y @otpilot/mcp --profile vps                 # what the agent runs
+npx -y @otpilot/mcp@latest connect --name VPS --no-open
+npx -y @otpilot/mcp@latest --profile vps                 # what the agent runs
 npx playwright install --with-deps chromium       # only for browser_login without Chrome
 ```
 
