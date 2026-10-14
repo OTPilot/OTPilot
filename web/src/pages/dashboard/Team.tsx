@@ -201,6 +201,9 @@ function TeamView({ teamId, meId }: { teamId: string; meId: string }) {
               <span className="text-xs text-zinc-600">{new Date(a.created_at).toLocaleString()}</span>
             </Row>
           ))}
+          {auditQuery.isFetchNextPageError && (
+            <p className="mt-2 text-xs text-red-400">Couldn't load more activity. Try again.</p>
+          )}
           {auditQuery.hasNextPage && (
             <button
               onClick={() => auditQuery.fetchNextPage()}

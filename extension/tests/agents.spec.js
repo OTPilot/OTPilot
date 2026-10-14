@@ -585,3 +585,26 @@ test("an agent's activity shows ten uses and loads the next ten from the API", a
   await expect(box.getByRole('button', { name: 'Show more' })).toHaveCount(0);
   expect(await page.evaluate(id => fakeAgents.calls.filter(c => c === `GET /agents/${id}/activity`).length, agentId)).toBeGreaterThanOrEqual(3);
 });
+
+test('more new uses than a page between refreshes: the list restarts from the newest, no gap', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    for (let i = 1; i <= 20; i++) fakeAgents.addUse(a.id, { detail: `cmd ${i}` });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  const box = page.locator(`#agents-detail .ag-activity[data-agent="${agentId}"]`);
+  await expect(box.locator('.ag-log')).toHaveCount(10);
+  await box.getByRole('button', { name: 'Show more' }).click();
+  await expect(box.locator('.ag-log')).toHaveCount(20);
+  await page.evaluate(id => { for (let i = 21; i <= 35; i++) fakeAgents.addUse(id, { detail: `cmd ${i}` }); }, agentId);
+  await page.evaluate(() => renderAgentsPanel());
+  await expect(box.locator('.ag-log').first()).toContainText('cmd 35');
+  await expect(box.locator('.ag-log')).toHaveCount(10);
+  await box.getByRole('button', { name: 'Show more' }).click();
+  await expect(box.locator('.ag-log')).toHaveCount(20);
+  const details = await box.locator('.ag-log span').allTextContents();
+  expect(details.map(t => Number(t.match(/cmd (\d+)/)[1]))).toEqual(Array.from({ length: 20 }, (_, i) => 35 - i));
+});

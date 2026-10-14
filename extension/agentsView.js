@@ -363,18 +363,22 @@ function drawAgentActivity(box, agentId) {
     ? `<div class="ag-card">${st.items.map(u => `<div class="ag-log"><time>${esc(when(u.created_at))}</time>
         <span>${esc(AGENT_ACTIONS[u.action] || u.action)} <b>${esc(u.item_id ? itemTitle(u.item_id) : '')}</b>${u.detail ? ` · ${esc(u.detail)}` : ''}</span></div>`).join('')}</div>
       ${st.error ? `<div class="ag-err">${esc(st.error)}</div>` : ''}
-      ${st.more ? '<button type="button" class="ag-btn link sm" data-act="more-activity" style="margin-top:4px">Show more</button>' : ''}`
+      ${st.more ? `<button type="button" class="ag-btn link sm" data-act="more-activity" style="margin-top:4px"${st.loading ? ' disabled' : ''}>${st.loading ? 'Loading…' : 'Show more'}</button>` : ''}`
     : '<div class="ag-note">Nothing yet.</div>';
-  box.querySelector('[data-act=more-activity]')?.addEventListener('click', async e => {
-    e.target.disabled = true;
-    e.target.textContent = 'Loading…';
-    try {
-      const page = await Agents.activity(agentId, st.items[st.items.length - 1].id);
-      const cur = _agentActivity.get(agentId) || st;
+  box.querySelector('[data-act=more-activity]')?.addEventListener('click', async () => {
+    // The pending state lives in the cache, so a redraw meanwhile keeps the
+    // button disabled; the answer is applied to whatever the cache holds then.
+    const from = st.items[st.items.length - 1].id;
+    _agentActivity.set(agentId, { ...st, loading: true, error: null });
+    drawAgentActivity(box, agentId);
+    let page = null, error = null;
+    try { page = await Agents.activity(agentId, from); } catch (err) { error = agentError(err); }
+    const cur = _agentActivity.get(agentId);
+    if (page && cur.items[cur.items.length - 1]?.id === from) {
       const seen = new Set(cur.items.map(u => u.id));
       _agentActivity.set(agentId, { items: [...cur.items, ...page.items.filter(u => !seen.has(u.id))], more: page.more });
-    } catch (err) {
-      _agentActivity.set(agentId, { ...st, error: agentError(err) });
+    } else {
+      _agentActivity.set(agentId, { ...cur, loading: false, error }); // the list changed meanwhile: just stop
     }
     drawAgentActivity(document.querySelector(`.ag-activity[data-agent="${CSS.escape(agentId)}"]`), agentId);
   });
@@ -385,10 +389,15 @@ async function mountAgentActivity(box, agentId) {
   try {
     const page = await Agents.activity(agentId);
     const cur = _agentActivity.get(agentId);
-    // The newest page, then what was loaded beyond it.
+    // The newest page, then what was loaded beyond it — only when the two
+    // overlap (or meet): with more new uses than a page in between, older
+    // pages are dropped and "Show more" goes on from the new page, no gap.
     const oldest = page.items.length ? page.items[page.items.length - 1].id : Infinity;
     const older = (cur?.items || []).filter(u => u.id < oldest);
-    _agentActivity.set(agentId, { items: [...page.items, ...older], more: older.length ? cur.more : page.more });
+    const joins = !page.more || (cur?.items || []).some(u => u.id >= oldest);
+    _agentActivity.set(agentId, joins && older.length
+      ? { items: [...page.items, ...older], more: cur.more, loading: cur.loading }
+      : { items: page.items, more: page.more });
   } catch (e) {
     if (!_agentActivity.has(agentId)) _agentActivity.set(agentId, { items: [], more: false, error: agentError(e) });
   }
