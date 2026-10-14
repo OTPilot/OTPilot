@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ApiError, addCollectionMember, changeGrant, collectionItemTitles, collectionMembers, createCollection,
@@ -135,12 +135,18 @@ function UnlockBar({ meId, unlocked, onUnlock, onLock }: { meId: string; unlocke
   // The extension, when installed here: it can unlock this tab (lib/extensionBridge.ts).
   const [ext, setExt] = useState<FoundExtension | null>(null)
   const [useKey, setUseKey] = useState(false)
+  // Checked again when the tab comes back (e.g. after signing in to the extension).
   useEffect(() => {
     if (unlocked) return
     let live = true
-    findExtension(meId).then((found) => { if (live) setExt(found) })
-    return () => { live = false }
+    const check = () => { findExtension(meId).then((found) => { if (live) setExt(found) }) }
+    check()
+    window.addEventListener('focus', check)
+    return () => { live = false; window.removeEventListener('focus', check) }
   }, [meId, unlocked])
+  // Only the latest attempt counts: a recovery key entered while the extension
+  // is still asking replaces that request (its answer, if any, is dropped).
+  const attemptId = useRef(0)
   if (unlocked) {
     return (
       <div className="flex items-center justify-between gap-3 rounded-lg border border-teal-900/60 bg-teal-950/30 px-4 py-2.5">
@@ -150,10 +156,18 @@ function UnlockBar({ meId, unlocked, onUnlock, onLock }: { meId: string; unlocke
     )
   }
   async function attempt(how: 'extension' | 'key', fn: () => Promise<Unlocked>) {
+    const id = ++attemptId.current
     setErr(null); setBusy(how)
-    try { onUnlock(await fn()); setKey('') } catch (e) { setErr(errorText(e)) } finally { setBusy(null) }
+    try {
+      const u = await fn()
+      if (id === attemptId.current) { onUnlock(u); setKey('') }
+    } catch (e) {
+      if (id === attemptId.current) setErr(errorText(e))
+    } finally {
+      if (id === attemptId.current) setBusy(null)
+    }
   }
-  const go = () => attempt('key', () => unlock(key))
+  const go = () => { if (key && busy !== 'key') attempt('key', () => unlock(key)) }
   const fromExtension = () => attempt('extension', async () => {
     const keys = await keysFromExtension(ext!.id, meId)
     return unlockWithKeys(keys.vaultKey, keys.teamKey)
@@ -162,9 +176,9 @@ function UnlockBar({ meId, unlocked, onUnlock, onLock }: { meId: string; unlocke
   const keyInput = (
     <div className="flex flex-wrap gap-2">
       <input id="team-recovery-key" type="password" value={key} onChange={(e) => setKey(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && key) go() }} placeholder="Recovery key" autoComplete="off"
+        onKeyDown={(e) => { if (e.key === 'Enter') go() }} placeholder="Recovery key" autoComplete="off"
         className="flex-1 min-w-0 bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 font-mono" />
-      <button onClick={go} disabled={!!busy || !key}
+      <button onClick={go} disabled={busy === 'key' || !key}
         className={`px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-50 ${canUseExtension ? 'border border-zinc-700 text-zinc-200' : 'bg-teal-500 text-black'}`}>
         {busy === 'key' ? 'Unlocking…' : 'Unlock'}
       </button>

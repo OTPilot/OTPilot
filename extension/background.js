@@ -1114,13 +1114,20 @@ const DASHBOARD_ORIGIN = (() => { try { return new URL(CONFIG.DASHBOARD_URL).ori
 const DASHBOARD_UNLOCK_TTL = 2 * 60 * 1000;
 let _dashboardUnlock = null; // { id, userId, email, windowId, resolve, timer }
 
-function endDashboardUnlock(answer) {
-  const req = _dashboardUnlock;
-  if (!req) return;
+// Ends `req` with `answer` — only while it's still the open request, so an
+// answer can never reach a request that replaced it.
+function endDashboardUnlock(req, answer) {
+  if (!req || _dashboardUnlock !== req) return false;
   _dashboardUnlock = null;
   clearTimeout(req.timer);
   req.resolve(answer);
   if (req.windowId != null) chrome.windows.remove(req.windowId).catch(() => {});
+  return true;
+}
+
+async function syncOn() {
+  const { syncEnabled, syncKey } = await chrome.storage.local.get(['syncEnabled', 'syncKey']);
+  return !!(syncEnabled || syncKey);
 }
 
 // 'same' | 'other' | 'signed-out': the account the dashboard shows vs this one's.
@@ -1135,25 +1142,22 @@ async function dashboardAccount(userId) {
 async function requestDashboardUnlock(userId) {
   const { account, session } = await dashboardAccount(userId);
   if (account !== 'same') return { ok: false, error: account };
-  const { syncEnabled, syncKey } = await chrome.storage.local.get(['syncEnabled', 'syncKey']);
-  if (!syncEnabled && !syncKey) return { ok: false, error: 'no-sync' };
-  endDashboardUnlock({ ok: false, error: 'superseded' });
-  const id = crypto.randomUUID();
-  const answer = new Promise(resolve => {
-    _dashboardUnlock = {
-      id, userId, email: session.user.email || '', windowId: null, resolve,
-      timer: setTimeout(() => endDashboardUnlock({ ok: false, error: 'expired' }), DASHBOARD_UNLOCK_TTL),
-    };
-  });
+  if (!(await syncOn())) return { ok: false, error: 'no-sync' };
+  endDashboardUnlock(_dashboardUnlock, { ok: false, error: 'superseded' });
+  const req = { id: crypto.randomUUID(), userId, email: session.user.email || '', windowId: null };
+  const answer = new Promise(resolve => { req.resolve = resolve; });
+  req.timer = setTimeout(() => endDashboardUnlock(req, { ok: false, error: 'expired' }), DASHBOARD_UNLOCK_TTL);
+  _dashboardUnlock = req;
+  const { id } = req;
   try {
     const win = await chrome.windows.create({
       url: chrome.runtime.getURL(`dashboardUnlock.html?id=${id}`), type: 'popup', width: 400, height: 360, focused: true,
     });
     // Answered or replaced while the window was opening: it has nothing to ask.
-    if (_dashboardUnlock?.id === id) _dashboardUnlock.windowId = win.id;
+    if (_dashboardUnlock === req) req.windowId = win.id;
     else chrome.windows.remove(win.id).catch(() => {});
   } catch {
-    if (_dashboardUnlock?.id === id) endDashboardUnlock({ ok: false, error: 'failed' });
+    endDashboardUnlock(req, { ok: false, error: 'failed' });
   }
   return answer;
 }
@@ -1169,20 +1173,20 @@ async function dashboardUnlockInfo(id) {
 async function answerDashboardUnlock(id, allow) {
   const req = _dashboardUnlock;
   if (!req || req.id !== id) return { ok: false, error: 'gone' };
-  if (!allow) { endDashboardUnlock({ ok: false, error: 'denied' }); return { ok: true }; }
+  if (!allow) { endDashboardUnlock(req, { ok: false, error: 'denied' }); return { ok: true }; }
   if ((await VaultLock.state()) !== 'unlocked') return { ok: false, error: 'locked' };
-  // Signed out or switched account while the window was open.
-  if ((await dashboardAccount(req.userId)).account !== 'same') {
-    endDashboardUnlock({ ok: false, error: 'other' });
-    return { ok: true };
-  }
+  // Signed out, switched account or sync turned off (a remote disconnect)
+  // while the window was open.
+  const account = (await dashboardAccount(req.userId)).account;
+  if (account !== 'same') return endDashboardUnlock(req, { ok: false, error: account }) ? { ok: true } : { ok: false, error: 'gone' };
+  if (!(await syncOn())) return endDashboardUnlock(req, { ok: false, error: 'no-sync' }) ? { ok: true } : { ok: false, error: 'gone' };
   const vaultKey = await VaultKeys.getKey();
   if (!vaultKey) return { ok: false, error: 'locked' };
   const teamKey = await TeamKeys.exportPrivJwk().catch(() => null);
-  if (_dashboardUnlock !== req) return { ok: false, error: 'gone' };
-  if (!teamKey) { endDashboardUnlock({ ok: false, error: 'no-team-key' }); return { ok: true }; }
-  await VaultLock.touch();
-  endDashboardUnlock({ ok: true, vaultKey, teamKey });
+  const answer = teamKey ? { ok: true, vaultKey, teamKey } : { ok: false, error: 'no-team-key' };
+  // The keys go to this request only; one that replaced it meanwhile gets nothing.
+  if (!endDashboardUnlock(req, answer)) return { ok: false, error: 'gone' };
+  if (teamKey) await VaultLock.touch();
   return { ok: true };
 }
 
@@ -1211,7 +1215,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // Closing the window says no.
 chrome.windows.onRemoved.addListener(windowId => {
-  if (_dashboardUnlock?.windowId === windowId) endDashboardUnlock({ ok: false, error: 'denied' });
+  if (_dashboardUnlock?.windowId === windowId) endDashboardUnlock(_dashboardUnlock, { ok: false, error: 'denied' });
 });
 
 // Inactivity auto-lock: VaultLock.state() locks the vault once its deadline

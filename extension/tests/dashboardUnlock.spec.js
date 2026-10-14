@@ -114,3 +114,25 @@ test('only the dashboard origin gets an answer', async ({ context, extensionId }
   expect(await send(other, extensionId, { action: 'unlockVault', userId: ME.id })).toEqual({ error: 'no-answer' });
   expect(context.pages().some(p => p.url().includes('dashboardUnlock.html'))).toBe(false);
 });
+
+test('a new request replaces the open one, which gets nothing', async ({ context, extensionId }) => {
+  await setup(context, extensionId);
+  const page = await dashboard(context);
+  const other = await context.newPage();
+  await other.goto('http://localhost:9999/dashboard/team');
+  const [first, firstAnswer] = await requestUnlock(context, page, extensionId);
+  const [second, secondAnswer] = await requestUnlock(context, other, extensionId);
+  expect(await firstAnswer).toEqual({ ok: false, error: 'superseded' });
+  await expect.poll(() => first.isClosed()).toBe(true);
+  await second.click('#allow');
+  expect((await secondAnswer).vaultKey).toBe(TEST_VAULT_KEY);
+});
+
+test('sync turned off while the window is open: refused', async ({ context, extensionId }) => {
+  await setup(context, extensionId);
+  const page = await dashboard(context);
+  const [win, answer] = await requestUnlock(context, page, extensionId);
+  await win.evaluate(() => chrome.storage.local.remove(['syncEnabled', 'syncKey']));
+  await win.click('#allow');
+  expect(await answer).toEqual({ ok: false, error: 'no-sync' });
+});
