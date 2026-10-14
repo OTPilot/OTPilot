@@ -18,11 +18,14 @@ test('every file the extension loads is in the release zip', () => {
   const manifest = JSON.parse(read('manifest.json'));
   const pageAssets = page => [...read(page).matchAll(/<(?:script src|link rel="stylesheet" href)="([^"]+)"/g)].map(m => m[1]);
   const accessible = (manifest.web_accessible_resources || []).flatMap(r => r.resources);
+  // Pages the background opens itself (approval windows).
+  const opened = [...read('background.js').matchAll(/getURL\(`([\w-]+\.html)/g)].map(m => m[1]);
   const loaded = new Set([
     manifest.background.service_worker,
     ...manifest.content_scripts.flatMap(cs => cs.js),
     ...accessible,
-    ...['popup.html', ...accessible.filter(f => f.endsWith('.html'))].flatMap(pageAssets),
+    ...opened,
+    ...['popup.html', ...accessible.filter(f => f.endsWith('.html')), ...opened].flatMap(pageAssets),
     ...[...read('background.js').match(/importScripts\(([\s\S]*?)\);/)[1]
       .replace(/\/\/.*$/gm, '') // comments may contain quotes
       .matchAll(/'([^']+)'/g)].map(m => m[1]),

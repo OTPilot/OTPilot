@@ -3,14 +3,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ApiError, addCollectionMember, changeGrant, collectionItemTitles, collectionMembers, createCollection,
   deleteCollection, leaveShare, listCollections, myItems, mySharesList, removeCollectionMember, removeGrant,
-  renameCollection, setCollectionRole, shareItem, sharedWithMe, unlock,
+  renameCollection, setCollectionRole, shareItem, sharedWithMe, unlock, unlockWithKeys,
   type Collection, type Grant, type Grantee, type MyShare, type Role, type StoredItem, type Teammate, type Unlocked,
 } from '../../lib/teamVault'
+import { findExtension, keysFromExtension, type FoundExtension } from '../../lib/extensionBridge'
 
 // Collections and shared items (2.0), next to the Team page's members and
 // 2FA codes. Who has what and with which role is plain server data; names,
 // item titles and sharing need the vault, unlocked here with the recovery
-// key (kept in this page's memory only).
+// key or by the OTPilot extension (kept in this page's memory only).
 
 type Run = (fn: () => Promise<unknown>) => Promise<string | null>
 
@@ -74,7 +75,7 @@ export default function TeamSharing({ teamId, meId, teammates }: { teamId: strin
 
   return (
     <div className="space-y-6">
-      <UnlockBar unlocked={unlocked} onUnlock={setUnlocked} onLock={lock} />
+      <UnlockBar meId={meId} unlocked={unlocked} onUnlock={setUnlocked} onLock={lock} />
       {err && <p className="text-sm text-red-400">{err}</p>}
 
       <CollectionsSection
@@ -127,10 +128,19 @@ function collectionName(list: Collection[] | undefined, id: string, locked: bool
   return c?.name ? `"${c.name}"` : locked ? 'a collection' : 'a collection you can\'t open'
 }
 
-function UnlockBar({ unlocked, onUnlock, onLock }: { unlocked: Unlocked | null; onUnlock: (u: Unlocked) => void; onLock: () => void }) {
+function UnlockBar({ meId, unlocked, onUnlock, onLock }: { meId: string; unlocked: Unlocked | null; onUnlock: (u: Unlocked) => void; onLock: () => void }) {
   const [key, setKey] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<'extension' | 'key' | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  // The extension, when installed here: it can unlock this tab (lib/extensionBridge.ts).
+  const [ext, setExt] = useState<FoundExtension | null>(null)
+  const [useKey, setUseKey] = useState(false)
+  useEffect(() => {
+    if (unlocked) return
+    let live = true
+    findExtension(meId).then((found) => { if (live) setExt(found) })
+    return () => { live = false }
+  }, [meId, unlocked])
   if (unlocked) {
     return (
       <div className="flex items-center justify-between gap-3 rounded-lg border border-teal-900/60 bg-teal-950/30 px-4 py-2.5">
@@ -139,22 +149,54 @@ function UnlockBar({ unlocked, onUnlock, onLock }: { unlocked: Unlocked | null; 
       </div>
     )
   }
-  async function go() {
-    setErr(null); setBusy(true)
-    try { onUnlock(await unlock(key)); setKey('') } catch (e) { setErr(errorText(e)) } finally { setBusy(false) }
+  async function attempt(how: 'extension' | 'key', fn: () => Promise<Unlocked>) {
+    setErr(null); setBusy(how)
+    try { onUnlock(await fn()); setKey('') } catch (e) { setErr(errorText(e)) } finally { setBusy(null) }
   }
+  const go = () => attempt('key', () => unlock(key))
+  const fromExtension = () => attempt('extension', async () => {
+    const keys = await keysFromExtension(ext!.id, meId)
+    return unlockWithKeys(keys.vaultKey, keys.teamKey)
+  })
+  const canUseExtension = ext?.account === 'same'
+  const keyInput = (
+    <div className="flex flex-wrap gap-2">
+      <input id="team-recovery-key" type="password" value={key} onChange={(e) => setKey(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && key) go() }} placeholder="Recovery key" autoComplete="off"
+        className="flex-1 min-w-0 bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 font-mono" />
+      <button onClick={go} disabled={!!busy || !key}
+        className={`px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-50 ${canUseExtension ? 'border border-zinc-700 text-zinc-200' : 'bg-teal-500 text-black'}`}>
+        {busy === 'key' ? 'Unlocking…' : 'Unlock'}
+      </button>
+    </div>
+  )
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4 space-y-2">
       <p className="text-sm text-zinc-300">Collection names and shared items are end-to-end encrypted.</p>
-      <p className="text-xs text-zinc-500">Enter your recovery key to see them and to share from here. It stays in this tab and is never sent.</p>
-      <div className="flex flex-wrap gap-2">
-        <input id="team-recovery-key" type="password" value={key} onChange={(e) => setKey(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && key) go() }} placeholder="Recovery key" autoComplete="off"
-          className="flex-1 min-w-0 bg-zinc-950 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 font-mono" />
-        <button onClick={go} disabled={busy || !key} className="px-3 py-1.5 rounded bg-teal-500 text-black text-xs font-semibold disabled:opacity-50">
-          {busy ? 'Unlocking…' : 'Unlock'}
-        </button>
-      </div>
+      {canUseExtension ? (
+        <>
+          <p className="text-xs text-zinc-500">Unlock them with the OTPilot extension: allow it in the window the extension opens. The key stays in this tab and is never sent.</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <button id="team-unlock-extension" onClick={fromExtension} disabled={!!busy}
+              className="px-3 py-1.5 rounded bg-teal-500 text-black text-xs font-semibold disabled:opacity-50">
+              {busy === 'extension' ? 'Waiting for the extension…' : 'Unlock with the extension'}
+            </button>
+            {!useKey && (
+              <button onClick={() => setUseKey(true)} className="text-xs text-zinc-400 hover:text-zinc-200">Use your recovery key instead</button>
+            )}
+          </div>
+          {useKey && keyInput}
+        </>
+      ) : (
+        <>
+          <p className="text-xs text-zinc-500">
+            Enter your recovery key to see them and to share from here. It stays in this tab and is never sent.
+            {ext?.account === 'other' && ' (The OTPilot extension here is signed in to a different account, so it can\'t unlock this one.)'}
+            {ext?.account === 'signed-out' && ' Or sign in to the OTPilot extension to unlock from it.'}
+          </p>
+          {keyInput}
+        </>
+      )}
       {err && <p className="text-xs text-red-400">{err}</p>}
     </div>
   )

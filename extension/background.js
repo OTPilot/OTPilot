@@ -1101,6 +1101,119 @@ chrome.storage.onChanged.addListener((changes, area) => {
   else chrome.action.setBadgeText({ text: '' });
 });
 
+// ── Unlocking the web dashboard ──────────────────────────────────────────────
+// The dashboard (CONFIG.DASHBOARD_URL, and only it: manifest
+// externally_connectable plus the origin check below) can ask for the vault
+// key and the team private key, so the user doesn't paste their recovery key
+// there. Nothing is handed over without a click in an extension window that
+// names the account (dashboardUnlock.html, which can unlock the vault too),
+// only to a dashboard showing the account this extension is signed in to, and
+// only with sync on (the dashboard reads the synced vault). One request at a
+// time; a new one replaces it.
+const DASHBOARD_ORIGIN = (() => { try { return new URL(CONFIG.DASHBOARD_URL).origin; } catch { return null; } })();
+const DASHBOARD_UNLOCK_TTL = 2 * 60 * 1000;
+let _dashboardUnlock = null; // { id, userId, email, windowId, resolve, timer }
+
+function endDashboardUnlock(answer) {
+  const req = _dashboardUnlock;
+  if (!req) return;
+  _dashboardUnlock = null;
+  clearTimeout(req.timer);
+  req.resolve(answer);
+  if (req.windowId != null) chrome.windows.remove(req.windowId).catch(() => {});
+}
+
+// 'same' | 'other' | 'signed-out': the account the dashboard shows vs this one's.
+// Read from storage, not SupabaseAuth's cache: this worker's copy outlives a
+// sign-out done in the popup.
+async function dashboardAccount(userId) {
+  const { cloudSession: session } = await chrome.storage.local.get('cloudSession');
+  if (!session?.user?.id) return { account: 'signed-out' };
+  return { account: typeof userId === 'string' && session.user.id === userId ? 'same' : 'other', session };
+}
+
+async function requestDashboardUnlock(userId) {
+  const { account, session } = await dashboardAccount(userId);
+  if (account !== 'same') return { ok: false, error: account };
+  const { syncEnabled, syncKey } = await chrome.storage.local.get(['syncEnabled', 'syncKey']);
+  if (!syncEnabled && !syncKey) return { ok: false, error: 'no-sync' };
+  endDashboardUnlock({ ok: false, error: 'superseded' });
+  const id = crypto.randomUUID();
+  const answer = new Promise(resolve => {
+    _dashboardUnlock = {
+      id, userId, email: session.user.email || '', windowId: null, resolve,
+      timer: setTimeout(() => endDashboardUnlock({ ok: false, error: 'expired' }), DASHBOARD_UNLOCK_TTL),
+    };
+  });
+  try {
+    const win = await chrome.windows.create({
+      url: chrome.runtime.getURL(`dashboardUnlock.html?id=${id}`), type: 'popup', width: 400, height: 360, focused: true,
+    });
+    // Answered or replaced while the window was opening: it has nothing to ask.
+    if (_dashboardUnlock?.id === id) _dashboardUnlock.windowId = win.id;
+    else chrome.windows.remove(win.id).catch(() => {});
+  } catch {
+    if (_dashboardUnlock?.id === id) endDashboardUnlock({ ok: false, error: 'failed' });
+  }
+  return answer;
+}
+
+// The approval window: what to show (null once the request is gone). Also its
+// keepalive: it asks every 20 s, so the worker isn't stopped while it waits.
+async function dashboardUnlockInfo(id) {
+  const req = _dashboardUnlock;
+  if (!req || req.id !== id) return null;
+  return { email: req.email, site: new URL(DASHBOARD_ORIGIN).host, state: await VaultLock.state() };
+}
+
+async function answerDashboardUnlock(id, allow) {
+  const req = _dashboardUnlock;
+  if (!req || req.id !== id) return { ok: false, error: 'gone' };
+  if (!allow) { endDashboardUnlock({ ok: false, error: 'denied' }); return { ok: true }; }
+  if ((await VaultLock.state()) !== 'unlocked') return { ok: false, error: 'locked' };
+  // Signed out or switched account while the window was open.
+  if ((await dashboardAccount(req.userId)).account !== 'same') {
+    endDashboardUnlock({ ok: false, error: 'other' });
+    return { ok: true };
+  }
+  const vaultKey = await VaultKeys.getKey();
+  if (!vaultKey) return { ok: false, error: 'locked' };
+  const teamKey = await TeamKeys.exportPrivJwk().catch(() => null);
+  if (_dashboardUnlock !== req) return { ok: false, error: 'gone' };
+  if (!teamKey) { endDashboardUnlock({ ok: false, error: 'no-team-key' }); return { ok: true }; }
+  await VaultLock.touch();
+  endDashboardUnlock({ ok: true, vaultKey, teamKey });
+  return { ok: true };
+}
+
+chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
+  // The dashboard's own top-level page only.
+  if (!DASHBOARD_ORIGIN || sender.origin !== DASHBOARD_ORIGIN || !sender.tab || sender.frameId !== 0) return;
+  if (msg?.action === 'hello') {
+    dashboardAccount(msg.userId).then(({ account }) => sendResponse({ ok: true, account }));
+    return true;
+  }
+  if (msg?.action === 'unlockVault') {
+    requestDashboardUnlock(msg.userId).then(sendResponse, () => sendResponse({ ok: false, error: 'failed' }));
+    return true;
+  }
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action !== 'dashboardUnlockInfo' && msg.action !== 'dashboardUnlockAnswer') return;
+  if (!fromExtensionPage(sender)) { sendResponse(null); return; }
+  const run = msg.action === 'dashboardUnlockInfo'
+    ? dashboardUnlockInfo(msg.id)
+    : answerDashboardUnlock(msg.id, msg.allow === true);
+  run.then(sendResponse, () => sendResponse(null));
+  return true;
+});
+
+// Closing the window says no.
+chrome.windows.onRemoved.addListener(windowId => {
+  if (_dashboardUnlock?.windowId === windowId) endDashboardUnlock({ ok: false, error: 'denied' });
+});
+
 // Inactivity auto-lock: VaultLock.state() locks the vault once its deadline
 // passes. It also runs on every read of the state, so this alarm only covers
 // the case where nothing asks for a while.

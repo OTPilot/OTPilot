@@ -4,10 +4,11 @@
 //
 // Membership and roles are plain server data. Names, item titles and the
 // keys needed to share are end-to-end encrypted: they need the vault, which
-// the user unlocks here with their recovery key (the vault key). The key
-// stays in this page's memory; it also opens the synced v1 blob, which
-// carries the user's team private key (cloudSync.js) — the one that unwraps
-// collection keys and share keys wrapped to them.
+// the user unlocks here with their recovery key (the vault key), or the
+// extension hands over (lib/extensionBridge.ts). The key stays in this page's
+// memory. A pasted one opens the synced v1 blob, which carries the user's team
+// private key (cloudSync.js) — the one that unwraps collection keys and share
+// keys wrapped to them; the extension sends that key along.
 
 import { apiFetch } from './api'
 import {
@@ -68,6 +69,18 @@ export async function unlock(recoveryKey: string): Promise<Unlocked> {
   }
   const jwk = payload?.teamKey
   if (!jwk?.d) throw new Error('Your team key hasn\'t synced yet. Open the extension once, then try again.')
+  return opened(vaultKey, jwk)
+}
+
+/** The keys the extension handed over (lib/extensionBridge.ts), already checked there. */
+export async function unlockWithKeys(vaultKey: string, teamKey: JsonWebKey): Promise<Unlocked> {
+  let raw: Uint8Array
+  try { raw = b64d(vaultKey) } catch { raw = new Uint8Array() }
+  if (raw.length !== 32 || !teamKey?.d) throw new Error('The extension sent something unexpected. Try your recovery key.')
+  return opened(vaultKey, teamKey)
+}
+
+async function opened(vaultKey: string, jwk: JsonWebKey): Promise<Unlocked> {
   const privateKey = await crypto.subtle.importKey('jwk', jwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey'])
   return { vaultKey, privateKey, publicKey: await publicKeyOf(jwk) }
 }

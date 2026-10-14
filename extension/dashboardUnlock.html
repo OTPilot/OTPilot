@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<!-- Approval window for unlocking the web dashboard (background.js
+     requestDashboardUnlock). Opened by the extension, so the dashboard can't
+     click it for the user; it can also unlock the vault with the master
+     password first. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Unlock the dashboard? · OTPilot</title>
+  <link rel="stylesheet" href="theme.css">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { background: var(--surface); height: 100%; }
+    body { font-family: var(--font-ui); color: var(--ink-2); padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+    h1 { font-size: 16px; color: var(--ink-0); }
+    p { font-size: 13px; line-height: 1.5; }
+    strong { color: var(--ink-0); font-weight: 600; overflow-wrap: anywhere; }
+    .note { font-size: 12px; color: var(--ink-4); }
+    #pw {
+      width: 100%; padding: 8px 10px; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 6px; color: var(--ink-1);
+      font-size: 13px; font-family: inherit;
+    }
+    #pw:focus { outline: none; border-color: var(--accent-2); }
+    #err { color: var(--danger); font-size: 12px; min-height: 16px; }
+    .row { display: flex; gap: 8px; margin-top: auto; }
+    button { padding: 8px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; font-family: inherit; }
+    #allow { flex: 1; background: var(--accent); border: none; color: var(--on-accent); font-weight: 600; }
+    #allow:disabled { opacity: .5; cursor: default; }
+    #deny { background: transparent; border: 1px solid var(--border); color: var(--ink-3); }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>Unlock the dashboard?</h1>
+  <p><strong id="site"></strong> asks to open your vault in a browser tab, signed in as <strong id="email"></strong>.</p>
+  <p class="note">It gets your vault key, the same as typing your recovery key there. It stays in that tab until you lock it or close it. Only allow it if you just asked for it.</p>
+  <input type="password" id="pw" placeholder="Master password" autocomplete="current-password" hidden>
+  <div id="err"></div>
+  <div class="row">
+    <button id="allow" type="button">Allow</button>
+    <button id="deny" type="button">Deny</button>
+  </div>
+  <script src="dashboardUnlock.js"></script>
+</body>
+</html>
