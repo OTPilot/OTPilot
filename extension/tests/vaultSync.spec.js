@@ -302,6 +302,26 @@ test('a server copy under an old key is replaced by the readable one here', asyn
   expect(r.second.replaced).toBeUndefined();
 });
 
+// The old copy and the newer readable record on different pages: settled
+// once the whole pull is in, so the local deletion still reaches the server.
+test('an old-key copy is settled after every page, its local deletion kept until then', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    fakeServer.pageSize = 1;
+    const gone = Vault.newItem('note', { title: 'deleted here' });
+    fakeServer.items.set(gone.id, { record: await VaultCrypto.encryptItem(gone, VaultCrypto.generateKey()), revision: ++fakeServer.rev, deleted: false });
+    await fakeServer.remoteSave(Vault.newItem('note', { title: 'newer, current key' }));
+    await VaultStore.save([gone], key);
+    await VaultStore.remove([gone.id]);
+    const stats = await VaultSync.sync(key);
+    return { stats, deleted: fakeServer.items.get(gone.id).deleted, tombs: Object.keys(await VaultStore.listTombstones()) };
+  });
+  expect(r.stats).toMatchObject({ replaced: 1, deleted: 1, unreadable: 0 });
+  expect(r.deleted).toBe(true);
+  expect(r.tombs).toEqual([]);
+});
+
 // The other way round: this device is the one left with an old key. The
 // server's copies under the account's newer key are newer than anything it
 // can read, so they're never overwritten.
