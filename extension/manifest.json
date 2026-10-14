@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OTPilot",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "Password manager with built-in 2FA, and safe sign-in for your AI agents. Fills logins and codes on any page. Free to start.",
   "background": {
     "service_worker": "background.js"
