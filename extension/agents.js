@@ -128,7 +128,7 @@ const Agents = (() => {
   };
   function clientLabel(agent) {
     const raw = String(agent?.client || '').trim();
-    return raw ? CLIENTS[raw.toLowerCase()] || raw : '';
+    return raw && Object.hasOwn(CLIENTS, raw.toLowerCase()) ? CLIENTS[raw.toLowerCase()] : raw;
   }
 
   // Denies a pending agent or revokes an active one.
