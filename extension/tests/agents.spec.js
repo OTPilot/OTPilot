@@ -608,3 +608,54 @@ test('more new uses than a page between refreshes: the list restarts from the ne
   const details = await box.locator('.ag-log span').allTextContents();
   expect(details.map(t => Number(t.match(/cmd (\d+)/)[1]))).toEqual(Array.from({ length: 20 }, (_, i) => 35 - i));
 });
+
+test('an agent shows the client it runs in, and can be renamed', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'AI agent', machine: 'work', status: 'active' });
+    a.client = 'claude-code';
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  const detail = page.locator('#agents-detail');
+  await expect(detail.locator('.ag-t2').first()).toContainText('via Claude Code · work');
+  await expect(page.locator('#agents-list')).toContainText('Claude Code · work · 0 accounts');
+  await detail.getByRole('button', { name: 'Rename' }).click();
+  await detail.locator('.ag-rename').fill('Claude Code (work)');
+  await detail.locator('.ag-rename').press('Enter');
+  await expect(detail.locator('.ag-name .ag-t1')).toHaveText('Claude Code (work)');
+  await expect(page.locator('#agents-list')).toContainText('Claude Code (work)');
+  expect(await page.evaluate(id => fakeAgents.agents.get(id).name, agentId)).toBe('Claude Code (work)');
+});
+
+test('renaming: Cancel and Escape send nothing, a refresh never redraws over the typed name', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'AI agent', status: 'active' });
+    a.client = 'constructor'; // an odd client name shows as is
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  const detail = page.locator('#agents-detail');
+  await expect(detail.locator('.ag-t2').first()).toContainText('via constructor');
+  const patches = () => page.evaluate(() => fakeAgents.calls.filter(c => c.startsWith('PATCH')).length);
+
+  await detail.getByRole('button', { name: 'Rename' }).click();
+  await detail.locator('.ag-rename').fill('Nope');
+  await detail.getByRole('button', { name: 'Cancel' }).click();
+  await expect(detail.locator('.ag-name .ag-t1')).toHaveText('AI agent');
+  await detail.getByRole('button', { name: 'Rename' }).click();
+  await detail.locator('.ag-rename').fill('Nope either');
+  await detail.locator('.ag-rename').press('Escape');
+  await expect(detail.locator('.ag-name .ag-t1')).toHaveText('AI agent');
+  expect(await patches()).toBe(0);
+
+  // A refresh with news (a new request) while typing: the field stays.
+  await detail.getByRole('button', { name: 'Rename' }).click();
+  await detail.locator('.ag-rename').fill('Half typed');
+  await page.evaluate(async id => { fakeAgents.addRequest(id, { query: 'github' }); await renderAgentsPanel(await Agents.list()); }, agentId);
+  await expect(detail.locator('.ag-rename')).toHaveValue('Half typed');
+  expect(await patches()).toBe(0);
+});

@@ -26,6 +26,12 @@ async function connect(grants: object[], extra: (m: string, p: string, b: any) =
 }
 
 describe('MCP server', () => {
+  it('reports the client it runs in once the session starts', async () => {
+    const reported: any[] = []
+    await connect([], (m, p, b) => { if (p === '/agent/client') { reported.push(b); return { body: { ok: true } } } })
+    await expect.poll(() => reported).toEqual([{ name: 'test', version: '1' }])
+  })
+
   it('tells the agent how to use it, and lists accounts by name only', async () => {
     const { client, call } = await connect([{ item: loginItem({ title: 'GitHub', urls: ['github.com'] }), scope: { kind: '2fa' } }])
     expect(client.getInstructions()).toBe(INSTRUCTIONS)

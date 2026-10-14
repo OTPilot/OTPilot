@@ -115,6 +115,22 @@ const Agents = (() => {
     return ok(`/agents/${agentId}/activity?limit=10${before != null ? `&before=${before}` : ''}`);
   }
 
+  // Renames an agent (what the user calls it here and in its activity).
+  function rename(agentId, name) {
+    return ok(`/agents/${agentId}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+  }
+
+  // The MCP client an agent last ran in, by its clientInfo name.
+  const CLIENTS = {
+    'claude-code': 'Claude Code', 'claude-ai': 'Claude', 'claude desktop': 'Claude Desktop',
+    'codex-mcp-client': 'Codex', codex: 'Codex', 'cursor-vscode': 'Cursor', cursor: 'Cursor',
+    windsurf: 'Windsurf', 'visual studio code': 'VS Code', vscode: 'VS Code', zed: 'Zed', cline: 'Cline', goose: 'Goose',
+  };
+  function clientLabel(agent) {
+    const raw = String(agent?.client || '').trim();
+    return raw && Object.hasOwn(CLIENTS, raw.toLowerCase()) ? CLIENTS[raw.toLowerCase()] : raw;
+  }
+
   // Denies a pending agent or revokes an active one.
   async function remove(agentId) {
     await ok(`/agents/${agentId}`, { method: 'DELETE' });
@@ -389,7 +405,7 @@ const Agents = (() => {
   }
 
   return {
-    code, list, approve, pin, remove, activity, grant, ungrant, decide, answer, candidates, syncCopies,
+    code, list, approve, pin, remove, activity, rename, clientLabel, grant, ungrant, decide, answer, candidates, syncCopies,
     hostOfQuery: q => { const h = hostOf(q); return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(h) ? h : null; },
     defaultScope, scopeSummary, partsOf, copyOf, vaultItems, SCOPE_LABELS,
   };

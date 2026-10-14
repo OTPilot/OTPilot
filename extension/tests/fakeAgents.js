@@ -80,6 +80,12 @@ export function installFakeAgents(page, { free = false } = {}) {
       }
       const a = S.agents.get(parts[1]);
       if (!a) return reply(404, {});
+      if (parts.length === 2 && method === 'PATCH') {
+        const name = String(body.name || '').trim().slice(0, 60);
+        if (!name) return reply(400, { error: 'name is required' });
+        a.name = name;
+        return reply(200, { id: a.id, name });
+      }
       if (parts.length === 2 && method === 'DELETE') { S.agents.delete(a.id); return reply(200, { ok: true }); }
       if (parts[2] === 'activity') {
         const before = url.searchParams.get('before');

@@ -62,7 +62,10 @@ pub fn router() -> Router<AppState> {
         .route("/agents/pair/{id}", get(pairing_of))
         .route("/agents/pair/{id}/claim", post(claim))
         .route("/agents", get(list))
-        .route("/agents/{id}", axum::routing::delete(remove_agent))
+        .route(
+            "/agents/{id}",
+            axum::routing::delete(remove_agent).patch(rename_agent),
+        )
         .route("/agents/{id}/approve", post(approve))
         .route("/agents/{id}/activity", get(agent_activity))
         .route(
@@ -76,6 +79,7 @@ pub fn router() -> Router<AppState> {
         .route("/agent/requests", post(agent_request))
         .route("/agent/requests/{id}", get(agent_request_status))
         .route("/agent/uses", post(agent_use))
+        .route("/agent/client", post(agent_client))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -390,6 +394,8 @@ struct AgentRow {
     created_at: DateTime<Utc>,
     approved_at: Option<DateTime<Utc>>,
     last_used_at: Option<DateTime<Utc>>,
+    client: Option<String>,
+    client_version: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -431,7 +437,8 @@ struct UseRow {
 async fn list(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Value>> {
     expire(&state.db).await?;
     let agents = sqlx::query_as::<_, AgentRow>(
-        "SELECT id, name, machine, public_key, status, created_at, approved_at, last_used_at
+        "SELECT id, name, machine, public_key, status, created_at, approved_at, last_used_at,
+                client, client_version
          FROM agents WHERE user_id = $1 ORDER BY created_at",
     )
     .bind(auth.id)
@@ -469,6 +476,7 @@ async fn list(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Valu
             "id": a.id, "name": a.name, "machine": a.machine, "public_key": a.public_key,
             "status": a.status, "created_at": a.created_at, "approved_at": a.approved_at,
             "last_used_at": a.last_used_at,
+            "client": a.client, "client_version": a.client_version,
             "grants": grants.iter().filter(|g| g.agent_id == a.id).map(|g| json!({
                 "item_id": g.item_id, "scope": g.scope, "expires_at": g.expires_at,
                 "ask_every_time": g.ask_every_time, "commands": g.commands,
@@ -957,6 +965,61 @@ async fn agent_request_status(
 }
 
 #[derive(Deserialize)]
+struct RenameBody {
+    name: String,
+}
+
+/// The user renames one of their agents (any status).
+async fn rename_agent(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<RenameBody>,
+) -> Result<Json<Value>> {
+    let name = text(&body.name, 60);
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("name is required".into()));
+    }
+    let done = sqlx::query("UPDATE agents SET name = $3 WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(auth.id)
+        .bind(&name)
+        .execute(&state.db)
+        .await?;
+    if done.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(Json(json!({ "id": id, "name": name })))
+}
+
+#[derive(Deserialize)]
+struct ClientBody {
+    name: String,
+    #[serde(default)]
+    version: String,
+}
+
+/// The MCP server reports the client it runs in (its MCP `clientInfo`) when
+/// a session starts, so the user can tell agents apart.
+async fn agent_client(
+    State(state): State<AppState>,
+    agent: AgentAuth,
+    Json(body): Json<ClientBody>,
+) -> Result<Json<Value>> {
+    let name = text(&body.name, 60);
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("name is required".into()));
+    }
+    sqlx::query("UPDATE agents SET client = $2, client_version = $3 WHERE id = $1")
+        .bind(agent.agent_id)
+        .bind(&name)
+        .bind(Some(text(&body.version, 40)).filter(|v| !v.is_empty()))
+        .execute(&state.db)
+        .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
 struct UseBody {
     #[serde(default)]
     item_id: Option<Uuid>,
@@ -1257,6 +1320,70 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, 0);
+    }
+
+    #[tokio::test]
+    async fn an_agent_reports_its_client_and_the_user_renames_it() {
+        let db = test_db().await;
+        let app = app(db.pool.clone());
+        let ana = create_user(&db.pool, "personal").await;
+        let bob = create_user(&db.pool, "personal").await;
+        let (agent, token) = connect(&app, ana).await;
+        let (s, _) = raw(
+            &app,
+            Some(&token),
+            Method::POST,
+            "/agent/client",
+            Some(json!({ "name": "claude-code", "version": "2.1.7" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _) = call(
+            &app,
+            ana,
+            Method::PATCH,
+            &format!("/agents/{agent}"),
+            Some(json!({ "name": "  Work laptop  " })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, list) = call(&app, ana, Method::GET, "/agents", None).await;
+        let a = &list["agents"][0];
+        assert_eq!(
+            [&a["name"], &a["client"], &a["client_version"]],
+            [
+                &json!("Work laptop"),
+                &json!("claude-code"),
+                &json!("2.1.7")
+            ]
+        );
+        let (s, _) = call(
+            &app,
+            ana,
+            Method::PATCH,
+            &format!("/agents/{agent}"),
+            Some(json!({ "name": " " })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, _) = call(
+            &app,
+            bob,
+            Method::PATCH,
+            &format!("/agents/{agent}"),
+            Some(json!({ "name": "Mine" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _) = raw(
+            &app,
+            None,
+            Method::POST,
+            "/agent/client",
+            Some(json!({ "name": "x" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
