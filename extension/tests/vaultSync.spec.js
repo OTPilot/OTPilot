@@ -287,17 +287,41 @@ test('a server copy under an old key is replaced by the readable one here', asyn
       const record = await VaultCrypto.encryptItem(it, old);
       fakeServer.items.set(it.id, { record, revision: ++fakeServer.rev, deleted: false });
     }
+    // Then another device wrote under the current key.
+    await fakeServer.remoteSave(Vault.newItem('note', { title: 'written after the key changed' }));
     await VaultStore.save([kept, gone], key);
     await VaultStore.remove([gone.id]);
     const first = await VaultSync.sync(key);
     const second = await VaultSync.sync(key);
     return { first, second, kept: (await fakeServer.read(kept.id))?.title, goneDeleted: fakeServer.items.get(gone.id).deleted, ids: [kept.id] };
   });
-  expect(r.first).toMatchObject({ replaced: 2, unreadable: 1, pushed: 1, deleted: 1 });
+  expect(r.first).toMatchObject({ replaced: 2, unreadable: 1, pushed: 1, deleted: 1, pulled: 1 });
   expect(r.kept).toBe('kept here');
   expect(r.goneDeleted).toBe(true);
   expect(r.second).toMatchObject({ pushed: 0, unreadable: 0 }); // settled; the orphan stays on the server, unread
   expect(r.second.replaced).toBeUndefined();
+});
+
+// The other way round: this device is the one left with an old key. The
+// server's copies under the account's newer key are newer than anything it
+// can read, so they're never overwritten.
+test('a device with an old key never overwrites newer copies it cannot read', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const r = await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    const newer = VaultCrypto.generateKey();
+    await fakeServer.remoteSave(Vault.newItem('note', { title: 'from before' })); // readable, older
+    const item = Vault.newItem('note', { title: 'old version here' });
+    const record = await VaultCrypto.encryptItem({ ...item, title: 'newer, other key' }, newer);
+    fakeServer.items.set(item.id, { record, revision: ++fakeServer.rev, deleted: false });
+    await VaultStore.save([item], key);
+    const stats = await VaultSync.sync(key);
+    const after = fakeServer.items.get(item.id).record;
+    return { stats, untouched: after === record, title: (await VaultCrypto.decryptItem(after, newer)).title };
+  });
+  expect(r.stats.replaced).toBeUndefined();
+  expect(r.stats.unreadable).toBe(1);
+  expect([r.untouched, r.title]).toEqual([true, 'newer, other key']);
 });
 
 test('a local deletion of an item the server has but sync state forgot is sent, not undone', async ({ context, extensionId }) => {

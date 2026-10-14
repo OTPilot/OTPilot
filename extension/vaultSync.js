@@ -27,7 +27,7 @@ const VaultSync = (() => {
 
   async function loadState() {
     const s = (await chrome.storage.local.get(STATE))[STATE];
-    return { cursor: s?.cursor ?? 0, synced: s?.synced ?? {} };
+    return { cursor: s?.cursor ?? 0, synced: s?.synced ?? {}, readRev: s?.readRev ?? 0 };
   }
 
   function saveState(state) {
@@ -101,6 +101,7 @@ const VaultSync = (() => {
     };
 
     const touched = new Set(); // ids this pull wrote
+    const stale = [];          // records this key can't open
     for (const r of remote) {
       touched.add(r.id);
       const known = state.synced[r.id];
@@ -123,20 +124,11 @@ const VaultSync = (() => {
       // Never store what this device can't read (e.g. left over from a
       // previous key): it would only show up as a failed record.
       const theirs = await decryptOrNull(r.record, key);
-      if (!theirs) {
-        // A copy under a key this vault no longer uses (e.g. written before
-        // this account's key changed) of an item this device holds readable
-        // — or deleted: nobody with the vault key can ever open the server's
-        // copy, so ours replaces it (a PUT / DELETE from that revision).
-        // Left alone, the item could never go up again: its id is taken.
-        if ((mine && await decryptOrNull(mine, key)) || (!mine && tombs[r.id])) {
-          state.synced[r.id] = { rev: r.revision, fp: null };
-          stats.replaced = (stats.replaced || 0) + 1;
-        } else {
-          stats.unreadable++;
-        }
-        continue;
-      }
+      if (!theirs) { stale.push(r); continue; } // settled after the loop
+
+      // Another device's record this key opens: the account used this key
+      // at least up to that revision.
+      if (!(mine && fp(mine) === fp(r.record))) state.readRev = Math.max(state.readRev || 0, r.revision);
 
       if (mine && fp(mine) === fp(r.record)) {
         // Our own upload coming back: just note its revision.
@@ -218,6 +210,23 @@ const VaultSync = (() => {
       await tx.put(r.id, r.record);
       state.synced[r.id] = { rev: r.revision, fp: fp(r.record) };
       stats.pulled++;
+    }
+
+    // A record this key can't open, written before another device wrote one
+    // it can (`readRev`): left under a key the account no longer uses (e.g.
+    // the 2.0 migration's, before a key change). When this device holds
+    // that item readable — or deleted it —, ours replaces it (a PUT / DELETE
+    // from that revision): left alone it could never go up again, its id is
+    // taken. A newer unreadable record may be another device's under a newer
+    // key (this one would be the stale one): never overwritten.
+    for (const r of stale) {
+      const mine = local[r.id];
+      if (r.revision < (state.readRev || 0) && ((mine && await decryptOrNull(mine, key)) || (!mine && tombs[r.id]))) {
+        state.synced[r.id] = { rev: r.revision, fp: null };
+        stats.replaced = (stats.replaced || 0) + 1;
+      } else {
+        stats.unreadable++;
+      }
     }
 
     // What came in linking an id this device moved to a new one (another
