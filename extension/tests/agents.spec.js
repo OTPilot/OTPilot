@@ -539,3 +539,28 @@ test('a request lists only its matches, says which the agent has and which are s
   await expect(pick).toContainText('Already allowed');
   await expect(pick).toContainText('Saved for qa-counterpart.test-counterpart.com, not feature-deploy.test-counterpart.com');
 });
+
+test('a share revoked while the popup was closed: the next copy sync asks the server and removes the grant', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const s = await seedShared(page);
+  const agentId = await page.evaluate(async ({ share }) => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin({ id: a.id, public_key: a.public_key });
+    const item = (await Agents.vaultItems(await VaultKeys.getKey())).find(x => x.id === share);
+    await Agents.grant(a, item, { scope: { kind: 'login' } });
+    return a.id;
+  }, s);
+  // The server now lists no share (the cached list still has it); a failed
+  // collections call changes nothing.
+  await page.evaluate(() => {
+    const prev = CloudSync.api;
+    CloudSync.api = async (path, opts) => {
+      if (path.startsWith('/shares/with-me')) return { status: 200, ok: true, json: async () => ({ shares: [] }) };
+      if (path.startsWith('/collections')) return { status: 503, ok: false, json: async () => ({}) };
+      return prev(path, opts);
+    };
+  });
+  await page.evaluate(async () => Agents.syncCopies(await VaultKeys.getKey()));
+  expect(await page.evaluate(a => fakeAgents.agents.get(a).grants.size, agentId)).toBe(0);
+  expect(await page.evaluate(sh => chrome.storage.local.get(`sr:${sh}`), s.share)).toEqual({});
+});

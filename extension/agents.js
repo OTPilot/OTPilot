@@ -226,7 +226,7 @@ const Agents = (() => {
     const d = h.split('.').slice(-2);
     return d.length === 2 && !['co', 'com', 'net', 'org', 'gov', 'edu', 'ac'].includes(d[0]) ? d.join('.') : null;
   };
-  function candidates(query, items) {
+  function candidates(query, items, limit = 8) {
     const q = String(query || '').trim().toLowerCase();
     const usable = items.filter(i => i.type === 'login' || (i.fields || []).some(f => f.value));
     if (!q) return usable;
@@ -245,7 +245,7 @@ const Agents = (() => {
       .filter(([, n], _, all) => n && (!host || n > 1 || !all.some(([, m]) => m > 1)))
       .sort(([a, x], [b, y]) => (y - x) || ((a.type === 'login' ? 0 : 1) - (b.type === 'login' ? 0 : 1)))
       .map(([i]) => i)
-      .slice(0, 8);
+      .slice(0, limit);
   }
 
   // ── Keeping copies current ─────────────────────────────────────────────
@@ -260,6 +260,11 @@ const Agents = (() => {
     const p = await pins();
     if (!Object.keys(p).length) return 0;
     const ok_ = await approved();
+    // Copies of shared items: what's shared is re-read from the server first
+    // (the background may run long after the popup last did), so a revoked
+    // share or a changed password is seen here. A failed refresh changes no
+    // list, so it never reads as lost access.
+    if (Object.values(ok_).some(s => s?.from)) await refreshShared();
     const { agents } = await ok('/agents');
     const { items } = await VaultStore.readAll(key);
     const byId = new Map([...items, ...await sharedItems()].map(i => [i.id, i]));
@@ -337,6 +342,19 @@ const Agents = (() => {
       } catch { /* unreadable: left out */ }
     }
     return out;
+  }
+
+  // Pulls the collections (their keys, items, the list) and the shares with
+  // the user, as the popup does when it opens. Each failure is skipped.
+  async function refreshShared() {
+    if (typeof VaultCollections !== 'undefined') {
+      try {
+        for (const c of await VaultCollections.list()) {
+          if (c.key && !c.offline) await VaultCollections.pull(c).catch(() => {});
+        }
+      } catch { /* offline or not on a team: the last lists stay */ }
+    }
+    await VaultShares.refresh().catch(() => {});
   }
 
   // Whether the user can no longer open a shared item, by the last lists the

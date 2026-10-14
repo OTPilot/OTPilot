@@ -287,7 +287,7 @@ function mountItemPicker(container, initial, onPick) {
 // has it, and when a login is saved for another host than the one asked
 // (a sign-in there would be refused: add the site to the login first).
 function mountRequestPicker(container, r, agent, onPick) {
-  const found = Agents.candidates(r.query, _agentsItems);
+  const found = Agents.candidates(r.query, _agentsItems, Infinity); // no search here: every match
   const host = Agents.hostOfQuery(r.query);
   if (!found.length) {
     container.innerHTML = `<div class="ag-note">No account in your vault matches <b>${esc(r.query || 'this')}</b>. Deny it, or save the login${host ? ` for ${esc(host)}` : ''} first: it shows here.</div>`;
@@ -389,7 +389,7 @@ function renderActiveAgent(detail, a) {
       <div class="ag-adding"></div>
       ${a.grants.length ? `<div class="ag-card">${a.grants.map(grantRow).join('')}</div>` : '<div class="ag-note">None yet. Add one, or approve it when the agent asks.</div>'}
     </div>
-    <details class="ag-setup"${activity.length ? '' : ' open'}>
+    <details class="ag-setup"${a.last_used_at ? '' : ' open'}>
       <summary class="ag-sec-head">Add it to your agent</summary>
       <div class="ag-card">${AGENT_SETUP.map(([name, where, cmd], i) => `<div class="ag-card-row" style="align-items:flex-start">
         <div class="ag-grow" style="min-width:0"><div class="ag-t1">${esc(name)} <span class="ag-note">${esc(where)}</span></div>
@@ -412,8 +412,7 @@ function renderActiveAgent(detail, a) {
     renderAgentsPanel();
   }));
   detail.querySelectorAll('.ag-setup [data-copy]').forEach(b => b.addEventListener('click', async () => {
-    await navigator.clipboard.writeText(AGENT_SETUP[b.dataset.copy][2]).catch(() => {});
-    setStatus('Copied');
+    if (await copyText(AGENT_SETUP[b.dataset.copy][2])) setStatus('Copied');
   }));
   detail.querySelector('[data-act=pin]')?.addEventListener('click', () => agentAct(detail, () => Agents.pin(a)));
   detail.querySelectorAll('.ag-card-row[data-item]').forEach(row => {
