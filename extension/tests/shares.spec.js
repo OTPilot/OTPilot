@@ -204,6 +204,32 @@ test('the Share sheet says what will be shared before pressing Share, and preset
   await expect(panel.locator('.ss-summary')).toHaveText('Everything → 1 person, can edit');
 });
 
+test('the Share sheet opens in view from a scrolled editor, which stays still under it, and ← / Cancel go back to where it was', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, [site]);
+  await page.setViewportSize({ width: 600, height: 580 }); // the popup's size: the editor scrolls
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'DigitalOcean' }).click();
+  const detail = page.locator('#acc-detail');
+  const scrollTop = () => detail.evaluate(el => el.scrollTop);
+  for (const close of ['#share-sheet .ss-back', '#share-sheet .ss-cancel']) {
+    await page.locator('#acc-detail .btn-share-item').scrollIntoViewIfNeeded();
+    const before = await scrollTop();
+    expect(before).toBeGreaterThan(0);
+    await page.click('#acc-detail .btn-share-item');
+    await expect(page.locator('#share-sheet .ss-title')).toBeInViewport();
+    await expect(page.locator('#share-sheet .share-confirm')).toBeInViewport();
+    expect(await scrollTop()).toBe(0);
+    // The wheel never scrolls the editor under the sheet.
+    await page.locator('#share-sheet .ss-head').hover();
+    await page.mouse.wheel(0, 400);
+    await page.waitForTimeout(100);
+    expect(await scrollTop()).toBe(0);
+    await page.click(close);
+    await expect(page.locator('#share-sheet')).toHaveCount(0);
+    expect(await scrollTop()).toBe(before);
+  }
+});
+
 test('the Share panel: a collection that has it shows as shared, a partial copy can\'t be made editable, a share whose key is elsewhere still changes role, and changing a role never restores a removed grant or share', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, [site]);
   // Collections first: the shares fake passes everything else on to it.
