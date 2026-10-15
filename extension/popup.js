@@ -2305,13 +2305,22 @@ function openShareSheet(entry) {
         <div class="ss-sub">Nothing is shared until you press Share</div></div>
     </div>
     <div class="share-panel"></div>`;
-  document.getElementById('acc-detail').appendChild(sheet);
+  // #acc-detail is the scroll container: the sheet covers its top, so bring
+  // that into view (and back to where the user was on close).
+  const detail = document.getElementById('acc-detail');
+  sheet.dataset.scrollTop = detail.scrollTop;
+  detail.scrollTop = 0;
+  detail.appendChild(sheet);
   sheet.querySelector('.ss-back').addEventListener('click', closeShareSheet);
   renderSharePanel(sheet.querySelector('.share-panel'), entry._id);
 }
 
 function closeShareSheet() {
-  document.getElementById('share-sheet')?.remove();
+  const sheet = document.getElementById('share-sheet');
+  if (!sheet) return;
+  const detail = sheet.parentElement;
+  sheet.remove();
+  if (detail) detail.scrollTop = Number(sheet.dataset.scrollTop) || 0;
 }
 
 // ── Share an item (docs/sharing.md) ──

@@ -170,6 +170,7 @@
     .share-panel { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 6px; background: var(--bg); }
     /* The Share sheet: over the item editor, its own button; the vault's Save hides meanwhile. */
     #acc-detail { position: relative; }
+    #acc-detail:has(#share-sheet) { overflow: hidden; } /* the editor mustn't scroll under the sheet */
     #share-sheet { position: absolute; inset: 0; z-index: 20; background: var(--bg); display: flex; flex-direction: column; }
     #settings-panel:has(#share-sheet) .settings-footer-actions { visibility: hidden; }
     .ss-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
