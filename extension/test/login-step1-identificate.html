@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in — step 1, "Identifícate"</title></head>
+<body>
+  <!-- A form-less username step whose only evidence of signing in is its
+       Spanish button ("Identifícate"); no autocomplete hint. -->
+  <div id="panel">
+    <input type="email" id="email">
+    <button id="identify">Identifícate</button>
+  </div>
+  <script>
+    document.getElementById('identify').onclick = () => {
+      location.href = 'login-step2.html?email=' + encodeURIComponent(document.getElementById('email').value);
+    };
+  </script>
+</body></html>

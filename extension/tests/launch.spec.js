@@ -60,6 +60,23 @@ test('a form whose Login is an <input type="button"> is signed in with that butt
   expect(site.url()).not.toContain('submitted=1');
 });
 
+test('a form whose button reads "Conéctate" (type="button", norauto.es) is signed in with it', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Norauto', email: 'y1234567x', secret: '', urls: `${SITE}/login-button-conectate.html`, password: 'norauto-pass' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Norauto');
+  await expect(site.locator('#who')).toHaveText('y1234567x:norauto-pass');
+  expect(site.url()).not.toContain('submitted=1');
+});
+
+test('a form-less username step whose button reads "Identifícate" gets both steps', async ({ context, extensionId }) => {
+  const popup = await popupWith(context, extensionId, [
+    { name: 'Identificate', email: 'yo@example.com', secret: '', urls: `${SITE}/login-step1-identificate.html`, password: 'pw-es' },
+  ]);
+  const site = await launchFromRow(context, popup, 'Identificate');
+  await expect(site).toHaveURL(/welcome\.html\?password=pw-es/);
+});
+
 test('a rejected password is not filled again', async ({ context, extensionId }) => {
   const popup = await popupWith(context, extensionId, [
     { name: 'Retry site', email: 'r@example.com', secret: '', urls: `${SITE}/login-step2-retry.html`, password: 'wrong-pass' },
