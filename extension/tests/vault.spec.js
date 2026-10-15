@@ -40,9 +40,9 @@ test('new items start from their type template', async ({ context, extensionId }
 test('unknown types are rejected when creating', async ({ context, extensionId }) => {
   const page = await vaultPage(context, extensionId);
   const error = await page.evaluate(() => {
-    try { Vault.newItem('ssh'); return null; } catch (e) { return e.message; }
+    try { Vault.newItem('wifi'); return null; } catch (e) { return e.message; }
   });
-  expect(error).toBe('unknown item type: ssh');
+  expect(error).toBe('unknown item type: wifi');
 });
 
 test('a v1 account converts to a v2 login', async ({ context, extensionId }) => {
