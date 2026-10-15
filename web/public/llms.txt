@@ -29,7 +29,7 @@ OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) code
 
 ## Team sharing
 
-OTPilot supports sharing TOTP codes with teammates without exposing the underlying secret. The owner uploads the secret encrypted with an independent sharing key. The backend generates the TOTP code on demand for recipients, who never receive the secret itself. Revocation is instant: the owner removes a recipient and their access is cut immediately. Sharing whole items (passwords, notes, fields) is separate and end-to-end encrypted: the server never sees them.
+OTPilot supports sharing TOTP codes with teammates without exposing the underlying secret. The owner uploads the secret encrypted with an independent sharing key. The backend generates the TOTP code on demand for recipients, who never receive the secret itself. Revocation is instant: the owner removes a recipient and their access is cut immediately. Sharing whole items (passwords, notes, fields) is separate and end-to-end encrypted: the server never sees them. Collections and shares can also be managed from the web dashboard, unlocked with the recovery key or, in Chrome and Edge, by the signed-in extension after the user allows it there.
 
 Invitation flow:
 - With an account: invite appears directly in the extension

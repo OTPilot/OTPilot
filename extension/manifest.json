@@ -29,6 +29,9 @@
       "run_at": "document_idle"
     }
   ],
+  "externally_connectable": {
+    "matches": ["https://otpilot.app/*", "http://localhost/*"]
+  },
   "web_accessible_resources": [
     {
       "resources": ["unlock.html", "unlock.js", "theme.css"],
