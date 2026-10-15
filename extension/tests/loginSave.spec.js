@@ -100,6 +100,17 @@ test('a sign-in whose Login is an <input type="button"> (xStation) is captured: 
   await expect.poll(async () => (await logins(popup)).map(l => [l.title, l.username, l.password])).toEqual([['XTB', 'alberto@example.com', 'xtb-pass']]);
 });
 
+test('a sign-in whose button reads "Conéctate" (type="button", norauto.es) is captured', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-button-conectate.html`);
+  await site.fill('input[name="email"]', 'y1234567x');
+  await site.fill('input[name="password"]', 'norauto-pass');
+  await site.click('#login-submit-button');
+  await expect(site.locator('h1')).toHaveText('Mi cuenta');
+  await expect(site.locator('#otpilot-login-save')).toContainText('y1234567x');
+});
+
 test('no offer while a sign-in form is still showing (a rejected password)', async ({ context, extensionId }) => {
   await vaultWith(context, extensionId, []);
   const site = await context.newPage();

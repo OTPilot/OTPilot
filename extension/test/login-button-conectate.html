@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in (Conéctate)</title></head>
+<body>
+  <div id="app"></div>
+  <script>
+    // Like norauto.es: the form's button is type="button" reading
+    // "Conéctate", and the page's script signs in over AJAX, then goes to the
+    // account page.
+    const app = document.getElementById('app');
+    app.innerHTML = `
+      <form id="login-form">
+        <input type="text" name="email" autocomplete="email">
+        <input type="password" name="password" autocomplete="password">
+        <button type="button">¿Te has olvidado de tu contraseña?</button>
+        <button type="button" id="login-submit-button">Conéctate</button>
+      </form>`;
+    document.getElementById('login-submit-button').addEventListener('click', () => {
+      setTimeout(() => { app.innerHTML = '<h1>Mi cuenta</h1>'; }, 200);
+    });
+  </script>
+</body></html>
