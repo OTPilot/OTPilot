@@ -255,7 +255,7 @@
   // like one — an <input type="button" value="Login"> too (xStation, many
   // Angular apps) — never Cancel, Back, Show/Hide password, Forgot password.
   const NOT_SUBMIT = /\b(cancel|back|close|show|hide|reveal|forgot|reset|clear|cancelar|volver|cerrar|mostrar|ocultar|olvid\w*)\b/i;
-  const LOOKS_SUBMIT = /\b(sign\s*in|log\s*in|login|sign\s*up|register|continue|next|submit|enter|go|verify|ingresar|iniciar|acceder|entrar|continuar|siguiente)\b/i;
+  const LOOKS_SUBMIT = /\b(sign\s*in|log\s*in|login|sign\s*up|register|continue|next|submit|enter|go|verify|ingresar|iniciar|acceder|entrar|continuar|siguiente|con[eé]ct(?:ate|ar|arse)|identif[ií]ca(?:te|rse)|connexion|se\s+connecter)\b/i;
   function isSubmitControl(btn) {
     const text = [btn.textContent, btn.value, btn.getAttribute('aria-label'), btn.title].filter(Boolean).join(' ');
     if (NOT_SUBMIT.test(text)) return false;
@@ -679,8 +679,8 @@
   // the button that submits it — only with evidence it's a sign-in step,
   // never a newsletter's email box: autocomplete="username", or a submitting
   // action that reads like signing in. That same button is the one clicked.
-  const SIGN_IN_BUTTON = /\b(sign\s*in|log\s*in|login|continue|next|iniciar|ingresar|acceder|entrar|continuar|siguiente)\b/i;
-  const SIGN_IN_SUBMIT = /\b(sign\s*in|log\s*in|login|continue|next|submit|verify|confirm|iniciar|ingresar|acceder|entrar|continuar|siguiente|enviar|verificar)\b/i;
+  const SIGN_IN_BUTTON = /\b(sign\s*in|log\s*in|login|continue|next|iniciar|ingresar|acceder|entrar|continuar|siguiente|con[eé]ct(?:ate|ar|arse)|identif[ií]ca(?:te|rse)|connexion|se\s+connecter)\b/i;
+  const SIGN_IN_SUBMIT = /\b(sign\s*in|log\s*in|login|continue|next|submit|verify|confirm|iniciar|ingresar|acceder|entrar|continuar|siguiente|enviar|verificar|con[eé]ct(?:ate|ar|arse)|identif[ií]ca(?:te|rse)|connexion|se\s+connecter)\b/i;
   const NOT_SIGN_IN = /\b(subscribe|newsletter|sign\s*up|register|join|suscrib\w*|registr\w*)\b/i;
   const buttonLabel = b => [b.textContent, b.value, b.getAttribute('aria-label')].filter(Boolean).join(' ');
   const readsSignIn = b => !!b && isVisible(b) && SIGN_IN_BUTTON.test(buttonLabel(b))
