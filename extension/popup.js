@@ -861,13 +861,28 @@ async function homeCopy(value, label) {
 
 // One label | value row; secret values masked with Show.
 // No label: the value takes the row (a section's only text, like notes).
-function homeRow({ label, value, secret = false, multiline = false, open = null }) {
+function homeRow({ label, value, secret = false, multiline = false, open = null, file = false }) {
   const el = document.createElement('div');
   el.className = 'home-cred' + (multiline ? ' multiline' : '') + (label ? '' : ' full');
   el.innerHTML = `<span class="home-cred-label"></span><span class="home-cred-value"></span><span class="home-cred-actions"></span>`;
   if (label) el.querySelector('.home-cred-label').textContent = label;
   else el.querySelector('.home-cred-label').remove();
   const valueEl = el.querySelector('.home-cred-value');
+  // A file: its name and size, Copy (text files) and Download.
+  if (file) {
+    const f = Vault.fileOf(value);
+    valueEl.textContent = f ? `${f.name} · ${formatBytes(f.size)}` : '';
+    const btn = (text, fn) => {
+      const b = document.createElement('button');
+      b.className = 'home-cred-btn';
+      b.textContent = text;
+      b.addEventListener('click', fn);
+      el.querySelector('.home-cred-actions').appendChild(b);
+    };
+    if (f && Vault.fileText(f) !== null) btn('Copy', () => homeCopy(Vault.fileText(f), f.name));
+    if (f) btn('Download', () => downloadFile(f));
+    return el;
+  }
   const show = shown => { valueEl.textContent = secret && !shown ? '•'.repeat(Math.min(String(value).length, 14)) : value; };
   show(false);
   const actions = el.querySelector('.home-cred-actions');
@@ -915,7 +930,7 @@ function homeSection(title, children, action) {
 // (the type's and custom ones) and its notes.
 function homeItemRows(item) {
   const rows = (item.fields || []).filter(f => String(f.value ?? '') !== '').map(f => homeRow({
-    label: f.label || f.id, value: f.value, secret: Vault.SECRET_KINDS.includes(f.kind), multiline: f.kind === 'multiline',
+    label: f.label || f.id, value: f.value, secret: Vault.SECRET_KINDS.includes(f.kind), multiline: f.kind === 'multiline', file: f.kind === 'file',
   }));
   if (String(item.notes || '').trim()) rows.push(homeRow({ label: item.type === 'note' ? '' : 'Notes', value: item.notes, multiline: true }));
   return rows;
@@ -948,7 +963,7 @@ function renderHomeCreds(acc) {
   }
   for (const name of [...groups.keys()].sort((a, b) => (a !== '') - (b !== ''))) { // the default section first
     box.appendChild(homeSection(name || 'More fields', groups.get(name).map(f => homeRow({
-      label: f.label || 'Field', value: f.value ?? '', secret: Vault.SECRET_KINDS.includes(f.kind), multiline: f.kind === 'multiline',
+      label: f.label || 'Field', value: f.value ?? '', secret: Vault.SECRET_KINDS.includes(f.kind), multiline: f.kind === 'multiline', file: f.kind === 'file',
     }))));
   }
 
@@ -1186,6 +1201,15 @@ const typeLabel = type => Vault.TYPES[type]?.label || type;
 const ITEM_SUMMARY = { server: ['host', 'username'], api: ['environment', 'clientId'] };
 
 function itemSummary(item) {
+  if (item.type === 'ssh') {
+    const key = SshKeys.describe(Vault.getValue(item, 'publicKey'));
+    const fp = Vault.getValue(item, 'fingerprint');
+    return [key?.label, fp && `${fp.slice(0, 15)}…`].filter(Boolean).join(' · ');
+  }
+  if (item.type === 'file') {
+    const f = Vault.fileOf(Vault.getValue(item, 'file'));
+    return f ? `${f.name} · ${formatBytes(f.size)}` : '';
+  }
   return (ITEM_SUMMARY[item.type] || []).map(id => Vault.getValue(item, id)).filter(Boolean).join(' · ');
 }
 
@@ -1797,6 +1821,117 @@ function openMergePanel(body, idx) {
 }
 
 // ── Custom fields (every editor) ──
+// ── Files (a `file` field: the type's, or a custom one) ──
+// A chip with the file's name and size: Show / Copy for a text file,
+// Download, Replace, Remove. The value (a data: URL, Vault.fileValue) lives in
+// a hidden input — `.item-field` or `.cf-value` — so editors read it back like
+// any field. All of an item's files together stay under Vault.FILE_BYTES_LIMIT.
+const formatBytes = n => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`);
+const fileBadge = name => (/\.([A-Za-z0-9]{1,4})$/.exec(name)?.[1] || 'file').toLowerCase();
+const fileTooLarge = (name, size) =>
+  `${name} is ${formatBytes(size)}: an item holds up to ${Vault.FILE_BYTES_LIMIT / 1024} KB of files (keys, certificates, config files)`;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+
+function downloadFile(file) {
+  const a = document.createElement('a');
+  a.download = file.name;
+  a.href = URL.createObjectURL(new Blob([file.bytes], { type: file.mime }));
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  setStatus(`${file.name} saved to Downloads — that copy isn't protected, delete it when you're done`);
+}
+
+// Opens the file chooser (call it within a click) and passes the chosen file on.
+function chooseFile(onFile, { multiple = false } = {}) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = multiple;
+  input.addEventListener('change', () => { for (const f of input.files) onFile(f); });
+  input.click();
+}
+
+function fileFieldHTML(inputHTML) {
+  return `<div class="file-field">${inputHTML}<div class="file-view"></div></div>`;
+}
+
+function fileViewHTML(value, readOnly) {
+  const f = Vault.fileOf(value);
+  if (!f) {
+    return readOnly ? '<div class="file-empty">No file</div>'
+      : `<div class="file-empty"><button type="button" class="file-btn file-choose">Choose file…</button><span>or drop it here</span></div>`;
+  }
+  const text = Vault.fileText(f) !== null;
+  const badge = /\.[A-Za-z0-9]{1,4}$/.test(f.name) ? fileBadge(f.name)
+    : /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(Vault.fileText(f) || '') ? 'key' : 'file';
+  return `<div class="file-chip">
+      <span class="file-badge">${esc(badge)}</span>
+      <span class="file-meta"><span class="file-name">${esc(f.name)}</span><span class="file-size">${formatBytes(f.size)} · ${text ? 'text' : 'binary'}</span></span>
+      <span class="file-actions">
+        ${text ? '<button type="button" class="file-btn file-show">Show</button><button type="button" class="file-btn file-copy">Copy</button>' : ''}
+        <button type="button" class="file-btn file-download">Download</button>
+        ${readOnly ? '' : '<button type="button" class="file-btn file-replace">Replace</button><button type="button" class="file-btn file-remove" title="Remove the file">✕</button>'}
+      </span>
+    </div>
+    <pre class="file-preview" hidden></pre>`;
+}
+
+// Wires a .file-field; `onChange(value)` after the user picks, drops or
+// removes a file.
+function mountFileField(wrap, { readOnly = false, onChange = null } = {}) {
+  const input = wrap.querySelector('input[type="hidden"]');
+  const view = wrap.querySelector('.file-view');
+  const set = value => {
+    input.value = value;
+    input.dataset.dirty = '1';
+    render();
+    onChange?.(value);
+  };
+  const take = async file => {
+    const others = [...(wrap.closest('.acc-body') || wrap).querySelectorAll('.file-field input[type="hidden"]')]
+      .filter(i => i !== input).reduce((n, i) => n + (Vault.fileOf(i.value)?.size || 0), 0);
+    if (!file.size) { setStatus(`${file.name} is empty`, false); return; }
+    if (file.size + others > Vault.FILE_BYTES_LIMIT) { setStatus(fileTooLarge(file.name, file.size), false); return; }
+    set(Vault.fileValue(file.name, file.type, new Uint8Array(await file.arrayBuffer())));
+  };
+  const render = () => {
+    view.innerHTML = fileViewHTML(input.value, readOnly);
+    const f = Vault.fileOf(input.value);
+    const on = (cls, fn) => view.querySelector(cls)?.addEventListener('click', fn);
+    on('.file-choose', () => chooseFile(take));
+    on('.file-replace', () => chooseFile(take));
+    on('.file-remove', () => {
+      if (!confirm(`Remove ${f.name} from this item?`)) return;
+      set('');
+    });
+    on('.file-download', () => downloadFile(f));
+    on('.file-copy', async () => { if (await copyText(Vault.fileText(f))) setStatus(`${f.name} copied`); });
+    on('.file-show', e => {
+      const pre = view.querySelector('.file-preview');
+      pre.hidden = !pre.hidden;
+      pre.textContent = pre.hidden ? '' : Vault.fileText(f);
+      e.currentTarget.textContent = pre.hidden ? 'Show' : 'Hide';
+    });
+  };
+  if (!readOnly) {
+    // Dropped here: this field's file (the vault's own drop adds a new item).
+    wrap.addEventListener('dragover', e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      wrap.classList.add('drop-hot');
+    });
+    wrap.addEventListener('dragleave', () => wrap.classList.remove('drop-hot'));
+    wrap.addEventListener('drop', e => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      wrap.classList.remove('drop-hot');
+      if (e.dataTransfer.files[0]) take(e.dataTransfer.files[0]);
+    });
+  }
+  render();
+}
+
 // The user's own label + value rows on an item, one compact row each, grouped
 // in sections: the default "Custom fields" one, plus named ones ("Bank
 // details") — a field's `section`. "Hidden" ones are masked with show/copy.
@@ -1809,6 +1944,7 @@ const CF_ADD_KINDS = [
   { kind: 'email', label: 'Email' },
   { kind: 'date', label: 'Date' },
   { kind: 'multiline', label: 'Multi-line' },
+  { kind: 'file', label: 'File' },
 ];
 const CF_PLACEHOLDER = { email: 'name@example.com', date: 'YYYY-MM-DD', url: 'https://…', phone: '+1 555 0100' };
 
@@ -1819,6 +1955,13 @@ function customFieldRowHTML(f = {}) {
   const placeholder = CF_PLACEHOLDER[kind] || 'Value';
   // A new row gets its id now: reading the form twice (Save re-reads it)
   // must give the same fields.
+  if (kind === 'file') {
+    return `<div class="cf-row cf-file" data-id="${esc(f.id || `c-${crypto.randomUUID()}`)}" data-kind="file">
+    <input class="cf-label" type="text" placeholder="Label" value="${esc(f.label || '')}" maxlength="60" aria-label="Field label">
+    ${fileFieldHTML(`<input type="hidden" class="cf-value" value="${value}">`)}
+    <span class="cf-actions"><button type="button" class="btn-eye cf-del" title="Remove">✕</button></span>
+  </div>`;
+  }
   return `<div class="cf-row" data-id="${esc(f.id || `c-${crypto.randomUUID()}`)}" data-kind="${esc(kind)}">
     <input class="cf-label" type="text" placeholder="Label" value="${esc(f.label || '')}" maxlength="60" aria-label="Field label">
     ${kind === 'multiline'
@@ -1858,7 +2001,7 @@ function customFieldsHTML(fields, readOnly = false) {
     if (!groups.has(name)) groups.set(name, []);
     groups.get(name).push(f);
   }
-  return `<div class="acc-field cf-fields">
+  return `<div class="acc-field cf-fields"${readOnly ? ' data-readonly="1"' : ''}>
     ${[...groups].map(([name, list]) => customSectionHTML(name, list, readOnly)).join('')}
     ${readOnly ? '' : '<button type="button" class="coll-link cf-new-section">+ New section</button>'}
   </div>`;
@@ -1881,6 +2024,8 @@ function mountCustomFields(body) {
   const root = body.querySelector('.cf-fields');
   if (!root) return;
   const wire = row => {
+    const file = row.querySelector('.file-field');
+    if (file) mountFileField(file, { readOnly: !!root.dataset.readonly });
     row.querySelector('.cf-eye')?.addEventListener('click', e => {
       const inp = row.querySelector('.cf-value');
       const reveal = inp.type === 'password';
@@ -1908,6 +2053,8 @@ function mountCustomFields(body) {
     section.querySelector('.cf-list').appendChild(row);
     wire(row);
     row.querySelector('.cf-label').focus();
+    // A file row starts by picking the file (still within the click).
+    if (kind === 'file') row.querySelector('.file-choose')?.click();
   };
   const wireSection = section => {
     section.querySelectorAll('.cf-row').forEach(wire);
@@ -2137,19 +2284,28 @@ function renderItemDetail(container, entry) {
     const secret = Vault.SECRET_KINDS.includes(f.kind);
     let input;
     const known = Vault.FIELD_KINDS.includes(f.kind);
+    if (f.kind === 'file') {
+      return `<div class="acc-field" data-field="${id}">
+      <label>${esc(f.label || f.id)}</label>
+      ${fileFieldHTML(`<input type="hidden" class="item-field" data-id="${id}" value="${val}">`)}
+    </div>${entry.type === 'ssh' && f.id === 'privateKey' && !f.value && !readOnly ? sshGenerateHTML() : ''}`;
+    }
+    const fixed = entry.type === 'ssh' && f.id === 'fingerprint'; // computed from the key
     if (f.kind === 'multiline' || !known) input = `<textarea class="item-field" data-id="${id}">
 ${val}</textarea>`;
     else if (f.kind === 'date') input = `<input class="item-field" data-id="${id}" type="date" value="${val}">`;
-    else input = `<input class="item-field" data-id="${id}" type="${secret ? 'password' : 'text'}" value="${val}" autocomplete="off">`;
-    return `<div class="acc-field">
+    else input = `<input class="item-field" data-id="${id}" type="${secret ? 'password' : 'text'}" value="${val}" autocomplete="off"${fixed ? ' readonly' : ''}>`;
+    return `<div class="acc-field" data-field="${id}">
       <label>${esc(f.label || f.id)}</label>
       <div class="field-row">
         ${input}
         ${secret ? `<button class="btn-eye" title="Show/hide">${SVG_EYE}</button>` : ''}
         ${f.kind === 'multiline' ? '' : '<button class="btn-eye btn-copy-field" title="Copy">⧉</button>'}
       </div>
+      ${entry.type === 'ssh' && f.id === 'publicKey' && f.value ? sshAddKeyLinksHTML() : ''}
     </div>`;
   };
+  const readOnly = isSharedEntry(entry) && entry.role === 'view';
   const body = document.createElement('div');
   body.className = 'acc-body open item-body';
   body.dataset.type = entry.type;
@@ -2159,6 +2315,7 @@ ${val}</textarea>`;
       <span class="type-tag">${esc(typeLabel(entry.type))}</span>
       <button class="btn-del" title="Delete">✕ Delete</button>
     </div>
+    ${detectedHTML(entry)}
     <div class="acc-field">
       <label>Name</label>
       <input class="item-title" type="text" placeholder="${esc(typeLabel(entry.type))} name" value="${esc(entry.name)}">
@@ -2257,11 +2414,136 @@ ${esc(item.notes || '')}</textarea>
     const head = document.querySelector(`.acc-row[data-i="${idx}"] .acc-head-name`);
     if (head) head.textContent = e.target.value.trim() || `Untitled ${typeLabel(entry.type).toLowerCase()}`;
   });
+  body.querySelectorAll('.acc-field[data-field] > .file-field').forEach(wrap => mountFileField(wrap, {
+    readOnly,
+    onChange: entry.type === 'ssh' && wrap.parentElement.dataset.field === 'privateKey' ? value => sshKeyChanged(idx, value) : null,
+  }));
+  if (entry.type === 'ssh') mountSsh(body, idx);
+  mountDetected(body, idx);
   mountCategoryChooser(body);
   mountCustomFields(body);
   mountRelated(body, entry);
   container.innerHTML = '';
   container.appendChild(body);
+}
+
+// ── Adding a file to the vault ──
+// A file picked from "+ Add → From a file…" or dropped on the vault becomes
+// the item FileKinds recognizes (SSH key, Apple .p8, …), opened unsaved with
+// a note saying what it was taken for and its alternatives ("Save as a plain
+// file", "Split into fields"). `_detected` is a draft-only flag.
+async function addFromFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const found = await FileKinds.fromFile(file.name, file.type, bytes);
+  if (found.error) {
+    setStatus(found.error === 'too-large' ? fileTooLarge(file.name, file.size) : `${file.name} is empty`, false);
+    return;
+  }
+  const e = entryOf(found.item);
+  e._detected = { label: found.label, note: found.note || '', alternatives: found.alternatives, source: Vault.fileValue(file.name, file.type, bytes) };
+  openNewEntry(e);
+}
+
+function detectedHTML(entry) {
+  const d = entry._detected;
+  if (!d) return '';
+  return `<div class="file-detected">
+    <span class="file-detected-text">${d.label === 'File' ? 'Added as a secure file.' : `Recognized: <b>${esc(d.label)}</b>.`}${d.note ? ` ${esc(d.note)}` : ''}</span>
+    ${d.alternatives.map(a => `<button type="button" class="coll-link file-alt" data-alt="${esc(a.id)}">${esc(a.label)}</button>`).join('')}
+  </div>`;
+}
+
+function mountDetected(body, idx) {
+  body.querySelectorAll('.file-alt').forEach(btn => btn.addEventListener('click', () => {
+    const d = draft[idx]._detected;
+    const f = Vault.fileOf(d.source);
+    const next = entryOf(FileKinds.alternative(btn.dataset.alt, f.name, f.mime, f.bytes));
+    next.category = draft[idx].category;
+    next.moreTags = draft[idx].moreTags;
+    next._detected = { label: btn.dataset.alt === 'env-fields' ? 'Variables as fields' : 'File', note: '', alternatives: [], source: d.source };
+    draft[idx] = next;
+    rebuildAccountsDOM();
+    renderVaultFilters();
+    applyVaultSearch();
+    renderAccDetail();
+  }));
+}
+
+// ── SSH keys in the editor ──
+// The private key is a file; its public key and fingerprint are read from it
+// (SshKeys.parse) when it's added, or come with a key generated here.
+const SSH_ADD_KEY_PAGES = [
+  ['GitHub', 'https://github.com/settings/ssh/new'],
+  ['GitLab', 'https://gitlab.com/-/user_settings/ssh_keys'],
+  ['Bitbucket', 'https://bitbucket.org/account/settings/ssh-keys/'],
+];
+
+function sshAddKeyLinksHTML() {
+  return `<div class="ssh-add-links">Add the public key to ${SSH_ADD_KEY_PAGES.map(([name, url]) =>
+    `<a href="${esc(url)}" class="ssh-add-link" target="_blank" rel="noopener">${name} ↗</a>`).join(' · ')}</div>`;
+}
+
+function sshGenerateHTML() {
+  return `<div class="acc-field ssh-gen">
+    <label>Or generate a new key</label>
+    <div class="field-row">
+      <select class="ssh-gen-type" aria-label="Key type"><option value="ed25519">Ed25519</option><option value="rsa">RSA 4096</option></select>
+      <input class="ssh-gen-comment" type="text" placeholder="Comment, e.g. you@laptop" autocomplete="off" aria-label="Key comment">
+      <button type="button" class="file-btn ssh-gen-go">Generate</button>
+    </div>
+    <div class="ssh-gen-hint">Made here and saved encrypted in your vault (no passphrase: add one later with <code>ssh-keygen -p</code> if you need it).</div>
+  </div>`;
+}
+
+function mountSsh(body, idx) {
+  body.querySelectorAll('.ssh-add-link').forEach(a => a.addEventListener('click', e => {
+    e.preventDefault();
+    chrome.tabs.create({ url: a.href });
+  }));
+  body.querySelector('.ssh-gen-go')?.addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    const kind = body.querySelector('.ssh-gen-type').value;
+    const comment = body.querySelector('.ssh-gen-comment').value.trim();
+    btn.disabled = true;
+    btn.textContent = 'Generating…';
+    let key;
+    try { key = await SshKeys.generate(kind, comment); } catch {
+      btn.disabled = false;
+      btn.textContent = 'Generate';
+      setStatus('This browser can\'t generate that kind of key — try RSA 4096', false);
+      return;
+    }
+    if (openAccIdx !== idx) return; // the user moved on meanwhile
+    syncOpenAccToDraft();
+    const item = draft[idx].item;
+    Vault.getField(item, 'privateKey').value = Vault.fileValue(key.fileName, 'text/plain', new TextEncoder().encode(key.privateKey));
+    Vault.getField(item, 'publicKey').value = key.publicKey;
+    Vault.getField(item, 'fingerprint').value = key.fingerprint;
+    if (!draft[idx].name) draft[idx].name = comment || `${key.label} key`;
+    rebuildAccountsDOM();
+    renderVaultFilters();
+    applyVaultSearch();
+    renderAccDetail();
+    setStatus(`${key.label} key generated — copy its public key, then Save`);
+  });
+}
+
+// A private key picked or dropped: its public key and fingerprint follow it.
+async function sshKeyChanged(idx, value) {
+  const f = Vault.fileOf(value);
+  const parsed = f ? await SshKeys.parse(Vault.fileText(f) || '') : null;
+  if (openAccIdx !== idx) return;
+  syncOpenAccToDraft();
+  const e = draft[idx];
+  Vault.getField(e.item, 'publicKey').value = parsed?.publicKey || '';
+  Vault.getField(e.item, 'fingerprint').value = parsed?.fingerprint || '';
+  if (!e.name && parsed?.comment) e.name = parsed.comment;
+  rebuildAccountsDOM();
+  renderVaultFilters();
+  applyVaultSearch();
+  renderAccDetail();
+  if (f && !parsed) setStatus(`${f.name} doesn't look like an SSH private key — kept as a file`, false);
+  else if (parsed?.encrypted && !parsed.publicKey) setStatus('That key is protected by a passphrase in a format OTPilot can\'t read: paste its public key', false);
 }
 
 // ── Collections in the editor ──
@@ -2574,6 +2856,8 @@ function sharedBadgeHTML(code) {
 // "+ Add" opens the type picker: the item types, and the planned ones as
 // "Soon". A Login starts the login editor; the others an item editor.
 function addToDraft(type) {
+  // The file chooser opens now, within the click that picked it.
+  if (type === 'from-file') { chooseFile(addFromFile, { multiple: true }); return; }
   syncOpenAccToDraft();
   // Adding while a category filter is active pre-assigns that category, so the
   // new row matches the active filter and stays visible (instead of being
@@ -2586,6 +2870,19 @@ function addToDraft(type) {
   } else {
     draft.push(entryOf(Vault.newItem(type, { tags: filterTag() ? [filterTag()] : [] })));
   }
+  showNewEntry();
+  document.querySelector(type === '2fa' ? '#acc-detail .acc-secret' : '#acc-detail .acc-name, #acc-detail .item-title')?.focus();
+}
+
+// Adds an item entry made elsewhere (from a file) and opens it, unsaved.
+function openNewEntry(entry) {
+  syncOpenAccToDraft();
+  if (filterTag()) entry.category = filterTag();
+  draft.push(entry);
+  showNewEntry();
+}
+
+function showNewEntry() {
   // A new item has no 2FA code yet, and may be of a type the filters hide.
   if (filters.twofa || filters.types.length || filters.tags.length > 1) clearFilters();
   openAccIdx = draft.length - 1;
@@ -2594,7 +2891,6 @@ function addToDraft(type) {
   applyVaultSearch();
   renderAccDetail();
   document.getElementById('accounts-list').lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  document.querySelector(type === '2fa' ? '#acc-detail .acc-secret' : '#acc-detail .acc-name, #acc-detail .item-title')?.focus();
 }
 
 function closeAddMenu() {
@@ -2617,13 +2913,20 @@ function fillAddMenu(menu, pick) {
   };
   add('2fa', '2FA code');
   for (const [type, t] of Object.entries(Vault.TYPES)) add(type, t.label);
+  add('from-file', 'From a file…');
+  menu.lastElementChild.classList.add('add-from-file');
+  // The planned types, as small chips under "Soon" (the menu has to fit the popup).
+  const soon = document.createElement('div');
+  soon.className = 'add-soon';
+  soon.innerHTML = '<span class="add-soon-label">Soon</span>';
   for (const t of Vault.UPCOMING_TYPES) {
     const b = document.createElement('button');
     b.className = 'add-type soon';
     b.disabled = true;
-    b.innerHTML = `${esc(t.label)} <span class="soon-tag">Soon</span>`;
-    menu.appendChild(b);
+    b.textContent = t.label;
+    soon.appendChild(b);
   }
+  menu.appendChild(soon);
 }
 
 function toggleAddMenu(id, pick) {
@@ -2644,6 +2947,27 @@ document.addEventListener('click', e => {
 });
 
 document.getElementById('acc-search').addEventListener('input', applyVaultSearch);
+
+// Files dropped on the vault become new items (a file field takes a file
+// dropped on it itself). Anywhere else, dropping does nothing — never
+// navigates the popup to the file.
+{
+  const panel = document.getElementById('settings-panel');
+  panel.addEventListener('dragover', e => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    panel.classList.add('drop-hot');
+  });
+  panel.addEventListener('dragleave', e => { if (!panel.contains(e.relatedTarget)) panel.classList.remove('drop-hot'); });
+  panel.addEventListener('drop', e => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    panel.classList.remove('drop-hot');
+    for (const f of e.dataTransfer.files) addFromFile(f);
+  });
+  window.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+  window.addEventListener('drop', e => { if (hasFiles(e)) e.preventDefault(); });
+}
 
 document.getElementById('btn-cancel').addEventListener('click', () => {
   openAccIdx = -1;

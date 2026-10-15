@@ -6,9 +6,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { Api, ApiError } from './api.js'
 import { browserLogin } from './browser.js'
-import { fieldValue, findGrant, loadGrants, openItem, PendingApproval, waitForAnswer, type Grant } from './grants.js'
+import { fieldValue, fileField, findGrant, loadGrants, openItem, PendingApproval, waitForAnswer, type Grant } from './grants.js'
 import { redact } from './redact.js'
-import { resolveAllowed, runCommand } from './run.js'
+import { fileSecrets, resolveAllowed, runCommand, writeTempFiles } from './run.js'
+import { Vault } from './extension.js'
 import type { Credentials } from './store.js'
 
 // From package.json, so --version and the MCP handshake always match the release.
@@ -19,6 +20,7 @@ export const INSTRUCTIONS = `OTPilot lets you use the user's accounts (passwords
 - list_accounts shows the accounts the user allowed you. To use another one, call request_access; the user approves it in the OTPilot browser extension.
 - To test or use a website, call browser_login: OTPilot signs in (password and 2FA included) and gives you a Playwright storageState file. Load it in your browser (e.g. browser.newContext({ storageState })) to continue signed in.
 - To run a command that needs a secret, call run with env values written as "<account>/<field>" (fields: username, password, totp for a fresh 2FA code, notes, or a custom field's label). Secrets are removed from the output.
+- A file (an SSH key, an Apple .p8, a service-account key file) comes as a path: "<account>/@file" (or the file field's label) sets the variable to a private temporary file that exists only while the command runs, e.g. { "KEY": "Deploy key/@file" } with GIT_SSH_COMMAND='ssh -i "$KEY" -o IdentitiesOnly=yes' git push.
 - When a tool answers "Waiting for approval", tell the user to open the OTPilot extension (Agents) and approve, then call the tool again (or check_request).
 - Never try to print, encode or send a secret elsewhere: the user trusts you with access, not with the values.`
 
@@ -122,7 +124,7 @@ export function buildServer(ctx: Ctx): McpServer {
 
   server.registerTool('run', {
     title: 'Run a command with secrets',
-    description: 'Runs a shell command with secrets from allowed accounts in its environment, for that process only. env values are references "<account>/<field>" (username, password, totp = a fresh 2FA code, notes, or a custom field\'s label). Returns the exit code and the output with every secret removed.',
+    description: 'Runs a shell command with secrets from allowed accounts in its environment, for that process only. env values are references "<account>/<field>" (username, password, totp = a fresh 2FA code, notes, or a custom field\'s label; "<account>/@file" or a file field\'s label = the path of a private temporary copy of that file, deleted when the command ends). Returns the exit code and the output with every secret removed.',
     inputSchema: {
       command: z.string().min(1).max(4000).describe('The command, e.g. psql -h db.example.com -c "select 1"'),
       env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()).describe('Environment variables to set, as references: { "PGPASSWORD": "Staging DB/password" }'),
@@ -138,6 +140,7 @@ export function buildServer(ctx: Ctx): McpServer {
     // Each account is opened once per command: one approval covers all its fields.
     const opened = new Map<string, Awaited<ReturnType<typeof openItem>>>()
     let program: { path: string; rest: string } | undefined
+    const files: { name: string; bytes: Uint8Array; env: string }[] = []
     for (const [name, ref] of Object.entries(env)) {
       const cut = ref.lastIndexOf('/')
       if (cut <= 0) return fail(`env ${name}: write it as "<account>/<field>", e.g. "Staging DB/password".`)
@@ -150,11 +153,23 @@ export function buildServer(ctx: Ctx): McpServer {
         item = await openItem(ctx.api, ctx.creds.privateJwk, grant, 'run', reason || '', WAIT_MS)
         opened.set(grant.itemId, item)
       }
-      values[name] = await fieldValue(item, ref.slice(cut + 1))
-      secrets.push(values[name], ...item.fields.map(f => f.value || ''), item.totp?.secret || '')
+      const file = fileField(item, ref.slice(cut + 1))
+      if (file) {
+        files.push({ name: file.name, bytes: file.bytes, env: name })
+        secrets.push(...fileSecrets(file.bytes, Vault.fileText(file)))
+      } else {
+        values[name] = await fieldValue(item, ref.slice(cut + 1))
+        secrets.push(values[name])
+      }
+      secrets.push(...item.fields.map(f => f.value || ''), item.totp?.secret || '')
       used.set(grant.itemId, grant)
     }
-    const r = await runCommand(command, values, { cwd, timeoutSec: timeout_seconds, secrets: secrets.filter(Boolean), program })
+    const temp = writeTempFiles(files)
+    files.forEach((f, i) => { values[f.env] = temp.paths[i] })
+    let r: Awaited<ReturnType<typeof runCommand>>
+    try {
+      r = await runCommand(command, values, { cwd, timeoutSec: timeout_seconds, secrets: secrets.filter(Boolean), program })
+    } finally { temp.cleanup() }
     const programName = command.trim().split(/\s+/)[0] || 'command'
     for (const g of used.values()) await report(ctx, g.itemId, 'run', programName)
     const out = [`exit code: ${r.exitCode ?? 'none'}${r.timedOut ? ' (timed out)' : ''}`]
