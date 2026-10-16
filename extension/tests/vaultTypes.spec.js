@@ -35,7 +35,7 @@ const stored = page => page.evaluate(async () => (await VaultStore.readAll(await
 test('Add offers every type, and the planned ones as Soon', async ({ context, extensionId }) => {
   const page = await vault(context, extensionId);
   await page.click('#btn-add');
-  await expect(page.locator('#add-type-menu [data-add-type]')).toHaveText(['2FA code', 'Login', 'Secure note', 'Server', 'API credential', 'SSH key', 'Secure file', 'From a file…']);
+  await expect(page.locator('#add-type-menu [data-add-type]')).toHaveText(['2FA code', 'Login', 'Secure note', 'Server', 'API credential', 'SSH key', 'Secure file', 'Crypto wallet', 'From a file…']);
   await expect(page.locator('#add-type-menu .add-type.soon').first()).toBeDisabled();
   await expect(page.locator('#add-type-menu .add-type.soon')).toHaveCount(7);
   // A click elsewhere closes it.

@@ -173,6 +173,9 @@ const Importers = (() => {
 
   // OTPilot's `fields` cell: a JSON list of { id, label, value, kind, custom, section? }
   // (lossless), or — from an earlier export — "Label: value" lines.
+  // A field's `format` the export keeps: a crypto wallet's secrets and addresses.
+  const FIELD_FORMATS = ['bip39', 'key', 'address'];
+
   function parseFieldsCell(text) {
     const t = String(text || '').trim();
     if (!t) return [];
@@ -184,6 +187,7 @@ const Importers = (() => {
             id: String(f.id || ''), label: String(f.label || ''), value: String(f.value ?? ''),
             kind: Vault.FIELD_KINDS.includes(f.kind) ? f.kind : 'text', custom: !!f.custom,
             ...(f.section ? { section: String(f.section).slice(0, 60) } : {}),
+            ...(FIELD_FORMATS.includes(f.format) ? { format: f.format } : {}),
           }));
         }
       } catch { /* not JSON: lines below */ }
@@ -344,10 +348,19 @@ const Importers = (() => {
   // the same id or label, else as a custom field (kept hidden if it was).
   // Custom fields already on the item (same label, value and section) aren't repeated.
   function withFields(item, fields) {
-    const next = { ...item, fields: (item.fields || []).map(f => ({ ...f })) };
+    let next = { ...item, fields: (item.fields || []).map(f => ({ ...f })) };
     for (const f of fields || []) {
       if (!f.label && !f.id) continue;
-      const tpl = !f.custom && next.fields.find(t => !t.custom && (t.id === f.id || (f.label && (t.label || '').toLowerCase() === f.label.toLowerCase())));
+      // A wallet's address: one more address (before the template match, which
+      // would take a second address on the same network for the first one).
+      if (!f.custom && f.format === 'address') {
+        const addrs = Vault.addressesOf(next);
+        if (!addrs.some(x => x.network === (f.label || 'Address') && x.address === String(f.value ?? '').trim())) {
+          next = Vault.withAddresses(next, [...addrs, { network: f.label, address: f.value }]);
+        }
+        continue;
+      }
+      const tpl = !f.custom && next.fields.find(t => !t.custom && t.format !== 'address' && (t.id === f.id || (f.label && (t.label || '').toLowerCase() === f.label.toLowerCase())));
       if (tpl) { tpl.value = f.value; continue; }
       if (next.fields.some(t => t.custom && t.label === f.label && t.value === f.value && (t.section || '') === (f.section || ''))) continue;
       next.fields.push({ id: `c-${crypto.randomUUID()}`, label: f.label || f.id, value: f.value, kind: f.kind || 'text', custom: true, ...(f.section ? { section: f.section } : {}) });
@@ -420,7 +433,7 @@ const Importers = (() => {
         const known = new Set(['username', 'password']);
         const extra = (item.fields || [])
           .filter(f => !(item.type === 'login' && !f.custom && known.has(f.id)) && (f.custom || String(f.value ?? '') !== ''))
-          .map(f => ({ id: f.id, label: f.label || f.id, value: f.value, kind: f.kind, ...(f.custom ? { custom: true } : {}), ...(f.section ? { section: f.section } : {}) }));
+          .map(f => ({ id: f.id, label: f.label || f.id, value: f.value, kind: f.kind, ...(f.custom ? { custom: true } : {}), ...(f.section ? { section: f.section } : {}), ...(f.format ? { format: f.format } : {}) }));
         return [
           item.type,
           item.title || '',

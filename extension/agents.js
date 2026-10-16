@@ -151,24 +151,36 @@ const Agents = (() => {
     return [...(scope.parts || [])];
   }
 
+  // The parts an agent can be given: never a crypto wallet's recovery phrase,
+  // passphrase or private keys (Vault.isWalletSecret) — they move funds.
+  function partsFor(item) {
+    return VaultShares.parts(item).filter(p => !p.walletSecret);
+  }
+
   // The scope that suits an item by default: its 2FA code when it has one
   // (the least it can give), else a login's sign-in, else the other item
   // types' own fields (a server, an API key…).
   function defaultScope(item) {
     if (item.totp?.secret) return { kind: '2fa' };
     if (item.type === 'login') return { kind: 'login' };
-    return { kind: 'fields', parts: VaultShares.parts(item).map(p => p.key) };
+    return { kind: 'fields', parts: partsFor(item).map(p => p.key) };
   }
 
   // What a scope gives of this item, for the UI ("2FA code · Password").
   function scopeSummary(item, scope) {
     if (scope.kind !== 'fields') return SCOPE_LABELS[scope.kind];
-    const labels = new Map(VaultShares.parts(item).map(p => [p.key, p.label]));
-    return (scope.parts || []).map(k => labels.get(k) || k).join(' · ') || 'Nothing';
+    const all = VaultShares.parts(item);
+    const labels = new Map(all.map(p => [p.key, p.label]));
+    const withheld = new Set(all.filter(p => p.walletSecret).map(p => p.key));
+    return (scope.parts || []).filter(k => !withheld.has(k)).map(k => labels.get(k) || k).join(' · ') || 'Nothing';
   }
 
+  // Wallet secrets are dropped here too, whatever the scope says (one approved
+  // before this rule, or a field that became one).
   function copyOf(item, scope) {
-    return VaultShares.project(item, { id: item.id, whole: false, parts: partsOf(scope) });
+    const copy = VaultShares.project(item, { id: item.id, whole: false, parts: partsOf(scope) });
+    copy.fields = copy.fields.filter(f => !Vault.isWalletSecret(item, f));
+    return copy;
   }
 
   async function fingerprint(copy, grant) {
@@ -407,6 +419,6 @@ const Agents = (() => {
   return {
     code, list, approve, pin, remove, activity, rename, clientLabel, grant, ungrant, decide, answer, candidates, syncCopies,
     hostOfQuery: q => { const h = hostOf(q); return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(h) ? h : null; },
-    defaultScope, scopeSummary, partsOf, copyOf, vaultItems, SCOPE_LABELS,
+    defaultScope, scopeSummary, partsOf, partsFor, copyOf, vaultItems, SCOPE_LABELS,
   };
 })();

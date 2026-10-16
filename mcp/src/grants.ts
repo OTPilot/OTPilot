@@ -44,7 +44,7 @@ export async function loadGrants(api: Api, privateJwk: JsonWebKey): Promise<Gran
     try {
       const sk = VaultCrypto.b64e(await unwrap(g.wrapped_key, privateJwk))
       const label = g.label ? await VaultCrypto.decryptItem(g.label, sk) : null
-      const item = g.record ? await VaultCrypto.decryptItem(g.record, sk) : null
+      const item = g.record ? withoutWalletSecrets(await VaultCrypto.decryptItem(g.record, sk)) : null
       out.push({
         itemId: g.item_id,
         title: item?.title || label?.title || 'Untitled',
@@ -62,6 +62,17 @@ export async function loadGrants(api: Api, privateJwk: JsonWebKey): Promise<Gran
   }
   return out
 }
+
+/**
+ * A crypto wallet's recovery phrase, passphrase and private keys move funds:
+ * the extension never puts them in an agent's copy, and one that still
+ * carries them (an older extension) has them dropped here.
+ */
+export function withoutWalletSecrets(item: VaultItem): VaultItem {
+  return { ...item, fields: (item.fields || []).filter(f => !Vault.isWalletSecret(item, f)) }
+}
+
+const WALLET_SECRET_NAMES = ['seed', 'passphrase', 'privatekey', 'private key', 'recovery phrase', 'seed phrase', 'mnemonic']
 
 /** The grant `ref` names: its item id, its exact title, or the one title containing it. */
 export function findGrant(grants: Grant[], ref: string): Grant {
@@ -196,6 +207,9 @@ export function fileField(item: VaultItem, field: string): VaultFile | null {
 /** One value of an item: username, password, totp (a fresh code), notes, or a custom field by label. */
 export async function fieldValue(item: VaultItem, field: string): Promise<string> {
   const f = field.trim().toLowerCase()
+  if (item.type === 'wallet' && WALLET_SECRET_NAMES.includes(f)) {
+    throw new Error(`A crypto wallet's recovery phrase, passphrase and private keys are never available to agents.`)
+  }
   if (f === 'totp' || f === 'code' || f === '2fa' || f === 'otp') {
     if (!item.totp?.secret) throw new Error(`"${item.title}" has no 2FA code available to this agent.`)
     return generateTOTP(item.totp.secret, item.totp.period || 30, item.totp.digits || 6)

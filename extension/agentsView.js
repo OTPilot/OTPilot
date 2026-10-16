@@ -169,7 +169,7 @@ function renderAgentConnectHelp(detail) {
     </div>
   </div>`;
   detail.querySelector('#agents-copy-cmd').addEventListener('click', async () => {
-    await navigator.clipboard.writeText(AGENT_CONNECT_CMD).catch(() => {});
+    await clipboardWrite(AGENT_CONNECT_CMD).catch(() => {});
     setStatus('Command copied');
   });
 }
@@ -213,7 +213,8 @@ function agentGrantFormHTML(item, current) {
   const isLogin = item.type === 'login';
   const hasTotp = !!item.totp?.secret;
   const opt = (v, label, on, dis) => `<option value="${v}"${on ? ' selected' : ''}${dis ? ' disabled' : ''}>${label}</option>`;
-  const parts = VaultShares.parts(item);
+  const parts = Agents.partsFor(item);
+  const withheld = VaultShares.parts(item).some(p => p.walletSecret);
   const chosen = new Set(scope.kind === 'fields' ? scope.parts : []);
   // An expired grant being renewed has no time left to keep: an hour by default.
   // The same rule the list shows "expired" by (its last half minute counts).
@@ -229,6 +230,7 @@ function agentGrantFormHTML(item, current) {
     </label>
     <div class="ag-fields"${scope.kind === 'fields' ? '' : ' hidden'}>
       ${parts.map(p => `<label><input type="checkbox" value="${esc(p.key)}"${chosen.has(p.key) ? ' checked' : ''}> ${esc(p.label)}</label>`).join('') || '<span class="ag-note">This item has no fields to share.</span>'}
+      ${withheld ? '<span class="ag-note">A wallet\'s recovery phrase and keys are never given to AI agents.</span>' : ''}
     </div>
     <label>For
       <select class="ag-duration">

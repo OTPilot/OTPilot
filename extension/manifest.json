@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "OTPilot",
   "version": "2.1.4",
-  "description": "Password manager with built-in 2FA, SSH keys and safe sign-in for AI agents. Fills logins and codes on any page. Free to start.",
+  "description": "Password manager with built-in 2FA, SSH keys, crypto wallets and safe sign-in for AI agents. Fills logins and 2FA codes anywhere.",
   "background": {
     "service_worker": "background.js"
   },
@@ -25,7 +25,7 @@
   "content_scripts": [
     {
       "matches": ["*://*/*"],
-      "js": ["jsqr.js", "totp.js", "email-reader.js", "content.js", "generator.js", "forms.js"],
+      "js": ["jsqr.js", "totp.js", "email-reader.js", "content.js", "generator.js", "forms.js", "bip39.js", "seedGuard.js"],
       "run_at": "document_idle"
     }
   ],

@@ -855,13 +855,14 @@ function siteUrl(pattern) {
 }
 
 async function homeCopy(value, label) {
-  try { await navigator.clipboard.writeText(value); setStatus(`${label} copied`); }
+  try { await clipboardWrite(value); setStatus(`${label} copied`); }
   catch { setStatus('Could not copy — the browser blocked the clipboard', false); }
 }
 
 // One label | value row; secret values masked with Show.
 // No label: the value takes the row (a section's only text, like notes).
-function homeRow({ label, value, secret = false, multiline = false, open = null, file = false }) {
+// `guard`: a wallet secret, shown / copied only after the master password.
+function homeRow({ label, value, secret = false, multiline = false, open = null, file = false, guard = false }) {
   const el = document.createElement('div');
   el.className = 'home-cred' + (multiline ? ' multiline' : '') + (label ? '' : ' full');
   el.innerHTML = `<span class="home-cred-label"></span><span class="home-cred-value"></span><span class="home-cred-actions"></span>`;
@@ -891,7 +892,10 @@ function homeRow({ label, value, secret = false, multiline = false, open = null,
     eye.className = 'home-cred-btn';
     eye.textContent = 'Show';
     let shown = false;
-    eye.addEventListener('click', () => { shown = !shown; show(shown); eye.textContent = shown ? 'Hide' : 'Show'; });
+    eye.addEventListener('click', async () => {
+      if (!shown && guard && !(await confirmWalletSecrets())) return;
+      shown = !shown; show(shown); eye.textContent = shown ? 'Hide' : 'Show';
+    });
     actions.appendChild(eye);
   }
   if (open) {
@@ -905,7 +909,10 @@ function homeRow({ label, value, secret = false, multiline = false, open = null,
   const copy = document.createElement('button');
   copy.className = 'home-cred-btn';
   copy.textContent = 'Copy';
-  copy.addEventListener('click', () => homeCopy(value, label || 'Text'));
+  copy.addEventListener('click', async () => {
+    if (!guard) { homeCopy(value, label || 'Text'); return; }
+    if (await confirmWalletSecrets()) copySecret(value, label || 'Secret');
+  });
   actions.appendChild(copy);
   return el;
 }
@@ -931,6 +938,7 @@ function homeSection(title, children, action) {
 function homeItemRows(item) {
   const rows = (item.fields || []).filter(f => String(f.value ?? '') !== '').map(f => homeRow({
     label: f.label || f.id, value: f.value, secret: Vault.SECRET_KINDS.includes(f.kind), multiline: f.kind === 'multiline', file: f.kind === 'file',
+    guard: Vault.isWalletSecret(item, f),
   }));
   if (String(item.notes || '').trim()) rows.push(homeRow({ label: item.type === 'note' ? '' : 'Notes', value: item.notes, multiline: true }));
   return rows;
@@ -1132,7 +1140,7 @@ document.getElementById('btn-obfuscate').addEventListener('click', () => {
 document.getElementById('btn-copy').addEventListener('click', async () => {
   if (!currentCode) return;
   try {
-    await navigator.clipboard.writeText(currentCode);
+    await clipboardWrite(currentCode);
     setStatus('Copied!');
   } catch {
     setStatus('Clipboard unavailable', false);
@@ -1209,6 +1217,11 @@ function itemSummary(item) {
   if (item.type === 'file') {
     const f = Vault.fileOf(Vault.getValue(item, 'file'));
     return f ? `${f.name} · ${formatBytes(f.size)}` : '';
+  }
+  if (item.type === 'wallet') {
+    const addrs = Vault.addressesOf(item);
+    const first = addrs[0] ? `${addrs[0].network} ${CryptoAddresses.short(addrs[0].address)}`.trim() : '';
+    return [Vault.getValue(item, 'wallet'), first, addrs.length > 1 && `+${addrs.length - 1}`].filter(Boolean).join(' · ');
   }
   return (ITEM_SUMMARY[item.type] || []).map(id => Vault.getValue(item, id)).filter(Boolean).join(' · ');
 }
@@ -1347,8 +1360,9 @@ function syncOpenAccToDraft() {
     // value exactly (a date in another format, a newer version's kind).
     body.querySelectorAll('.item-field[data-dirty]').forEach(inp => {
       const field = Vault.getField(entry.item, inp.dataset.id);
-      if (field) field.value = inp.value;
+      if (field) field.value = field.format === 'bip39' ? Bip39.normalize(inp.value) : inp.value;
     });
+    if (body.querySelector('.wallet-addrs')) entry.item = Vault.withAddresses(entry.item, readWalletAddresses(body));
     entry.item.notes = body.querySelector('.item-notes').value;
     entry.item = VaultAccounts.withCustomFields(entry.item, readCustomFields(body));
     entry.email = itemSummary(entry.item);
@@ -2284,6 +2298,10 @@ function renderItemDetail(container, entry) {
     const secret = Vault.SECRET_KINDS.includes(f.kind);
     let input;
     const known = Vault.FIELD_KINDS.includes(f.kind);
+    if (f.format === 'address') return ''; // in the Addresses list (walletAddressesHTML)
+    if (f.format === 'bip39') return seedFieldHTML(f, readOnly);
+    // A wallet secret already saved shows / copies only after the master password.
+    const guard = Vault.isWalletSecret(item, f) && String(f.value ?? '') !== '' ? ' data-guard="1"' : '';
     if (f.kind === 'file') {
       return `<div class="acc-field" data-field="${id}">
       <label>${esc(f.label || f.id)}</label>
@@ -2294,7 +2312,7 @@ function renderItemDetail(container, entry) {
     if (f.kind === 'multiline' || !known) input = `<textarea class="item-field" data-id="${id}">
 ${val}</textarea>`;
     else if (f.kind === 'date') input = `<input class="item-field" data-id="${id}" type="date" value="${val}">`;
-    else input = `<input class="item-field" data-id="${id}" type="${secret ? 'password' : 'text'}" value="${val}" autocomplete="off"${fixed ? ' readonly' : ''}>`;
+    else input = `<input class="item-field" data-id="${id}" type="${secret ? 'password' : 'text'}" value="${val}" autocomplete="off"${fixed ? ' readonly' : ''}${guard}>`;
     return `<div class="acc-field" data-field="${id}">
       <label>${esc(f.label || f.id)}</label>
       <div class="field-row">
@@ -2321,6 +2339,7 @@ ${val}</textarea>`;
       <input class="item-title" type="text" placeholder="${esc(typeLabel(entry.type))} name" value="${esc(entry.name)}">
     </div>
     ${(item.fields || []).filter(f => !f.custom).map(fieldHTML).join('')}
+    ${Vault.TYPES[entry.type]?.addresses ? walletAddressesHTML(item, readOnly) : ''}
     ${Vault.TYPES[entry.type]?.urls ? `
     <div class="acc-field">
       <label>2FA secret (optional, base32 or hex)</label>
@@ -2399,16 +2418,22 @@ ${esc(item.notes || '')}</textarea>
     applyVaultSearch();
     renderAccDetail();
   });
-  body.querySelectorAll('.btn-eye:not(.btn-copy-field):not(.btn-eye-totp)').forEach(b => !b.closest('.cf-row') && b.addEventListener('click', e => {
+  body.querySelectorAll('.btn-eye:not(.btn-copy-field):not(.btn-eye-totp)').forEach(b => !b.closest('.cf-row, .addr-row') && b.addEventListener('click', async e => {
     const btn = e.currentTarget;
     const inp = btn.parentElement.querySelector('.item-field');
     const reveal = inp.type === 'password';
+    if (reveal && inp.dataset.guard && !(await confirmWalletSecrets())) return;
     inp.type = reveal ? 'text' : 'password';
     btn.innerHTML = reveal ? SVG_EYE_OFF : SVG_EYE;
   }));
-  body.querySelectorAll('.btn-copy-field').forEach(b => b.addEventListener('click', async () => {
+  body.querySelectorAll('.btn-copy-field').forEach(b => !b.closest('.addr-row') && b.addEventListener('click', async () => {
     const inp = b.parentElement.querySelector('.item-field');
-    if (inp.value && await copyText(inp.value)) setStatus('Copied');
+    if (!inp.value) return;
+    if (inp.dataset.guard) {
+      if (await confirmWalletSecrets()) copySecret(inp.value, inp.closest('.acc-field')?.querySelector('label')?.textContent || 'Secret');
+      return;
+    }
+    if (await copyText(inp.value)) setStatus('Copied');
   }));
   body.querySelector('.item-title').addEventListener('input', e => {
     const head = document.querySelector(`.acc-row[data-i="${idx}"] .acc-head-name`);
@@ -2419,12 +2444,250 @@ ${esc(item.notes || '')}</textarea>
     onChange: entry.type === 'ssh' && wrap.parentElement.dataset.field === 'privateKey' ? value => sshKeyChanged(idx, value) : null,
   }));
   if (entry.type === 'ssh') mountSsh(body, idx);
+  mountSeedFields(body, readOnly);
+  mountWalletAddresses(body, readOnly);
   mountDetected(body, idx);
   mountCategoryChooser(body);
   mountCustomFields(body);
   mountRelated(body, entry);
   container.innerHTML = '';
   container.appendChild(body);
+}
+
+// ── Crypto wallets ──
+// The recovery phrase shows as numbered words, checked against the BIP39 list
+// as it's typed (bip39.js); a saved one, like the wallet's other secrets
+// (Vault.isWalletSecret), shows or copies only after the master password.
+// Addresses are a list of network + address, each with its QR code.
+
+function seedFieldHTML(f, readOnly) {
+  const id = esc(f.id);
+  const has = String(f.value ?? '').trim() !== '';
+  return `<div class="acc-field seed-field" data-field="${id}">
+      <label>${esc(f.label || f.id)}</label>
+      <div class="seed-masked"${has ? '' : ' hidden'}>${'•'.repeat(12)} <span>hidden</span></div>
+      <ol class="seed-grid" hidden></ol>
+      <textarea class="item-field seed-input" data-id="${id}" spellcheck="false" autocomplete="off" autocapitalize="off"${has ? ' hidden data-guard="1"' : ''} placeholder="Paste or type the 12 to 24 words">
+${esc(String(f.value ?? ''))}</textarea>
+      ${has ? `<div class="seed-actions">
+        <button type="button" class="home-cred-btn seed-show">Show</button>
+        ${readOnly ? '' : '<button type="button" class="home-cred-btn seed-edit">Edit</button>'}
+        <button type="button" class="home-cred-btn seed-copy">Copy</button>
+      </div>` : ''}
+      <div class="seed-check" aria-live="polite"></div>
+      <div class="share-hint">Anyone with these words owns the wallet. Never type them into a website; OTPilot never gives them to AI agents.</div>
+    </div>`;
+}
+
+// What the editor says about the phrase typed so far.
+// `masked`: the phrase is hidden, so the message names no word.
+async function seedCheckText(text, masked) {
+  const c = await Bip39.check(text);
+  if (!c.count) return { text: '', ok: null };
+  if (c.unknown.length) {
+    const u = c.unknown[0];
+    const more = c.unknown.length > 1 ? ` (and ${c.unknown.length - 1} more)` : '';
+    const word = masked ? `Word ${u.index + 1}` : `Word ${u.index + 1}, “${u.word}”,`;
+    return { text: `${word} isn't in the BIP39 list${more}. Fine if your wallet uses another list.`, ok: false };
+  }
+  if (!c.countOk) return { text: `${c.count} word${c.count === 1 ? '' : 's'}: recovery phrases have 12, 15, 18, 21 or 24.`, ok: false };
+  if (c.checksum === false) return { text: `${c.count} words, but the checksum doesn't match. Check for a typo or two swapped words.`, ok: false };
+  return { text: `✓ Valid ${c.count}-word recovery phrase`, ok: true };
+}
+
+function mountSeedFields(body, readOnly) {
+  body.querySelectorAll('.seed-field').forEach(box => {
+    const input = box.querySelector('.seed-input');
+    const grid = box.querySelector('.seed-grid');
+    const masked = box.querySelector('.seed-masked');
+    const check = box.querySelector('.seed-check');
+    const showBtn = box.querySelector('.seed-show');
+    let seq = 0;
+    const recheck = async () => {
+      const mine = ++seq;
+      const r = await seedCheckText(input.value, input.hidden);
+      if (mine !== seq) return;
+      check.textContent = r.text;
+      check.dataset.ok = r.ok === null ? '' : String(r.ok);
+    };
+    const hideGrid = () => {
+      grid.hidden = true;
+      grid.innerHTML = '';
+      if (showBtn) showBtn.textContent = 'Show';
+      if (input.hidden) masked.hidden = false;
+    };
+    input.addEventListener('input', recheck);
+    recheck();
+    showBtn?.addEventListener('click', async () => {
+      if (!grid.hidden) { hideGrid(); return; }
+      if (!(await confirmWalletSecrets())) return;
+      grid.innerHTML = '';
+      for (const w of input.value.trim().split(/\s+/).filter(Boolean)) {
+        const li = document.createElement('li');
+        li.textContent = w;
+        grid.appendChild(li);
+      }
+      grid.hidden = false;
+      masked.hidden = true;
+      showBtn.textContent = 'Hide';
+    });
+    box.querySelector('.seed-edit')?.addEventListener('click', async () => {
+      if (!(await confirmWalletSecrets())) return;
+      hideGrid();
+      masked.hidden = true;
+      input.hidden = false;
+      box.querySelector('.seed-edit').remove();
+      recheck();
+      if (!readOnly) input.focus();
+    });
+    box.querySelector('.seed-copy')?.addEventListener('click', async () => {
+      if (await confirmWalletSecrets()) copySecret(Bip39.normalize(input.value), 'Recovery phrase');
+    });
+  });
+}
+
+function walletAddressesHTML(item, readOnly) {
+  return `<div class="acc-field wallet-addrs">
+      <label>Addresses</label>
+      <div class="addr-list">${Vault.addressesOf(item).map(a => addrRowHTML(a, readOnly)).join('')}</div>
+      ${readOnly ? '' : '<button type="button" class="cf-add-kind addr-add">+ Add address</button>'}
+      <div class="share-hint">Public: share them to receive funds.</div>
+    </div>`;
+}
+
+function addrRowHTML(a, readOnly) {
+  const nets = [...CryptoAddresses.NETWORKS];
+  if (a.network && !nets.includes(a.network)) nets.unshift(a.network);
+  return `<div class="addr-row" data-id="${esc(a.id || `addr-${crypto.randomUUID()}`)}"${a.network ? ' data-picked="1"' : ''}>
+      <div class="field-row">
+        <select class="addr-net" aria-label="Network"${readOnly ? ' disabled' : ''}>
+          <option value=""${a.network ? '' : ' selected'}>Network</option>
+          ${nets.map(n => `<option value="${esc(n)}"${n === a.network ? ' selected' : ''}>${esc(n)}</option>`).join('')}
+        </select>
+        <input class="addr-value" type="text" value="${esc(a.address || '')}" placeholder="Address" spellcheck="false" autocomplete="off">
+        <button type="button" class="btn-eye addr-copy" title="Copy">⧉</button>
+        <button type="button" class="btn-eye addr-qr-btn" title="QR code">QR</button>
+        ${readOnly ? '' : '<button type="button" class="btn-eye addr-del" title="Remove">✕</button>'}
+      </div>
+      <div class="addr-qr" hidden></div>
+    </div>`;
+}
+
+function readWalletAddresses(body) {
+  return [...body.querySelectorAll('.wallet-addrs .addr-row')].map(row => {
+    const address = row.querySelector('.addr-value').value.trim();
+    return { id: row.dataset.id, network: row.querySelector('.addr-net').value || CryptoAddresses.detect(address), address };
+  });
+}
+
+function mountAddrRow(row) {
+  const input = row.querySelector('.addr-value');
+  const net = row.querySelector('.addr-net');
+  const qr = row.querySelector('.addr-qr');
+  // The network follows the address until the user picks one.
+  input.addEventListener('input', () => {
+    if (!row.dataset.picked) net.value = CryptoAddresses.detect(input.value);
+    if (!qr.hidden) qr.innerHTML = CryptoAddresses.qrSvg(input.value);
+  });
+  net.addEventListener('change', () => { row.dataset.picked = '1'; });
+  row.querySelector('.addr-copy').addEventListener('click', async () => {
+    if (input.value.trim() && await copyText(input.value.trim())) setStatus('Address copied');
+  });
+  row.querySelector('.addr-qr-btn').addEventListener('click', () => {
+    const svg = qr.hidden ? CryptoAddresses.qrSvg(input.value) : '';
+    if (qr.hidden && !svg) { setStatus('Enter the address first', false); return; }
+    qr.innerHTML = svg;
+    qr.hidden = !svg;
+  });
+  row.querySelector('.addr-del')?.addEventListener('click', () => row.remove());
+}
+
+function mountWalletAddresses(body, readOnly) {
+  const box = body.querySelector('.wallet-addrs');
+  if (!box) return;
+  box.querySelectorAll('.addr-row').forEach(mountAddrRow);
+  box.querySelector('.addr-add')?.addEventListener('click', () => {
+    const tpl = document.createElement('div');
+    tpl.innerHTML = addrRowHTML({}, readOnly);
+    const row = tpl.firstElementChild;
+    box.querySelector('.addr-list').appendChild(row);
+    mountAddrRow(row);
+    row.querySelector('.addr-value').focus();
+  });
+}
+
+// Wallet secrets ask for the master password again; once given, for two
+// minutes (this popup only: it closes, they ask again).
+let _walletSecretsUntil = 0;
+async function confirmWalletSecrets() {
+  if (Date.now() < _walletSecretsUntil && (await VaultLock.state()) === 'unlocked') return true;
+  const ok = await askMasterPassword('Wallet secrets move funds. Enter your master password to see or copy them.');
+  if (ok) _walletSecretsUntil = Date.now() + 2 * 60 * 1000;
+  return ok;
+}
+
+// A modal master-password check: resolves true once the password is right,
+// false when cancelled.
+function askMasterPassword(text) {
+  document.getElementById('mp-prompt')?.querySelector('.mp-cancel')?.click();
+  return new Promise(resolve => {
+    const wrap = document.createElement('div');
+    wrap.id = 'mp-prompt';
+    wrap.setAttribute('role', 'dialog');
+    wrap.setAttribute('aria-modal', 'true');
+    wrap.innerHTML = `<form class="mp-card">
+        <div class="mp-title">Confirm it's you</div>
+        <div class="mp-text"></div>
+        <input type="password" class="mp-password" placeholder="Master password" autocomplete="current-password">
+        <div class="mp-err" aria-live="polite"></div>
+        <div class="mp-actions">
+          <button type="button" class="btn-crypto-cancel mp-cancel">Cancel</button>
+          <button type="submit" class="btn-crypto-ok mp-ok">Continue</button>
+        </div>
+      </form>`;
+    wrap.querySelector('.mp-text').textContent = text;
+    const pw = wrap.querySelector('.mp-password');
+    const done = ok => { wrap.remove(); resolve(ok); };
+    wrap.querySelector('.mp-cancel').addEventListener('click', () => done(false));
+    wrap.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+    wrap.querySelector('form').addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!pw.value) return;
+      const btn = wrap.querySelector('.mp-ok');
+      btn.disabled = true;
+      const key = await VaultLock.revealRecoveryKey(pw.value).catch(() => null);
+      pw.value = '';
+      btn.disabled = false;
+      if (key) { done(true); return; }
+      wrap.querySelector('.mp-err').textContent = 'Incorrect password.';
+      pw.focus();
+    });
+    document.body.appendChild(wrap);
+    pw.focus();
+  });
+}
+
+// Copies a secret and clears the clipboard 30 s later while this popup is
+// still open (it closes when focus leaves it, so nothing was copied from
+// another app meanwhile; once it's closed the browser gives no way to clear).
+// Every copy made here goes through clipboardWrite, so a later one (an
+// address, a code) cancels the pending clear instead of being wiped.
+let _clipSeq = 0;
+// Counts only a copy that happened: a failed one leaves the secret there,
+// so its clear must still run.
+async function clipboardWrite(text) {
+  await navigator.clipboard.writeText(text);
+  _clipSeq++;
+}
+
+async function copySecret(value, label) {
+  if (!(await copyText(value))) return;
+  const mine = _clipSeq;
+  setStatus(`${label} copied — cleared in 30 s`);
+  setTimeout(() => {
+    if (mine !== _clipSeq) return;
+    navigator.clipboard.writeText('').catch(() => {}); // straight: not a copy of ours
+  }, 30000);
 }
 
 // ── Adding a file to the vault ──
@@ -2753,6 +3016,9 @@ async function renderSharePanel(panel, itemId) {
     const colls = [...panel.querySelectorAll('.share-coll:checked:not(:disabled)')].map(c => collections.find(x => x.id === c.value));
     const grants = [...users.map(u => ({ user: u, role: role.value })), ...colls.map(c => ({ collection: c, role: role.value }))];
     if (!grants.length) { setStatus('Pick at least one teammate or collection', false); return; }
+    // A wallet's recovery phrase or keys: whoever gets them controls its funds.
+    const risky = parts.filter(p => p.walletSecret && (everything() || chosenParts().includes(p.key)));
+    if (risky.length && !confirm(`You're sharing this wallet's ${risky.map(p => p.label.toLowerCase()).join(', ')}. Whoever gets it controls the wallet's funds, and can keep a copy even after you stop sharing. Share anyway?`)) return;
     btn.disabled = true;
     try {
       const k = await VaultKeys.getKey();
@@ -3418,7 +3684,7 @@ document.getElementById('gen-regenerate').addEventListener('click', regenerate);
 // Copies or reports why it couldn't; returns whether the clipboard got it.
 async function copyText(text) {
   try {
-    await navigator.clipboard.writeText(text);
+    await clipboardWrite(text);
     return true;
   } catch {
     setStatus('Could not copy — the browser blocked the clipboard', false);
@@ -4063,6 +4329,7 @@ document.getElementById('btn-export-csv').addEventListener('click', () => {
   const form = document.getElementById('csv-export-form');
   if (form.style.display !== 'none') { hideCsvExport(); return; }
   form.style.display = '';
+  document.getElementById('csv-export-wallets').style.display = otherItems.some(Vault.hasWalletSecret) ? '' : 'none';
   document.getElementById('csv-export-password').focus();
 });
 document.getElementById('csv-export-cancel').addEventListener('click', hideCsvExport);
@@ -4497,7 +4764,7 @@ function downloadEmergencyKit(key) {
 }
 
 document.getElementById('lock-kit-copy').addEventListener('click', async () => {
-  await navigator.clipboard.writeText(document.getElementById('lock-kit-key').textContent).catch(() => {});
+  await clipboardWrite(document.getElementById('lock-kit-key').textContent).catch(() => {});
   setStatus('Recovery key copied');
 });
 document.getElementById('lock-kit-download').addEventListener('click', () =>
@@ -4868,7 +5135,7 @@ document.getElementById('btn-reveal-synckey').addEventListener('click', () => {
 
 // New key: copy
 document.getElementById('btn-copy-synckey').addEventListener('click', async () => {
-  await navigator.clipboard.writeText(_currentSyncKey).catch(() => {});
+  await clipboardWrite(_currentSyncKey).catch(() => {});
   document.getElementById('btn-copy-synckey').textContent = 'Copied!';
   setTimeout(() => {
     document.getElementById('btn-copy-synckey').textContent = 'Copy key';
@@ -5736,7 +6003,7 @@ async function renderSharedCodes() {
     row.querySelector('.shared-copy').addEventListener('click', async () => {
       const code = await fetchCode('copy'); // audited
       if (!code) { setStatus('Could not fetch code', false); return; }
-      try { await navigator.clipboard.writeText(code); setStatus('Copied!'); }
+      try { await clipboardWrite(code); setStatus('Copied!'); }
       catch { setStatus('Clipboard unavailable', false); }
     });
     list.appendChild(row);
