@@ -31,6 +31,9 @@ const send = (page, extensionId, msg) => page.evaluate(([id, msg]) => new Promis
   if (!globalThis.chrome?.runtime?.sendMessage) { resolve({ error: 'no-runtime' }); return; }
   chrome.runtime.sendMessage(id, msg, res => resolve(chrome.runtime.lastError ? { error: 'no-answer' } : res));
 }), [extensionId, msg]);
+// Allow / Deny close the window: it can be gone before Playwright's click
+// returns ("Target page closed"), which is the click working, not failing.
+const clickClosing = (win, selector) => win.click(selector).catch(e => { if (!win.isClosed()) throw e; });
 // Starts an unlock request; returns [the approval window, the answer].
 async function requestUnlock(context, page, extensionId, userId = ME.id) {
   const opened = context.waitForEvent('page', p => p.url().includes('dashboardUnlock.html'));
@@ -49,7 +52,7 @@ test('allowed in the extension, the dashboard gets the vault key and the team ke
   await expect(win.locator('#email')).toHaveText(ME.email);
   await expect(win.locator('#site')).toHaveText('localhost:9999');
   await expect(win.locator('#pw')).toBeHidden();
-  await win.click('#allow');
+  await clickClosing(win, '#allow');
   const res = await answer;
   expect(res.ok).toBe(true);
   expect(res.vaultKey).toBe(TEST_VAULT_KEY);
@@ -68,7 +71,7 @@ test('denying, or closing the window, gives nothing', async ({ context, extensio
   const page = await dashboard(context);
 
   let [win, answer] = await requestUnlock(context, page, extensionId);
-  await win.click('#deny');
+  await clickClosing(win, '#deny');
   expect(await answer).toEqual({ ok: false, error: 'denied' });
 
   [win, answer] = await requestUnlock(context, page, extensionId);
@@ -86,7 +89,7 @@ test('a locked extension unlocks with the master password in the window', async 
   await win.click('#allow');
   await expect(win.locator('#err')).toHaveText('Incorrect password');
   await win.fill('#pw', TEST_PASSWORD);
-  await win.click('#allow');
+  await clickClosing(win, '#allow');
   const res = await answer;
   expect(res.ok).toBe(true);
   expect(res.vaultKey).toBe(TEST_VAULT_KEY);
@@ -124,7 +127,7 @@ test('a new request replaces the open one, which gets nothing', async ({ context
   const [second, secondAnswer] = await requestUnlock(context, other, extensionId);
   expect(await firstAnswer).toEqual({ ok: false, error: 'superseded' });
   await expect.poll(() => first.isClosed()).toBe(true);
-  await second.click('#allow');
+  await clickClosing(second, '#allow');
   expect((await secondAnswer).vaultKey).toBe(TEST_VAULT_KEY);
 });
 
@@ -133,6 +136,6 @@ test('sync turned off while the window is open: refused', async ({ context, exte
   const page = await dashboard(context);
   const [win, answer] = await requestUnlock(context, page, extensionId);
   await win.evaluate(() => chrome.storage.local.remove(['syncEnabled', 'syncKey']));
-  await win.click('#allow');
+  await clickClosing(win, '#allow');
   expect(await answer).toEqual({ ok: false, error: 'no-sync' });
 });
