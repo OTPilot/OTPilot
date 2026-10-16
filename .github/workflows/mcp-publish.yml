@@ -3,9 +3,16 @@ name: MCP publish
 # Publishes @otpilot/mcp to npm from a tag mcp-v<version> (the version in
 # mcp/package.json), with provenance. No token: npm trusts this workflow
 # (trusted publishing, OIDC — set on the package's npm settings page).
+# Then lists that version in the MCP Registry (mcp/server.json), also through
+# this workflow's OIDC identity: the registry trusts GitHub Actions runs of
+# OTPilot/OTPilot for io.github.OTPilot/*, which a person's login can't get
+# while the organization restricts third-party apps.
+# Run by hand (Actions → MCP publish → Run workflow) it only updates the
+# registry, for a version already on npm.
 on:
   push:
     tags: ['mcp-v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,6 +20,7 @@ permissions:
 
 jobs:
   publish:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -37,3 +45,28 @@ jobs:
 
       - name: Publish
         run: npm publish --provenance --access public
+
+  registry:
+    needs: publish
+    # After npm, or alone when run by hand.
+    if: always() && (needs.publish.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: server.json lists the package version
+        run: |
+          v=$(node -p 'require("./package.json").version')
+          test "$(node -p 'require("./server.json").version')" = "$v"
+          test "$(node -p 'require("./server.json").packages[0].version')" = "$v"
+
+      - name: Install mcp-publisher
+        run: curl -sSfL https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz | tar xz mcp-publisher
+
+      - name: Publish to the MCP Registry
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
