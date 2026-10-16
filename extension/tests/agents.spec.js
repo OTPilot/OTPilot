@@ -386,11 +386,21 @@ test('the Agents view picks up a new request on its own, and never redraws over 
       if (window.__hold) { window.__paused = true; await new Promise(r => { window.__release = r; }); }
       return orig(k);
     };
+    // Counts redraws in flight, so the hold only catches the timer's.
+    window.__renders = 0;
+    const render = renderAgentsPanel;
+    window.renderAgentsPanel = async (...args) => {
+      window.__renders++;
+      try { return await render(...args); } finally { window.__renders--; }
+    };
     return a.id;
   });
   await page.click('#nav-agents');
   await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
   const detail = page.locator('#agents-detail');
+  // The click's own redraw finishes first: held, it would look like the
+  // timer's, and redraw over the form when released (a click's does, on purpose).
+  await page.waitForFunction(() => window.__renders === 0);
   await page.evaluate(a => { window.__hold = true; fakeAgents.addRequest(a, { query: 'bank' }); }, agentId);
   // The timer's redraw is now held halfway; the user opens a form meanwhile.
   await page.waitForFunction(() => window.__paused, null, { timeout: 15_000 });

@@ -37,6 +37,10 @@ async function popupWith(context, extensionId, notices) {
     };
     CloudSync.syncUser = async () => { window.__calls.push('syncUser'); return { plan: 'team_lite' }; };
     Sharing.getMyTeam = async () => null;
+    // The popup asked the real background for its notices when it opened;
+    // that answer (none: no session here) may still be on its way and would
+    // hide the bell after ours. A new session drops it, as a sign-in does.
+    _noticesSession++;
     await renderNotices();
   }, notices);
   return page;
