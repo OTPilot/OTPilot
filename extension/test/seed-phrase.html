@@ -6,6 +6,8 @@
   <form id="one" onsubmit="return false">
     <textarea name="phrase" rows="3" cols="60"></textarea>
     <button>Continue</button>
+    <button type="reset">Reset</button>
+    <button type="button" id="cancel" onclick="document.querySelector('textarea[name=phrase]').value = ''">Cancel</button>
   </form>
   <form id="grid" onsubmit="return false">
     <script>

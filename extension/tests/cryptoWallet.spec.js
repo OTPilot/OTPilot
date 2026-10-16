@@ -326,3 +326,37 @@ test('phishing guard: the page\'s own script cannot click "It\'s my wallet"', as
   await expect(banner).toBeVisible();
   expect(await page.evaluate(async () => (await chrome.storage.local.get('seedGuardAllow:localhost'))['seedGuardAllow:localhost'])).toBeUndefined();
 });
+
+test('phishing guard: Reset and Cancel still work on a form holding a phrase', async ({ context, extensionId }) => {
+  await popup(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(SITE);
+  const phrase = site.locator('textarea[name="phrase"]');
+  const set = () => site.evaluate(p => { document.querySelector('textarea[name="phrase"]').value = p; }, PHRASE);
+  await set();
+  await site.click('#one button[type="reset"]');
+  await expect(phrase).toHaveValue('');
+  await set();
+  await site.click('#cancel');
+  await expect(phrase).toHaveValue('');
+  await expect(site.locator('#otpilot-seed-guard')).toHaveCount(0);
+});
+
+test('a copy that fails leaves the pending clear of a secret in place', async ({ context, extensionId }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const page = await context.newPage();
+  await page.clock.install();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedUnlocked(page, { accounts: [] });
+  await page.reload();
+  await waitForVault(page);
+  await page.evaluate(async () => {
+    await copySecret('secret words', 'Recovery phrase');
+    const real = navigator.clipboard.writeText.bind(navigator.clipboard);
+    navigator.clipboard.writeText = async text => { if (text) throw new Error('blocked'); return real(text); };
+    await copyText('an address');
+  });
+  await page.clock.runFor(31_000);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('');
+});

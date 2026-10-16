@@ -2673,9 +2673,11 @@ function askMasterPassword(text) {
 // Every copy made here goes through clipboardWrite, so a later one (an
 // address, a code) cancels the pending clear instead of being wiped.
 let _clipSeq = 0;
-function clipboardWrite(text) {
+// Counts only a copy that happened: a failed one leaves the secret there,
+// so its clear must still run.
+async function clipboardWrite(text) {
+  await navigator.clipboard.writeText(text);
   _clipSeq++;
-  return navigator.clipboard.writeText(text);
 }
 
 async function copySecret(value, label) {

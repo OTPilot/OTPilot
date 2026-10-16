@@ -174,10 +174,21 @@
     if (e.key !== 'Enter' || !isField(e.target) || e.target instanceof HTMLTextAreaElement) return;
     guardSubmit(e, e.target.form || document);
   }, true);
-  // JS-driven forms send on a button's click, with no submit event.
+  // JS-driven forms send on a button's click, with no submit event. Only a
+  // control that sends: a submit button, or one that reads like it; Reset,
+  // Cancel, Back… stay usable.
+  const NOT_SENDING = /\b(cancel|back|close|clear|reset|delete|remove|show|hide|paste|copy)\b/;
+  const SENDING = /\b(continue|next|import|confirm|submit|validate|verify|restore|recover|connect|claim|unlock|send|sync|proceed|done|ok|log ?in|sign ?in)\b/;
+  function sends(btn) {
+    const type = (btn.getAttribute('type') || '').toLowerCase();
+    if (type === 'reset') return false;
+    if (btn.type === 'submit' || type === 'image') return true; // a <button> without a type in a form is a submit
+    const text = String(btn.value || btn.textContent || btn.getAttribute('aria-label') || '').trim().toLowerCase();
+    return !NOT_SENDING.test(text) && SENDING.test(text);
+  }
   document.addEventListener('click', e => {
-    const btn = e.target instanceof Element && e.target.closest('button, input[type="submit"], input[type="button"], [role="button"]');
-    if (!btn || btn.closest(`#${BANNER_ID}`)) return;
+    const btn = e.target instanceof Element && e.target.closest('button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]');
+    if (!btn || btn.closest(`#${BANNER_ID}`) || !sends(btn)) return;
     guardSubmit(e, btn.form || btn.closest('form') || document);
   }, true);
 })();
