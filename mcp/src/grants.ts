@@ -4,7 +4,7 @@
 // one-time approval, asked for here.
 import { Api, ApiError } from './api.js'
 import { unwrap } from './ecies.js'
-import { VaultCrypto, Vault, generateTOTP, type EncryptedRecord, type VaultItem } from './extension.js'
+import { VaultCrypto, Vault, generateTOTP, type EncryptedRecord, type VaultFile, type VaultItem } from './extension.js'
 
 export type Scope = { kind: '2fa' | 'login' | 'fields'; parts?: string[] }
 export type Grant = {
@@ -171,6 +171,26 @@ export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, t
   const again = (await loadGrants(api, privateJwk)).find(g => g.itemId === grant.itemId)
   if (!again?.item) throw new Error(`"${grant.title}" was approved but its approval expired. Try again.`)
   return again.item
+}
+
+/**
+ * The file a reference names, when it names a file field (an SSH key, a .p8, a
+ * key file): by its id or label, or "@file" / "file" for the item's first one.
+ * Null for any other field.
+ */
+export function fileField(item: VaultItem, field: string): VaultFile | null {
+  const f = field.trim().toLowerCase()
+  const files = item.fields.filter(x => x.kind === 'file')
+  const hit = f === '@file' || f === 'file'
+    ? files.find(x => x.value)
+    : files.find(x => x.id.toLowerCase() === f) || files.find(x => (x.label || '').toLowerCase() === f)
+  if (!hit) {
+    if (f === '@file') throw new Error(`"${item.title}" has no file available to this agent.`)
+    return null
+  }
+  const file = Vault.fileOf(hit.value)
+  if (!file) throw new Error(`"${item.title}" has no file in "${hit.label || hit.id}".`)
+  return file
 }
 
 /** One value of an item: username, password, totp (a fresh code), notes, or a custom field by label. */

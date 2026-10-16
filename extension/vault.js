@@ -15,9 +15,14 @@ const Vault = (() => {
   // Anything else (free, missing, unknown) gets the Free limit.
   const PAID_PLANS = ['personal', 'team_lite', 'team_pro'];
 
-  const FIELD_KINDS = ['text', 'password', 'hidden', 'email', 'url', 'date', 'phone', 'multiline'];
+  const FIELD_KINDS = ['text', 'password', 'hidden', 'email', 'url', 'date', 'phone', 'multiline', 'file'];
   // Kinds whose value is masked by default and offered by the generator.
   const SECRET_KINDS = ['password', 'hidden'];
+
+  // Files ride inside the encrypted item (see fileValue): all of an item's
+  // files together stay under this, so the record stays under the server's
+  // 128 KiB (bytes grow ~1.78x: base64 in the item, then the encrypted record).
+  const FILE_BYTES_LIMIT = 64 * 1024;
 
   const TYPES = {
     login: {
@@ -51,11 +56,25 @@ const Vault = (() => {
         { id: 'expires', label: 'Expires', kind: 'date' },
       ],
     },
+    ssh: {
+      label: 'SSH key',
+      fields: [
+        { id: 'privateKey', label: 'Private key', kind: 'file' },
+        { id: 'publicKey', label: 'Public key', kind: 'text' },
+        { id: 'fingerprint', label: 'Fingerprint', kind: 'text' },
+        { id: 'passphrase', label: 'Passphrase', kind: 'password' },
+      ],
+    },
+    file: {
+      label: 'Secure file',
+      fields: [
+        { id: 'file', label: 'File', kind: 'file' },
+      ],
+    },
   };
 
   // Shown as "Coming soon" in the new-item picker.
   const UPCOMING_TYPES = [
-    { id: 'ssh', label: 'SSH key' },
     { id: 'database', label: 'Database' },
     { id: 'wifi', label: 'Wi-Fi' },
     { id: 'card', label: 'Payment card' },
@@ -145,6 +164,58 @@ const Vault = (() => {
     return countedItems(items.filter(i => i.id !== candidate.id)) < FREE_ITEM_LIMIT;
   }
 
+  // ── Files ───────────────────────────────────────────────────────────────
+  // A file field's value is a data: URL carrying its name, so it stays one
+  // string: versions that don't know the `file` kind keep it untouched (their
+  // editors rebuild custom fields from label / value / kind only).
+  //   data:<mime>;name=<encoded name>;base64,<bytes>
+
+  function bytesToB64(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+
+  function b64ToBytes(b64) {
+    const s = atob(b64);
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  }
+
+  function fileValue(name, mime, bytes) {
+    const type = /^[\w.+-]+\/[\w.+-]+$/.test(mime || '') ? mime : 'application/octet-stream';
+    return `data:${type};name=${encodeURIComponent(String(name || 'file'))};base64,${bytesToB64(bytes)}`;
+  }
+
+  // The file in a value, or null (empty, or not a file value).
+  function fileOf(value) {
+    const m = /^data:([^;,]*)((?:;[^;,]*)*);base64,([A-Za-z0-9+/=]*)$/.exec(String(value || ''));
+    if (!m) return null;
+    let name = 'file';
+    for (const p of m[2].split(';')) {
+      if (!p.startsWith('name=')) continue;
+      try { name = decodeURIComponent(p.slice(5)) || name; } catch { /* keep the default */ }
+    }
+    let bytes;
+    try { bytes = b64ToBytes(m[3]); } catch { return null; }
+    return { name, mime: m[1] || 'application/octet-stream', size: bytes.length, bytes };
+  }
+
+  // The file's text when it reads as text (UTF-8, no NULs), else null.
+  function fileText(file) {
+    if (!file) return null;
+    try {
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(file.bytes);
+      return text.includes('\0') ? null : text;
+    } catch { return null; }
+  }
+
+  // Bytes of every file an item carries (its file fields, the type's and custom).
+  function fileBytes(item) {
+    return (item.fields || []).filter(f => f.kind === 'file').reduce((n, f) => n + (fileOf(f.value)?.size || 0), 0);
+  }
+
   // ── v1 ⇄ v2 ─────────────────────────────────────────────────────────────
   // v1 account: { name, email, secret, urls ("a.com\nb.com"), autofill,
   //               category, domain, _updatedAt }
@@ -186,10 +257,11 @@ const Vault = (() => {
   }
 
   return {
-    FREE_ITEM_LIMIT, PAID_PLANS, FIELD_KINDS, SECRET_KINDS, TYPES, UPCOMING_TYPES,
+    FREE_ITEM_LIMIT, PAID_PLANS, FIELD_KINDS, SECRET_KINDS, FILE_BYTES_LIMIT, TYPES, UPCOMING_TYPES,
     isKnownType, newItem, getField, getValue,
     countsForLimit, countedItems, canSaveItem,
     fromV1Account, toV1Account,
     loginCoversHost,
+    fileValue, fileOf, fileText, fileBytes, bytesToB64, b64ToBytes,
   };
 })();

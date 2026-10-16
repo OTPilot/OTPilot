@@ -109,15 +109,17 @@ test("an item whose id is '__proto__' is stored and read back like any other", a
   expect(result).toEqual({ titles: ['Odd id'], failed: [], tombs: ['__proto__'] });
 });
 
-test('a save Chrome rejects (over quota) throws and keeps the tombstone', async ({ context, extensionId }) => {
+test('a save Chrome rejects (e.g. a full disk) throws and keeps the tombstone', async ({ context, extensionId }) => {
   const page = await storePage(context, extensionId);
   const result = await page.evaluate(async () => {
     const vk = VaultCrypto.generateKey();
     await VaultStore.remove('big', '2026-10-06T12:00:00.000Z');
-    // ~11 MB of notes: past chrome.storage.local's 10 MB quota once encrypted.
-    const huge = { id: 'big', type: 'note', title: 'Too big', fields: [], notes: 'x'.repeat(11 * 1024 * 1024) };
+    // unlimitedStorage lifts the quota, so Chrome's rejection is simulated.
+    const set = chrome.storage.local.set;
+    chrome.storage.local.set = () => Promise.reject(new Error('QUOTA_BYTES quota exceeded'));
+    const huge = { id: 'big', type: 'note', title: 'Too big', fields: [], notes: 'x'.repeat(1024) };
     let error = null;
-    try { await VaultStore.save(huge, vk); } catch (e) { error = e.message; }
+    try { await VaultStore.save(huge, vk); } catch (e) { error = e.message; } finally { chrome.storage.local.set = set; }
     return {
       threw: !!error,
       records: Object.keys(await VaultStore.listRecords()),

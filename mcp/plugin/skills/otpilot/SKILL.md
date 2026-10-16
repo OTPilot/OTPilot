@@ -41,6 +41,7 @@ Recipes:
 - **API call**: `curl -s -H "Authorization: Bearer $TOKEN" https://api.example.com/me` with `{ "TOKEN": "Example API/API key" }`.
 - **2FA in an e2e test**: run the test with `{ "E2E_USER": "App/username", "E2E_PASS": "App/password", "E2E_TOTP": "App/totp" }`; the test reads them from `process.env`. A `totp` value is valid for about 30 s: start the test right away.
 - **CLI login**: pass the token or password through the env variable the tool documents (`PGPASSWORD`, `MYSQL_PWD`, `GH_TOKEN`, `AWS_*`…), never as an argument.
+- **A key file** (SSH key, Apple `.p8`, service-account JSON): `"<account>/@file"` (or the file field's label) sets the variable to the **path** of a private temporary copy (0600) that's deleted when the command ends. Git over SSH: `GIT_SSH_COMMAND='ssh -i "$KEY" -o IdentitiesOnly=yes' git push deploy main` with `{ "KEY": "Deploy key/@file" }`. fastlane with an App Store Connect key: `{ "ASC_KEY_PATH": "Apple API key 2X9R4HXF34/@file", "ASC_KEY_ID": "Apple API key 2X9R4HXF34/Key ID", "ASC_ISSUER_ID": "Apple API key 2X9R4HXF34/Issuer ID" }`.
 
 ## Waiting for the user
 

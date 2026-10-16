@@ -2,7 +2,7 @@
 // what it prints comes back with the secrets scrubbed.
 import { execFileSync, spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
-import { accessSync, constants, realpathSync, statSync } from 'node:fs'
+import { accessSync, chmodSync, constants, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, isAbsolute, join, resolve, sep } from 'node:path'
 import { redact } from './redact.js'
@@ -49,6 +49,52 @@ export function resolveAllowed(command: string, allowed: string[], cwd = process
     }
   }
   return { error: `${program} isn't installed here (not found on PATH).` }
+}
+
+/**
+ * Files a command gets by path (an SSH key, a .p8): written to a fresh temp
+ * directory only this user can read (0700, files 0600), each under its own
+ * name, for that one command; `cleanup` deletes them all.
+ */
+export function writeTempFiles(files: { name: string; bytes: Uint8Array }[]): { paths: string[]; cleanup: () => void } {
+  if (!files.length) return { paths: [], cleanup: () => {} }
+  const dir = mkdtempSync(join(tmpdir(), 'otpilot-'))
+  const cleanup = () => rmSync(dir, { recursive: true, force: true })
+  try {
+    chmodSync(dir, 0o700)
+    const paths = files.map((f, i) => {
+      const sub = join(dir, String(i))
+      mkdirSync(sub, { mode: 0o700 })
+      const path = join(sub, f.name.replace(/[^\w.@+-]/g, '_').replace(/^\.+$/, '_') || 'file')
+      writeFileSync(path, f.bytes, { mode: 0o600 })
+      return path
+    })
+    return { paths, cleanup }
+  } catch (e) {
+    // A write that failed halfway (a full disk) leaves none of the others behind.
+    cleanup()
+    throw e
+  }
+}
+
+/**
+ * What to scrub for a file a command got: its bytes in base64, its text, every
+ * line of it (a command can print one: `head -n 1 .env`) and the value of a
+ * KEY=VALUE / "key": "value" line. Bits under 4 characters (`}`, `{`) stay:
+ * scrubbing them would garble every output.
+ */
+export function fileSecrets(bytes: Uint8Array, text: string | null): string[] {
+  const out = [Buffer.from(bytes).toString('base64')]
+  if (!text) return out
+  out.push(text)
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line.length < 4) continue
+    out.push(line)
+    const value = /^(?:export\s+)?["']?[\w.-]+["']?\s*[=:]\s*(.+?),?$/.exec(line)?.[1].replace(/^(['"`])(.*)\1$/, '$2')
+    if (value && value.length >= 4) out.push(value)
+  }
+  return out
 }
 
 export type RunResult = { exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }

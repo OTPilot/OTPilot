@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
@@ -55,6 +56,37 @@ describe('MCP server', () => {
     const refused = await call('run', { command: 'cat /etc/hosts', env: { P: 'Staging DB/password' } })
     expect(refused.isError).toBe(true)
     expect(refused.text).toMatch(/only be used with echo/)
+  })
+
+  it('run: a file field comes as the path of a private temp copy, gone after the command', async () => {
+    const pem = '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n-----END OPENSSH PRIVATE KEY-----\n'
+    const dataUrl = (name: string, bytes: Buffer) => `data:application/octet-stream;name=${encodeURIComponent(name)};base64,${bytes.toString('base64')}`
+    const item = loginItem({
+      title: 'Deploy key', type: 'ssh',
+      fields: [
+        { id: 'privateKey', label: 'Private key', kind: 'file', value: dataUrl('id_ed25519', Buffer.from(pem)) },
+        { id: 'c1', label: 'Cert', kind: 'file', custom: true, value: dataUrl('dist.p12', Buffer.from([0, 1, 2, 3, 4])) },
+      ],
+    })
+    const { call } = await connect([{ item, scope: { kind: 'fields', parts: ['f:privateKey', 'f:c1'] } }])
+    const r = await call('run', {
+      command: 'echo "path=$KEY"; ls -l "$KEY" | cut -c1-10; head -2 "$KEY"; wc -c < "$CERT"; basename "$CERT"',
+      env: { KEY: 'Deploy key/@file', CERT: 'Deploy key/Cert' },
+    })
+    expect(r.isError).toBe(false)
+    expect(r.text).toContain('exit code: 0')
+    expect(r.text).toContain('-rw-------')
+    expect(r.text).toMatch(/^\s*5$/m)
+    expect(r.text).toContain('dist.p12')
+    expect(r.text).not.toContain('b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ')
+    const path = /path=(\S+)/.exec(r.text)![1]
+    expect(path.endsWith('/id_ed25519')).toBe(true)
+    expect(existsSync(path)).toBe(false)
+    // A reference to an item without a file says so.
+    const none = await connect([{ item: loginItem({ title: 'Plain' }) }])
+    const bad = await none.call('run', { command: 'true', env: { K: 'Plain/@file' } })
+    expect(bad.isError).toBe(true)
+    expect(bad.text).toContain('has no file')
   })
 
   it('a 2FA-only account gives a code to run, but no sign-in', async () => {

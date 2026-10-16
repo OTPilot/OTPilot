@@ -1,9 +1,9 @@
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { redact } from '../src/redact.js'
-import { resolveAllowed, runCommand } from '../src/run.js'
+import { fileSecrets, resolveAllowed, runCommand, writeTempFiles } from '../src/run.js'
 
 describe('redact', () => {
   it('scrubs a secret and its encodings', () => {
@@ -73,5 +73,29 @@ describe('command limits', () => {
     try {
       expect(resolveAllowed('fakepsql', ['fakepsql'], dir)).toEqual({ error: expect.stringMatching(/isn't installed/) })
     } finally { process.env.PATH = before }
+  })
+})
+
+describe('files', () => {
+  it('scrubs every line of a file a command prints, short ones and their values too', async () => {
+    const text = 'TOKEN=abc123\nOTHER="xyz789"\n{\n  "key": "k-7f3a",\n}\n'
+    const bytes = new TextEncoder().encode(text)
+    const temp = writeTempFiles([{ name: '.env', bytes }])
+    try {
+      const r = await runCommand('head -n 1 "$K"; cut -d= -f2 "$K" | head -n 2; grep key "$K"', { K: temp.paths[0] }, { secrets: fileSecrets(bytes, text) })
+      expect(r.exitCode).toBe(0)
+      expect(r.stdout).not.toMatch(/abc123|xyz789|k-7f3a/)
+      expect(r.stdout).toContain('[REDACTED]')
+    } finally { temp.cleanup() }
+    expect(existsSync(temp.paths[0])).toBe(false)
+  })
+
+  it('a write that fails halfway leaves no file behind', () => {
+    const before = new Set(readdirSync(tmpdir()).filter(n => n.startsWith('otpilot-')))
+    expect(() => writeTempFiles([
+      { name: 'id_ed25519', bytes: new TextEncoder().encode('secret key') },
+      { name: 'broken', bytes: 42 as unknown as Uint8Array },
+    ])).toThrow()
+    expect(readdirSync(tmpdir()).filter(n => n.startsWith('otpilot-') && !before.has(n))).toEqual([])
   })
 })

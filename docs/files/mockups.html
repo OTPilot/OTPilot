@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OTPilot · Files mockups</title>
+<!-- Mockups of 2.2 "Secure files & SSH keys" (plan.md). Same frame and theme
+     tokens as ../agents/mockups.html, so every theme can be previewed. -->
+<link rel="stylesheet" href="../../extension/theme.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { background: #0b0d12; }
+  body { font-family: var(--font-ui); color: var(--ink-2); padding: 32px 24px 80px; background: #0b0d12; }
+  .page-head { max-width: 1260px; margin: 0 auto 28px; color: #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  .page-head h1 { font-size: 22px; margin-bottom: 6px; }
+  .page-head p { font-size: 13px; color: #9ca3af; line-height: 1.6; max-width: 760px; }
+  .themes { display: flex; gap: 6px; margin-top: 14px; flex-wrap: wrap; }
+  .themes button { font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px; border: 1px solid #374151; background: none; color: #d1d5db; cursor: pointer; }
+  .themes button.on { background: #e5e7eb; color: #111827; border-color: #e5e7eb; }
+
+  .grid { max-width: 1260px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(600px, 1fr)); gap: 36px 28px; }
+  .shot h2 { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; color: #e5e7eb; margin-bottom: 4px; }
+  .shot .note { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 12px; color: #9ca3af; line-height: 1.55; margin-bottom: 12px; max-width: 600px; }
+  .shot .note b { color: #e5e7eb; font-weight: 600; }
+
+  /* ── Popup frame (same metrics as popup.html) ── */
+  .popup { width: 600px; height: 580px; display: flex; flex-direction: column; background: var(--bg); border-radius: 10px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.06); position: relative; font-family: var(--font-ui); }
+  .header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .header h1 { font-size: 15px; font-weight: 700; color: var(--ink-0); }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; color: var(--ink-4); }
+  .bell { position: relative; color: var(--accent-2); display: flex; }
+  .notice-count { position: absolute; top: -6px; right: -8px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--accent); color: var(--on-accent); font-size: 9px; font-weight: 700; line-height: 14px; text-align: center; }
+
+  .app-row { flex: 1; display: flex; min-height: 0; }
+  .rail { width: 56px; flex-shrink: 0; background: var(--bg-deep); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 3px; }
+  .rail-btn { width: 42px; height: 42px; border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--ink-5); position: relative; }
+  .rail-btn svg { width: 17px; height: 17px; }
+  .rail-btn span { font-size: 8px; font-weight: 700; }
+  .rail-btn.active { color: var(--accent-2); background: rgba(var(--accent-2-rgb),0.1); }
+  .rail-dot { position: absolute; top: 6px; right: 8px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg-deep); }
+
+  .split { flex: 1; display: flex; min-height: 0; min-width: 0; }
+  .lc-col { width: 210px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--bg-deep); display: flex; flex-direction: column; min-height: 0; }
+  .dc-col { flex: 1; min-width: 0; overflow-y: auto; padding: 14px 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .single { flex: 1; min-width: 0; overflow-y: auto; padding: 14px 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+
+  .lc-section { font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-5); padding: 10px 10px 4px; display: flex; justify-content: space-between; align-items: center; }
+  .lc-section .pill { letter-spacing: 0; text-transform: none; }
+  .lc-list { padding: 2px 6px 8px; }
+  .lc-row { display: flex; align-items: center; gap: 8px; padding: 7px; border-radius: 7px; border-left: 2px solid transparent; position: relative; }
+  .lc-row.sel { background: rgba(var(--accent-2-rgb),0.1); border-left-color: var(--accent-2); }
+  .lc-row-text { flex: 1; min-width: 0; }
+  .lc-row-name { display: block; font-size: 11px; font-weight: 600; color: var(--ink-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lc-row-sub { display: block; font-size: 9.5px; color: var(--ink-5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+
+  .agent-av { width: 24px; height: 24px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; background: rgba(var(--accent-2-rgb),.14); color: var(--accent-2); }
+  .agent-av svg { width: 14px; height: 14px; }
+  .agent-av.lg { width: 34px; height: 34px; border-radius: 9px; }
+  .agent-av.lg svg { width: 19px; height: 19px; }
+  .agent-av.pending { background: rgba(var(--warning-rgb),.15); color: var(--warning); }
+  .acc-av { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-weight: 700; color: #fff; flex-shrink: 0; width: 22px; height: 22px; font-size: 9px; }
+
+  .sec-head { display: flex; align-items: center; justify-content: space-between; font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-4); margin-bottom: 6px; }
+  .card { background: var(--surface); border-radius: 9px; overflow: hidden; }
+  .card + .card { margin-top: 8px; }
+  .card-row { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-bottom: 1px solid var(--bg); }
+  .card-row:last-child { border-bottom: 0; }
+  .grow { flex: 1; min-width: 0; }
+  .t1 { font-size: 12px; font-weight: 600; color: var(--ink-0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .t2 { font-size: 10.5px; color: var(--ink-4); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .t2 b { color: var(--ink-2); font-weight: 600; }
+
+  .pill { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 700; background: rgba(var(--accent-2-rgb),.14); color: var(--accent-2); white-space: nowrap; }
+  .pill.warn { background: rgba(var(--warning-rgb),.15); color: var(--warning); }
+  .pill.muted { background: var(--surface-2); color: var(--ink-3); }
+  .pill.new { background: var(--accent); color: var(--on-accent); letter-spacing: .04em; }
+
+  .btn { font: inherit; font-size: 11.5px; font-weight: 600; padding: 5px 11px; border-radius: 6px; border: 1px solid var(--border); background: none; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.danger { color: var(--danger); border-color: rgba(var(--danger-rgb),.35); }
+  .btn.link { border: 0; padding: 4px 2px; color: var(--accent-2); }
+  .btn.sm { font-size: 10.5px; padding: 3px 8px; }
+  .btns { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  select.sel { font: inherit; font-size: 10.5px; background: var(--bg); color: var(--ink-1); border: 1px solid var(--border); border-radius: 6px; padding: 3px 5px; }
+  .toggle-track { width: 28px; height: 16px; flex-shrink: 0; background: var(--border); border-radius: 8px; position: relative; }
+  .toggle-track::after { content: ''; position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--ink-5); top: 2px; left: 2px; }
+  .toggle-track.on { background: var(--accent); }
+  .toggle-track.on::after { left: 14px; background: var(--on-accent); }
+
+  .request { border: 1px solid rgba(var(--warning-rgb),.35); background: rgba(var(--warning-rgb),.06); border-radius: 10px; padding: 11px 12px; display: flex; flex-direction: column; gap: 9px; }
+  .request .who { display: flex; gap: 9px; align-items: center; }
+  .request .what { font-size: 12px; color: var(--ink-2); line-height: 1.5; }
+  .request .what b { color: var(--ink-0); }
+  .code-match { display: flex; align-items: center; gap: 10px; background: var(--bg); border-radius: 8px; padding: 8px 10px; }
+  .code-match .code { white-space: nowrap; font-family: var(--font-code); font-size: 18px; font-weight: 700; letter-spacing: .12em; color: var(--ink-0); }
+  .code-match .hint { font-size: 10.5px; color: var(--ink-4); line-height: 1.45; }
+
+  .scope { display: flex; gap: 4px; flex-wrap: wrap; }
+  .chip { font-size: 10px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-3); }
+  .chip.on { border-color: var(--accent-2); color: var(--accent-2); background: rgba(var(--accent-2-rgb),.08); }
+
+  .log { font-size: 11px; color: var(--ink-3); display: flex; gap: 8px; padding: 6px 11px; border-bottom: 1px solid var(--bg); }
+  .log:last-child { border-bottom: 0; }
+  .log time { font-family: var(--font-code); color: var(--ink-5); flex-shrink: 0; }
+  .log b { color: var(--ink-1); font-weight: 600; }
+  .log .deny { color: var(--danger); }
+
+  .limit { display: flex; gap: 10px; align-items: center; padding: 9px 11px; border-radius: 9px; background: rgba(var(--accent-2-rgb),.07); border: 1px dashed rgba(var(--accent-2-rgb),.35); font-size: 11px; color: var(--ink-2); line-height: 1.45; }
+  .limit b { color: var(--ink-0); }
+  .meter { height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; margin-top: 5px; }
+  .meter i { display: block; height: 100%; background: var(--accent-2); }
+
+  .empty { text-align: center; padding: 26px 10px; color: var(--ink-4); font-size: 12px; line-height: 1.6; }
+  .empty code, .mono { font-family: var(--font-code); font-size: 11px; background: var(--bg-deep); color: var(--ink-1); padding: 2px 6px; border-radius: 5px; }
+  .steps { counter-reset: s; display: flex; flex-direction: column; gap: 8px; text-align: left; margin-top: 12px; }
+  .steps li { list-style: none; counter-increment: s; display: flex; gap: 9px; font-size: 11.5px; color: var(--ink-2); line-height: 1.5; }
+  .steps li::before { content: counter(s); width: 18px; height: 18px; border-radius: 50%; background: var(--surface-2); color: var(--ink-1); font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+  /* Modal over the popup */
+  .scrim { position: absolute; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .modal { width: 400px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 16px 40px rgba(0,0,0,.45); }
+  .modal h3 { font-size: 14px; color: var(--ink-0); }
+  .modal p { font-size: 11.5px; color: var(--ink-3); line-height: 1.55; }
+  .check { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; background: var(--bg); font-size: 12px; color: var(--ink-1); }
+  .cb { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid var(--ink-5); flex-shrink: 0; }
+  .cb.on { background: var(--accent); border-color: var(--accent); position: relative; }
+  .cb.on::after { content: ''; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid var(--on-accent); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+
+  /* Bell dropdown */
+  .notices-menu { position: absolute; top: 44px; right: 70px; z-index: 20; width: 290px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 4px; display: flex; flex-direction: column; }
+  .notice { padding: 9px 10px; display: flex; flex-direction: column; gap: 7px; }
+  .notice + .notice { border-top: 1px solid var(--border); }
+  .notice-text { font-size: 12px; line-height: 1.45; color: var(--ink-2); }
+  .notice-text b { color: var(--ink-0); font-weight: 600; }
+  .notice-meta { font-size: 10.5px; color: var(--ink-4); margin-top: 2px; }
+
+  /* Editor fragment */
+  .field { display: grid; grid-template-columns: 92px 1fr; gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--bg); font-size: 12px; }
+  .field:last-child { border-bottom: 0; }
+  .field .l { color: var(--ink-3); font-size: 11.5px; }
+  .field .v { color: var(--ink-0); font-weight: 600; }
+
+  /* Terminal */
+  .term { width: 600px; height: 580px; border-radius: 10px; overflow: hidden; background: #0d1117; border: 1px solid rgba(255,255,255,.08); box-shadow: 0 20px 50px rgba(0,0,0,.5); display: flex; flex-direction: column; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+  .term-bar { height: 30px; background: #161b22; display: flex; align-items: center; gap: 7px; padding: 0 12px; }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .term-bar span { margin-left: 10px; font-size: 11px; color: #8b949e; }
+  .term-body { padding: 14px 16px; font-size: 12px; line-height: 1.65; color: #c9d1d9; overflow: hidden; white-space: pre-wrap; }
+  .t-user { color: #e6edf3; }
+  .t-dim { color: #6e7681; }
+  .t-tool { color: #d2a8ff; }
+  .t-ok { color: #56d364; }
+  .t-warn { color: #e3b341; }
+  .t-red { color: #ff7b72; }
+  .t-box { border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; margin: 4px 0; display: block; }
+
+  /* ── Files & SSH keys ── */
+  .rail-btn.active { color: var(--accent-2); }
+  .ft { width: 30px; height: 36px; border-radius: 5px; flex-shrink: 0; position: relative; background: var(--surface-2); color: var(--ink-1); display: inline-flex; align-items: flex-end; justify-content: center; padding-bottom: 4px; font-family: var(--font-code); font-size: 8.5px; font-weight: 700; letter-spacing: .02em; }
+  .ft::before { content: ''; position: absolute; top: 0; right: 0; width: 9px; height: 9px; background: var(--bg); border-bottom-left-radius: 4px; }
+  .ft.key { background: rgba(var(--accent-2-rgb),.18); color: var(--accent-2); }
+  .ft.cert { background: rgba(var(--warning-rgb),.18); color: var(--warning); }
+  .ft.sm { width: 22px; height: 26px; font-size: 7px; padding-bottom: 3px; }
+  .ft.sm::before { width: 7px; height: 7px; }
+  .file-chip { display: flex; align-items: center; gap: 10px; padding: 9px 11px; }
+  .file-chip .name { font-family: var(--font-code); font-size: 11.5px; font-weight: 700; color: var(--ink-0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-chip .meta { font-size: 10px; color: var(--ink-4); margin-top: 2px; font-family: var(--font-code);  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dc-col .file-chip { flex-wrap: wrap; row-gap: 7px; }
+  .dc-col .file-chip .icon-btns { flex-basis: 100%; padding-left: 40px; }
+  .icon-btns { display: flex; gap: 4px; }
+  .ib { font: inherit; font-size: 10.5px; font-weight: 600; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--ink-2); white-space: nowrap; }
+  .ib.on { color: var(--accent-2); border-color: rgba(var(--accent-2-rgb),.45); }
+  .preview { margin: 0 11px 10px; background: var(--bg-deep); border-radius: 7px; padding: 8px 10px; font-family: var(--font-code); font-size: 10px; line-height: 1.5; color: var(--ink-3); white-space: pre; overflow: hidden; }
+  .preview .mask { color: var(--ink-5); letter-spacing: .05em; }
+  .drop { border: 1.5px dashed rgba(var(--accent-2-rgb),.5); border-radius: 10px; background: rgba(var(--accent-2-rgb),.05); padding: 14px; text-align: center; font-size: 11.5px; color: var(--ink-3); line-height: 1.55; }
+  .drop b { color: var(--ink-0); }
+  .drop.hot { background: rgba(var(--accent-2-rgb),.14); border-color: var(--accent-2); }
+  .type-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .type-opt { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); font-size: 12px; color: var(--ink-1); font-weight: 600; }
+  .type-opt .ti { width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--ink-2); font-size: 11px; flex-shrink: 0; }
+  .type-opt.soon { opacity: .45; }
+  .type-opt .soon-tag { margin-left: auto; font-size: 9px; color: var(--ink-4); font-weight: 600; }
+  .type-opt.hl { border-color: rgba(var(--accent-2-rgb),.5); }
+  .input { font: inherit; font-size: 12px; background: var(--bg); color: var(--ink-0); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; width: 100%; }
+  .input.ph { color: var(--ink-5); }
+  .input.mono { font-family: var(--font-code); font-size: 11px; }
+  .field .v.mono { font-family: var(--font-code); font-size: 11px; font-weight: 600; }
+  .field .v.dim { color: var(--ink-4); font-weight: 400; }
+  .field.fx { grid-template-columns: 92px 1fr auto; }
+  .detect { display: flex; gap: 10px; align-items: center; padding: 10px 11px; border-radius: 9px; background: rgba(var(--success-rgb, 74,222,128),.08); border: 1px solid rgba(var(--accent-2-rgb),.3); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seg span { font-size: 11px; font-weight: 600; padding: 4px 10px; color: var(--ink-3); }
+  .seg span.on { background: rgba(var(--accent-2-rgb),.15); color: var(--accent-2); }
+  .cf-kinds { display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 11px; }
+  .toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); width: 440px; background: var(--surface); border: 1px solid rgba(var(--danger-rgb),.45); border-radius: 10px; padding: 11px 13px; display: flex; gap: 10px; align-items: flex-start; box-shadow: 0 10px 30px rgba(0,0,0,.45); font-size: 11.5px; color: var(--ink-2); line-height: 1.5; }
+  .toast b { color: var(--ink-0); }
+  .warn-line { font-size: 10.5px; color: var(--ink-4); line-height: 1.5; }
+  .warn-line code { font-family: var(--font-code); background: var(--bg-deep); color: var(--ink-1); padding: 1px 5px; border-radius: 4px; }
+  .search { margin: 10px 8px 4px; }
+  .filters { display: flex; gap: 4px; flex-wrap: wrap; padding: 2px 10px 6px; }
+  .page-head code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: #1f2937; padding: 1px 5px; border-radius: 4px; color: #e5e7eb; }
+  .decisions { max-width: 1260px; margin: 40px auto 0; color: #d1d5db; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.6; }
+  .decisions h2 { font-size: 16px; color: #e5e7eb; margin-bottom: 8px; }
+  .decisions ol { padding-left: 20px; }
+  .decisions li { margin-bottom: 4px; }
+  .decisions b { color: #f3f4f6; }
+</style>
+</head>
+<body>
+
+<!-- Shared SVGs -->
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-agent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="12" cy="3" r="1"/><circle cx="9" cy="14" r="1.2" fill="currentColor"/><circle cx="15" cy="14" r="1.2" fill="currentColor"/><path d="M2 13v3M22 13v3"/>
+  </symbol>
+  <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3m-3 3l3 3"/></symbol>
+  <symbol id="i-team" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8" stroke-dasharray="3 3"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 15v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></symbol>
+  <symbol id="i-logo" viewBox="0 0 128 128"><rect width="128" height="128" rx="28" fill="var(--accent)"/><path d="M64 26l30 12v22c0 20-13 36-30 42-17-6-30-22-30-42V38z" fill="none" stroke="var(--on-accent)" stroke-width="8" stroke-linejoin="round"/><circle cx="64" cy="64" r="8" fill="var(--on-accent)"/></symbol>
+</svg>
+
+<template id="tpl-header">
+  <div class="header">
+    <svg width="22" height="22"><use href="#i-logo"/></svg>
+    <h1>OTPilot</h1>
+    <div class="header-right">
+      <span class="bell"><svg width="15" height="15"><use href="#i-bell"/></svg><span class="notice-count">2</span></span>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </div>
+  </div>
+</template>
+<template id="tpl-rail">
+  <nav class="rail">
+    <div class="rail-btn"><svg><use href="#i-home"/></svg><span>Home</span></div>
+    <div class="rail-btn"><svg><use href="#i-list"/></svg><span>Accounts</span></div>
+    <div class="rail-btn"><svg><use href="#i-key"/></svg><span>Generate</span></div>
+    <div class="rail-btn"><svg><use href="#i-team"/></svg><span>Team</span></div>
+    <div class="rail-btn" data-agents><svg><use href="#i-agent"/></svg><span>Agents</span><i class="rail-dot"></i></div>
+    <div class="rail-btn"><svg><use href="#i-gear"/></svg><span>Settings</span></div>
+    <div class="rail-btn"><svg><use href="#i-sync"/></svg><span>Sync</span></div>
+  </nav>
+</template>
+
+<div class="page-head">
+  <h1>OTPilot 2.2 · Secure files &amp; SSH keys — mockups</h1>
+  <p>Un archivo es un <b>tipo de campo</b> (<code>file</code>): cualquier ítem puede tener uno, y hay dos tipos nuevos armados alrededor de eso, <b>SSH key</b> y <b>Secure file</b>.
+     Los bytes viajan dentro del ítem cifrado (hasta 64 KB por ítem), así que sync, sharing, colecciones, agentes y backup funcionan sin cambios en el servidor.
+     Plan: <code>docs/files/plan.md</code>.</p>
+  <div class="themes" id="themes">
+    <button data-t="" class="on">Original</button>
+    <button data-t="vault">Vault</button>
+    <button data-t="daylight">Daylight</button>
+    <button data-t="terminal">Terminal</button>
+    <button data-t="signal">Signal</button>
+  </div>
+</div>
+
+<div class="grid">
+
+  <!-- 1. Add picker -->
+  <section class="shot">
+    <h2>1 · "+ Add": SSH key y Secure file salen de "Soon", y una zona para soltar</h2>
+    <p class="note">Los dos tipos nuevos en el picker. Debajo, <b>soltar un archivo o elegirlo</b>: OTPilot detecta qué es y arma el ítem (pantalla 2). También se puede soltar directamente sobre la lista del Vault.</p>
+    <div class="popup" data-header data-rail="accounts">
+      <div class="app-row">
+        <div class="single">
+          <div class="sec-head">New item</div>
+          <div class="type-grid">
+            <div class="type-opt"><span class="ti">⏱</span>2FA code</div>
+            <div class="type-opt"><span class="ti">●</span>Login</div>
+            <div class="type-opt"><span class="ti">✎</span>Secure note</div>
+            <div class="type-opt"><span class="ti">▤</span>Server</div>
+            <div class="type-opt"><span class="ti">{}</span>API credential</div>
+            <div class="type-opt hl"><span class="ti" style="color:var(--accent-2)"><svg width="13" height="13"><use href="#i-key"/></svg></span>SSH key <span class="pill new" style="margin-left:auto">NEW</span></div>
+            <div class="type-opt hl"><span class="ti" style="color:var(--accent-2)">▯</span>Secure file <span class="pill new" style="margin-left:auto">NEW</span></div>
+            <div class="type-opt soon"><span class="ti">◫</span>Database<span class="soon-tag">Soon</span></div>
+            <div class="type-opt soon"><span class="ti">▭</span>Payment card<span class="soon-tag">Soon</span></div>
+            <div class="type-opt soon"><span class="ti">⌂</span>Wi-Fi<span class="soon-tag">Soon</span></div>
+          </div>
+          <div class="drop">
+            <div style="display:flex;justify-content:center;gap:6px;margin-bottom:8px">
+              <span class="ft sm key">.p8</span><span class="ft sm key">id_</span><span class="ft sm cert">.p12</span><span class="ft sm">.json</span><span class="ft sm">.env</span>
+            </div>
+            <b>Drop a file here</b> or <span style="color:var(--accent-2);font-weight:600">choose one</span><br>
+            SSH keys, App Store Connect <span class="mono">.p8</span>, certificates, service-account JSON, configs… up to 64 KB, encrypted like everything else.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. Detection -->
+  <section class="shot">
+    <h2>2 · Soltaste <span class="mono" style="font-size:12px">AuthKey_2X9R4HXF34.p8</span>: OTPilot lo reconoce</h2>
+    <p class="note">No hay un tipo ".p8": es una <b>API credential</b> con el archivo adentro. El Key ID sale del nombre del archivo; el Issuer ID lo pegás vos. "Save as a plain file" queda como salida.
+      Lo mismo con <b>JSON de service account</b> de Google (project, client email) o un <b>.p12</b> (pide la contraseña del certificado).</p>
+    <div class="popup" data-header data-rail="accounts">
+      <div class="app-row">
+        <div class="single">
+          <div class="detect">
+            <span class="ft key">.p8</span>
+            <div class="grow"><div class="t1">App Store Connect API key</div><div class="t2">Recognized from the file name and its <span class="mono" style="font-size:10px">PRIVATE KEY</span> block · saved as an <b>API credential</b></div></div>
+            <button class="btn link sm">Save as a plain file</button>
+          </div>
+          <div>
+            <div class="sec-head">Details</div>
+            <div class="card">
+              <div class="field"><span class="l">Name</span><input class="input" value="App Store Connect · CI"></div>
+              <div class="field"><span class="l">Key ID</span><input class="input mono" value="2X9R4HXF34"></div>
+              <div class="field"><span class="l">Issuer ID</span><input class="input ph" value="Paste it from Users and Access → Integrations"></div>
+              <div class="field"><span class="l">Website</span><input class="input" value="appstoreconnect.apple.com"></div>
+            </div>
+          </div>
+          <div>
+            <div class="sec-head">File</div>
+            <div class="card">
+              <div class="file-chip"><span class="ft key">.p8</span><div class="grow"><div class="name">AuthKey_2X9R4HXF34.p8</div><div class="meta">257 B · text · SHA-256 9f3a…c41e</div></div><div class="icon-btns"><span class="ib">Replace</span></div></div>
+            </div>
+          </div>
+          <div class="warn-line">Apple lets you download this file only once. Keep the original until this item has synced, then delete it from Downloads.</div>
+          <div class="btns"><button class="btn">Cancel</button><span class="grow"></span><button class="btn primary">Save to vault</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. SSH key editor -->
+  <section class="shot">
+    <h2>3 · Ítem SSH key</h2>
+    <p class="note">La clave privada es un campo archivo; la <b>pública</b>, el <b>fingerprint</b> y el tipo se calculan al importarla (solo lectura). La pública se copia sin máscara (no es secreta).
+      "Used on" lista los hosts; un ítem Server puede linkearla en <b>Related</b>.</p>
+    <div class="popup" data-header data-rail="accounts">
+      <div class="app-row">
+        <div class="split">
+          <div class="lc-col">
+            <div class="lc-section">SSH keys</div>
+            <div class="lc-list">
+              <div class="lc-row sel"><span class="ft sm key">ed</span><div class="lc-row-text"><span class="lc-row-name">GitHub · personal</span><span class="lc-row-sub">ed25519 · SHA256:4qX…</span></div></div>
+              <div class="lc-row"><span class="ft sm key">ed</span><div class="lc-row-text"><span class="lc-row-name">Deploy key · acme-api</span><span class="lc-row-sub">ed25519 · SHA256:Zt1…</span></div></div>
+              <div class="lc-row"><span class="ft sm key">rsa</span><div class="lc-row-text"><span class="lc-row-name">prod-bastion</span><span class="lc-row-sub">RSA 4096 · SHA256:bN8…</span></div></div>
+            </div>
+          </div>
+          <div class="dc-col">
+            <div style="display:flex;gap:10px;align-items:center">
+              <span class="ft key">ed</span>
+              <div class="grow"><div class="t1" style="font-size:14px">GitHub · personal</div><div class="t2">SSH key · ed25519 · added Oct 3</div></div>
+              <button class="btn sm">⋯</button>
+            </div>
+            <div>
+              <div class="sec-head">Key</div>
+              <div class="card">
+                <div class="file-chip"><span class="ft key">ed</span><div class="grow"><div class="name">id_ed25519</div><div class="meta">Private key · 411 B · passphrase protected</div></div><div class="icon-btns"><span class="ib">Show</span><span class="ib">Copy</span><span class="ib">Download</span></div></div>
+                <div class="field fx"><span class="l">Public key</span><span class="v mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK7…</span><span class="ib on">Copy</span></div>
+                <div class="field"><span class="l">Fingerprint</span><span class="v mono">SHA256:4qXv0nT…r8Yw</span></div>
+                <div class="field"><span class="l">Passphrase</span><span class="v">•••••••••••</span></div>
+                <div class="field"><span class="l">Comment</span><span class="v dim">alberto@macbook</span></div>
+                <div class="field"><span class="l">Used on</span><span class="v">github.com</span></div>
+              </div>
+            </div>
+            <div>
+              <div class="sec-head">Related</div>
+              <div class="card"><div class="card-row"><span class="acc-av" style="background:#24292f">GH</span><div class="grow"><div class="t1">GitHub</div><div class="t2">Login · apaparelli</div></div></div></div>
+            </div>
+            <div class="warn-line">Download saves <code>id_ed25519</code> to Downloads, unprotected. Move it and run <code>chmod 600 ~/.ssh/id_ed25519</code>.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. Generate -->
+  <section class="shot">
+    <h2>4 · Generar una clave SSH</h2>
+    <p class="note">Desde "+ Add → SSH key → Generate". <b>Ed25519</b> por defecto (WebCrypto), RSA 4096 para servidores viejos. Se crea y cifra en el popup.
+      Después: copiar la pública o abrir la página de "New SSH key" de GitHub / GitLab.</p>
+    <div class="popup" data-header data-rail="accounts">
+      <div class="app-row"><div class="split"><div class="lc-col"></div><div class="dc-col"></div></div></div>
+      <div class="scrim">
+        <div class="modal">
+          <h3>Generate an SSH key</h3>
+          <div style="display:flex;flex-direction:column;gap:9px">
+            <div style="display:flex;align-items:center;gap:10px"><span style="width:80px;font-size:11.5px;color:var(--ink-3)">Type</span><span class="seg"><span class="on">Ed25519</span><span>RSA 4096</span></span></div>
+            <div style="display:flex;align-items:center;gap:10px"><span style="width:80px;font-size:11.5px;color:var(--ink-3)">Name</span><input class="input" value="Deploy key · acme-api"></div>
+            <div style="display:flex;align-items:center;gap:10px"><span style="width:80px;font-size:11.5px;color:var(--ink-3)">Comment</span><input class="input mono" value="deploy@acme-api"></div>
+            <div style="display:flex;align-items:center;gap:10px"><span style="width:80px;font-size:11.5px;color:var(--ink-3)">Passphrase</span><input class="input ph" value="Optional (OTPilot keeps the key encrypted anyway)"></div>
+          </div>
+          <div class="card" style="background:var(--bg)">
+            <div class="file-chip"><span class="ft key">ed</span><div class="grow"><div class="name" style="white-space:normal;word-break:break-all;font-weight:600;font-size:10.5px">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFk2…Qe deploy@acme-api</div><div class="meta">SHA256:Zt1m…8KpQ</div></div></div>
+          </div>
+          <div class="btns"><span class="ib on">Copy public key</span><span class="ib">Add to GitHub ↗</span><span class="ib">Add to GitLab ↗</span></div>
+          <div class="btns"><button class="btn">Cancel</button><span class="grow"></span><button class="btn primary">Save key</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. Secure file -->
+  <section class="shot">
+    <h2>5 · Ítem Secure file: texto y binario</h2>
+    <p class="note">Para lo que no es una clave: <span class="mono">google-services.json</span>, un <span class="mono">.mobileprovision</span>, un <span class="mono">.p12</span>.
+      Un archivo de <b>texto</b> se puede ver (enmascarado hasta "Show") y copiar; uno <b>binario</b> solo se descarga. El .p12 trae su contraseña como campo normal.</p>
+    <div class="popup" data-header data-rail="accounts">
+      <div class="app-row">
+        <div class="split">
+          <div class="lc-col">
+            <div class="lc-section">Files</div>
+            <div class="lc-list">
+              <div class="lc-row sel"><span class="ft sm">json</span><div class="lc-row-text"><span class="lc-row-name">Firebase · acme-prod</span><span class="lc-row-sub">google-services.json · 1.2 KB</span></div></div>
+              <div class="lc-row"><span class="ft sm cert">p12</span><div class="lc-row-text"><span class="lc-row-name">Apple Distribution cert</span><span class="lc-row-sub">dist-2026.p12 · 3.1 KB</span></div></div>
+              <div class="lc-row"><span class="ft sm">prov</span><div class="lc-row-text"><span class="lc-row-name">Acme AppStore profile</span><span class="lc-row-sub">.mobileprovision · 12 KB</span></div></div>
+              <div class="lc-row"><span class="ft sm">env</span><div class="lc-row-text"><span class="lc-row-name">acme-api · staging .env</span><span class="lc-row-sub">.env · 640 B</span></div></div>
+            </div>
+          </div>
+          <div class="dc-col">
+            <div style="display:flex;gap:10px;align-items:center">
+              <span class="ft">json</span>
+              <div class="grow"><div class="t1" style="font-size:14px">Firebase · acme-prod</div><div class="t2">Secure file · updated 2 days ago</div></div>
+            </div>
+            <div class="card">
+              <div class="file-chip"><span class="ft sm">json</span><div class="grow"><div class="name">google-services.json</div><div class="meta">1.2 KB · text · SHA-256 a01c…77d2</div></div><div class="icon-btns"><span class="ib on">Hide</span><span class="ib">Copy</span><span class="ib">Download</span><span class="ib">Replace</span></div></div>
+              <div class="preview">{
+  "project_info": {
+    "project_number": "4821…",
+    "project_id": "acme-prod",
+  },
+  "client": [{ "api_key": [{ "current_key": <span class="mask">"••••••••••••••••••••"</span> }],
+  …</div>
+            </div>
+            <div class="card">
+              <div class="file-chip"><span class="ft sm cert">p12</span><div class="grow"><div class="name">dist-2026.p12</div><div class="meta">3.1 KB · binary · from "Apple Distribution cert"</div></div><div class="icon-btns"><span class="ib">Download</span></div></div>
+              <div class="field"><span class="l">Password</span><span class="v">••••••••</span></div>
+            </div>
+            <div>
+              <div class="sec-head">Notes</div>
+              <div class="card"><div style="padding:9px 11px;font-size:11.5px;color:var(--ink-2)">Goes in <span class="mono">android/app/</span>. Rotated with the Firebase key in Sept.</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. File as custom field -->
+  <section class="shot">
+    <h2>6 · "+ File" en cualquier ítem (la generalización)</h2>
+    <p class="note">El login de Apple Developer guarda su <span class="mono">.p8</span> y su <span class="mono">.p12</span> en una sección "Files". "File" es un tipo más de campo personalizado, al lado de Text / Hidden / Email / Date.
+      Al ser un campo, <b>compartirlo</b> (Share… → partes) y dárselo a un <b>agente</b> ya funciona.</p>
+    <div class="popup" data-header data-rail="accounts">
+      <div class="app-row">
+        <div class="split">
+          <div class="lc-col">
+            <div class="lc-section">Vault</div>
+            <div class="lc-list">
+              <div class="lc-row sel"><span class="acc-av" style="background:#111">AD</span><div class="lc-row-text"><span class="lc-row-name">Apple Developer</span><span class="lc-row-sub">dev@acme.io</span></div></div>
+              <div class="lc-row"><span class="acc-av" style="background:#24292f">GH</span><div class="lc-row-text"><span class="lc-row-name">GitHub</span><span class="lc-row-sub">apaparelli</span></div></div>
+            </div>
+          </div>
+          <div class="dc-col">
+            <div>
+              <div class="sec-head">Sign-in</div>
+              <div class="card">
+                <div class="field"><span class="l">Username</span><span class="v">dev@acme.io</span></div>
+                <div class="field"><span class="l">Password</span><span class="v">••••••••••</span></div>
+                <div class="field"><span class="l">Website</span><span class="v">developer.apple.com</span></div>
+              </div>
+            </div>
+            <div>
+              <div class="sec-head">Files</div>
+              <div class="card">
+                <div class="file-chip"><span class="ft sm key">.p8</span><div class="grow"><div class="name">AuthKey_2X9R4HXF34.p8</div><div class="meta">App Store Connect key · 257 B</div></div><div class="icon-btns"><span class="ib">Copy</span><span class="ib">Download</span><span class="ib">✕</span></div></div>
+                <div class="file-chip" style="border-top:1px solid var(--bg)"><span class="ft sm cert">p12</span><div class="grow"><div class="name">dist-2026.p12</div><div class="meta">Distribution certificate · 3.1 KB</div></div><div class="icon-btns"><span class="ib">Download</span><span class="ib">✕</span></div></div>
+                <div class="field"><span class="l">Key ID</span><span class="v mono">2X9R4HXF34</span></div>
+                <div class="field"><span class="l">.p12 password</span><span class="v">••••••••</span></div>
+                <div class="cf-kinds" style="border-top:1px solid var(--bg)"><span class="chip">+ Text</span><span class="chip">+ Hidden</span><span class="chip">+ Email</span><span class="chip">+ Date</span><span class="chip">+ Multi-line</span><span class="chip on">+ File</span></div>
+              </div>
+            </div>
+            <div class="btns"><button class="btn sm">+ New section</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. Vault list -->
+  <section class="shot">
+    <h2>7 · Lista del Vault: filtros y búsqueda</h2>
+    <p class="note">El filtro de tipo suma <b>SSH keys</b> y <b>Files</b>. Cada fila muestra lo útil para reconocerla (tipo de clave + fingerprint, nombre de archivo + tamaño). La búsqueda matchea nombres de archivo.
+      Soltar un archivo sobre la lista abre la pantalla 2.</p>
+    <div class="popup" data-header data-rail="accounts">
+      <div class="app-row">
+        <div class="split">
+          <div class="lc-col" style="width:270px">
+            <div class="search"><input class="input" value="p8"></div>
+            <div class="filters"><span class="chip">All</span><span class="chip">Logins</span><span class="chip">SSH keys</span><span class="chip on">Files</span><span class="chip">API</span></div>
+            <div class="lc-list">
+              <div class="lc-row sel"><span class="ft sm key">.p8</span><div class="lc-row-text"><span class="lc-row-name">App Store Connect · CI</span><span class="lc-row-sub">AuthKey_2X9R4HXF34.p8 · 257 B</span></div></div>
+              <div class="lc-row"><span class="acc-av" style="background:#111">AD</span><div class="lc-row-text"><span class="lc-row-name">Apple Developer</span><span class="lc-row-sub">Login · has AuthKey_7KQ…p8</span></div></div>
+              <div class="lc-row"><span class="ft sm key">.p8</span><div class="lc-row-text"><span class="lc-row-name">APNs key · acme</span><span class="lc-row-sub">AuthKey_Q4M81ZZ02P.p8 · 257 B</span></div></div>
+            </div>
+          </div>
+          <div class="dc-col">
+            <div class="drop hot" style="margin-top:auto;margin-bottom:auto">
+              <span class="ft key" style="margin-bottom:8px">ed</span><br>
+              <b>Drop to add id_ed25519</b><br>Recognized as an SSH key
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. Too large -->
+  <section class="shot">
+    <h2>8 · Archivo demasiado grande</h2>
+    <p class="note">Fase 1 guarda los bytes dentro del ítem cifrado: tope de <b>64 KB por ítem</b> (el registro del servidor admite 128 KiB y el archivo crece ×1.8 al cifrarse). Rechazo claro, nunca truncar.
+      Archivos grandes (PDFs, scans) serían la fase 2: blobs cifrados en R2, en planes pagos.</p>
+    <div class="popup" data-header data-rail="accounts">
+      <div class="app-row"><div class="split"><div class="lc-col"></div><div class="dc-col"></div></div></div>
+      <div class="toast">
+        <span class="ft sm" style="background:rgba(var(--danger-rgb),.15);color:var(--danger)">pdf</span>
+        <div class="grow"><b>passport-scan.pdf is 2.4 MB</b><br>OTPilot keeps files up to 64 KB for now: keys, certificates and config files. Larger documents are coming.</div>
+        <button class="btn sm">OK</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9. Agents -->
+  <section class="shot">
+    <h2>9 · Agentes: usar el archivo sin verlo</h2>
+    <p class="note"><span class="mono">run</span> acepta <b>@file</b>: el MCP escribe el archivo en un directorio temporal privado (0600), pasa la <b>ruta</b> y lo borra al terminar. El contenido se redacta de la salida.
+      Con eso un agente sube un build con el .p8 o hace push con una deploy key.</p>
+    <div class="term">
+      <div class="term-bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span>claude — ~/code/acme-ios</span></div>
+      <div class="term-body"><span class="t-user">&gt; Subí el build 412 a TestFlight</span>
+
+<span class="t-tool">● otpilot.list_accounts</span>()
+  <span class="t-dim">⎿ App Store Connect · CI (Key ID, Issuer ID, file: AuthKey_2X9R4HXF34.p8)
+    Deploy key · acme-api (SSH key)</span>
+
+<span class="t-tool">● otpilot.run</span>(command: "fastlane pilot upload --ipa build/Acme.ipa",
+             env: { ASC_KEY_PATH:  "App Store Connect · CI/@file",
+                    ASC_KEY_ID:    "App Store Connect · CI/Key ID",
+                    ASC_ISSUER_ID: "App Store Connect · CI/Issuer ID" })
+  <span class="t-dim">⎿</span> <span class="t-ok">exit 0</span> <span class="t-dim">— Successfully uploaded build 412
+    (key written to a private temp file for this run, then deleted)</span>
+
+<span class="t-tool">● otpilot.run</span>(command: "git push deploy main",
+             env: { GIT_SSH_COMMAND: "ssh -i {Deploy key · acme-api/@file} -o IdentitiesOnly=yes" })
+  <span class="t-dim">⎿</span> <span class="t-ok">exit 0</span> <span class="t-dim">— main -&gt; main</span>
+
+  Listo: build 412 en TestFlight y el deploy pusheado.
+<span class="t-dim">  Nunca vi la clave .p8 ni la SSH.</span></div>
+    </div>
+  </section>
+
+</div>
+
+<div class="decisions">
+  <h2>Decisiones</h2>
+  <ol>
+    <li><b>Tope</b>: 64 KB de archivos por ítem.</li>
+    <li><b>Free</b>: SSH keys y archivos son ítems como cualquier otro, cuentan dentro de los 50.</li>
+    <li><b>.env → "Split into fields"</b> (un campo oculto por variable) entra en la fase 1.</li>
+    <li><b>Generar claves SSH</b> (Ed25519 y RSA 4096) entra en la fase 1.</li>
+  </ol>
+</div>
+
+<script>
+  const header = document.getElementById('tpl-header').content;
+  const rail = document.getElementById('tpl-rail').content;
+  const idx = { home: 0, accounts: 1, agents: 4 };
+  document.querySelectorAll('.popup').forEach(p => {
+    if (p.hasAttribute('data-header')) p.prepend(header.cloneNode(true));
+    const r = rail.cloneNode(true);
+    r.querySelectorAll('.rail-btn')[idx[p.dataset.rail] ?? 0].classList.add('active');
+    p.querySelector('.app-row').prepend(r);
+  });
+  document.getElementById('themes').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#themes button').forEach(x => x.classList.toggle('on', x === b));
+    if (b.dataset.t) document.body.dataset.theme = b.dataset.t; else delete document.body.dataset.theme;
+  });
+</script>
+</body>
+</html>

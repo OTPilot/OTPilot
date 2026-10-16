@@ -757,6 +757,34 @@
     .cf-row:hover .cf-hide, .cf-row:hover .cf-del, .cf-row:focus-within .cf-hide, .cf-row:focus-within .cf-del { opacity: 1; }
     .cf-add-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
     .cf-add-kind { height: 22px; padding: 0 7px; border-radius: 12px; border: 1px dashed var(--border); background: none; color: var(--ink-2); font: inherit; font-size: 11px; cursor: pointer; }
+    /* Files (a file field: the type's or a custom one) */
+    .file-field { border-radius: 6px; }
+    .file-field.drop-hot { outline: 2px dashed var(--accent-2); outline-offset: 2px; }
+    .file-empty { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px dashed var(--border); border-radius: 6px; font-size: 11px; color: var(--ink-4); }
+    .file-chip { display: flex; align-items: center; gap: 9px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; flex-wrap: wrap; }
+    .file-badge { width: 30px; height: 34px; flex-shrink: 0; border-radius: 5px; display: inline-flex; align-items: flex-end; justify-content: center; padding-bottom: 4px; background: rgba(var(--accent-2-rgb),.16); color: var(--accent-2); font-family: var(--font-code); font-size: 8.5px; font-weight: 700; text-transform: lowercase; }
+    .file-meta { flex: 1; min-width: 110px; display: flex; flex-direction: column; }
+    .file-name { font-family: var(--font-code); font-size: 11.5px; font-weight: 700; color: var(--ink-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-size { font-size: 10px; color: var(--ink-4); margin-top: 1px; }
+    .file-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+    .file-btn { height: 22px; padding: 0 8px; border-radius: 5px; border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); font: inherit; font-size: 10.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    .file-btn:hover:not(:disabled) { color: var(--accent-2); border-color: rgba(var(--accent-2-rgb),.5); }
+    .file-btn:disabled { opacity: .6; cursor: default; }
+    .file-remove:hover { color: var(--danger) !important; border-color: var(--danger) !important; }
+    .file-preview { margin-top: 5px; max-height: 160px; overflow: auto; padding: 7px 9px; border-radius: 6px; background: var(--bg-deep); color: var(--ink-2); font-family: var(--font-code); font-size: 10px; line-height: 1.5; white-space: pre; }
+    .cf-row.cf-file { align-items: start; }
+    .cf-row.cf-file .file-field { min-width: 0; padding: 3px 0; }
+    .file-detected { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 9px; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(var(--accent-2-rgb),.35); background: rgba(var(--accent-2-rgb),.07); font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
+    .file-detected b { color: var(--ink-0); }
+    .file-detected-text { flex: 1 1 220px; }
+    .ssh-gen select { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; color: var(--ink-1); font: inherit; font-size: 11.5px; padding: 0 6px; }
+    .ssh-gen .file-btn { height: auto; }
+    .ssh-gen-hint, .ssh-add-links { font-size: 10.5px; color: var(--ink-4); margin-top: 4px; line-height: 1.45; }
+    .ssh-gen-hint code { font-family: var(--font-code); background: var(--bg-deep); padding: 0 4px; border-radius: 3px; color: var(--ink-2); }
+    .ssh-add-link { color: var(--accent-2); text-decoration: none; }
+    .ssh-add-link:hover { text-decoration: underline; }
+    #settings-panel { position: relative; }
+    #settings-panel.drop-hot::after { content: 'Drop to add to your vault'; position: absolute; inset: 6px; z-index: 30; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--accent-2); border-radius: 10px; background: rgba(var(--accent-2-rgb),.1); color: var(--accent-2); font-size: 13px; font-weight: 700; pointer-events: none; }
     .rel-head { display: flex; align-items: center; justify-content: space-between; }
     .rel-head label { margin: 0; }
     .rel-hint { font-size: 11px; color: var(--ink-4); padding: 4px 0; }
@@ -812,6 +840,10 @@
       padding: 7px 10px; border-radius: 7px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px;
     }
     .add-type:hover:not(:disabled) { background: var(--surface-2); }
+    .add-from-file { border-top: 1px solid var(--border); border-radius: 0 0 7px 7px; margin-top: 2px; color: var(--accent-2) !important; }
+    .add-soon { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; max-width: 230px; padding: 7px 8px 5px; border-top: 1px solid var(--border); }
+    .add-soon-label { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-5); margin-right: 3px; }
+    .add-soon .add-type { padding: 1px 7px; font-size: 10.5px; border: 1px dashed var(--border); border-radius: 10px; }
     .add-type.soon { color: var(--ink-5); cursor: default; }
     .soon-tag { font-size: 10px; color: var(--ink-4); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; }
     .type-tag {
@@ -1942,6 +1974,8 @@
 <script src="vaultKeys.js"></script>
 <script src="vaultStore.js"></script>
 <script src="vault.js"></script>
+<script src="sshKeys.js"></script>
+<script src="fileKinds.js"></script>
 <script src="importers.js"></script>
 <script src="vaultMigration.js"></script>
 <script src="vaultAccounts.js"></script>

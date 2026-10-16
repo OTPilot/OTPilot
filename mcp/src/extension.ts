@@ -33,9 +33,13 @@ export const VaultCrypto = load<{
   decryptItem(record: EncryptedRecord, key: string): Promise<VaultItem>
 }>('vaultCrypto.js', 'VaultCrypto')
 
+export type VaultFile = { name: string; mime: string; size: number; bytes: Uint8Array }
+
 export const Vault = load<{
   getValue(item: VaultItem, id: string): string
   loginCoversHost(urls: string[] | string, hostname: string): boolean
+  fileOf(value: string | undefined): VaultFile | null
+  fileText(file: VaultFile | null): string | null
 }>('vault.js', 'Vault')
 
 export const generateTOTP = load<(secret: string, period?: number, digits?: number) => Promise<string>>('totp.js', 'generateTOTP')
