@@ -351,13 +351,17 @@ const Importers = (() => {
     let next = { ...item, fields: (item.fields || []).map(f => ({ ...f })) };
     for (const f of fields || []) {
       if (!f.label && !f.id) continue;
-      const tpl = !f.custom && next.fields.find(t => !t.custom && (t.id === f.id || (f.label && (t.label || '').toLowerCase() === f.label.toLowerCase())));
-      if (tpl) { tpl.value = f.value; continue; }
-      // A wallet's address: one more address, not a custom field.
+      // A wallet's address: one more address (before the template match, which
+      // would take a second address on the same network for the first one).
       if (!f.custom && f.format === 'address') {
-        if (!next.fields.some(t => t.format === 'address' && t.value === f.value)) next = Vault.withAddresses(next, [...Vault.addressesOf(next), { network: f.label, address: f.value }]);
+        const addrs = Vault.addressesOf(next);
+        if (!addrs.some(x => x.network === (f.label || 'Address') && x.address === String(f.value ?? '').trim())) {
+          next = Vault.withAddresses(next, [...addrs, { network: f.label, address: f.value }]);
+        }
         continue;
       }
+      const tpl = !f.custom && next.fields.find(t => !t.custom && t.format !== 'address' && (t.id === f.id || (f.label && (t.label || '').toLowerCase() === f.label.toLowerCase())));
+      if (tpl) { tpl.value = f.value; continue; }
       if (next.fields.some(t => t.custom && t.label === f.label && t.value === f.value && (t.section || '') === (f.section || ''))) continue;
       next.fields.push({ id: `c-${crypto.randomUUID()}`, label: f.label || f.id, value: f.value, kind: f.kind || 'text', custom: true, ...(f.section ? { section: f.section } : {}) });
     }

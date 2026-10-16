@@ -169,7 +169,7 @@ function renderAgentConnectHelp(detail) {
     </div>
   </div>`;
   detail.querySelector('#agents-copy-cmd').addEventListener('click', async () => {
-    await navigator.clipboard.writeText(AGENT_CONNECT_CMD).catch(() => {});
+    await clipboardWrite(AGENT_CONNECT_CMD).catch(() => {});
     setStatus('Command copied');
   });
 }

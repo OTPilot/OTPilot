@@ -855,7 +855,7 @@ function siteUrl(pattern) {
 }
 
 async function homeCopy(value, label) {
-  try { await navigator.clipboard.writeText(value); setStatus(`${label} copied`); }
+  try { await clipboardWrite(value); setStatus(`${label} copied`); }
   catch { setStatus('Could not copy — the browser blocked the clipboard', false); }
 }
 
@@ -1140,7 +1140,7 @@ document.getElementById('btn-obfuscate').addEventListener('click', () => {
 document.getElementById('btn-copy').addEventListener('click', async () => {
   if (!currentCode) return;
   try {
-    await navigator.clipboard.writeText(currentCode);
+    await clipboardWrite(currentCode);
     setStatus('Copied!');
   } catch {
     setStatus('Clipboard unavailable', false);
@@ -2480,13 +2480,15 @@ ${esc(String(f.value ?? ''))}</textarea>
 }
 
 // What the editor says about the phrase typed so far.
-async function seedCheckText(text) {
+// `masked`: the phrase is hidden, so the message names no word.
+async function seedCheckText(text, masked) {
   const c = await Bip39.check(text);
   if (!c.count) return { text: '', ok: null };
   if (c.unknown.length) {
     const u = c.unknown[0];
     const more = c.unknown.length > 1 ? ` (and ${c.unknown.length - 1} more)` : '';
-    return { text: `Word ${u.index + 1}, “${u.word}”, isn't in the BIP39 list${more}. Fine if your wallet uses another list.`, ok: false };
+    const word = masked ? `Word ${u.index + 1}` : `Word ${u.index + 1}, “${u.word}”,`;
+    return { text: `${word} isn't in the BIP39 list${more}. Fine if your wallet uses another list.`, ok: false };
   }
   if (!c.countOk) return { text: `${c.count} word${c.count === 1 ? '' : 's'}: recovery phrases have 12, 15, 18, 21 or 24.`, ok: false };
   if (c.checksum === false) return { text: `${c.count} words, but the checksum doesn't match. Check for a typo or two swapped words.`, ok: false };
@@ -2503,7 +2505,7 @@ function mountSeedFields(body, readOnly) {
     let seq = 0;
     const recheck = async () => {
       const mine = ++seq;
-      const r = await seedCheckText(input.value);
+      const r = await seedCheckText(input.value, input.hidden);
       if (mine !== seq) return;
       check.textContent = r.text;
       check.dataset.ok = r.ok === null ? '' : String(r.ok);
@@ -2535,6 +2537,7 @@ function mountSeedFields(body, readOnly) {
       masked.hidden = true;
       input.hidden = false;
       box.querySelector('.seed-edit').remove();
+      recheck();
       if (!readOnly) input.focus();
     });
     box.querySelector('.seed-copy')?.addEventListener('click', async () => {
@@ -2665,16 +2668,23 @@ function askMasterPassword(text) {
 }
 
 // Copies a secret and clears the clipboard 30 s later while this popup is
-// still open (it closes when focus leaves it, so nothing else was copied
-// from here meanwhile; once it's closed the browser gives no way to clear).
+// still open (it closes when focus leaves it, so nothing was copied from
+// another app meanwhile; once it's closed the browser gives no way to clear).
+// Every copy made here goes through clipboardWrite, so a later one (an
+// address, a code) cancels the pending clear instead of being wiped.
 let _clipSeq = 0;
+function clipboardWrite(text) {
+  _clipSeq++;
+  return navigator.clipboard.writeText(text);
+}
+
 async function copySecret(value, label) {
   if (!(await copyText(value))) return;
-  const mine = ++_clipSeq;
+  const mine = _clipSeq;
   setStatus(`${label} copied — cleared in 30 s`);
   setTimeout(() => {
     if (mine !== _clipSeq) return;
-    navigator.clipboard.writeText('').catch(() => {});
+    navigator.clipboard.writeText('').catch(() => {}); // straight: not a copy of ours
   }, 30000);
 }
 
@@ -3672,7 +3682,7 @@ document.getElementById('gen-regenerate').addEventListener('click', regenerate);
 // Copies or reports why it couldn't; returns whether the clipboard got it.
 async function copyText(text) {
   try {
-    await navigator.clipboard.writeText(text);
+    await clipboardWrite(text);
     return true;
   } catch {
     setStatus('Could not copy — the browser blocked the clipboard', false);
@@ -4752,7 +4762,7 @@ function downloadEmergencyKit(key) {
 }
 
 document.getElementById('lock-kit-copy').addEventListener('click', async () => {
-  await navigator.clipboard.writeText(document.getElementById('lock-kit-key').textContent).catch(() => {});
+  await clipboardWrite(document.getElementById('lock-kit-key').textContent).catch(() => {});
   setStatus('Recovery key copied');
 });
 document.getElementById('lock-kit-download').addEventListener('click', () =>
@@ -5123,7 +5133,7 @@ document.getElementById('btn-reveal-synckey').addEventListener('click', () => {
 
 // New key: copy
 document.getElementById('btn-copy-synckey').addEventListener('click', async () => {
-  await navigator.clipboard.writeText(_currentSyncKey).catch(() => {});
+  await clipboardWrite(_currentSyncKey).catch(() => {});
   document.getElementById('btn-copy-synckey').textContent = 'Copied!';
   setTimeout(() => {
     document.getElementById('btn-copy-synckey').textContent = 'Copy key';
@@ -5991,7 +6001,7 @@ async function renderSharedCodes() {
     row.querySelector('.shared-copy').addEventListener('click', async () => {
       const code = await fetchCode('copy'); // audited
       if (!code) { setStatus('Could not fetch code', false); return; }
-      try { await navigator.clipboard.writeText(code); setStatus('Copied!'); }
+      try { await clipboardWrite(code); setStatus('Copied!'); }
       catch { setStatus('Clipboard unavailable', false); }
     });
     list.appendChild(row);

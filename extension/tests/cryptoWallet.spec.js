@@ -249,3 +249,80 @@ test('phishing guard: a grid of one-word boxes warns too; "It\'s my wallet" stop
   await site.waitForTimeout(800);
   await expect(banner).toHaveCount(0);
 });
+
+test('a masked phrase from another word list names no word until it is shown', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  await page.evaluate(async () => {
+    const w = Vault.newItem('wallet', { title: 'Monero' });
+    Vault.getField(w, 'seed').value = 'abandon zyzzyva ability';
+    await VaultStore.save([w], await VaultKeys.getKey());
+  });
+  await page.reload();
+  await page.click('#nav-settings');
+  await page.locator('.acc-head', { hasText: 'Monero' }).click();
+  const check = page.locator('#acc-detail .seed-check');
+  await expect(check).toHaveText("Word 2 isn't in the BIP39 list. Fine if your wallet uses another list.");
+  await page.click('#acc-detail .seed-edit');
+  await page.fill('.mp-password', TEST_PASSWORD);
+  await page.click('.mp-ok');
+  await expect(check).toContainText('“zyzzyva”');
+});
+
+test('copying something else cancels the pending clear of a copied secret', async ({ context, extensionId }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const page = await context.newPage();
+  await page.clock.install();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedUnlocked(page, { accounts: [] });
+  await page.reload();
+  await waitForVault(page);
+  await page.evaluate(() => copySecret('secret words', 'Recovery phrase'));
+  await page.clock.runFor(31_000);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('');
+  await page.evaluate(() => copySecret('secret words', 'Recovery phrase'));
+  await page.evaluate(() => copyText('an address'));
+  await page.clock.runFor(31_000);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('an address');
+});
+
+test('CSV import keeps two addresses on the same network, and one address on two networks', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  const addrs = await page.evaluate(() => {
+    const w = Vault.withAddresses(Vault.newItem('wallet', { title: 'Ledger' }), [
+      { network: 'Ethereum / EVM', address: '0xaaa' }, { network: 'Ethereum / EVM', address: '0xbbb' }, { network: 'Other', address: '0xaaa' },
+    ]);
+    const parsed = Importers.parse(Importers.toCsv([w]));
+    const [item] = Importers.toItems(parsed.entries, [{ action: 'new' }], []);
+    return Vault.addressesOf(item).map(a => [a.network, a.address]);
+  });
+  expect(addrs).toEqual([['Ethereum / EVM', '0xaaa'], ['Ethereum / EVM', '0xbbb'], ['Other', '0xaaa']]);
+});
+
+test('phishing guard: a submission carrying a phrase is stopped at once', async ({ context, extensionId }) => {
+  await popup(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(SITE);
+  await site.evaluate(() => {
+    window.sent = 0;
+    document.getElementById('one').addEventListener('submit', () => { window.sent++; });
+  });
+  // Set without an input event, then submitted at once: no debounce to wait for.
+  await site.evaluate(phrase => { document.querySelector('textarea[name="phrase"]').value = phrase; }, PHRASE);
+  await site.click('#one button');
+  await expect(site.locator('#otpilot-seed-guard')).toBeVisible();
+  expect(await site.evaluate(() => window.sent)).toBe(0);
+});
+
+test('phishing guard: the page\'s own script cannot click "It\'s my wallet"', async ({ context, extensionId }) => {
+  const page = await popup(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(SITE);
+  await site.fill('textarea[name="phrase"]', PHRASE);
+  const banner = site.locator('#otpilot-seed-guard');
+  await expect(banner).toBeVisible();
+  await site.evaluate(() => [...document.querySelectorAll('#otpilot-seed-guard button')].find(b => b.textContent.startsWith("It's my wallet")).click());
+  await site.waitForTimeout(300);
+  await expect(banner).toBeVisible();
+  expect(await page.evaluate(async () => (await chrome.storage.local.get('seedGuardAllow:localhost'))['seedGuardAllow:localhost'])).toBeUndefined();
+});
