@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export type VaultField = { id: string; label?: string; value?: string; kind?: string; custom?: boolean; section?: string }
+export type VaultField = { id: string; label?: string; value?: string; kind?: string; custom?: boolean; section?: string; format?: string }
 export type VaultItem = {
   id: string
   type: string
@@ -40,6 +40,7 @@ export const Vault = load<{
   loginCoversHost(urls: string[] | string, hostname: string): boolean
   fileOf(value: string | undefined): VaultFile | null
   fileText(file: VaultFile | null): string | null
+  isWalletSecret(item: VaultItem, field: VaultField): boolean
 }>('vault.js', 'Vault')
 
 export const generateTOTP = load<(secret: string, period?: number, digits?: number) => Promise<string>>('totp.js', 'generateTOTP')

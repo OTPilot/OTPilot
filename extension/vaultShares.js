@@ -47,7 +47,7 @@ const VaultShares = (() => {
   function parts(item) {
     const out = [];
     for (const f of item.fields || []) {
-      if (String(f.value ?? '') !== '') out.push({ key: `f:${f.id}`, label: f.label || f.id, secret: Vault.SECRET_KINDS.includes(f.kind) });
+      if (String(f.value ?? '') !== '') out.push({ key: `f:${f.id}`, label: f.label || f.id, secret: Vault.SECRET_KINDS.includes(f.kind), walletSecret: Vault.isWalletSecret(item, f) });
     }
     if (item.totp?.secret) out.push({ key: 'totp', label: '2FA code', secret: true });
     if ((item.urls || []).length) out.push({ key: 'urls', label: 'Websites' });

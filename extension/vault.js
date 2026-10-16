@@ -71,6 +71,21 @@ const Vault = (() => {
         { id: 'file', label: 'File', kind: 'file' },
       ],
     },
+    // A crypto wallet: its secrets are `hidden` fields with a `format`
+    // (a newer kind would show unmasked in versions that don't know it), and
+    // its addresses are fields of their own (see addressesOf).
+    wallet: {
+      label: 'Crypto wallet',
+      fields: [
+        { id: 'wallet', label: 'Wallet app', kind: 'text' },
+        { id: 'seed', label: 'Recovery phrase', kind: 'hidden', format: 'bip39' },
+        { id: 'passphrase', label: 'Passphrase (25th word)', kind: 'hidden', format: 'key' },
+        { id: 'password', label: 'Unlock password', kind: 'password' },
+        { id: 'privateKey', label: 'Private key', kind: 'hidden', format: 'key' },
+        { id: 'derivationPath', label: 'Derivation path', kind: 'text' },
+      ],
+      addresses: true,
+    },
   };
 
   // Shown as "Coming soon" in the new-item picker.
@@ -216,6 +231,45 @@ const Vault = (() => {
     return (item.fields || []).filter(f => f.kind === 'file').reduce((n, f) => n + (fileOf(f.value)?.size || 0), 0);
   }
 
+  // ── Crypto wallets ─────────────────────────────────────────────────────
+  // A wallet's recovery phrase, its passphrase and private keys move funds:
+  // they're never given to AI agents, need the master password again to show
+  // or copy, and sharing them asks first. Known by `format` (kept by every
+  // version: editors only rewrite a template field's value), or by the
+  // wallet template's ids for a field that lost it.
+  const WALLET_SECRET_FORMATS = ['bip39', 'key'];
+  const WALLET_SECRET_IDS = ['seed', 'passphrase', 'privateKey'];
+
+  function isWalletSecret(item, field) {
+    if (!field || field.custom) return WALLET_SECRET_FORMATS.includes(field?.format);
+    return WALLET_SECRET_FORMATS.includes(field.format) || (item?.type === 'wallet' && WALLET_SECRET_IDS.includes(field.id));
+  }
+
+  // Whether an item holds any filled wallet secret.
+  function hasWalletSecret(item) {
+    return (item?.fields || []).some(f => String(f.value ?? '') !== '' && isWalletSecret(item, f));
+  }
+
+  // A wallet's addresses: one field each, `format: 'address'`, the network as
+  // its label (versions that don't know them show "Solana: <address>" fields).
+  //   → [{ id, network, address }]
+  function addressesOf(item) {
+    return (item.fields || []).filter(f => f.format === 'address' && !f.custom)
+      .map(f => ({ id: f.id, network: f.label || '', address: f.value ?? '' }));
+  }
+
+  // Replaces an item's addresses (empty ones dropped), after its template
+  // fields and before its custom ones.
+  function withAddresses(item, list) {
+    const fields = (item.fields || []).filter(f => !(f.format === 'address' && !f.custom));
+    const addrs = (list || [])
+      .map(a => ({ id: a.id, network: String(a.network || '').trim().slice(0, 40), address: String(a.address ?? '').trim() }))
+      .filter(a => a.address)
+      .map(a => ({ id: a.id || `addr-${crypto.randomUUID()}`, label: a.network || 'Address', kind: 'text', format: 'address', value: a.address }));
+    const at = fields.findIndex(f => f.custom);
+    return { ...item, fields: at < 0 ? [...fields, ...addrs] : [...fields.slice(0, at), ...addrs, ...fields.slice(at)] };
+  }
+
   // ── v1 ⇄ v2 ─────────────────────────────────────────────────────────────
   // v1 account: { name, email, secret, urls ("a.com\nb.com"), autofill,
   //               category, domain, _updatedAt }
@@ -263,5 +317,6 @@ const Vault = (() => {
     fromV1Account, toV1Account,
     loginCoversHost,
     fileValue, fileOf, fileText, fileBytes, bytesToB64, b64ToBytes,
+    isWalletSecret, hasWalletSecret, addressesOf, withAddresses,
   };
 })();

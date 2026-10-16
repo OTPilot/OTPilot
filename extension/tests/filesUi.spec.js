@@ -70,7 +70,7 @@ test('a Secure file: choose it, save, then Show / Copy / Download it', async ({ 
 test('From a file…: an Apple .p8 becomes an API credential, or a plain file if asked', async ({ context, extensionId }) => {
   const page = await vault(context, extensionId);
   await page.click('#btn-add');
-  await expect(page.locator('#add-type-menu [data-add-type]')).toHaveText(['2FA code', 'Login', 'Secure note', 'Server', 'API credential', 'SSH key', 'Secure file', 'From a file…']);
+  await expect(page.locator('#add-type-menu [data-add-type]')).toHaveText(['2FA code', 'Login', 'Secure note', 'Server', 'API credential', 'SSH key', 'Secure file', 'Crypto wallet', 'From a file…']);
   const chooser = page.waitForEvent('filechooser');
   await page.click('#add-type-menu [data-add-type="from-file"]');
   await (await chooser).setFiles({ name: 'AuthKey_2X9R4HXF34.p8', mimeType: '', buffer: Buffer.from(P8) });

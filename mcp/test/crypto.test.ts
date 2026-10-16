@@ -47,6 +47,27 @@ describe('grants', () => {
     expect(() => findGrant(all, 'bank')).toThrow(/request_access/)
   })
 
+  it('never hands out a crypto wallet\'s recovery phrase or keys, even when its copy carries them', async () => {
+    const keys = await generateKeyPair()
+    const wallet = loginItem({
+      type: 'wallet', title: 'Phantom',
+      fields: [
+        { id: 'wallet', label: 'Wallet app', kind: 'text', value: 'Phantom' },
+        { id: 'seed', label: 'Recovery phrase', kind: 'hidden', format: 'bip39', value: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' },
+        { id: 'privateKey', label: 'Private key', kind: 'hidden', value: '5Kb8kLf9zgWQnogidDA76MzPL6TsZZY36hWXMssSzNydYXYB9KF' },
+        { id: 'addr-1', label: 'Solana', kind: 'text', format: 'address', value: '7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV' },
+      ],
+    })
+    const row = await grantRow(wallet, keys.publicKey)
+    const api = new FakeApi((m, p) => (p === '/agent/grants' ? { body: { grants: [row] } } : undefined))
+    const [g] = await loadGrants(api, keys.privateJwk)
+    expect(g.item!.fields.map(f => f.id)).toEqual(['wallet', 'addr-1'])
+    expect(await fieldValue(g.item!, 'Solana')).toBe('7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV')
+    await expect(fieldValue(g.item!, 'seed')).rejects.toThrow(/never available to agents/)
+    await expect(fieldValue(g.item!, 'Recovery phrase')).rejects.toThrow(/never available to agents/)
+    await expect(fieldValue(wallet, 'private key')).rejects.toThrow(/never available to agents/)
+  })
+
   it('a fresh 2FA code from the extension\'s own TOTP (RFC 6238 vector)', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(59_000)
