@@ -144,6 +144,8 @@ test('an added file becomes the right item: SSH key, Apple .p8, service account,
       env: summary(await FileKinds.fromFile('.env.production', '', enc(env))),
       envSplit: (() => { const i = FileKinds.alternative('env-fields', '.env.production', '', enc(env)); return { type: i.type, fields: i.fields.map(f => [f.label, f.kind, f.value]) }; })(),
       other: summary(await FileKinds.fromFile('notes.txt', 'text/plain', enc('hello'))),
+      envMultiline: FileKinds.parseEnv('A=1\nPRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIGT\\"x\n-----END PRIVATE KEY-----" # c\nB=\'two\nlines\'\n'),
+      envUnclosed: summary(await FileKinds.fromFile('.env', '', enc('A=1\nKEY="never closed\nB=2\n'))),
       tooLarge: await FileKinds.fromFile('big.bin', '', new Uint8Array(Vault.FILE_BYTES_LIMIT + 1)),
       empty: await FileKinds.fromFile('empty', '', new Uint8Array(0)),
     };
@@ -167,6 +169,13 @@ test('an added file becomes the right item: SSH key, Apple .p8, service account,
   expect(r.envSplit).toEqual({ type: 'note', fields: [
     ['API_URL', 'password', 'https://api.acme.io'], ['TOKEN', 'password', 'abc def'], ['PLAIN', 'password', 'x'],
   ] });
+  expect(r.envMultiline).toEqual([
+    { key: 'A', value: '1' },
+    { key: 'PRIVATE_KEY', value: '-----BEGIN PRIVATE KEY-----\nMIGT"x\n-----END PRIVATE KEY-----' },
+    { key: 'B', value: 'two\nlines' },
+  ]);
+  // A quoted value that never closes: no split (it would lose the rest).
+  expect(r.envUnclosed).toMatchObject({ kind: 'env', label: '.env file', type: 'file', alts: [] });
   expect(r.other).toMatchObject({ kind: 'file', type: 'file', title: 'notes', fields: [['File', 'file', 'notes.txt']] });
   expect(r.tooLarge).toEqual({ error: 'too-large' });
   expect(r.empty).toEqual({ error: 'empty' });

@@ -19,17 +19,41 @@ const FileKinds = (() => {
     return item;
   }
 
+  // Where a quoted value's closing quote is in `s` (after the opening one),
+  // or -1. In double quotes a backslash escapes the next character.
+  function closingQuote(s, quote) {
+    for (let i = 0; i < s.length; i++) {
+      if (quote === '"' && s[i] === '\\') { i++; continue; }
+      if (s[i] === quote) return i;
+    }
+    return -1;
+  }
+
   // An .env's variables, in order ({ key, value }); comments, blank lines and
-  // anything that isn't KEY=VALUE are skipped. Quotes around a value go.
+  // anything that isn't KEY=VALUE are skipped. Quotes around a value go, and
+  // a quoted value may span lines (a PEM key). null when a quoted value is
+  // never closed: splitting it would lose the rest.
   function parseEnv(text) {
+    const lines = String(text || '').split(/\r?\n/);
     const out = [];
-    for (const raw of String(text || '').split(/\r?\n/)) {
-      const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/.exec(raw);
+    for (let i = 0; i < lines.length; i++) {
+      const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/.exec(lines[i]);
       if (!m) continue;
-      let value = m[2].trim();
-      const q = /^(['"`])([\s\S]*)\1$/.exec(value);
-      if (q) value = q[1] === '"' ? q[2].replace(/\\n/g, '\n').replace(/\\(["\\])/g, '$1') : q[2];
-      else value = value.replace(/\s+#.*$/, '');
+      const rest = m[2];
+      const quote = /^['"`]/.exec(rest)?.[0];
+      if (!quote) {
+        out.push({ key: m[1], value: rest.replace(/\s+#.*$/, '').trim() });
+        continue;
+      }
+      let body = rest.slice(1);
+      let end = closingQuote(body, quote);
+      while (end < 0 && i + 1 < lines.length) {
+        body += `\n${lines[++i]}`;
+        end = closingQuote(body, quote);
+      }
+      if (end < 0) return null;
+      let value = body.slice(0, end);
+      if (quote === '"') value = value.replace(/\\n/g, '\n').replace(/\\(["\\])/g, '$1');
       out.push({ key: m[1], value });
     }
     return out;
@@ -38,7 +62,7 @@ const FileKinds = (() => {
   // The .env as a secure note with one hidden field per variable.
   function envAsFields(name, text) {
     const item = Vault.newItem('note', { title: baseName(name) });
-    item.fields = parseEnv(text).map(v => custom(v.key, v.value, 'password'));
+    item.fields = (parseEnv(text) || []).map(v => custom(v.key, v.value, 'password'));
     return item;
   }
 
@@ -92,10 +116,13 @@ const FileKinds = (() => {
         }
       }
 
-      if (isEnvName(name) && parseEnv(text).length) {
-        const count = parseEnv(text).length;
+      const vars = isEnvName(name) ? parseEnv(text) : [];
+      if (vars === null) {
+        return { kind: 'env', label: '.env file', item: plainFile(name, mime, bytes), note: 'A quoted value in it never closes, so it stays one file.', alternatives: [] };
+      }
+      if (vars.length) {
         return {
-          kind: 'env', label: `.env file (${count} variable${count === 1 ? '' : 's'})`, item: plainFile(name, mime, bytes),
+          kind: 'env', label: `.env file (${vars.length} variable${vars.length === 1 ? '' : 's'})`, item: plainFile(name, mime, bytes),
           alternatives: [{ id: 'env-fields', label: 'Split into fields' }],
         };
       }

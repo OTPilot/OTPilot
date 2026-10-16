@@ -2514,9 +2514,19 @@ function mountSsh(body, idx) {
       return;
     }
     if (openAccIdx !== idx) return; // the user moved on meanwhile
+    // The item's other files and the new key stay under the files limit too.
+    const keyBytes = new TextEncoder().encode(key.privateKey);
+    const others = [...body.querySelectorAll('.file-field input[type="hidden"]')]
+      .reduce((n, i) => n + (Vault.fileOf(i.value)?.size || 0), 0);
+    if (others + keyBytes.length > Vault.FILE_BYTES_LIMIT) {
+      btn.disabled = false;
+      btn.textContent = 'Generate';
+      setStatus(fileTooLarge(key.fileName, keyBytes.length), false);
+      return;
+    }
     syncOpenAccToDraft();
     const item = draft[idx].item;
-    Vault.getField(item, 'privateKey').value = Vault.fileValue(key.fileName, 'text/plain', new TextEncoder().encode(key.privateKey));
+    Vault.getField(item, 'privateKey').value = Vault.fileValue(key.fileName, 'text/plain', keyBytes);
     Vault.getField(item, 'publicKey').value = key.publicKey;
     Vault.getField(item, 'fingerprint').value = key.fingerprint;
     if (!draft[idx].name) draft[idx].name = comment || `${key.label} key`;

@@ -189,6 +189,17 @@ test('an SSH key: generate one, or pick a key file and its public key follows', 
   expect(item.type).toBe('ssh');
   expect(item.fields[0].value.text).toMatch(/^-----BEGIN OPENSSH PRIVATE KEY-----/);
 
+  // Generating counts toward the item's files limit too.
+  await addType(page, 'SSH key');
+  const chooserBig = page.waitForEvent('filechooser');
+  await page.click('#acc-detail .cf-add-kind[data-kind="file"]');
+  await (await chooserBig).setFiles({ name: 'big.bin', mimeType: '', buffer: Buffer.alloc(64 * 1024 - 100) });
+  await expect(page.locator('#acc-detail .cf-row.cf-file .file-name')).toHaveText('big.bin');
+  await page.click('#acc-detail .ssh-gen-go');
+  await expect(page.locator('#status-msg')).toContainText(/id_ed25519 is \d+ B: an item holds up to 64 KB/);
+  await expect(page.locator('#acc-detail .file-choose')).toHaveCount(1); // still no key
+  await expect(page.locator('#acc-detail .ssh-gen-go')).toBeEnabled();
+
   // A key file of its own: public key and fingerprint come from it.
   const other = await page.evaluate(() => SshKeys.generate('ed25519', 'me@laptop'));
   await addType(page, 'SSH key');
