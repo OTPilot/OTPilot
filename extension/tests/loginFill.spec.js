@@ -315,7 +315,7 @@ test('the first page of a two-step sign-in: badge and dropdown on the username; 
     return fillLogin({ tab: { id: 1 }, frameId: 0, url }, items[0].id, true);
   }, site.url());
   expect(answer).toEqual({ ok: true, username: 'me@example.com' });
-  await site.click('button:has-text("Continue")');
+  // "Sign in automatically" (on by default) submits the username step.
   await expect(site).toHaveURL(/login-step2\.html/);
   await site.focus('input[name="password"]');
   await site.locator('#otpilot-login-dropdown .otpilot-login-choice').click();
@@ -447,4 +447,45 @@ test('scrolling inside a long dropdown keeps its position', async ({ context, ex
   await drop.evaluate(el => { el.scrollTop = el.scrollHeight; });
   await site.waitForTimeout(300); // a repositioning frame
   expect(await drop.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+});
+
+// ── Per-login settings: Auto-fill, Sign in automatically ─────────────────────
+
+const countSubmits = site => site.evaluate(() => {
+  window.__submits = 0;
+  document.getElementById('login').addEventListener('submit', () => { window.__submits++; });
+});
+
+test('Sign in automatically (the default) submits after the pick; turned off, the form is only filled', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  await countSubmits(site);
+  await site.locator('#otpilot-login-fill .otpilot-login-choice').click();
+  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+  await expect.poll(() => site.evaluate(() => window.__submits)).toBe(1);
+
+  await writeAccounts(popup, [{ ...github, autoLogin: false }]);
+  expect(await popup.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items[0].autoLogin)).toBe(false);
+  await site.reload();
+  await countSubmits(site);
+  await site.locator('#otpilot-login-fill .otpilot-login-choice').click();
+  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+  await site.waitForTimeout(800);
+  expect(await site.evaluate(() => window.__submits)).toBe(0);
+});
+
+test('Auto-fill off: no offer on its own, the badge still lists the login', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ ...github, autofill: false }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  const badge = site.locator('.otpilot-field-badge[data-kind="login"]');
+  await expect(badge).toHaveCount(2);
+  await site.focus('input[name="email"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-login-fill')).toHaveCount(0);
+  await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0);
+  await badge.first().click();
+  await site.locator('#otpilot-login-dropdown .otpilot-login-choice').click();
+  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
 });

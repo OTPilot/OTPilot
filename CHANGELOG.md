@@ -1,6 +1,20 @@
 # Changelog
 
 
+## v2.1.5
+
+### Extension
+
+- Vault editor: the footer's Save follows the open item — on an item shared with you it saves it to its collection / share ("Save to <collection>"), disabled ("View only") without edit access; the second save button inside the editor is gone.
+- Vault editor: "+ Add" is hidden while an item is open; clicking the open row closes it.
+- Home: the edit button reads "Edit" next to its icon.
+- Two-step sign-ins (email first, password on the next page — Rippling, Google…): the username page gets the OTPilot badge, the dropdown and the corner offer, and a pick fills the username only.
+- The OTPilot badge shows in every sign-in field once the vault is set up, also on sites without a saved login (its dropdown says so).
+- Locked vault: the badge's dropdown shows "Unlock OTPilot to fill…" with an Unlock button that opens the master-password prompt.
+- A login saved from a page keeps the address its sign-in started on (e.g. `app.rippling.com/sign-in/id`, never the query), so "Open & sign in" goes straight there.
+- Per-login Advanced settings: **Auto-fill** (off: no offer on its own and no automatic 2FA code — fill from the badge or the popup) and **Sign in automatically** (submit after filling the login or its 2FA code; on by default).
+
+
 ## v2.1.0
 
 **OTPilot for AI agents**: Claude Code, Codex, Cursor or any MCP agent can sign in to websites and run commands with the accounts you allow — passwords and 2FA codes — without the agent ever seeing them.

@@ -29,6 +29,8 @@ const VaultAccounts = (() => {
       secret: item.totp?.secret || '',
       urls: (item.urls || []).join('\n'),
       autofill: item.autofill !== false,
+      // Submit the sign-in after filling it (the login, or its 2FA code).
+      autoLogin: item.autoLogin !== false,
       category: item.tags?.[0] || '',
       moreTags: (item.tags || []).slice(1),
       password: Vault.getValue(item, 'password'),
@@ -88,6 +90,10 @@ const VaultAccounts = (() => {
       : null;
     next.urls = String(acc.urls || '').split('\n').map(s => s.trim()).filter(Boolean);
     next.autofill = acc.autofill !== false;
+    // Only when the caller knows it (a 1.x device's account doesn't): stored
+    // only when off, so items that never had it keep signing in.
+    if (acc.autoLogin === false) next.autoLogin = false;
+    else if (acc.autoLogin === true) delete next.autoLogin;
     const category = String(acc.category || '').trim();
     // Tags after the first: the editor's "More tags", or kept as they were
     // for callers that don't know them (a 1.x device's account).
@@ -121,6 +127,7 @@ const VaultAccounts = (() => {
   function indexEntry(item) {
     return {
       id: item.id, name: item.title || '', urls: (item.urls || []).join('\n'), autofill: item.autofill !== false,
+      autoLogin: item.autoLogin !== false,
       // Whether it can fill a sign-in form / a 2FA code (never the password
       // or the secret itself).
       hasPassword: !!Vault.getValue(item, 'password'),

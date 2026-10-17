@@ -120,7 +120,15 @@
     document.getElementById(OVERLAY_ID)?.remove();
   }
 
-  async function fill(id) {
+  // Offered on their own (the corner offer, focusing a field): the logins
+  // with Auto-fill on. The badge lists every login of the site.
+  const autoOffered = res => ({ ...res, logins: res.logins.filter(l => l.autofill !== false) });
+
+  // `login`: { id, autoLogin } from vaultLoginsForPage. With "Sign in
+  // automatically" on, the form (or the username step) is submitted after
+  // the fill — the user's pick is the gesture; not where the site rejects
+  // a synthetic click (isNoAutoSubmitHost).
+  async function fill({ id, autoLogin }) {
     const fields = findFillFields();
     // A username step gets the username only: the password waits for its page.
     const usernameOnly = !!fields && !fields.password;
@@ -136,6 +144,10 @@
       if (fields.username && res.username) fillInputValue(fields.username, res.username);
       if (fields.password) fillInputValue(fields.password, res.password);
     } finally { _filling = false; }
+    if (autoLogin !== false) {
+      if (fields.password) submitAfterFill(fields.password, passwordButtonFor);
+      else submitAfterFill(fields.username, signInButtonFor);
+    }
     closeOverlay();
     closeDropdown();
   }
@@ -165,7 +177,7 @@
           async () => {
             const next = await loginsForPage();
             if (next.state !== 'unlocked') { close(); return; }
-            if (next.logins.length === 1) { fill(next.logins[0].id); return; }
+            if (next.logins.length === 1) { fill(next.logins[0]); return; }
             render(el, next, close); // the logins to pick from, or "No saved login"
             if (_anchor?.el === el) placeUnder(el, _anchor.field);
           },
@@ -193,7 +205,7 @@
       });
       btn.innerHTML = `<div style="font-weight:600;">${esc(login.name)}</div>`
         + (login.username ? `<div style="color:var(--ink-3, #94a3b8);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(login.username)}</div>` : '');
-      btn.addEventListener('click', trusted(() => fill(login.id)));
+      btn.addEventListener('click', trusted(() => fill(login)));
       body.appendChild(btn);
     }
   }
@@ -210,10 +222,11 @@
       const res = await loginsForPage();
       _pageLogins = res.state === 'setup' ? null : res;
       syncBadges();
-      if (_dismissed || res.state === 'setup' || !res.logins.length) return;
+      const offered = autoOffered(res);
+      if (_dismissed || res.state === 'setup' || !offered.logins.length) return;
       closeOverlay();
       const el = makeOverlay(OVERLAY_ID);
-      render(el, res);
+      render(el, offered);
       document.body.appendChild(el);
     } finally {
       _checking = false;
@@ -580,9 +593,10 @@
     _pendingField = null;
     _pageLogins = res.state === 'setup' ? null : res;
     if (!_pageLogins || !field.isConnected) return;
-    if (!_pageLogins.logins.length && !explicit) return;
+    const shown = explicit ? res : autoOffered(res);
+    if (!shown.logins.length && !explicit) return;
     const el = makeAnchored(DROP_ID, field);
-    render(el, res, closeDropdown);
+    render(el, shown, closeDropdown);
     showAnchored(el, field);
   }
 
@@ -689,7 +703,7 @@
     // background answered still opens (openLogins asks, and shows only if the
     // site has logins). Once that check found none, focusing doesn't ask again.
     if (_anchor?.field === f || _pendingField === f) return;
-    if (_pageLogins && !_pageLogins.logins.length) return;
+    if (_pageLogins && !autoOffered(_pageLogins).logins.length) return;
     const login = findFillFields();
     if (login && (f === login.username || f === login.password)) openLogins(f);
   }, true);

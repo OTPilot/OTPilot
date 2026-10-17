@@ -922,6 +922,11 @@
     .toggle input:checked + .toggle-track { background: var(--accent); }
     .toggle input:checked + .toggle-track::after { left: 14px; background: var(--on-accent); }
     .toggle-label { font-size: 11px; color: var(--ink-4); }
+    /* The login editor's Advanced settings: toggles, not field labels. */
+    .acc-field.acc-advanced label.toggle {
+      display: flex; font-size: inherit; font-weight: normal; text-transform: none;
+      letter-spacing: normal; margin: 6px 0 0;
+    }
 
     .btn-backup {
       flex: 1; padding: 7px;
