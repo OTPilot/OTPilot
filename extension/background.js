@@ -195,7 +195,9 @@ async function loginsForPage(sender) {
   return { state, logins };
 }
 
-async function fillLogin(sender, id) {
+// `usernameOnly`: the first page of a two-step sign-in, which asks for the
+// username alone — the password stays here until its own page asks.
+async function fillLogin(sender, id, usernameOnly = false) {
   const host = senderHost(sender);
   if (!host || typeof id !== 'string' || (await VaultLock.state()) !== 'unlocked') return { ok: false };
   const item = (await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null))
@@ -203,6 +205,7 @@ async function fillLogin(sender, id) {
   const password = item && Vault.getValue(item, 'password');
   if (!item || item.type !== 'login' || !password || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
   await VaultLock.touch();
+  if (usernameOnly) return { ok: true, username: Vault.getValue(item, 'username') };
   return { ok: true, username: Vault.getValue(item, 'username'), password };
 }
 
@@ -304,6 +307,24 @@ const pendingLoginKey = tabId => `pendingLogin:${tabId}`;
 // one public suffix (a.co.uk / b.co.uk, x.github.io / y.github.io).
 const relatedHost = (a, b) => a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
 
+// The website a login saved from a page gets: the page its sign-in was
+// typed on (the username step's, in a two-step sign-in), so "Open & sign in"
+// goes straight there — host + path, e.g. "app.site.com/sign-in/id". The
+// path is kept only when it reads like a sign-in page (not a change-password
+// or sign-up one) and holds plain words: no query or fragment (redirect
+// targets, tokens), nothing that looks like an id. Else the host alone.
+const SIGN_IN_SEGMENT = /^(sign[-_]?in|log[-_]?in|logon|sign[-_]?on|sso|auth|authenticate|session|identifier)(\.[a-z]+)?$/i;
+function signInUrlOf(url) {
+  try {
+    const u = new URL(url);
+    if (!/^https?:$/.test(u.protocol) || !u.hostname) return null;
+    const segments = u.pathname.split('/').filter(Boolean);
+    const plain = segments.length <= 4 && segments.some(x => SIGN_IN_SEGMENT.test(x))
+      && segments.every(x => /^[a-z][a-z0-9._~-]{0,31}$/i.test(x) && !/\d{4,}|[0-9a-f]{12,}/i.test(x));
+    return `${u.host.toLowerCase()}${plain ? `/${segments.join('/')}` : ''}`;
+  } catch { return null; }
+}
+
 // A capture still being stored, per tab: the next page's offer request can
 // arrive while it is (the sign-in navigated right away), and waits for it.
 const _capturesInFlight = new Map();
@@ -329,14 +350,21 @@ async function storeCapture(sender, msg) {
   // without takes the username step's (kept for a retried password).
   // `step`: the username step this capture took its username from, the only
   // one settling it may end.
+  // `url`: where the sign-in started (the username step's page, if any).
+  // A password page that repeats the username step's username (a read-only
+  // or hidden copy of it) is still that sign-in: it keeps its start.
   let step = null;
-  if (username) await chrome.storage.session.remove(pendingUsernameKey(sender.tab.id));
-  else {
-    const pending = await pendingUsernameFor(sender.tab.id, host);
-    if (pending) ({ username, id: step } = pending);
+  let url = signInUrlOf(sender.url);
+  const pending = await pendingUsernameFor(sender.tab.id, host);
+  if (username) {
+    if (pending?.url && pending.username.toLowerCase() === username.toLowerCase()) url = pending.url;
+    await chrome.storage.session.remove(pendingUsernameKey(sender.tab.id));
+  } else if (pending) {
+    ({ username, id: step } = pending);
+    if (pending.url) url = pending.url;
   }
   const id = crypto.randomUUID(); // offers and choices name the capture they're about
-  await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { id, host, username, password, at: Date.now(), ...(step ? { step } : {}) } });
+  await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { id, host, username, password, at: Date.now(), ...(url ? { url } : {}), ...(step ? { step } : {}) } });
 }
 
 // Two-step sign-ins (username page, then password page): the username step's
@@ -348,7 +376,8 @@ async function captureUsername(sender, msg) {
   const host = senderHost(sender);
   const username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
   if (!host || !username || sender.tab?.id === undefined) return;
-  await chrome.storage.session.set({ [pendingUsernameKey(sender.tab.id)]: { id: crypto.randomUUID(), host, username, at: Date.now() } });
+  const url = signInUrlOf(sender.url);
+  await chrome.storage.session.set({ [pendingUsernameKey(sender.tab.id)]: { id: crypto.randomUUID(), host, username, at: Date.now(), ...(url ? { url } : {}) } });
 }
 
 // Kept until it expires, a new username step or a form with its own username
@@ -498,9 +527,14 @@ async function resolvePendingLogin(sender, id, choice, target) {
     let kind;
     if (choice === 'new' || plan.kind === 'new') {
       if (plan.newLimit) return { ok: false, limit: true };
+      // The sign-in's start, plus the password page's host when the start
+      // doesn't cover it (login.site.com, then site.com): the login must
+      // still be offered where its password is typed.
+      const urls = [pending.url || pending.host];
+      if (!Vault.loginCoversHost(urls, pending.host)) urls.push(pending.host);
       await VaultAccounts.add({
         name: pending.host.replace(/^www\./, ''), email: pending.username, secret: '',
-        urls: pending.host, password: pending.password,
+        urls: urls.join('\n'), password: pending.password,
       }, vk);
       kind = 'new';
     } else {
@@ -832,7 +866,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.action === 'vaultFillLogin') {
-    fillLogin(_sender, msg.id).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    fillLogin(_sender, msg.id, msg.usernameOnly === true).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 

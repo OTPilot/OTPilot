@@ -48,7 +48,7 @@ test('a new sign-in is offered on the next page and saved as a login', async ({ 
   await offer.locator('.otpilot-save-confirm').click();
   await expect(offer).toHaveCount(0);
   await expect.poll(() => logins(popup)).toEqual([
-    { title: 'localhost', urls: ['localhost'], username: 'new@example.com', password: 'n3w-pass!', history: [] },
+    { title: 'localhost', urls: ['localhost:8765'], username: 'new@example.com', password: 'n3w-pass!', history: [] },
   ]);
   // Next time, the same sign-in is already saved: no offer.
   await signIn(site, 'new@example.com', 'n3w-pass!');
@@ -303,6 +303,8 @@ test('an index from before hasPassword is rebuilt on unlock, so a locked vault o
   expect((await popup.evaluate(() => VaultAccounts.readIndex())).map(e => e.hasPassword)).toEqual([true]);
   const site = await context.newPage();
   await site.goto(`${SITE}/login.html`);
+  await expect(site.locator('#otpilot-login-fill .otpilot-login-locked')).toContainText('GitHub');
+  await site.locator('#otpilot-login-fill .otpilot-login-unlock').click();
   await expect(site.frameLocator('#otpilot-login-fill iframe').locator('#label')).toContainText('GitHub');
 });
 
@@ -456,14 +458,14 @@ test('a login saved without a username (change-password form) is completed by th
   await site.click('button');
   const offer = site.locator('#otpilot-login-save');
   await offer.locator('.otpilot-save-confirm').click();
-  await expect.poll(() => logins(popup)).toEqual([{ title: 'localhost', urls: ['localhost'], username: '', password: 'new-pass', history: [] }]);
+  await expect.poll(() => logins(popup)).toEqual([{ title: 'localhost', urls: ['localhost:8765'], username: '', password: 'new-pass', history: [] }]);
 
   // Signing in with a username: offered as an update of that login.
   await signIn(site, 'me@example.com', 'new-pass');
   await expect(offer).toContainText('Add this username and password to localhost?');
   await expect(offer.locator('.otpilot-save-new')).toBeVisible();
   await offer.locator('.otpilot-save-confirm').click();
-  await expect.poll(() => logins(popup)).toEqual([{ title: 'localhost', urls: ['localhost'], username: 'me@example.com', password: 'new-pass', history: [] }]);
+  await expect.poll(() => logins(popup)).toEqual([{ title: 'localhost', urls: ['localhost:8765'], username: 'me@example.com', password: 'new-pass', history: [] }]);
 });
 
 test('an update offer can save a new login instead', async ({ context, extensionId }) => {
@@ -555,8 +557,18 @@ test('a two-step sign-in is saved with the username from the first step', async 
   await expect(offer).toContainText('two@example.com');
   await offer.locator('.otpilot-save-confirm').click();
   await expect.poll(() => logins(popup)).toEqual([
-    { title: 'localhost', urls: ['localhost'], username: 'two@example.com', password: 'tw0-step!', history: [] },
+    { title: 'localhost', urls: ['localhost:8765'], username: 'two@example.com', password: 'tw0-step!', history: [] },
   ]);
+});
+
+test('a login saved from a two-step sign-in gets the address of its first page, without the query', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await twoStepSignIn(site, 'two@example.com', 'tw0-step!', 'sign-in/?next=%2Fdashboard%3Ftab%3D1', 'input[name="email"]');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('two@example.com');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup)).map(l => l.urls)).toEqual([['localhost:8765/test/sign-in']]);
 });
 
 test('a two-step sign-in updates the login with that username, and offers saving as new', async ({ context, extensionId }) => {
@@ -705,4 +717,27 @@ test('settling an older sign-in keeps a newer username step', async ({ context, 
   await site.click('button');
   await expect(site).toHaveURL(/welcome\.html/);
   await expect(offer).toContainText('Update the password for Bob?');
+});
+
+test('a two-step sign-in starting on a subdomain also keeps the password page host; a repeated username keeps the start', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const [worker] = context.serviceWorkers();
+  const urls = await worker.evaluate(async () => {
+    const save = async (tabId, passwordUrl, username) => {
+      await captureUsername({ tab: { id: tabId }, frameId: 0, url: 'https://login.example.com/sign-in?next=%2Fhome' }, { username: 'me@example.com' });
+      const sender = { tab: { id: tabId }, frameId: 0, url: passwordUrl };
+      await captureLogin(sender, { username, password: `pw-${tabId}` });
+      const offer = await pendingLoginOffer(sender);
+      await resolvePendingLogin(sender, offer.id, 'new');
+    };
+    await save(901, 'https://example.com/password', '');
+    await save(902, 'https://login.example.com/challenge/pwd', 'ME@example.com');
+    const { items } = await VaultStore.readAll(await VaultKeys.getKey());
+    return items.map(i => [Vault.getValue(i, 'password'), i.urls]).sort();
+  });
+  expect(urls).toEqual([
+    ['pw-901', ['login.example.com/sign-in', 'example.com']],
+    ['pw-902', ['login.example.com/sign-in']],
+  ]);
+  void popup;
 });

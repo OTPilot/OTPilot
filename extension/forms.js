@@ -100,6 +100,16 @@
     return { username, password };
   }
 
+  // What an offer fills: the sign-in form (username + password), or the
+  // first page of a two-step sign-in, which asks for the username alone
+  // (`password` null; see findUsernameOnlyField).
+  function findFillFields() {
+    const login = findLoginFields();
+    if (login) return login;
+    const step = findUsernameOnlyField();
+    return step ? { username: step.field, password: null } : null;
+  }
+
   async function loginsForPage() {
     try {
       return (await chrome.runtime.sendMessage({ action: 'vaultLoginsForPage' })) || { state: 'locked', logins: [] };
@@ -111,15 +121,20 @@
   }
 
   async function fill(id) {
-    const fields = findLoginFields();
+    const fields = findFillFields();
+    // A username step gets the username only: the password waits for its page.
+    const usernameOnly = !!fields && !fields.password;
     let res;
-    try { res = await chrome.runtime.sendMessage({ action: 'vaultFillLogin', id }); } catch { res = null; }
-    if (!fields || !res?.ok) { showToast('OTPilot could not fill this login', false); return; }
+    try { res = await chrome.runtime.sendMessage({ action: 'vaultFillLogin', id, usernameOnly }); } catch { res = null; }
+    if (!fields || !res?.ok || (usernameOnly && !res.username)) {
+      showToast(usernameOnly && res?.ok ? 'This login has no username saved' : 'OTPilot could not fill this login', false);
+      return;
+    }
     // Filling focuses the fields: that mustn't reopen the dropdown.
     _filling = true;
     try {
       if (fields.username && res.username) fillInputValue(fields.username, res.username);
-      fillInputValue(fields.password, res.password);
+      if (fields.password) fillInputValue(fields.password, res.password);
     } finally { _filling = false; }
     closeOverlay();
     closeDropdown();
@@ -134,16 +149,36 @@
     el.querySelector('.otpilot-overlay-close').addEventListener('click', close);
     const body = el.querySelector('.otpilot-login-body');
 
+    // Locked: a short note and an Unlock button first; the master password
+    // is typed in the extension's frame it opens (the page can't read it).
     if (state === 'locked') {
-      const name = logins.length === 1 ? logins[0].name : `${logins.length} logins`;
-      mountUnlockFrame(body, { name, action: 'Unlock & fill', intro: `Unlock OTPilot to fill your ${name} login.` },
-        async () => {
-          const next = await loginsForPage();
-          if (next.state !== 'unlocked' || !next.logins.length) { closeOverlay(); return; }
-          if (next.logins.length === 1) { fill(next.logins[0].id); return; }
-          render(el, next, close);
-        },
-        close);
+      const name = logins.length === 1 ? logins[0].name : logins.length ? `${logins.length} logins` : '';
+      const intro = name ? `Unlock OTPilot to fill your ${name} login.` : 'Unlock OTPilot to fill your credentials.';
+      body.innerHTML = `<div class="otpilot-login-locked" style="color:var(--ink-0, #f1f5f9);font-size:13px;margin-bottom:10px;"></div>`;
+      body.firstElementChild.textContent = intro;
+      const unlock = saveButton('Unlock OTPilot', true);
+      unlock.className = 'otpilot-login-unlock';
+      unlock.style.width = '100%';
+      unlock.addEventListener('click', trusted(() => {
+        body.innerHTML = '';
+        mountUnlockFrame(body, { name: name || location.hostname, action: 'Unlock & fill', intro },
+          async () => {
+            const next = await loginsForPage();
+            if (next.state !== 'unlocked') { close(); return; }
+            if (next.logins.length === 1) { fill(next.logins[0].id); return; }
+            render(el, next, close); // the logins to pick from, or "No saved login"
+            if (_anchor?.el === el) placeUnder(el, _anchor.field);
+          },
+          close);
+        if (_anchor?.el === el) placeUnder(el, _anchor.field);
+      }));
+      body.appendChild(unlock);
+      return;
+    }
+
+    if (!logins.length) {
+      body.innerHTML = `<div class="otpilot-login-none" style="color:var(--ink-3, #94a3b8);font-size:12px;"></div>`;
+      body.firstElementChild.textContent = `No saved login for ${location.hostname}. OTPilot offers to save it after you sign in.`;
       return;
     }
 
@@ -165,11 +200,12 @@
 
   async function check() {
     if (_dismissed || _checking || !chrome.runtime?.id) return;
-    const fields = findLoginFields();
+    const fields = findFillFields();
     if (!fields) { _checkedFor = null; _pageLogins = null; closeOverlay(); syncBadges(); return; }
-    if (fields.password === _checkedFor) { syncBadges(); return; }
+    const asked = fields.password || fields.username;
+    if (asked === _checkedFor) { syncBadges(); return; }
     _checking = true;
-    _checkedFor = fields.password;
+    _checkedFor = asked;
     try {
       const res = await loginsForPage();
       _pageLogins = res.state === 'setup' ? null : res;
@@ -532,7 +568,9 @@
     _anchor = null;
   }
 
-  async function openLogins(field) {
+  // `explicit`: the badge was clicked — say so when the site has no login
+  // (focusing a field opens only where there is one).
+  async function openLogins(field, explicit = false) {
     if (!chrome.runtime?.id) return;
     closeDropdown();
     const seq = _openSeq;
@@ -541,7 +579,8 @@
     if (seq !== _openSeq) return; // closed or superseded meanwhile
     _pendingField = null;
     _pageLogins = res.state === 'setup' ? null : res;
-    if (!_pageLogins?.logins.length || !field.isConnected) return;
+    if (!_pageLogins || !field.isConnected) return;
+    if (!_pageLogins.logins.length && !explicit) return;
     const el = makeAnchored(DROP_ID, field);
     render(el, res, closeDropdown);
     showAnchored(el, field);
@@ -584,12 +623,13 @@
     if (svg) { svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%'); }
   }
 
-  // The fields that get a badge now: this form's sign-in fields when the
-  // site has logins, and every visible new-password field.
+  // The fields that get a badge now: the sign-in fields (or a two-step
+  // sign-in's username field) once the vault is set up — with no login for
+  // the site, its dropdown says so —, and every visible new-password field.
   function badgeTargets() {
     const out = new Map();
-    const login = _pageLogins?.logins.length ? findLoginFields() : null;
-    for (const f of [login?.username, login?.password]) if (f) out.set(f, ['login', () => openLogins(f)]);
+    const login = _pageLogins ? findFillFields() : null;
+    for (const f of [login?.username, login?.password]) if (f) out.set(f, ['login', () => openLogins(f, true)]);
     for (const f of document.querySelectorAll('input[type="password"]')) {
       if (isNewPassword(f) && isVisible(f)) out.set(f, ['generate', () => suggestPassword(f, { force: true })]);
     }
@@ -650,7 +690,7 @@
     // site has logins). Once that check found none, focusing doesn't ask again.
     if (_anchor?.field === f || _pendingField === f) return;
     if (_pageLogins && !_pageLogins.logins.length) return;
-    const login = findLoginFields();
+    const login = findFillFields();
     if (login && (f === login.username || f === login.password)) openLogins(f);
   }, true);
 
