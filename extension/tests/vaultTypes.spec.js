@@ -259,8 +259,7 @@ test('"2FA code": hex-looking link secrets keep their bytes; malformed links are
 
   await page.click('#acc-detail .btn-add-password');
   await page.fill('#acc-detail .acc-password', 'pw');
-  await page.click('#btn-add');
-  await page.click('[data-add-type="note"]');
+  await page.click('.acc-head.open'); // closed and reopened: kept, as a regular login
   await page.locator('.acc-head', { hasText: 'Example' }).click();
   await expect(page.locator('#acc-detail .acc-password')).toHaveValue('pw');
   await expect(page.locator('#acc-detail .acc-password-field')).toBeVisible();

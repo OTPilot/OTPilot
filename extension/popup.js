@@ -1118,7 +1118,7 @@ const SVG_EDIT = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" st
   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
   <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/>
 </svg>`;
-document.getElementById('btn-edit-account').innerHTML = SVG_EDIT;
+document.getElementById('btn-edit-account').innerHTML = `${SVG_EDIT}<span>Edit</span>`;
 
 function applyObfuscateBtn() {
   const btn = document.getElementById('btn-obfuscate');
@@ -1439,9 +1439,11 @@ function rebuildAccountsDOM() {
         </span>` : ''}
       </span>`;
 
+    // Clicking the open item again closes its editor (its edits stay in
+    // the draft until Save or Cancel).
     head.addEventListener('click', () => {
       syncOpenAccToDraft();
-      openAccIdx = i;
+      openAccIdx = openAccIdx === i ? -1 : i;
       rebuildAccountsDOM();
       renderVaultFilters();
       applyVaultSearch();
@@ -1459,6 +1461,31 @@ function rebuildAccountsDOM() {
 // panel. Same fields/behavior as the old inline accordion body, just mounted
 // in one shared container instead of nested under each row.
 function renderAccDetail() {
+  renderAccDetailBody();
+  syncVaultFooter();
+}
+
+// The footer follows the open item: no "+ Add" while one is being edited,
+// and Save writes an item shared with the user where it lives — the share
+// or the collection (the personal Save never touches it) —, disabled for a
+// view-only one.
+function syncVaultFooter() {
+  const entry = draft[openAccIdx];
+  document.querySelector('#settings-panel .add-wrap').style.display = entry ? 'none' : '';
+  if (entry) closeAddMenu();
+  const save = document.getElementById('btn-save-all');
+  const shared = !!entry && isSharedEntry(entry);
+  save.disabled = shared && entry.role === 'view';
+  save.textContent = !shared ? 'Save'
+    : entry.role === 'view' ? 'View only'
+      : entry.share ? 'Save shared item' : `Save to ${entry.collectionName}`;
+  save.title = !shared ? ''
+    : entry.role === 'view' ? `Shared with you by ${entry.collectionName} — view only`
+      : entry.share ? `Saves it for everyone it's shared with (shared by ${entry.collectionName})`
+        : `Saves it to the collection "${entry.collectionName}"`;
+}
+
+function renderAccDetailBody() {
   const container = document.getElementById('acc-detail');
   const acc = draft[openAccIdx];
 
@@ -2825,14 +2852,15 @@ async function sshKeyChanged(idx, value) {
 // then removed from the personal vault).
 function collectionControlsHTML(entry) {
   if (isSharedEntry(entry)) {
+    // Saved with the footer's Save (syncVaultFooter): just say where.
     if (entry.share) {
       return entry.role === 'view'
         ? `<div class="coll-meta">Shared with you by ${esc(entry.collectionName)} — view only.</div>`
-        : `<button type="button" class="btn-save-all btn-save-shared">Save — shared by ${esc(entry.collectionName)}</button>`;
+        : `<div class="coll-meta">Shared with you by ${esc(entry.collectionName)} — Save updates it for everyone it's shared with.</div>`;
     }
     return entry.role === 'view'
       ? `<div class="coll-meta">View only — ask a manager of "${esc(entry.collectionName)}" for edit access.</div>`
-      : `<button type="button" class="btn-save-all btn-save-shared">Save to ${esc(entry.collectionName)}</button>`;
+      : `<div class="coll-meta">In the collection "${esc(entry.collectionName)}" — Save updates it there.</div>`;
   }
   // A saved personal item, on a team plan: share it.
   if (!_teamPlan || !entry._id || !_draftBase.some(b => b._id === entry._id)) return '';
@@ -2843,7 +2871,6 @@ function collectionControlsHTML(entry) {
 }
 
 function mountCollectionControls(body, entry) {
-  body.querySelector('.btn-save-shared')?.addEventListener('click', () => saveSharedEntry(entry));
   body.querySelector('.btn-share-item')?.addEventListener('click', () => openShareSheet(entry));
 }
 
@@ -3264,6 +3291,13 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
 let _savingAccounts = false;
 document.getElementById('btn-save-all').addEventListener('click', async () => {
   if (_savingAccounts) return;
+  const open = draft[openAccIdx];
+  if (open && isSharedEntry(open)) {
+    if (open.role === 'view') return;
+    _savingAccounts = true;
+    try { await saveSharedEntry(open); } finally { _savingAccounts = false; }
+    return;
+  }
   _savingAccounts = true;
   // What this click saves is captured now, before waiting for the lock: if
   // the user leaves the editor or starts over meanwhile, the queued save
@@ -3288,7 +3322,7 @@ async function saveAccounts(intended) {
   const baseById = new Map(_draftBase.map(e => [e._id, JSON.stringify(e)]));
   const sharedDirty = draft.find(e => isSharedEntry(e) && baseById.get(e._id) !== JSON.stringify(e));
   if (sharedDirty) {
-    setStatus(`"${sharedDirty.name}" is shared: use "Save to ${sharedDirty.collectionName}" first, or Cancel`, false);
+    setStatus(`"${sharedDirty.name}" is shared: open it and Save it first, or Cancel`, false);
     return;
   }
 

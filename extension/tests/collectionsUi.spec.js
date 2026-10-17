@@ -105,7 +105,9 @@ test('Vault: shared items are listed with their collection and saved straight to
   await page.locator('.acc-head', { hasText: 'AWS root' }).click();
   await expect(page.locator('#acc-detail .item-urls')).toHaveValue('aws.amazon.com');
   await page.fill('#acc-detail .item-field[data-id="password"]', 'rotated');
-  await page.click('#acc-detail .btn-save-shared');
+  await expect(page.locator('#btn-save-all')).toHaveText('Save to Infra');
+  await expect(page.locator('#settings-panel .add-wrap')).toBeHidden();
+  await page.click('#btn-save-all');
   await expect(page.locator('#status-msg')).toContainText('Saved to Infra');
   const saved = await page.evaluate(async ({ a, edit }) => {
     const c = (await VaultCollections.list()).find(x => x.id === edit);
@@ -115,7 +117,8 @@ test('Vault: shared items are listed with their collection and saved straight to
 
   await page.locator('.acc-head', { hasText: 'Bank PIN' }).click();
   await expect(page.locator('#acc-detail .item-title')).toHaveJSProperty('readOnly', true);
-  await expect(page.locator('#acc-detail .btn-save-shared')).toHaveCount(0);
+  await expect(page.locator('#btn-save-all')).toBeDisabled();
+  await expect(page.locator('#btn-save-all')).toHaveText('View only');
   await expect(page.locator('#acc-detail .btn-del')).toHaveCount(0);
   await expect(page.locator('#acc-detail')).toContainText('View only');
 });
@@ -163,7 +166,7 @@ test('saving a shared item keeps unsaved edits to other rows', async ({ context,
   await page.fill('#acc-detail .acc-email', 'kept@x.com');
   await page.locator('.acc-head', { hasText: 'Shared note' }).click();
   await page.fill('#acc-detail .item-notes', 'edited');
-  await page.click('#acc-detail .btn-save-shared');
+  await page.click('#btn-save-all');
   await expect(page.locator('#status-msg')).toContainText('Saved to Infra');
   expect(await page.evaluate(() => draft.find(e => e.name === 'Mine').email)).toBe('kept@x.com');
   await page.click('#btn-save-all');
@@ -241,8 +244,10 @@ test('the main Save refuses to drop unsaved edits to a shared item', async ({ co
   await page.click('#nav-settings');
   await page.locator('.acc-head', { hasText: 'Shared note' }).click();
   await page.fill('#acc-detail .item-notes', 'v2 not saved yet');
+  await page.locator('.acc-head', { hasText: 'Mine' }).click();
+  await expect(page.locator('#btn-save-all')).toHaveText('Save');
   await page.click('#btn-save-all');
-  await expect(page.locator('#status-msg')).toContainText('use "Save to Infra" first');
+  await expect(page.locator('#status-msg')).toContainText('is shared: open it and Save it first');
   expect(await page.evaluate(() => draft.find(e => e.name === 'Shared note').item.notes)).toBe('v2 not saved yet');
 });
 
