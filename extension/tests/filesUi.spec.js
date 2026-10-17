@@ -89,6 +89,7 @@ test('From a file…: an Apple .p8 becomes an API credential, or a plain file if
   // The note is draft-only: reopened, the item has none.
   await page.locator('.acc-row .acc-head').click();
   await expect(page.locator('#acc-detail .file-detected')).toHaveCount(0);
+  await page.locator('.acc-row .acc-head').click(); // closes it: + Add shows again
 
   // Another one, kept as a plain file.
   const chooser2 = page.waitForEvent('filechooser');
@@ -136,6 +137,7 @@ test('files dropped on the vault become items; one over the limit is refused', a
   await expect(page.locator('.acc-row')).toHaveCount(1);
 
   // Dropped on a file field: that field's file (the item's total still counts).
+  await page.click('.acc-head.open'); // closes the editor: + Add shows again
   await addType(page, 'Secure file');
   await drop('#acc-detail .file-field', [{ name: 'a.bin', size: 40 * 1024 }]);
   await expect(page.locator('#acc-detail .file-name')).toHaveText('a.bin');
@@ -202,6 +204,7 @@ test('an SSH key: generate one, or pick a key file and its public key follows', 
 
   // A key file of its own: public key and fingerprint come from it.
   const other = await page.evaluate(() => SshKeys.generate('ed25519', 'me@laptop'));
+  await page.click('.acc-head.open');
   await addType(page, 'SSH key');
   const chooser = page.waitForEvent('filechooser');
   await page.click('#acc-detail .file-choose');

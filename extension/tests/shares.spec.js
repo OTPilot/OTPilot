@@ -127,7 +127,7 @@ test('an item Bob shared with me shows in my vault; with edit I can save it, and
   await expect(row).toContainText('Shared · bob@team.test');
   await row.click();
   await page.fill('#acc-detail .item-title', 'Team AWS (prod)');
-  await page.click('#acc-detail .btn-save-shared');
+  await page.click('#btn-save-all');
   await expect(page.locator('#status-msg')).toContainText('Saved');
   const saved = await page.evaluate(async () => {
     const s = fakeShares.shares.get(bobShare.id);
