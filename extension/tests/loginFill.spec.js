@@ -489,3 +489,15 @@ test('Auto-fill off: no offer on its own, the badge still lists the login', asyn
   await site.locator('#otpilot-login-dropdown .otpilot-login-choice').click();
   await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
 });
+
+test('locked: unlocking an offer that opened on its own keeps Auto-fill off logins out', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, [github, { ...github, name: 'Quiet', email: 'quiet@example.com', password: 'q', autofill: false }]);
+  await page.evaluate(() => VaultLock.lock());
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  const overlay = site.locator('#otpilot-login-fill');
+  await expect(overlay.locator('.otpilot-login-locked')).toHaveText('Unlock OTPilot to fill your GitHub login.');
+  await overlay.locator('.otpilot-login-unlock').click();
+  // The one login it named is filled; "Quiet" is never offered.
+  await unlockThen(site.frameLocator('#otpilot-login-fill iframe'), () => pwExpect(site.locator('input[name="password"]')).toHaveValue('hunter2!'));
+});

@@ -156,7 +156,9 @@
 
   // `close`: what the ✕ (and dismissing the unlock) does — the corner
   // overlay stops offering on this page; a field's dropdown just closes.
-  function render(el, { state, logins }, close = () => { _dismissed = true; closeOverlay(); }) {
+  // `shown`: which of the page's logins this offer lists (autoOffered for an
+  // offer that opened on its own) — the same once the vault is unlocked.
+  function render(el, { state, logins }, close = () => { _dismissed = true; closeOverlay(); }, shown = res => res) {
     el.innerHTML = `${OVERLAY_HEADER}<div class="otpilot-login-body" style="padding:10px 12px 12px;"></div>`;
     el.querySelector('.otpilot-overlay-close').addEventListener('click', close);
     const body = el.querySelector('.otpilot-login-body');
@@ -175,10 +177,10 @@
         body.innerHTML = '';
         mountUnlockFrame(body, { name: name || location.hostname, action: 'Unlock & fill', intro },
           async () => {
-            const next = await loginsForPage();
+            const next = shown(await loginsForPage());
             if (next.state !== 'unlocked') { close(); return; }
             if (next.logins.length === 1) { fill(next.logins[0]); return; }
-            render(el, next, close); // the logins to pick from, or "No saved login"
+            render(el, next, close, shown); // the logins to pick from, or "No saved login"
             if (_anchor?.el === el) placeUnder(el, _anchor.field);
           },
           close);
@@ -226,7 +228,7 @@
       if (_dismissed || res.state === 'setup' || !offered.logins.length) return;
       closeOverlay();
       const el = makeOverlay(OVERLAY_ID);
-      render(el, offered);
+      render(el, offered, undefined, autoOffered);
       document.body.appendChild(el);
     } finally {
       _checking = false;
@@ -596,7 +598,7 @@
     const shown = explicit ? res : autoOffered(res);
     if (!shown.logins.length && !explicit) return;
     const el = makeAnchored(DROP_ID, field);
-    render(el, shown, closeDropdown);
+    render(el, shown, closeDropdown, explicit ? res => res : autoOffered);
     showAnchored(el, field);
   }
 

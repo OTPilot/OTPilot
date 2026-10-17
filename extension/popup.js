@@ -1354,6 +1354,11 @@ function syncOpenAccToDraft() {
     entry.name = body.querySelector('.item-title').value.trim();
     const urls = body.querySelector('.item-urls');
     if (urls) entry.item.urls = urls.value.split('\n').map(u => u.trim()).filter(Boolean);
+    const autofill = body.querySelector('.acc-autofill');
+    if (autofill) {
+      entry.item.autofill = autofill.checked;
+      if (body.querySelector('.acc-autologin').checked) delete entry.item.autoLogin; else entry.item.autoLogin = false;
+    }
     const secret = body.querySelector('.item-totp');
     if (secret?.dataset.dirty) entry.item.totp = secret.value.trim() ? { ...(entry.item.totp || { digits: 6, period: 30, algorithm: 'SHA1' }), secret: secret.value.trim() } : null;
     // Only fields the user changed: an input can't always hold a stored
@@ -1456,6 +1461,24 @@ function rebuildAccountsDOM() {
   });
 
   updateVaultCount();
+}
+
+// A login's Advanced settings (its own editor, and a shared login's).
+function advancedSettingsHTML(autofill, autoLogin, readOnly = false) {
+  const off = readOnly ? ' disabled' : '';
+  return `<div class="acc-field acc-advanced">
+      <label>Advanced settings</label>
+      <label class="toggle" title="Off: no offer when a sign-in form shows and no automatic 2FA code; fill it from the OTPilot icon in the field or the popup">
+        <input type="checkbox" class="acc-autofill" ${autofill !== false ? 'checked' : ''}${off}>
+        <span class="toggle-track"></span>
+        <span class="toggle-label">Auto-fill: offer this login on sign-in forms and fill its 2FA code</span>
+      </label>
+      <label class="toggle" title="Off: the login and its 2FA code are filled, and you press Sign in yourself">
+        <input type="checkbox" class="acc-autologin" ${autoLogin !== false ? 'checked' : ''}${off}>
+        <span class="toggle-track"></span>
+        <span class="toggle-label">Sign in automatically after filling</span>
+      </label>
+    </div>`;
 }
 
 // Renders the edit form for draft[openAccIdx] into the right-column detail
@@ -1562,19 +1585,7 @@ ${esc(acc.notes || '')}</textarea>
     ${compact
       ? nameField + secretField + userField + urlsField + passwordField + tagFieldsHTML(acc) + extras
       : nameField + userField + passwordField + tagFieldsHTML(acc) + secretField + urlsField + extras}
-    <div class="acc-field acc-advanced">
-      <label>Advanced settings</label>
-      <label class="toggle" title="Off: no offer when a sign-in form shows and no automatic 2FA code; fill it from the OTPilot icon in the field or the popup">
-        <input type="checkbox" class="acc-autofill" ${acc.autofill !== false ? 'checked' : ''}>
-        <span class="toggle-track"></span>
-        <span class="toggle-label">Auto-fill: offer this login on sign-in forms and fill its 2FA code</span>
-      </label>
-      <label class="toggle" title="Off: the login and its 2FA code are filled, and you press Sign in yourself">
-        <input type="checkbox" class="acc-autologin" ${acc.autoLogin !== false ? 'checked' : ''}>
-        <span class="toggle-track"></span>
-        <span class="toggle-label">Sign in automatically after filling</span>
-      </label>
-    </div>
+    ${advancedSettingsHTML(acc.autofill, acc.autoLogin)}
     <div class="acc-share">
       <button type="button" class="btn-share-team" title="Teammates get live codes; the 2FA secret itself is never revealed">↗ Share 2FA code only</button>
       <div class="share-hint share-hint-codes">Teammates get live codes only, never the secret. Copies, fills and refreshes are logged (just viewing, at most every 10 minutes), and when you revoke it they can't make codes anymore.</div>
@@ -2389,6 +2400,7 @@ ${val}</textarea>`;
       <textarea class="item-urls">
 ${esc((item.urls || []).join('\n'))}</textarea>
     </div>` : ''}
+    ${entry.type === 'login' ? advancedSettingsHTML(item.autofill, item.autoLogin, isSharedEntry(entry) && entry.role === 'view') : ''}
     <div class="acc-field">
       <label>Notes</label>
       <textarea class="item-notes" placeholder="${entry.type === 'note' ? 'Write your note' : 'Anything else worth keeping'}">
