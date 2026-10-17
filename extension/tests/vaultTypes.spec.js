@@ -794,3 +794,23 @@ test('merging two logins keeps both sides\' related items', async ({ context, ex
     return items.filter(i => i.type === 'login').length === 1 && items.find(i => i.type === 'note').links[0] === login.id;
   }).toBe(true);
 });
+
+test('Advanced settings: Auto-fill and Sign in automatically are saved on the login', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{ name: 'Rippling', email: 'me@example.com', secret: TEST_SECRET, urls: 'app.rippling.com', password: 'pw' }] });
+  await page.locator('.acc-head', { hasText: 'Rippling' }).click();
+  await expect(page.locator('#acc-detail .acc-advanced')).toContainText('Advanced settings');
+  await expect(page.locator('#acc-detail .acc-autologin')).toBeChecked();
+  await page.locator('#acc-detail .acc-advanced .toggle', { hasText: 'Sign in automatically' }).click();
+  await page.locator('#acc-detail .acc-advanced .toggle', { hasText: 'Auto-fill' }).click();
+  await page.click('#btn-save-all');
+  const read = () => page.evaluate(async () => {
+    const [i] = (await VaultStore.readAll(await VaultKeys.getKey())).items;
+    const [e] = (await chrome.storage.local.get('vaultIndex')).vaultIndex;
+    return [i.autofill, i.autoLogin, e.autoLogin];
+  });
+  await expect.poll(read).toEqual([false, false, false]);
+  await page.locator('.acc-head', { hasText: 'Rippling' }).click();
+  await page.locator('#acc-detail .acc-advanced .toggle', { hasText: 'Sign in automatically' }).click();
+  await page.click('#btn-save-all');
+  await expect.poll(read).toEqual([false, undefined, true]);
+});

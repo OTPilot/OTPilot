@@ -83,7 +83,7 @@ async function accountsForContent() {
       if (!item.totp?.secret) continue;
       accounts.push({
         _id: item.id, name: item.title || '', email: Vault.getValue(item, 'username'), secret: item.totp.secret,
-        urls: (item.urls || []).join('\n'), autofill: item.autofill !== false, shared: true,
+        urls: (item.urls || []).join('\n'), autofill: item.autofill !== false, autoLogin: item.autoLogin !== false, shared: true,
       });
     }
     return { locked: false, activeIndex, accounts };
@@ -186,12 +186,15 @@ async function loginsForPage(sender) {
     const logins = [...items, ...(await sharedLogins())]
       .filter(i => i.type === 'login' && Vault.getValue(i, 'password') && Vault.loginCoversHost(i.urls, host))
       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-      .map(i => ({ id: i.id, name: i.title || host, username: Vault.getValue(i, 'username') }));
+      .map(i => ({
+        id: i.id, name: i.title || host, username: Vault.getValue(i, 'username'),
+        autofill: i.autofill !== false, autoLogin: i.autoLogin !== false,
+      }));
     return { state, logins };
   }
   const logins = (await VaultAccounts.readIndex())
     .filter(e => e.hasPassword && Vault.loginCoversHost(e.urls, host))
-    .map(e => ({ id: e.id, name: e.name || host }));
+    .map(e => ({ id: e.id, name: e.name || host, autofill: e.autofill !== false, autoLogin: e.autoLogin !== false }));
   return { state, logins };
 }
 

@@ -1154,7 +1154,7 @@ document.getElementById('btn-fill').addEventListener('click', async () => {
   try {
     // A shared login isn't in the page's own account list: it's sent along.
     const result = await chrome.tabs.sendMessage(tab.id, acc?._shared
-      ? { action: 'fillWith', account: { name: acc.name, secret: acc.secret } }
+      ? { action: 'fillWith', account: { name: acc.name, secret: acc.secret, autoLogin: acc.autoLogin !== false } }
       : { action: 'fill', accountIndex: activeIndex });
     if (result?.ok) setStatus('Filled: ' + result.code);
     else            setStatus(result?.msg || 'Fill failed', false);
@@ -1354,6 +1354,11 @@ function syncOpenAccToDraft() {
     entry.name = body.querySelector('.item-title').value.trim();
     const urls = body.querySelector('.item-urls');
     if (urls) entry.item.urls = urls.value.split('\n').map(u => u.trim()).filter(Boolean);
+    const autofill = body.querySelector('.acc-autofill');
+    if (autofill) {
+      entry.item.autofill = autofill.checked;
+      if (body.querySelector('.acc-autologin').checked) delete entry.item.autoLogin; else entry.item.autoLogin = false;
+    }
     const secret = body.querySelector('.item-totp');
     if (secret?.dataset.dirty) entry.item.totp = secret.value.trim() ? { ...(entry.item.totp || { digits: 6, period: 30, algorithm: 'SHA1' }), secret: secret.value.trim() } : null;
     // Only fields the user changed: an input can't always hold a stored
@@ -1374,6 +1379,7 @@ function syncOpenAccToDraft() {
   draft[openAccIdx].secret   = body.querySelector('.acc-secret').value.trim();
   draft[openAccIdx].urls     = body.querySelector('.acc-urls').value.trim();
   draft[openAccIdx].autofill = body.querySelector('.acc-autofill').checked;
+  draft[openAccIdx].autoLogin = body.querySelector('.acc-autologin').checked;
   draft[openAccIdx].notes    = body.querySelector('.acc-notes').value;
   draft[openAccIdx].customFields = readCustomFields(body);
 }
@@ -1455,6 +1461,24 @@ function rebuildAccountsDOM() {
   });
 
   updateVaultCount();
+}
+
+// A login's Advanced settings (its own editor, and a shared login's).
+function advancedSettingsHTML(autofill, autoLogin, readOnly = false) {
+  const off = readOnly ? ' disabled' : '';
+  return `<div class="acc-field acc-advanced">
+      <label>Advanced settings</label>
+      <label class="toggle" title="Off: no offer when a sign-in form shows and no automatic 2FA code; fill it from the OTPilot icon in the field or the popup">
+        <input type="checkbox" class="acc-autofill" ${autofill !== false ? 'checked' : ''}${off}>
+        <span class="toggle-track"></span>
+        <span class="toggle-label">Auto-fill: offer this login on sign-in forms and fill its 2FA code</span>
+      </label>
+      <label class="toggle" title="Off: the login and its 2FA code are filled, and you press Sign in yourself">
+        <input type="checkbox" class="acc-autologin" ${autoLogin !== false ? 'checked' : ''}${off}>
+        <span class="toggle-track"></span>
+        <span class="toggle-label">Sign in automatically after filling</span>
+      </label>
+    </div>`;
 }
 
 // Renders the edit form for draft[openAccIdx] into the right-column detail
@@ -1561,11 +1585,7 @@ ${esc(acc.notes || '')}</textarea>
     ${compact
       ? nameField + secretField + userField + urlsField + passwordField + tagFieldsHTML(acc) + extras
       : nameField + userField + passwordField + tagFieldsHTML(acc) + secretField + urlsField + extras}
-    <label class="toggle">
-      <input type="checkbox" class="acc-autofill" ${acc.autofill !== false ? 'checked' : ''}>
-      <span class="toggle-track"></span>
-      <span class="toggle-label">Auto-fill on matching pages</span>
-    </label>
+    ${advancedSettingsHTML(acc.autofill, acc.autoLogin)}
     <div class="acc-share">
       <button type="button" class="btn-share-team" title="Teammates get live codes; the 2FA secret itself is never revealed">↗ Share 2FA code only</button>
       <div class="share-hint share-hint-codes">Teammates get live codes only, never the secret. Copies, fills and refreshes are logged (just viewing, at most every 10 minutes), and when you revoke it they can't make codes anymore.</div>
@@ -1704,7 +1724,7 @@ function mergeLogins(a, b, choice = {}, { stored } = {}) {
   return {
     ...a,
     name: pick('name'), email: pick('email'), password, secret: pick('secret'), notes: pick('notes'),
-    autofill: pick('autofill'), urls: urls.join('\n'), category, moreTags: tags.filter(t => t !== category),
+    autofill: pick('autofill'), autoLogin: a.autoLogin !== false && b.autoLogin !== false, urls: urls.join('\n'), category, moreTags: tags.filter(t => t !== category),
     customFields: custom, domain: a.domain || b.domain,
     links: [...new Set([...(a.links || []), ...(b.links || [])])].filter(id => id !== a._id && id !== b._id),
     extraPasswordHistory: left,
@@ -2380,6 +2400,7 @@ ${val}</textarea>`;
       <textarea class="item-urls">
 ${esc((item.urls || []).join('\n'))}</textarea>
     </div>` : ''}
+    ${entry.type === 'login' ? advancedSettingsHTML(item.autofill, item.autoLogin, isSharedEntry(entry) && entry.role === 'view') : ''}
     <div class="acc-field">
       <label>Notes</label>
       <textarea class="item-notes" placeholder="${entry.type === 'note' ? 'Write your note' : 'Anything else worth keeping'}">
@@ -3375,7 +3396,7 @@ async function saveAccounts(intended) {
     const old = oldMap.get(acc.name);
     const changed = !old ||
       old.secret !== acc.secret || old.urls !== acc.urls ||
-      old.email !== acc.email || old.autofill !== acc.autofill ||
+      old.email !== acc.email || old.autofill !== acc.autofill || (old.autoLogin !== false) !== (acc.autoLogin !== false) ||
       (old.password || '') !== (acc.password || '') ||
       (old.category || '') !== (acc.category || '') ||
       JSON.stringify(old.moreTags || []) !== JSON.stringify(acc.moreTags || []) ||

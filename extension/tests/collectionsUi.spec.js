@@ -105,15 +105,17 @@ test('Vault: shared items are listed with their collection and saved straight to
   await page.locator('.acc-head', { hasText: 'AWS root' }).click();
   await expect(page.locator('#acc-detail .item-urls')).toHaveValue('aws.amazon.com');
   await page.fill('#acc-detail .item-field[data-id="password"]', 'rotated');
+  await page.locator('#acc-detail .acc-advanced .toggle', { hasText: 'Sign in automatically' }).click();
   await expect(page.locator('#btn-save-all')).toHaveText('Save to Infra');
   await expect(page.locator('#settings-panel .add-wrap')).toBeHidden();
   await page.click('#btn-save-all');
   await expect(page.locator('#status-msg')).toContainText('Saved to Infra');
   const saved = await page.evaluate(async ({ a, edit }) => {
     const c = (await VaultCollections.list()).find(x => x.id === edit);
-    return Vault.getValue(await VaultCrypto.decryptItem(fake.items.get(a).record, c.key), 'password');
+    const item = await VaultCrypto.decryptItem(fake.items.get(a).record, c.key);
+    return [Vault.getValue(item, 'password'), item.autoLogin];
   }, ids);
-  expect(saved).toBe('rotated');
+  expect(saved).toEqual(['rotated', false]);
 
   await page.locator('.acc-head', { hasText: 'Bank PIN' }).click();
   await expect(page.locator('#acc-detail .item-title')).toHaveJSProperty('readOnly', true);

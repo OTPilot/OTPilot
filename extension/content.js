@@ -496,7 +496,9 @@ async function fillAndSubmit(accountIndexHint, fromPopup = false) {
   const result = await fillOTP(accountIndexHint);
   if (result.ok) {
     const hostname = location.hostname.toLowerCase();
-    const noAutoSubmit = await isNoAutoSubmitHost(hostname);
+    // The login's "Sign in automatically" turned off, or the site rejects
+    // the synthetic click (isNoAutoSubmitHost): the user submits.
+    const noAutoSubmit = result.acc?.autoLogin === false || await isNoAutoSubmitHost(hostname);
     showToast(noAutoSubmit ? `OTP filled: ${result.code} — press Enter to continue` : 'OTP filled: ' + result.code);
 
     // This account only filled via the popup's manual selection (not a URL
@@ -549,7 +551,7 @@ async function fillAndSubmitWithAccount(acc) {
   const result = await fillOTPWithAccount(acc);
   if (result.ok) {
     const hostname = location.hostname.toLowerCase();
-    const noAutoSubmit = await isNoAutoSubmitHost(hostname);
+    const noAutoSubmit = acc.autoLogin === false || await isNoAutoSubmitHost(hostname);
     showToast(noAutoSubmit ? `OTP filled: ${result.code} — press Enter to continue` : 'OTP filled: ' + result.code);
     const form = result.input.closest('form');
     if (form && !noAutoSubmit) {
@@ -571,7 +573,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     isSessionLocked().then(locked => {
       if (locked) { reply({ ok: false, msg: 'OTPilot is locked' }); return; }
       if (!msg.account?.secret) { reply({ ok: false, msg: 'No 2FA code saved for this account' }); return; }
-      fillAndSubmitWithAccount({ name: String(msg.account.name || ''), secret: String(msg.account.secret) })
+      fillAndSubmitWithAccount({ name: String(msg.account.name || ''), secret: String(msg.account.secret), autoLogin: msg.account.autoLogin !== false })
         .then(r => reply({ ok: r.ok, code: r.code, msg: r.msg }));
     });
     return true;

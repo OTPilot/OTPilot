@@ -21,3 +21,19 @@ test('a page asking for a 2FA code gets it filled in on load', async ({ context,
   // Filled, then auto-submitted: the page shows the code it received.
   await expect(page.locator('#result-code')).toHaveText(/^Code accepted: \d{6}$/, { timeout: 10000 });
 });
+
+test('with "Sign in automatically" off the code is filled, not submitted', async ({ context, extensionId }) => {
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await popup.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedUnlocked(popup, { accounts: [] });
+  await popup.reload();
+  await waitForVault(popup);
+  await writeAccounts(popup, [{ name: 'TestApp', email: 'me@example.com', secret: TEST_SECRET, urls: 'localhost', autoLogin: false }]);
+
+  const page = await context.newPage();
+  await page.goto('http://localhost:8765/test/autofill.html');
+  await expect(page.locator('#otp-input')).toHaveValue(/^\d{6}$/, { timeout: 10000 });
+  await page.waitForTimeout(1500);
+  await expect(page.locator('#result-code')).toHaveText('');
+});
