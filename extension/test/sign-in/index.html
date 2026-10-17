@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in</title></head>
+<body>
+  <!-- A two-step sign-in's first page like many SPAs: an email field with
+       autocomplete="username", a <button> without a type, and a redirect
+       target in the query. -->
+  <form id="signInForm" action="../login-step2.html" method="get" novalidate>
+    <h4>Sign in</h4>
+    <label for="email"><p>Email</p></label>
+    <input id="email" autocomplete="username" type="email" value="" name="email">
+    <button><span>Continue</span></button>
+    <button type="button"><span>Sign in with Google</span></button>
+  </form>
+</body></html>

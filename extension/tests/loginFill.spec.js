@@ -113,6 +113,10 @@ test('locked: the offer unlocks in the extension frame, then fills', async ({ co
 
   const overlay = site.locator('#otpilot-login-fill');
   await expect(overlay).toBeVisible();
+  // A short note and an Unlock button first; the frame only after a click.
+  await expect(overlay.locator('.otpilot-login-locked')).toHaveText('Unlock OTPilot to fill your GitHub login.');
+  await expect(overlay.locator('iframe')).toHaveCount(0);
+  await overlay.locator('.otpilot-login-unlock').click();
   const frame = site.frameLocator('#otpilot-login-fill iframe');
   await expect(frame.locator('#label')).toContainText('GitHub');
   await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
@@ -127,6 +131,7 @@ test('locked: after unlocking in the popup, a page navigating the stale unlock f
   const site = await context.newPage();
   await site.goto(`${SITE}/login.html`);
   const overlay = site.locator('#otpilot-login-fill');
+  await overlay.locator('.otpilot-login-unlock').click();
   await expect(overlay.locator('iframe')).toBeVisible();
   // Unlocked from the popup; the page's frame is still there and the page
   // points it at its own content, which claims the unlock.
@@ -265,14 +270,65 @@ test('the badge toggles the dropdown; Escape, typing or a click elsewhere closes
   await expect(drop).toHaveCount(0);
 });
 
-test('no badge without a saved login for the site', async ({ context, extensionId }) => {
+test('without a saved login for the site the badge still shows; focusing opens nothing, its click says so', async ({ context, extensionId }) => {
   await vaultWith(context, extensionId, [{ ...github, urls: 'elsewhere.example' }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  const badge = site.locator('.otpilot-field-badge[data-kind="login"]');
+  await expect(badge).toHaveCount(2);
+  await site.focus('input[name="email"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0);
+  await expect(site.locator('#otpilot-login-fill')).toHaveCount(0);
+  await badge.first().click();
+  await expect(site.locator('#otpilot-login-dropdown .otpilot-login-none')).toContainText('No saved login for localhost');
+});
+
+test('no badge before the vault is set up, nor on a newsletter box', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/newsletter.html`);
+  await site.focus('input[name="newsletter_email"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('.otpilot-field-badge')).toHaveCount(0);
+  await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0);
+});
+
+test('the first page of a two-step sign-in: badge and dropdown on the username; a pick fills the username only', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/sign-in/?next=%2Flogin%3Fnext%3D%252Fdashboard`);
+  await expect(site.locator('#otpilot-login-fill')).toBeVisible();
+  await expect(site.locator('.otpilot-field-badge[data-kind="login"]')).toHaveCount(1);
+  await site.focus('input[name="email"]');
+  const drop = site.locator('#otpilot-login-dropdown');
+  await expect(drop.locator('.otpilot-login-choice')).toHaveCount(1);
+  await drop.locator('.otpilot-login-choice').click();
+  await expect(site.locator('input[name="email"]')).toHaveValue('me@example.com');
+  await expect(drop).toHaveCount(0);
+  // The password stays in the extension until its own page asks for it.
+  expect(await site.content()).not.toContain('hunter2!');
+  await site.click('button:has-text("Continue")');
+  await expect(site).toHaveURL(/login-step2\.html/);
+  await site.focus('input[name="password"]');
+  await site.locator('#otpilot-login-dropdown .otpilot-login-choice').click();
+  await expect(site.locator('input[name="password"]')).toHaveValue('hunter2!');
+});
+
+test('locked: a badge click on a site without a known login offers to unlock', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, [{ ...github, urls: 'elsewhere.example' }]);
+  await page.evaluate(() => VaultLock.lock());
   const site = await context.newPage();
   await site.goto(`${SITE}/login.html`);
   await site.focus('input[name="email"]');
   await site.waitForTimeout(800);
-  await expect(site.locator('.otpilot-field-badge[data-kind="login"]')).toHaveCount(0);
-  await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0);
+  await expect(site.locator('#otpilot-login-dropdown')).toHaveCount(0); // focusing opens nothing
+  await site.locator('.otpilot-field-badge[data-kind="login"]').first().click();
+  const drop = site.locator('#otpilot-login-dropdown');
+  await expect(drop.locator('.otpilot-login-locked')).toHaveText('Unlock OTPilot to fill your credentials.');
+  await drop.locator('.otpilot-login-unlock').click();
+  const frame = site.frameLocator('#otpilot-login-dropdown iframe');
+  await unlockThen(frame, () => pwExpect(drop.locator('.otpilot-login-none')).toContainText('No saved login'));
 });
 
 test('locked: the dropdown unlocks in the extension frame, then fills', async ({ context, extensionId }) => {
@@ -281,6 +337,7 @@ test('locked: the dropdown unlocks in the extension frame, then fills', async ({
   const site = await context.newPage();
   await site.goto(`${SITE}/login.html`);
   await site.focus('input[name="password"]');
+  await site.locator('#otpilot-login-dropdown .otpilot-login-unlock').click();
   const frame = site.frameLocator('#otpilot-login-dropdown iframe');
   await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   await unlockThen(frame, () => pwExpect(site.locator('input[name="password"]')).toHaveValue('hunter2!'));
@@ -326,6 +383,7 @@ test('locked: a long list after unlocking in the dropdown can still scroll to ev
   await site.setViewportSize({ width: 800, height: 360 });
   await site.goto(`${SITE}/login.html`);
   await site.focus('input[name="email"]');
+  await site.locator('#otpilot-login-dropdown .otpilot-login-unlock').click();
   const frame = site.frameLocator('#otpilot-login-dropdown iframe');
   await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
   const drop = site.locator('#otpilot-login-dropdown');
