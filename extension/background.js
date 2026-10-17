@@ -351,13 +351,17 @@ async function storeCapture(sender, msg) {
   // `step`: the username step this capture took its username from, the only
   // one settling it may end.
   // `url`: where the sign-in started (the username step's page, if any).
+  // A password page that repeats the username step's username (a read-only
+  // or hidden copy of it) is still that sign-in: it keeps its start.
   let step = null;
   let url = signInUrlOf(sender.url);
-  if (username) await chrome.storage.session.remove(pendingUsernameKey(sender.tab.id));
-  else {
-    const pending = await pendingUsernameFor(sender.tab.id, host);
-    if (pending) ({ username, id: step } = pending);
-    if (pending?.url) url = pending.url;
+  const pending = await pendingUsernameFor(sender.tab.id, host);
+  if (username) {
+    if (pending?.url && pending.username.toLowerCase() === username.toLowerCase()) url = pending.url;
+    await chrome.storage.session.remove(pendingUsernameKey(sender.tab.id));
+  } else if (pending) {
+    ({ username, id: step } = pending);
+    if (pending.url) url = pending.url;
   }
   const id = crypto.randomUUID(); // offers and choices name the capture they're about
   await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { id, host, username, password, at: Date.now(), ...(url ? { url } : {}), ...(step ? { step } : {}) } });
@@ -523,9 +527,14 @@ async function resolvePendingLogin(sender, id, choice, target) {
     let kind;
     if (choice === 'new' || plan.kind === 'new') {
       if (plan.newLimit) return { ok: false, limit: true };
+      // The sign-in's start, plus the password page's host when the start
+      // doesn't cover it (login.site.com, then site.com): the login must
+      // still be offered where its password is typed.
+      const urls = [pending.url || pending.host];
+      if (!Vault.loginCoversHost(urls, pending.host)) urls.push(pending.host);
       await VaultAccounts.add({
         name: pending.host.replace(/^www\./, ''), email: pending.username, secret: '',
-        urls: pending.url || pending.host, password: pending.password,
+        urls: urls.join('\n'), password: pending.password,
       }, vk);
       kind = 'new';
     } else {

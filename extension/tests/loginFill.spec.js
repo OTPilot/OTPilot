@@ -306,8 +306,15 @@ test('the first page of a two-step sign-in: badge and dropdown on the username; 
   await drop.locator('.otpilot-login-choice').click();
   await expect(site.locator('input[name="email"]')).toHaveValue('me@example.com');
   await expect(drop).toHaveCount(0);
-  // The password stays in the extension until its own page asks for it.
+  // The password stays in the extension until its own page asks for it: the
+  // background's answer for a username step carries none.
   expect(await site.content()).not.toContain('hunter2!');
+  const [worker] = context.serviceWorkers();
+  const answer = await worker.evaluate(async url => {
+    const { items } = await VaultStore.readAll(await VaultKeys.getKey());
+    return fillLogin({ tab: { id: 1 }, frameId: 0, url }, items[0].id, true);
+  }, site.url());
+  expect(answer).toEqual({ ok: true, username: 'me@example.com' });
   await site.click('button:has-text("Continue")');
   await expect(site).toHaveURL(/login-step2\.html/);
   await site.focus('input[name="password"]');

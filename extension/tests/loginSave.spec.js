@@ -718,3 +718,26 @@ test('settling an older sign-in keeps a newer username step', async ({ context, 
   await expect(site).toHaveURL(/welcome\.html/);
   await expect(offer).toContainText('Update the password for Bob?');
 });
+
+test('a two-step sign-in starting on a subdomain also keeps the password page host; a repeated username keeps the start', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const [worker] = context.serviceWorkers();
+  const urls = await worker.evaluate(async () => {
+    const save = async (tabId, passwordUrl, username) => {
+      await captureUsername({ tab: { id: tabId }, frameId: 0, url: 'https://login.example.com/sign-in?next=%2Fhome' }, { username: 'me@example.com' });
+      const sender = { tab: { id: tabId }, frameId: 0, url: passwordUrl };
+      await captureLogin(sender, { username, password: `pw-${tabId}` });
+      const offer = await pendingLoginOffer(sender);
+      await resolvePendingLogin(sender, offer.id, 'new');
+    };
+    await save(901, 'https://example.com/password', '');
+    await save(902, 'https://login.example.com/challenge/pwd', 'ME@example.com');
+    const { items } = await VaultStore.readAll(await VaultKeys.getKey());
+    return items.map(i => [Vault.getValue(i, 'password'), i.urls]).sort();
+  });
+  expect(urls).toEqual([
+    ['pw-901', ['login.example.com/sign-in', 'example.com']],
+    ['pw-902', ['login.example.com/sign-in']],
+  ]);
+  void popup;
+});
