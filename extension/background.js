@@ -1298,8 +1298,20 @@ async function setUninstallSurvey() {
 
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   if (reason === 'install') await chrome.storage.local.set({ installedAt: Date.now() });
+  if (reason === 'update') await forgetMissingIcons();
   setUninstallSurvey();
 });
+
+// A new version may come with a server that finds more icons: drop the cached
+// "no icon" answers so they're asked again now, not after ICON_NONE_TTL_MS.
+async function forgetMissingIcons() {
+  const { iconCache } = await chrome.storage.local.get('iconCache');
+  if (!iconCache) return;
+  const kept = Object.fromEntries(Object.entries(iconCache).filter(([, e]) => e && e.dataUrl));
+  if (Object.keys(kept).length !== Object.keys(iconCache).length) {
+    await chrome.storage.local.set({ iconCache: kept });
+  }
+}
 chrome.runtime.onStartup.addListener(setUninstallSurvey);
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.userPlan) setUninstallSurvey();

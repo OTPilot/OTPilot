@@ -74,3 +74,18 @@ test('a cached "no icon" is asked again when the page sends a hint, and expires 
   }, PNG_DATA_URL);
   expect(r).toEqual({ asked: ['hinted.test', 'old.test'], got: ['hinted.test', 'old.test'] });
 });
+
+test('an update forgets cached "no icon" answers and keeps the icons', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  const cache = await worker.evaluate(async dataUrl => {
+    await chrome.storage.local.set({ iconCache: {
+      'github.com': { dataUrl, fetchedAt: Date.now() },
+      'bbva.es': { dataUrl: null, fetchedAt: Date.now() },
+    } });
+    await forgetMissingIcons();
+    return (await chrome.storage.local.get('iconCache')).iconCache;
+  }, PNG_DATA_URL);
+  expect(Object.keys(cache)).toEqual(['github.com']);
+});
