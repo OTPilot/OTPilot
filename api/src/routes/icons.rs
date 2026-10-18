@@ -39,6 +39,16 @@ const ICON_SIZE: u32 = 64;
 /// Max concurrent outbound favicon fetches across all requests — the endpoint is
 /// public, so this bounds resource use under a flood of cache-miss domains.
 const MAX_CONCURRENT_FETCHES: usize = 8;
+/// Many sites (Akamai / Cloudflare bot rules, e.g. bbva.es) answer 403 to a
+/// non-browser User-Agent, even for `/favicon.ico`.
+const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+     (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+/// Most `<link rel=icon>` candidates tried per homepage.
+const MAX_LINK_CANDIDATES: usize = 4;
+/// Last resort when the site itself can't be read (bot wall, SVG-only icon…):
+/// DuckDuckGo's favicon service (404 when it has none). Only the domain is sent,
+/// from the server, never tied to a user.
+const FALLBACK_ICON_SERVICE: &str = "https://icons.duckduckgo.com/ip3";
 
 // ── S3/R2 store ──────────────────────────────────────────────────────────────
 
@@ -247,12 +257,20 @@ async fn fetch_and_store(
     // 2) Fallback to the registrable parent domain (e.g. ap.www.namecheap.com →
     //    namecheap.com), since enrollment often happens on an icon-less subdomain.
     //    The icon is stored under the ORIGINAL host key so the account still matches.
-    if let Some(parent) = registrable_domain(domain) {
-        if parent != domain {
-            if let Some(png) = fetch_icon_png(&parent, None).await {
-                store.put_png(domain, &png).await?;
-                return Ok(true);
-            }
+    let parent = registrable_domain(domain).filter(|p| p != domain);
+    if let Some(parent) = &parent {
+        if let Some(png) = fetch_icon_png(parent, None).await {
+            store.put_png(domain, &png).await?;
+            return Ok(true);
+        }
+    }
+
+    // 3) A favicon service, for the host then its parent.
+    for d in std::iter::once(domain).chain(parent.as_deref()) {
+        if let Some(png) = download_and_normalize(&format!("{FALLBACK_ICON_SERVICE}/{d}.ico")).await
+        {
+            store.put_png(domain, &png).await?;
+            return Ok(true);
         }
     }
 
@@ -271,7 +289,7 @@ async fn fetch_icon_png(domain: &str, hint: Option<&str>) -> Option<Vec<u8>> {
             }
         }
     }
-    if let Some(href) = discover_link_icon(domain).await {
+    for href in discover_link_icons(domain).await {
         if let Some(png) = download_and_normalize(&href).await {
             return Some(png);
         }
@@ -293,19 +311,31 @@ async fn download_and_normalize(url: &str) -> Option<Vec<u8>> {
     normalize_to_png(&bytes)
 }
 
-/// Fetches the homepage HTML and extracts the best `<link rel="...icon...">` href,
-/// resolved to an absolute URL on the same domain.
-async fn discover_link_icon(domain: &str) -> Option<String> {
+/// Fetches the homepage HTML and returns its `<link rel="...icon...">` hrefs, best
+/// first, as absolute https URLs. Unlike a client hint, these may point to another
+/// host (a CDN: belo.app's icon lives on framerusercontent.com): the site's own
+/// page says so, and `fetch_bytes` applies the same SSRF guards to any host.
+async fn discover_link_icons(domain: &str) -> Vec<String> {
     let base = format!("https://{domain}/");
-    let html_bytes = fetch_bytes(&base, MAX_HTML_DOWNLOAD).await?;
+    let Some(html_bytes) = fetch_bytes(&base, MAX_HTML_DOWNLOAD).await else {
+        return Vec::new();
+    };
+    let Ok(base) = reqwest::Url::parse(&base) else {
+        return Vec::new();
+    };
     let html = String::from_utf8_lossy(&html_bytes);
-    let href = extract_icon_href(&html)?;
-    let abs = reqwest::Url::parse(&base).ok()?.join(&href).ok()?;
-    if abs.scheme() == "https" && host_matches_domain(abs.host_str(), domain) {
-        Some(abs.into())
-    } else {
-        None
+    let mut out: Vec<String> = Vec::new();
+    for href in extract_icon_hrefs(&html) {
+        let Ok(abs) = base.join(&href) else { continue };
+        let abs: String = abs.into();
+        if abs.starts_with("https://") && !out.contains(&abs) {
+            out.push(abs);
+        }
+        if out.len() == MAX_LINK_CANDIDATES {
+            break;
+        }
     }
+    out
 }
 
 /// Max redirect hops to follow when fetching an icon/homepage.
@@ -328,14 +358,25 @@ async fn fetch_bytes(url: &str, max_bytes: usize) -> Option<Vec<u8>> {
         let addr = resolve_public_addr(&host).await?;
 
         let client = reqwest::Client::builder()
-            .user_agent("OTPilot-IconFetcher/1.0")
+            .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(5))
             .redirect(reqwest::redirect::Policy::none())
             .resolve(&host, addr)
             .build()
             .ok()?;
 
-        let resp = client.get(current.clone()).send().await.ok()?;
+        let resp = client
+            .get(current.clone())
+            // No avif: CDNs negotiate it (framerusercontent.com) and the image
+            // crate here can't decode it.
+            .header(
+                reqwest::header::ACCEPT,
+                "text/html,image/webp,image/png,image/*;q=0.9,*/*;q=0.8",
+            )
+            .header(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9")
+            .send()
+            .await
+            .ok()?;
         let status = resp.status();
 
         if status.is_redirection() {
@@ -373,15 +414,18 @@ fn normalize_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
-/// Minimal scan for `<link rel="...icon...">` → href, no HTML parser dependency.
-fn extract_icon_href(html: &str) -> Option<String> {
+/// Minimal scan for `<link rel="...icon...">` → hrefs, best first (apple-touch-icon,
+/// usually the largest; then the others in page order), no HTML parser dependency.
+/// SVG and `mask-icon` (a monochrome SVG) are skipped: the image crate can't read them.
+fn extract_icon_hrefs(html: &str) -> Vec<String> {
     // ASCII-only lowercasing preserves byte length, so offsets into `lower` stay
     // valid char boundaries in `html` (Unicode to_lowercase() can change length
     // — e.g. Turkish İ — and panic when slicing the original). Tag/attr names are
     // ASCII; hrefs are read from `html` so their case is preserved.
     let lower = html.to_ascii_lowercase();
     let mut search_from = 0;
-    let mut fallback: Option<String> = None;
+    let mut touch: Vec<String> = Vec::new();
+    let mut icons: Vec<String> = Vec::new();
     while let Some(rel_pos) = lower[search_from..].find("<link") {
         let start = search_from + rel_pos;
         let end = lower[start..]
@@ -389,22 +433,39 @@ fn extract_icon_href(html: &str) -> Option<String> {
             .map(|e| start + e)
             .unwrap_or(lower.len());
         let tag = &html[start..end];
-        let tag_lower = &lower[start..end];
         search_from = end;
-        if !tag_lower.contains("rel=") || !tag_lower.contains("icon") {
+        let Some(rel) = attr_value(tag, "rel") else {
+            continue;
+        };
+        let rel = rel.to_ascii_lowercase();
+        let tokens: Vec<&str> = rel.split_ascii_whitespace().collect();
+        if tokens.contains(&"mask-icon") {
             continue;
         }
-        if let Some(href) = attr_value(tag, "href") {
-            // Prefer apple-touch-icon (usually higher res); otherwise keep the first.
-            if tag_lower.contains("apple-touch-icon") {
-                return Some(href);
-            }
-            if fallback.is_none() {
-                fallback = Some(href);
-            }
+        let is_touch = tokens.iter().any(|t| t.starts_with("apple-touch-icon"));
+        if !is_touch && !tokens.contains(&"icon") {
+            continue;
+        }
+        let Some(href) = attr_value(tag, "href") else {
+            continue;
+        };
+        let svg = attr_value(tag, "type").is_some_and(|t| t.to_ascii_lowercase().contains("svg"))
+            || href
+                .to_ascii_lowercase()
+                .split(['?', '#'])
+                .next()
+                .is_some_and(|p| p.ends_with(".svg"));
+        if svg || href.starts_with("data:") {
+            continue;
+        }
+        if is_touch {
+            touch.push(href)
+        } else {
+            icons.push(href)
         }
     }
-    fallback
+    touch.extend(icons);
+    touch
 }
 
 /// Extracts a quoted attribute value (case-insensitive name) from a tag fragment.
@@ -412,13 +473,26 @@ fn attr_value(tag: &str, name: &str) -> Option<String> {
     // ASCII lowercasing keeps byte offsets aligned with `tag` (see extract_icon_href).
     let lower = tag.to_ascii_lowercase();
     let key = format!("{name}=");
-    let idx = lower.find(&key)? + key.len();
+    // The name must start an attribute (`data-href=` isn't `href=`).
+    let idx = lower
+        .match_indices(&key)
+        .find(|(i, _)| *i > 0 && lower.as_bytes()[i - 1].is_ascii_whitespace())?
+        .0
+        + key.len();
     let rest = &tag[idx..];
     let bytes = rest.as_bytes();
     let (quote, content_start) = match bytes.first() {
         Some(b'"') => ('"', 1),
         Some(b'\'') => ('\'', 1),
-        _ => return None,
+        // Unquoted (`rel=icon`): up to whitespace or the tag's end.
+        Some(_) => {
+            let end = rest
+                .find(|c: char| c.is_ascii_whitespace() || c == '>')
+                .unwrap_or(rest.len());
+            let val = rest[..end].trim_end_matches('/');
+            return (!val.is_empty()).then(|| val.to_string());
+        }
+        None => return None,
     };
     let end = rest[content_start..].find(quote)? + content_start;
     let val = rest[content_start..end].trim();
@@ -532,7 +606,43 @@ fn is_cgnat(v4: Ipv4Addr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::ip_is_public;
+    use super::{extract_icon_hrefs, fetch_icon_png, ip_is_public};
+
+    /// Real sites (network): `cargo test icons -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn fetches_real_icons() {
+        // bbva.es: 403 to a non-browser User-Agent; belo.app: icon on a CDN.
+        for d in ["bbva.es", "belo.app", "github.com"] {
+            assert!(fetch_icon_png(d, None).await.is_some(), "{d}");
+        }
+    }
+
+    #[test]
+    fn icon_hrefs_best_first() {
+        let html = r#"<head>
+            <link rel="preload" href="/icons/sprite.png">
+            <link href="https://cdn.example.net/a.png" rel="icon" media="(prefers-color-scheme: light)">
+            <link rel="mask-icon" href="/mask.png">
+            <link rel="icon" type="image/svg+xml" href="/icon.svg">
+            <link rel="icon" href="/fav.svg?v=2">
+            <link data-href="/x.png" rel="shortcut icon" href="/favicon.ico">
+            <link rel='apple-touch-icon' sizes="180x180" href='/touch.png'>
+        </head>"#;
+        assert_eq!(
+            extract_icon_hrefs(html),
+            [
+                "/touch.png",
+                "https://cdn.example.net/a.png",
+                "/favicon.ico"
+            ]
+        );
+        assert!(extract_icon_hrefs("<link rel=stylesheet href=/a.css>").is_empty());
+        assert_eq!(
+            extract_icon_hrefs("<link rel=icon href=/f.png>"),
+            ["/f.png"]
+        );
+    }
     use std::net::IpAddr;
     use std::str::FromStr;
 
