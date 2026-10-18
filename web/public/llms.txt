@@ -14,6 +14,7 @@ OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) code
 ## Key features
 
 - Fills passwords and 2FA codes on login pages (two-step sign-ins too); offers to save new sign-ins and updated passwords; per login, turn off auto-fill or automatic sign-in
+- Fills codes sent by email: reads the site's recent email from Gmail (your browser's Gmail session, no need to open it) or an open Outlook, Yahoo, Proton, Fastmail or Zoho tab — read on the device, only from the site you're signing in to
 - Detects 2FA setup pages automatically — reads otpauth:// URIs and QR codes from the page
 - Secure notes, servers and API credentials, with custom fields and related items
 - Secure files and SSH keys: generate or import SSH keys (public key and fingerprint shown), keep .p8 / .p12 / service-account / .env files in any item; a dropped file is recognized and filled in

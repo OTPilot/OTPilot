@@ -7,7 +7,7 @@ EXTENSION_FILES := \
   popup.html popup.js theme-boot.js theme.css unlock.html unlock.js generator.js \
   dashboardUnlock.html dashboardUnlock.js \
   background.js \
-  jsqr.js content.js forms.js totp.js email-reader.js googleAuthMigration.js \
+  jsqr.js content.js forms.js totp.js emailCodes.js email-reader.js googleAuthMigration.js \
   supabase.js cloudSync.js keys.js sharing.js vaultCollections.js vaultShares.js agents.js agentsView.js \
   vault.js sshKeys.js fileKinds.js bip39.js qrcode.js cryptoAddresses.js seedGuard.js importers.js vaultAccounts.js vaultCrypto.js vaultKeys.js vaultLock.js vaultMigration.js vaultStore.js vaultSync.js \
   config.js links.js \
