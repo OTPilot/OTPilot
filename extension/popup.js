@@ -454,7 +454,24 @@ function accountIconDomain(acc) {
 function accountIconDataUrl(acc) {
   const d = accountIconDomain(acc);
   const e = d && iconCache[d];
-  return e && e.dataUrl ? e.dataUrl : null;
+  if (e && e.dataUrl) return e.dataUrl;
+  return d ? null : relatedIconDataUrl(acc);
+}
+
+// An item with no website of its own (a note, a key…) shows the icon of a
+// related login: the first one it links that has an icon, else the first
+// that links it. The vault's draft wins over the saved list (unsaved links).
+function relatedIconDataUrl(acc) {
+  if (acc._kind !== 'item' || !acc._id) return null;
+  const logins = new Map(accounts.filter(a => a._id).map(a => [a._id, a]));
+  for (const d of draft) if (!d._kind && d._id) logins.set(d._id, d);
+  const own = (acc.item?.links || []).map(id => logins.get(id)).filter(Boolean);
+  const back = [...logins.values()].filter(a => (a.links || []).includes(acc._id));
+  for (const login of [...own, ...back]) {
+    const e = iconCache[accountIconDomain(login)];
+    if (e && e.dataUrl) return e.dataUrl;
+  }
+  return null;
 }
 
 function avatarHTML(acc, extraClass = '') {
@@ -985,7 +1002,7 @@ function renderHomeCreds(acc) {
       const btn = document.createElement('button');
       btn.className = 'home-rel-head';
       btn.setAttribute('aria-expanded', String(open));
-      btn.innerHTML = `${avatarHTML(r.acc || { name: r.name }, 'acc-av-sm')}<span class="home-rel-text"><span class="home-rel-name"></span><span class="home-rel-sub"></span></span><span class="home-rel-chev">${r.kind === 'login' ? '›' : open ? '▾' : '▸'}</span>`;
+      btn.innerHTML = `${avatarHTML(r.acc || { _kind: 'item', _id: r.id, name: r.name, item: r.item }, 'acc-av-sm')}<span class="home-rel-text"><span class="home-rel-name"></span><span class="home-rel-sub"></span></span><span class="home-rel-chev">${r.kind === 'login' ? '›' : open ? '▾' : '▸'}</span>`;
       btn.querySelector('.home-rel-name').textContent = r.name;
       btn.querySelector('.home-rel-sub').textContent = r.kind === 'login' ? ['Login', r.sub].filter(Boolean).join(' · ') : r.sub;
       btn.addEventListener('click', () => {
