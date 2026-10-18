@@ -460,11 +460,13 @@ function accountIconDataUrl(acc) {
 
 // An item with no website of its own (a note, a key…) shows the icon of a
 // related login: the first one it links that has an icon, else the first
-// that links it. The vault's draft wins over the saved list (unsaved links).
+// that links it. While the vault is open its draft is the list (unsaved links
+// and deletions count), elsewhere the saved logins.
 function relatedIconDataUrl(acc) {
   if (acc._kind !== 'item' || !acc._id) return null;
-  const logins = new Map(accounts.filter(a => a._id).map(a => [a._id, a]));
-  for (const d of draft) if (!d._kind && d._id) logins.set(d._id, d);
+  const vaultOpen = document.getElementById('settings-panel')?.style.display !== 'none';
+  const list = vaultOpen ? draft.filter(d => !d._kind) : accounts;
+  const logins = new Map(list.filter(a => a._id).map(a => [a._id, a]));
   const own = (acc.item?.links || []).map(id => logins.get(id)).filter(Boolean);
   const back = [...logins.values()].filter(a => (a.links || []).includes(acc._id));
   for (const login of [...own, ...back]) {
@@ -961,10 +963,12 @@ function homeItemRows(item) {
   return rows;
 }
 
+const homeRelatedAvatar = r => r.acc || { _kind: 'item', _id: r.id, name: r.name, item: r.item };
+
 function renderHomeCreds(acc) {
   const related = homeRelated(acc);
   const key = acc ? JSON.stringify([_teamPlan, _sharingRev, acc._id, acc.email || '', acc.password || '', acc.urls || '', acc.notes || '', acc.customFields || [],
-    related.map(r => [r.id, r.name, r.item?.updatedAt || r.acc?._updatedAt || '']), [..._homeOpenRelated]]) : '';
+    related.map(r => [r.id, r.name, r.item?.updatedAt || r.acc?._updatedAt || '', !!accountIconDataUrl(homeRelatedAvatar(r))]), [..._homeOpenRelated]]) : '';
   if (key === _homeCredsKey) return;
   _homeCredsKey = key;
   const box = document.getElementById('home-creds');
@@ -1002,7 +1006,7 @@ function renderHomeCreds(acc) {
       const btn = document.createElement('button');
       btn.className = 'home-rel-head';
       btn.setAttribute('aria-expanded', String(open));
-      btn.innerHTML = `${avatarHTML(r.acc || { _kind: 'item', _id: r.id, name: r.name, item: r.item }, 'acc-av-sm')}<span class="home-rel-text"><span class="home-rel-name"></span><span class="home-rel-sub"></span></span><span class="home-rel-chev">${r.kind === 'login' ? '›' : open ? '▾' : '▸'}</span>`;
+      btn.innerHTML = `${avatarHTML(homeRelatedAvatar(r), 'acc-av-sm')}<span class="home-rel-text"><span class="home-rel-name"></span><span class="home-rel-sub"></span></span><span class="home-rel-chev">${r.kind === 'login' ? '›' : open ? '▾' : '▸'}</span>`;
       btn.querySelector('.home-rel-name').textContent = r.name;
       btn.querySelector('.home-rel-sub').textContent = r.kind === 'login' ? ['Login', r.sub].filter(Boolean).join(' · ') : r.sub;
       btn.addEventListener('click', () => {

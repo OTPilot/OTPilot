@@ -151,3 +151,57 @@ test('an item with no website shows the icon of a related login', async ({ conte
   await expect(row('Alone').locator('span.acc-av')).toHaveCount(1);
   await expect(row('Acme').locator('span.acc-av')).toHaveCount(1);
 });
+
+// A note linked to the GitHub login, with GitHub's icon cached or not.
+async function noteLinkedToGitHub(context, extensionId, { cached }) {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedUnlocked(page, { accounts: [], obfuscated: false });
+  await page.reload();
+  await waitForVault(page);
+  await writeAccounts(page, [{ name: 'GitHub', email: 'a', secret: '', urls: 'github.com', password: 'p' }]);
+  await page.evaluate(async ([dataUrl, cached]) => {
+    const key = await VaultKeys.getKey();
+    const { items } = await VaultStore.readAll(key);
+    const github = items.find(i => i.title === 'GitHub');
+    await VaultStore.save([Vault.newItem('note', { title: 'Backup codes', links: [github.id] })], key);
+    await chrome.storage.local.set({ iconCache: cached ? { 'github.com': { dataUrl, fetchedAt: Date.now() } } : {} });
+  }, [PNG_DATA_URL, cached]);
+  return page;
+}
+
+test('deleting the related login in the vault drops its icon from the note before saving', async ({ context, extensionId }) => {
+  const page = await noteLinkedToGitHub(context, extensionId, { cached: true });
+  await page.reload();
+  await waitForVault(page);
+  await page.click('#nav-settings');
+  const note = page.locator('.acc-head', { hasText: 'Backup codes' });
+  await expect(note.locator('img.acc-av')).toHaveCount(1);
+
+  await page.locator('.acc-head', { hasText: 'GitHub' }).click();
+  page.once('dialog', d => d.accept());
+  await page.click('#acc-detail .btn-del:not(.btn-merge)');
+  await expect(page.locator('.acc-head', { hasText: 'GitHub' })).toHaveCount(0);
+  await expect(note.locator('span.acc-av')).toHaveCount(1);
+});
+
+test('Home shows a related note\'s icon once it is downloaded', async ({ context, extensionId }) => {
+  const png = Buffer.from(PNG_DATA_URL.split(',')[1], 'base64');
+  let release;
+  const held = new Promise(r => { release = r; });
+  await context.route('**/icons/resolve', route => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ 'github.com': { status: 'ok', url: 'https://icons.example/github.com.png' } }),
+  }));
+  await context.route('https://icons.example/**', async route => { await held; route.fulfill({ contentType: 'image/png', body: png }); });
+
+  const page = await noteLinkedToGitHub(context, extensionId, { cached: false });
+  await page.reload();
+  await waitForVault(page);
+  await page.locator('#home-list .lc-row', { hasText: 'GitHub' }).click();
+  const row = page.locator('#home-creds .home-rel-head', { hasText: 'Backup codes' });
+  await expect(row.locator('span.acc-av')).toHaveCount(1);
+
+  release();
+  await expect(row.locator('img.acc-av')).toHaveCount(1);
+});
