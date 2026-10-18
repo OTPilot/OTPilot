@@ -89,3 +89,31 @@ test('an update forgets cached "no icon" answers and keeps the icons', async ({ 
   }, PNG_DATA_URL);
   expect(Object.keys(cache)).toEqual(['github.com']);
 });
+
+test('a download finishing after the update cleanup does not bring back "no icon" answers', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  await context.route('**/icons/resolve', route => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ 'slow.test': { status: 'ok', url: 'https://icons.example/slow.test.png' } }),
+  }));
+  let release;
+  const held = new Promise(r => { release = r; });
+  await context.route('https://icons.example/**', async route => {
+    await held;
+    route.fulfill({ contentType: 'image/png', body: Buffer.from(PNG_DATA_URL.split(',')[1], 'base64') });
+  });
+  await worker.evaluate(() => chrome.storage.local.set({ iconCache: {
+    'bbva.es': { dataUrl: null, fetchedAt: Date.now() },
+  } }));
+  // A request reads the cache, then waits on its download while the update runs.
+  await worker.evaluate(() => { globalThis._pending = handleResolveIcons(['slow.test'], {}, false); });
+  await page.waitForTimeout(300);
+  await worker.evaluate(() => forgetMissingIcons());
+  release();
+  const cache = await worker.evaluate(async () => {
+    await globalThis._pending;
+    return (await chrome.storage.local.get('iconCache')).iconCache;
+  });
+  expect(Object.keys(cache)).toEqual(['slow.test']);
+});
