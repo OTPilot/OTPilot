@@ -1,7 +1,7 @@
 'use strict';
 
 importScripts(
-  'config.js', 'supabase.js',
+  'config.js', 'supabase.js', 'emailCodes.js',
   // 2.0 vault lock: the unlocked vault key lives in chrome.storage.session,
   // which content scripts can't read, so they ask this worker (vaultState /
   // vaultUnlock below).
@@ -578,6 +578,104 @@ async function themeVars() {
 // Latest email OTP detected by email-reader.js (expires after 10 min).
 let _emailOtp = null;
 
+// ── Email codes from Gmail, without opening it ──
+// Gmail's Atom feed (/mail/u/N/feed/atom) lists the inbox's unread messages
+// with their subject, a snippet and the sender, read with the browser's Gmail
+// session (the extension's host permission sends its cookies): no OAuth scope,
+// no Gmail tab. Only recent emails from the site asking (EmailCodes.fromSite)
+// count; when the snippet doesn't hold the code, the message's print view is
+// read (best effort). Nothing is stored: feed answers live 4 s in memory, and
+// codes handed out are remembered (not reused) for 15 min.
+const GMAIL_MAX_ACCOUNTS = 4;          // /u/0 … /u/3, the browser's signed-in Gmail accounts
+const EMAIL_CODE_MAX_AGE_MS = 10 * 60 * 1000;
+const GMAIL_FEED_TTL_MS = 4000;        // pages poll every few seconds: one read for all of them
+let _gmailFeed = null;                 // { at, entries: [{ …entry, u }] }
+let _gmailFeedLoading = null;
+const _gmailBodies = new Map();        // `${u}:${messageId}` → text | null (print view)
+const _usedEmailCodes = new Map();     // code → handed out at (ms)
+
+async function gmailFeedEntries() {
+  if (_gmailFeed && Date.now() - _gmailFeed.at < GMAIL_FEED_TTL_MS) return _gmailFeed.entries;
+  _gmailFeedLoading ??= (async () => {
+    const entries = [];
+    const accounts = new Set();
+    for (let u = 0; u < GMAIL_MAX_ACCOUNTS; u++) {
+      let xml;
+      try {
+        const res = await fetch(`https://mail.google.com/mail/u/${u}/feed/atom`, { credentials: 'include', cache: 'no-store' });
+        if (!res.ok || !/xml/i.test(res.headers.get('content-type') || '')) break; // signed out / no such account
+        xml = await res.text();
+      } catch { break; }
+      const feed = EmailCodes.parseFeed(xml);
+      // An index past the last account answers as /u/0: stop at a repeat.
+      if (accounts.has(feed.account)) break;
+      accounts.add(feed.account);
+      for (const e of feed.entries) entries.push({ ...e, u });
+    }
+    _gmailFeed = { at: Date.now(), entries };
+    return entries;
+  })().finally(() => { _gmailFeedLoading = null; });
+  return _gmailFeedLoading;
+}
+
+// A message's text from Gmail's print view; null when Gmail doesn't serve it
+// (it sends a sign-in page or the inbox instead).
+async function gmailMessageText(u, messageId) {
+  const key = `${u}:${messageId}`;
+  if (_gmailBodies.has(key)) return _gmailBodies.get(key);
+  let text = null;
+  try {
+    const res = await fetch(`https://mail.google.com/mail/u/${u}/?view=pt&search=all&th=${encodeURIComponent(messageId)}`,
+      { credentials: 'include', cache: 'no-store' });
+    if (res.ok && new URL(res.url).hostname === 'mail.google.com') text = EmailCodes.htmlText(await res.text());
+  } catch { /* best effort */ }
+  if (_gmailBodies.size > 50) _gmailBodies.clear();
+  _gmailBodies.set(key, text);
+  return text;
+}
+
+async function gmailFeedCode(pageHost, expectedLength) {
+  const now = Date.now();
+  for (const [code, at] of _usedEmailCodes) if (now - at > 15 * 60 * 1000) _usedEmailCodes.delete(code);
+  const recent = (await gmailFeedEntries())
+    .filter(e => now - e.issued <= EMAIL_CODE_MAX_AGE_MS && EmailCodes.fromSite(e, pageHost))
+    .sort((a, b) => b.issued - a.issued);
+  const fresh = code => code && !_usedEmailCodes.has(code) ? code : null;
+  let code = null;
+  for (const e of recent) {
+    code = fresh(EmailCodes.pickBestCode(`${e.title}\n${e.summary}`, expectedLength));
+    if (code) break;
+  }
+  // The snippet is the email's first ~100 characters: read the newest few
+  // whole when the code sits further down.
+  for (const e of code ? [] : recent.slice(0, 3)) {
+    if (!e.messageId) continue;
+    code = fresh(EmailCodes.pickBestCode(await gmailMessageText(e.u, e.messageId), expectedLength));
+    if (code) break;
+  }
+  if (code) _usedEmailCodes.set(code, now);
+  return code;
+}
+
+// Asks an open webmail tab's email-reader.js to scan what it shows; a tab
+// opened before the extension loaded (MV3 doesn't inject into existing tabs)
+// gets the reader injected first.
+async function scanWebmailTab(expectedLength) {
+  const tabs = await chrome.tabs.query({});
+  const emailTab = tabs.find(t => WEBMAIL_RE.test(t.url ?? ''));
+  if (!emailTab) return null;
+  const ask = () => chrome.tabs.sendMessage(emailTab.id, { action: 'scanEmailOtp', expectedLength });
+  try {
+    return (await ask())?.code ?? null;
+  } catch { /* no reader in the tab */ }
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: emailTab.id }, files: ['emailCodes.js', 'email-reader.js'] });
+    return (await ask())?.code ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // Recognised webmail origins. localhost/127.0.0.1 are included for the
 // localhost-gated test override (?otpilot_test_provider) in email-reader.js.
 const WEBMAIL_RE = /^https?:\/\/(mail\.google\.com|outlook\.live\.com|outlook\.office\.com|mail\.yahoo\.com|mail\.proton\.me|app\.fastmail\.com|mail\.zoho\.com|localhost|127\.0\.0\.1)(?::\d+)?\//;
@@ -610,125 +708,26 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  // Active request from content.js when an OTP field needs a code.
+  // Active request from content.js when an OTP field needs a code: Gmail's
+  // feed first (no Gmail tab needed), then a code an open webmail tab pushed,
+  // then a scan of that tab.
   if (msg.action === 'getEmailOtp') {
     // expectedLength = number of digits the login page asks for (or undefined).
     const expectedLength = msg.expectedLength;
-    // Use the cache only if fresh AND its length matches what the page expects.
-    if (_emailOtp && Date.now() < _emailOtp.expiresAt &&
-        (!expectedLength || _emailOtp.code?.length === expectedLength)) {
-      sendResponse({ code: _emailOtp.code });
-      return true;
-    }
-    chrome.tabs.query({}, tabs => {
-      const emailTab = tabs.find(t => WEBMAIL_RE.test(t.url ?? ''));
-      if (!emailTab) {
-        console.debug('[OTPilot] getEmailOtp: no webmail tab found');
-        sendResponse({ code: null }); return;
-      }
-
-      function handleCode(code) {
-        if (code) _emailOtp = { code, expiresAt: Date.now() + 10 * 60 * 1000 };
-        sendResponse({ code: code ?? null });
-      }
-
-      // Try messaging the pre-injected content script first.
-      // If the tab was open before the extension loaded (MV3 doesn't re-inject into
-      // existing tabs), sendMessage fails → fall back to scripting.executeScript.
-      chrome.tabs.sendMessage(emailTab.id, { action: 'scanEmailOtp', expectedLength }, r => {
-        if (!chrome.runtime.lastError && r?.code != null) { handleCode(r.code); return; }
-        console.debug('[OTPilot] getEmailOtp: content script not responding, falling back to scripting.executeScript');
-        // Fallback: inline scan via scripting API (no pre-injected script needed).
-        chrome.scripting.executeScript({
-          target: { tabId: emailTab.id },
-          // ⚠️ INVARIANT: this duplicates the scan logic in email-reader.js
-          // (getOpenEmailBodies + getRows + pickBestCode). Keep both in sync.
-          // Must be fully self-contained — no references to outer scope.
-          func: (provider, expectedLength) => {
-            const CODE_RE = /\b\d{4,8}\b/g;
-            const OTP_KEYWORDS = /(c[oó]digo|code|verificaci[oó]n|verification|passcode|one[- ]?time|2fa|otp|pin|security|seguridad|c[oó]d\.?|auth)/i;
-            const bodySelectors = {
-              gmail:    '.a3s',
-              outlook:  '[role="document"], div[aria-label*="essage body"]',
-              yahoo:    '[data-test-id="message-view-body"], .msg-body',
-              proton:   '.message-content',
-              fastmail: '.v-Message-body, [class*="MessageView"]',
-              zoho:     '.zmail-msg-content, .msgBodyDiv',
-            };
-            const rowSelectors = {
-              gmail:    'tr[jsmodel]',
-              outlook:  '[role="option"][data-convid]',
-              yahoo:    '[data-item-id]',
-              proton:   '[data-element-id]',
-              fastmail: '[data-msg-id]',
-              zoho:     '.maillist-item[data-id]',
-            };
-            // Requires an OTP keyword near the digits; honours expectedLength.
-            // Signature kept identical to email-reader.js pickBestCode (invariant).
-            function pickBestCode(text, expectedLength) {
-              if (!text) return null;
-              const matches = [];
-              for (const m of text.matchAll(CODE_RE)) matches.push({ code: m[0], idx: m.index });
-              if (!matches.length) return null;
-              let best = null, bestScore = -Infinity;
-              for (let i = 0; i < matches.length; i++) {
-                const { code, idx } = matches[i];
-                if (expectedLength && code.length !== expectedLength) continue;
-                const ctx = text.slice(Math.max(0, idx - 80), idx + code.length + 80);
-                if (!OTP_KEYWORDS.test(ctx)) continue;
-                let score = 100;
-                if (code.length === 6) score += 10;
-                if (code.length === 4 && /^(19|20)\d\d$/.test(code)) score -= 50;
-                score -= i;
-                if (score > bestScore) { bestScore = score; best = code; }
-              }
-              return best;
-            }
-            const MAX_AGE_MS = 30 * 60 * 1000;
-            function rowIsRecent(row) {
-              const cands = [];
-              for (const t of row.querySelectorAll('time[datetime]')) cands.push(t.getAttribute('datetime'));
-              for (const el of row.querySelectorAll('[title], [aria-label]')) {
-                cands.push(el.getAttribute('title'), el.getAttribute('aria-label'));
-              }
-              let sawValid = false;
-              for (const c of cands) {
-                if (!c) continue;
-                const ms = Date.parse(c);
-                if (Number.isNaN(ms)) continue;
-                sawValid = true;
-                if (Date.now() - ms <= MAX_AGE_MS) return true;
-              }
-              return !sawValid;
-            }
-            const bodies = Array.from(document.querySelectorAll(bodySelectors[provider] || '.a3s')).slice(0, 5);
-            for (const body of bodies) {
-              const code = pickBestCode(body.innerText || '', expectedLength);
-              if (code) return code;
-            }
-            const rows = Array.from(document.querySelectorAll(rowSelectors[provider] || 'tr[jsmodel]')).slice(0, 5);
-            for (const row of rows) {
-              if (!rowIsRecent(row)) continue;
-              const code = pickBestCode(row.innerText || '', expectedLength);
-              if (code) return code;
-            }
-            return null;
-          },
-          args: [
-            /mail\.google\.com/.test(emailTab.url)     ? 'gmail'    :
-            /outlook\.(live|office)\.com/.test(emailTab.url) ? 'outlook' :
-            /mail\.yahoo\.com/.test(emailTab.url)      ? 'yahoo'    :
-            /mail\.proton\.me/.test(emailTab.url)      ? 'proton'   :
-            /app\.fastmail\.com/.test(emailTab.url)    ? 'fastmail' :
-            'zoho',
-            expectedLength ?? null,
-          ],
-        }, results => {
-          if (chrome.runtime.lastError) { sendResponse({ code: null }); return; }
-          handleCode(results?.[0]?.result ?? null);
-        });
-      });
-    });
+    // The page asking, from the sender (never from the message): a feed code
+    // is only given to the site that sent the email.
+    let pageHost = null;
+    try { if (_sender?.frameId === 0) pageHost = new URL(_sender.tab.url).hostname; } catch { /* no tab */ }
+    (async () => {
+      const fromFeed = pageHost ? await gmailFeedCode(pageHost, expectedLength).catch(() => null) : null;
+      if (fromFeed) return fromFeed;
+      // Use the cache only if fresh AND its length matches what the page expects.
+      if (_emailOtp && Date.now() < _emailOtp.expiresAt &&
+          (!expectedLength || _emailOtp.code?.length === expectedLength)) return _emailOtp.code;
+      const code = await scanWebmailTab(expectedLength);
+      if (code) _emailOtp = { code, expiresAt: Date.now() + 10 * 60 * 1000 };
+      return code;
+    })().then(code => sendResponse({ code: code ?? null }), () => sendResponse({ code: null }));
     return true;
   }
 

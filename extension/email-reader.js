@@ -23,51 +23,17 @@ const PROVIDER =
     : null) || null;
 
 if (!PROVIDER) return; // no-op on every other page
+// The background injects this file into a webmail tab opened before the
+// extension loaded; never run twice in one tab.
+if (globalThis.__otpilotEmailReader) return;
+globalThis.__otpilotEmailReader = true;
 
 // No language-specific subject filter — OTP emails arrive in any language.
 // We rely on the 4-8 digit code pattern and the context (content.js only
 // requests a code when an OTP input is present on the active page).
-//
-// ⚠️ INVARIANT: the selectors + pickBestCode logic below are duplicated inside
-// the scripting.executeScript fallback in background.js (used when the content
-// script isn't pre-injected into a pre-existing tab). Keep both in sync.
-const CODE_RE = /\b\d{4,8}\b/g;
-const OTP_KEYWORDS = /(c[oó]digo|code|verificaci[oó]n|verification|passcode|one[- ]?time|2fa|otp|pin|security|seguridad|c[oó]d\.?|auth)/i;
-
-// Picks the most likely OTP from a block of text.
-// REQUIRES an OTP keyword within ~80 chars of the digits — if no candidate has
-// one, returns null (never invents a code from a random number in the inbox).
-// (~80 because emails often phrase it as "código … que vencerá en 15 minutos.\n123456",
-// pushing the keyword well past a tighter window.)
-// When expectedLength is given (the number of digits the login page asks for),
-// only digit-runs of exactly that length are considered.
-function pickBestCode(text, expectedLength) {
-  if (!text) return null;
-  const matches = [];
-  for (const m of text.matchAll(CODE_RE)) matches.push({ code: m[0], idx: m.index });
-  if (!matches.length) return null;
-
-  let best = null, bestScore = -Infinity;
-  for (let i = 0; i < matches.length; i++) {
-    const { code, idx } = matches[i];
-    // Length filter: the page tells us how many digits to expect.
-    if (expectedLength && code.length !== expectedLength) continue;
-    // Hard gate: a candidate is only valid with an OTP keyword nearby.
-    const ctx = text.slice(Math.max(0, idx - 80), idx + code.length + 80);
-    if (!OTP_KEYWORDS.test(ctx)) continue;
-
-    let score = 100;
-    // 6-digit codes are the most common OTP length (only matters when the
-    // expected length is unknown).
-    if (code.length === 6) score += 10;
-    // A bare 4-digit year is rarely the code.
-    if (code.length === 4 && /^(19|20)\d\d$/.test(code)) score -= 50;
-    // Tie-break toward earlier matches.
-    score -= i;
-    if (score > bestScore) { bestScore = score; best = code; }
-  }
-  return best;
-}
+// The code is picked by EmailCodes.pickBestCode (emailCodes.js, shared with
+// the background, which also reads Gmail's feed without a Gmail tab).
+const pickBestCode = EmailCodes.pickBestCode;
 
 // Best-effort recency check for an inbox row: only reject when a machine-readable
 // timestamp confidently parses to more than ~30 min ago. Anything unparseable is
@@ -94,7 +60,7 @@ function rowIsRecent(row) {
 function getRows() {
   switch (PROVIDER) {
     case 'gmail':
-      return Array.from(document.querySelectorAll('tr[jsmodel]')).slice(0, 5);
+      return Array.from(document.querySelectorAll('tr.zA, tr[jsmodel]')).slice(0, 5);
     case 'outlook':
       return Array.from(document.querySelectorAll('[role="option"][data-convid]')).slice(0, 5);
     case 'yahoo':

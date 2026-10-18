@@ -1369,9 +1369,11 @@ async function runDetection() {
     return true;
   }
 
-  // Re-checks for an email OTP every 2s for up to 60s. Started when we're on a
-  // passcode page but the code hasn't landed yet; stops on success, when the
-  // input goes away, or on timeout. Guards against stacking multiple pollers.
+  // Re-checks for an email OTP every 3s for up to 3 min (emails can take a
+  // while; the background reads Gmail at most every 4s for every tab). Started
+  // when we're on a passcode page but the code hasn't landed yet; stops on
+  // success, when the input goes away, or on timeout. Guards against stacking
+  // multiple pollers.
   function startEmailOtpPoll(input) {
     if (_emailPollTimer && _emailPollFor === input) return;
     clearInterval(_emailPollTimer);
@@ -1380,12 +1382,12 @@ async function runDetection() {
     const stop = () => { clearInterval(_emailPollTimer); _emailPollTimer = null; _emailPollFor = null; };
     _emailPollTimer = setInterval(async () => {
       if (!chrome.runtime?.id) { clearInterval(_emailPollTimer); _emailPollTimer = null; return; }
-      if (Date.now() - startedAt > 60_000 || !input.isConnected || input === _lastFilledInput) {
+      if (Date.now() - startedAt > 180_000 || !input.isConnected || input === _lastFilledInput) {
         stop();
         return;
       }
       if (await attemptEmailOtp(input)) stop();
-    }, 2000);
+    }, 3000);
   }
 
   async function tryAutoFill() {
@@ -1401,13 +1403,14 @@ async function runDetection() {
       return;
     }
 
-    // Email OTP fallback: if no TOTP account matches, try reading from Gmail/Outlook.
+    // Email OTP fallback: if no TOTP account matches, ask the background for an
+    // emailed code (Gmail's feed for this site, or an open webmail tab).
     if (matching.length === 0) {
       console.debug('[OTPilot] tryAutoFill: no matching TOTP account — trying email OTP');
       const handled = await attemptEmailOtp(input);
       if (!handled) {
-        // The code often hasn't arrived yet — the user lands on the passcode
-        // page first and only then opens the email. The page DOM is static, so
+        // The code often hasn't arrived yet when the passcode page shows up.
+        // The page DOM is static, so
         // the MutationObserver won't re-trigger us; poll for the code instead.
         console.debug('[OTPilot] tryAutoFill: email OTP not found yet — polling for the code');
         startEmailOtpPoll(input);
