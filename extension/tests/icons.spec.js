@@ -210,3 +210,25 @@ test('Home shows a related note\'s icon once it is downloaded, keeping what was 
   await expect(row.locator('img.acc-av')).toHaveCount(1);
   await expect(password.locator('.home-cred-value')).toHaveText('p');
 });
+
+test('linking and unlinking a login in the editor updates the note\'s icon in the list', async ({ context, extensionId }) => {
+  const page = await noteLinkedToGitHub(context, extensionId, { cached: true });
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    await VaultStore.save([Vault.newItem('note', { title: 'Loose note' })], key);
+  });
+  await page.reload();
+  await waitForVault(page);
+  await page.click('#nav-settings');
+  const note = page.locator('.acc-head', { hasText: 'Loose note' });
+  await expect(note.locator('span.acc-av')).toHaveCount(1);
+
+  await note.click();
+  await page.click('#acc-detail .rel-link');
+  await page.fill('#acc-detail .rel-search', 'GitHub');
+  await page.locator('#acc-detail .rel-option', { hasText: 'GitHub' }).click();
+  await expect(note.locator('img.acc-av')).toHaveAttribute('src', PNG_DATA_URL);
+
+  await page.locator('#acc-detail .rel-row', { hasText: 'GitHub' }).locator('.rel-unlink').click();
+  await expect(note.locator('span.acc-av')).toHaveCount(1);
+});

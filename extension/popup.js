@@ -1454,6 +1454,16 @@ function renderVaultFilters() {
 // lives in the separate #acc-detail panel (see renderAccDetail) instead of
 // expanding inline, since the vault is now a persistent list+detail split
 // rather than an accordion.
+// Links changed in the editor: the list's avatars follow (an item without a
+// website shows a related login's icon), without rebuilding the rows.
+function refreshVaultAvatars() {
+  for (const row of document.querySelectorAll('#accounts-list .acc-row')) {
+    const acc = draft[row.dataset.i];
+    const av = row.querySelector('.acc-head .acc-av');
+    if (acc && av) av.replaceWith(avatarNode(acc, 'acc-av-md'));
+  }
+}
+
 function rebuildAccountsDOM() {
   const container = document.getElementById('accounts-list');
   container.innerHTML = '';
@@ -2264,6 +2274,7 @@ function mountRelated(body, entry) {
       syncOpenAccToDraft();
       unlinkEntries(entry, target);
       renderAccDetail();
+      refreshVaultAvatars();
     });
   });
 
@@ -2288,6 +2299,7 @@ function mountRelated(body, entry) {
       syncOpenAccToDraft();
       setLinks(entry, [...linksOf(entry), btn.dataset.id]);
       renderAccDetail();
+      refreshVaultAvatars();
     }));
   };
   section.querySelector('.rel-link').addEventListener('click', e => {
