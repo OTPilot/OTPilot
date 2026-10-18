@@ -55,12 +55,15 @@ const EmailCodes = (() => {
     });
   }
 
-  // An HTML page (Gmail's print view of a message) as plain text.
+  // An HTML page (Gmail's print view of a message) as plain text. Block
+  // elements and cells break the text; inline ones don't, so a code styled
+  // digit by digit (<span>604</span><span>281</span>) stays one number.
+  const BLOCK_TAG = /<\/?(p|div|br|tr|td|th|li|ul|ol|table|tbody|thead|h[1-6]|blockquote|section|article|header|footer|center|hr)\b[^>]*>/gi;
   function htmlText(html) {
     return decodeEntities(String(html || '')
-      .replace(/<(script|style|head)\b[\s\S]*?<\/\1>/gi, ' ')
-      .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, '\n')
-      .replace(/<[^>]+>/g, ' '))
+      .replace(/<(script|style|head|title)\b[\s\S]*?<\/\1>/gi, '\n')
+      .replace(BLOCK_TAG, '\n')
+      .replace(/<[^>]+>/g, ''))
       .replace(/[ \t\r\f\v]+/g, ' ');
   }
 
@@ -91,32 +94,27 @@ const EmailCodes = (() => {
     return { account, entries };
   }
 
-  // A host's name without subdomains or public suffix, roughly: online.bbva.com.ar
-  // → bbva, bbva.es → bbva, mail.notion.so → notion. Good enough to tell whether
-  // an email comes from the site being signed in to; not a security boundary on
-  // its own (see fromSite).
+  // A host's registrable domain, roughly (no Public Suffix List here):
+  // online.bbva.com.ar → bbva.com.ar, mail.notion.so → notion.so,
+  // accounts.google.com → google.com.
   const SECOND_LEVEL = new Set(['com', 'co', 'org', 'net', 'gov', 'gob', 'edu', 'ac', 'or', 'ne', 'go', 'mil', 'nom']);
-  function siteName(host) {
+  function registrableDomain(host) {
     const labels = String(host || '').toLowerCase().replace(/\.+$/, '').split('.').filter(Boolean);
-    if (labels.length < 2) return labels[0] || '';
-    labels.pop();
-    if (labels.length > 1 && SECOND_LEVEL.has(labels[labels.length - 1])) labels.pop();
-    return labels[labels.length - 1];
+    const n = labels.length;
+    const keep = n >= 3 && labels[n - 1].length === 2 && SECOND_LEVEL.has(labels[n - 2]) ? 3 : 2;
+    return labels.slice(-keep).join('.');
   }
 
-  // Whether an email is from the site at `pageHost`: the sender's domain has the
-  // same name, or the name is a word of the sender's name / subject / snippet
-  // ("Tu código de belo"). A page on another site never gets the code, so a page
-  // can't show a code field and collect the code another site just emailed.
+  // Whether an email was sent by the site at `pageHost`: the sender's address
+  // is on the same registrable domain (security@mail.bbva.es for
+  // online.bbva.es). Nothing weaker — not a word of the subject, not the same
+  // name under another ending (bbva.xyz) —, so a page can't show a code field
+  // and collect the code another site just emailed.
   function fromSite(entry, pageHost) {
-    const name = siteName(pageHost);
-    if (name.length < 2) return false;
-    const senderHost = (entry.authorEmail || '').split('@')[1] || '';
-    if (senderHost && siteName(senderHost) === name) return true;
-    const words = `${entry.author || ''} ${entry.title || ''} ${entry.summary || ''}`.toLowerCase();
-    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(^|[^\\p{L}\\p{N}])${esc}([^\\p{L}\\p{N}]|$)`, 'u').test(words);
+    const page = registrableDomain(pageHost);
+    const sender = (entry.authorEmail || '').split('@')[1] || '';
+    return !!page && !!sender && registrableDomain(sender) === page;
   }
 
-  return { CODE_RE, OTP_KEYWORDS, pickBestCode, decodeEntities, htmlText, parseFeed, siteName, fromSite };
+  return { CODE_RE, OTP_KEYWORDS, pickBestCode, decodeEntities, htmlText, parseFeed, registrableDomain, fromSite };
 })();

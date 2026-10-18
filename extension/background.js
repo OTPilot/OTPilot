@@ -585,14 +585,25 @@ let _emailOtp = null;
 // no Gmail tab. Only recent emails from the site asking (EmailCodes.fromSite)
 // count; when the snippet doesn't hold the code, the message's print view is
 // read (best effort). Nothing is stored: feed answers live 4 s in memory, and
-// codes handed out are remembered (not reused) for 15 min.
+// codes handed out are remembered (not reused) for 15 min in session storage.
 const GMAIL_MAX_ACCOUNTS = 4;          // /u/0 … /u/3, the browser's signed-in Gmail accounts
 const EMAIL_CODE_MAX_AGE_MS = 10 * 60 * 1000;
 const GMAIL_FEED_TTL_MS = 4000;        // pages poll every few seconds: one read for all of them
+const GMAIL_TIMEOUT_MS = 3000;         // per request, body included: a slow Gmail never holds up the other sources
 let _gmailFeed = null;                 // { at, entries: [{ …entry, u }] }
 let _gmailFeedLoading = null;
 const _gmailBodies = new Map();        // `${u}:${messageId}` → text | null (print view)
-const _usedEmailCodes = new Map();     // code → handed out at (ms)
+const USED_EMAIL_CODES_MS = 15 * 60 * 1000;
+
+const gmailFetchOptions = () => ({ credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(GMAIL_TIMEOUT_MS) });
+
+// Codes handed out, { code: at } in chrome.storage.session: the worker can be
+// stopped between two sign-ins, and the old email is still unread.
+async function usedEmailCodes() {
+  const { usedEmailCodes = {} } = await chrome.storage.session.get('usedEmailCodes');
+  const now = Date.now();
+  return Object.fromEntries(Object.entries(usedEmailCodes).filter(([, at]) => now - at <= USED_EMAIL_CODES_MS));
+}
 
 async function gmailFeedEntries() {
   if (_gmailFeed && Date.now() - _gmailFeed.at < GMAIL_FEED_TTL_MS) return _gmailFeed.entries;
@@ -602,7 +613,7 @@ async function gmailFeedEntries() {
     for (let u = 0; u < GMAIL_MAX_ACCOUNTS; u++) {
       let xml;
       try {
-        const res = await fetch(`https://mail.google.com/mail/u/${u}/feed/atom`, { credentials: 'include', cache: 'no-store' });
+        const res = await fetch(`https://mail.google.com/mail/u/${u}/feed/atom`, gmailFetchOptions());
         if (!res.ok || !/xml/i.test(res.headers.get('content-type') || '')) break; // signed out / no such account
         xml = await res.text();
       } catch { break; }
@@ -626,7 +637,7 @@ async function gmailMessageText(u, messageId) {
   let text = null;
   try {
     const res = await fetch(`https://mail.google.com/mail/u/${u}/?view=pt&search=all&th=${encodeURIComponent(messageId)}`,
-      { credentials: 'include', cache: 'no-store' });
+      gmailFetchOptions());
     if (res.ok && new URL(res.url).hostname === 'mail.google.com') text = EmailCodes.htmlText(await res.text());
   } catch { /* best effort */ }
   if (_gmailBodies.size > 50) _gmailBodies.clear();
@@ -636,24 +647,24 @@ async function gmailMessageText(u, messageId) {
 
 async function gmailFeedCode(pageHost, expectedLength) {
   const now = Date.now();
-  for (const [code, at] of _usedEmailCodes) if (now - at > 15 * 60 * 1000) _usedEmailCodes.delete(code);
   const recent = (await gmailFeedEntries())
     .filter(e => now - e.issued <= EMAIL_CODE_MAX_AGE_MS && EmailCodes.fromSite(e, pageHost))
     .sort((a, b) => b.issued - a.issued);
-  const fresh = code => code && !_usedEmailCodes.has(code) ? code : null;
+  if (!recent.length) return null;
+  const used = await usedEmailCodes();
+  const fresh = code => code && !(code in used) ? code : null;
+  // Newest email first, its snippet then (for the newest 3) the whole message:
+  // the snippet is the email's first ~100 characters. An older email's code
+  // never wins over a newer one that holds its code further down.
   let code = null;
-  for (const e of recent) {
+  for (const [i, e] of recent.entries()) {
     code = fresh(EmailCodes.pickBestCode(`${e.title}\n${e.summary}`, expectedLength));
+    if (!code && i < 3 && e.messageId) {
+      code = fresh(EmailCodes.pickBestCode(await gmailMessageText(e.u, e.messageId), expectedLength));
+    }
     if (code) break;
   }
-  // The snippet is the email's first ~100 characters: read the newest few
-  // whole when the code sits further down.
-  for (const e of code ? [] : recent.slice(0, 3)) {
-    if (!e.messageId) continue;
-    code = fresh(EmailCodes.pickBestCode(await gmailMessageText(e.u, e.messageId), expectedLength));
-    if (code) break;
-  }
-  if (code) _usedEmailCodes.set(code, now);
+  if (code) await chrome.storage.session.set({ usedEmailCodes: { ...used, [code]: now } });
   return code;
 }
 
