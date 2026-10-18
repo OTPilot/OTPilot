@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, TEST_SECRET } from './fixtures.js';
+import { test, expect, seedUnlocked, waitForVault, writeAccounts, TEST_SECRET } from './fixtures.js';
 
 // 1×1 transparent PNG as a data URL — stands in for a cached favicon.
 const PNG_DATA_URL =
@@ -116,4 +116,119 @@ test('a download finishing after the update cleanup does not bring back "no icon
     return (await chrome.storage.local.get('iconCache')).iconCache;
   });
   expect(Object.keys(cache)).toEqual(['slow.test']);
+});
+
+test('an item with no website shows the icon of a related login', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedUnlocked(page, { accounts: [], obfuscated: false });
+  await page.reload();
+  await waitForVault(page);
+  await writeAccounts(page, [
+    { name: 'GitHub', email: 'a', secret: '', urls: 'github.com', password: 'p' },
+    { name: 'Acme', email: 'b', secret: '', urls: 'acme.test', password: 'p' },
+  ]);
+  await page.evaluate(async dataUrl => {
+    const key = await VaultKeys.getKey();
+    const { items } = await VaultStore.readAll(key);
+    const github = items.find(i => i.title === 'GitHub');
+    const acme = items.find(i => i.title === 'Acme');
+    // Links Acme first (no icon), then GitHub: the first one with an icon wins.
+    const codes = Vault.newItem('note', { title: 'Backup codes', links: [acme.id, github.id] });
+    const linkedBack = Vault.newItem('note', { title: 'Linked back' });
+    const alone = Vault.newItem('note', { title: 'Alone' });
+    await VaultStore.save([codes, linkedBack, alone, { ...github, links: [linkedBack.id] }], key);
+    await chrome.storage.local.set({ iconCache: { 'github.com': { dataUrl, fetchedAt: Date.now() } } });
+  }, PNG_DATA_URL);
+  await page.reload();
+  await waitForVault(page);
+  await page.click('#nav-settings');
+
+  const row = name => page.locator('.acc-head', { hasText: name });
+  await expect(row('Backup codes').locator('img.acc-av')).toHaveAttribute('src', PNG_DATA_URL);
+  await expect(row('Linked back').locator('img.acc-av')).toHaveAttribute('src', PNG_DATA_URL);
+  await expect(row('Alone').locator('span.acc-av')).toHaveCount(1);
+  await expect(row('Acme').locator('span.acc-av')).toHaveCount(1);
+});
+
+// A note linked to the GitHub login, with GitHub's icon cached or not.
+async function noteLinkedToGitHub(context, extensionId, { cached }) {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedUnlocked(page, { accounts: [], obfuscated: false });
+  await page.reload();
+  await waitForVault(page);
+  await writeAccounts(page, [{ name: 'GitHub', email: 'a', secret: '', urls: 'github.com', password: 'p' }]);
+  await page.evaluate(async ([dataUrl, cached]) => {
+    const key = await VaultKeys.getKey();
+    const { items } = await VaultStore.readAll(key);
+    const github = items.find(i => i.title === 'GitHub');
+    await VaultStore.save([Vault.newItem('note', { title: 'Backup codes', links: [github.id] })], key);
+    await chrome.storage.local.set({ iconCache: cached ? { 'github.com': { dataUrl, fetchedAt: Date.now() } } : {} });
+  }, [PNG_DATA_URL, cached]);
+  return page;
+}
+
+test('deleting the related login in the vault drops its icon from the note before saving', async ({ context, extensionId }) => {
+  const page = await noteLinkedToGitHub(context, extensionId, { cached: true });
+  await page.reload();
+  await waitForVault(page);
+  await page.click('#nav-settings');
+  const note = page.locator('.acc-head', { hasText: 'Backup codes' });
+  await expect(note.locator('img.acc-av')).toHaveCount(1);
+
+  await page.locator('.acc-head', { hasText: 'GitHub' }).click();
+  page.once('dialog', d => d.accept());
+  await page.click('#acc-detail .btn-del:not(.btn-merge)');
+  await expect(page.locator('.acc-head', { hasText: 'GitHub' })).toHaveCount(0);
+  await expect(note.locator('span.acc-av')).toHaveCount(1);
+});
+
+test('Home shows a related note\'s icon once it is downloaded, keeping what was revealed', async ({ context, extensionId }) => {
+  const png = Buffer.from(PNG_DATA_URL.split(',')[1], 'base64');
+  let release;
+  const held = new Promise(r => { release = r; });
+  await context.route('**/icons/resolve', route => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ 'github.com': { status: 'ok', url: 'https://icons.example/github.com.png' } }),
+  }));
+  await context.route('https://icons.example/**', async route => { await held; route.fulfill({ contentType: 'image/png', body: png }); });
+
+  const page = await noteLinkedToGitHub(context, extensionId, { cached: false });
+  await page.reload();
+  await waitForVault(page);
+  await page.locator('#home-list .lc-row', { hasText: 'GitHub' }).click();
+  const row = page.locator('#home-creds .home-rel-head', { hasText: 'Backup codes' });
+  await expect(row.locator('span.acc-av')).toHaveCount(1);
+  // A password shown before the icon lands stays shown (no rebuild).
+  const password = page.locator('#home-creds .home-cred', { hasText: 'Password' });
+  await password.locator('.home-cred-btn', { hasText: 'Show' }).click();
+  await expect(password.locator('.home-cred-value')).toHaveText('p');
+
+  release();
+  await expect(row.locator('img.acc-av')).toHaveCount(1);
+  await expect(password.locator('.home-cred-value')).toHaveText('p');
+});
+
+test('linking and unlinking a login in the editor updates the note\'s icon in the list', async ({ context, extensionId }) => {
+  const page = await noteLinkedToGitHub(context, extensionId, { cached: true });
+  await page.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    await VaultStore.save([Vault.newItem('note', { title: 'Loose note' })], key);
+  });
+  await page.reload();
+  await waitForVault(page);
+  await page.click('#nav-settings');
+  const note = page.locator('.acc-head', { hasText: 'Loose note' });
+  await expect(note.locator('span.acc-av')).toHaveCount(1);
+
+  await note.click();
+  await page.click('#acc-detail .rel-link');
+  await page.fill('#acc-detail .rel-search', 'GitHub');
+  await page.locator('#acc-detail .rel-option', { hasText: 'GitHub' }).click();
+  await expect(note.locator('img.acc-av')).toHaveAttribute('src', PNG_DATA_URL);
+
+  await page.locator('#acc-detail .rel-row', { hasText: 'GitHub' }).locator('.rel-unlink').click();
+  await expect(note.locator('span.acc-av')).toHaveCount(1);
 });

@@ -454,7 +454,26 @@ function accountIconDomain(acc) {
 function accountIconDataUrl(acc) {
   const d = accountIconDomain(acc);
   const e = d && iconCache[d];
-  return e && e.dataUrl ? e.dataUrl : null;
+  if (e && e.dataUrl) return e.dataUrl;
+  return d ? null : relatedIconDataUrl(acc);
+}
+
+// An item with no website of its own (a note, a key…) shows the icon of a
+// related login: the first one it links that has an icon, else the first
+// that links it. While the vault is open its draft is the list (unsaved links
+// and deletions count), elsewhere the saved logins.
+function relatedIconDataUrl(acc) {
+  if (acc._kind !== 'item' || !acc._id) return null;
+  const vaultOpen = document.getElementById('settings-panel')?.style.display !== 'none';
+  const list = vaultOpen ? draft.filter(d => !d._kind) : accounts;
+  const logins = new Map(list.filter(a => a._id).map(a => [a._id, a]));
+  const own = (acc.item?.links || []).map(id => logins.get(id)).filter(Boolean);
+  const back = [...logins.values()].filter(a => (a.links || []).includes(acc._id));
+  for (const login of [...own, ...back]) {
+    const e = iconCache[accountIconDomain(login)];
+    if (e && e.dataUrl) return e.dataUrl;
+  }
+  return null;
 }
 
 function avatarHTML(acc, extraClass = '') {
@@ -515,6 +534,7 @@ function requestIcons(hints = {}) {
     Object.assign(iconCache, updated);
     renderAccountBar();
     refreshDisplay(); // the big icon above the code only knows the real favicon once this lands
+    refreshHomeRelatedAvatars();
     // Refresh vault rows too, but only when no row is being edited.
     if (document.getElementById('settings-panel')?.style.display !== 'none' && openAccIdx < 0) {
       rebuildAccountsDOM();
@@ -944,6 +964,19 @@ function homeItemRows(item) {
   return rows;
 }
 
+const homeRelatedAvatar = r => r.acc || { _kind: 'item', _id: r.id, name: r.name, item: r.item };
+
+// An icon downloaded after Home rendered: swap the related rows' avatars in
+// place (a rebuild would hide a secret the user revealed).
+function refreshHomeRelatedAvatars() {
+  const entries = new Map(homeVaultEntries().map(e => [e.id, e]));
+  for (const btn of document.querySelectorAll('#home-creds .home-rel-head[data-rel-id]')) {
+    const r = entries.get(btn.dataset.relId);
+    const av = btn.querySelector('.acc-av');
+    if (r && av) av.replaceWith(avatarNode(homeRelatedAvatar(r), 'acc-av-sm'));
+  }
+}
+
 function renderHomeCreds(acc) {
   const related = homeRelated(acc);
   const key = acc ? JSON.stringify([_teamPlan, _sharingRev, acc._id, acc.email || '', acc.password || '', acc.urls || '', acc.notes || '', acc.customFields || [],
@@ -984,8 +1017,9 @@ function renderHomeCreds(acc) {
       const open = r.kind !== 'login' && _homeOpenRelated.has(r.id);
       const btn = document.createElement('button');
       btn.className = 'home-rel-head';
+      btn.dataset.relId = r.id;
       btn.setAttribute('aria-expanded', String(open));
-      btn.innerHTML = `${avatarHTML(r.acc || { name: r.name }, 'acc-av-sm')}<span class="home-rel-text"><span class="home-rel-name"></span><span class="home-rel-sub"></span></span><span class="home-rel-chev">${r.kind === 'login' ? '›' : open ? '▾' : '▸'}</span>`;
+      btn.innerHTML = `${avatarHTML(homeRelatedAvatar(r), 'acc-av-sm')}<span class="home-rel-text"><span class="home-rel-name"></span><span class="home-rel-sub"></span></span><span class="home-rel-chev">${r.kind === 'login' ? '›' : open ? '▾' : '▸'}</span>`;
       btn.querySelector('.home-rel-name').textContent = r.name;
       btn.querySelector('.home-rel-sub').textContent = r.kind === 'login' ? ['Login', r.sub].filter(Boolean).join(' · ') : r.sub;
       btn.addEventListener('click', () => {
@@ -1420,6 +1454,16 @@ function renderVaultFilters() {
 // lives in the separate #acc-detail panel (see renderAccDetail) instead of
 // expanding inline, since the vault is now a persistent list+detail split
 // rather than an accordion.
+// Links changed in the editor: the list's avatars follow (an item without a
+// website shows a related login's icon), without rebuilding the rows.
+function refreshVaultAvatars() {
+  for (const row of document.querySelectorAll('#accounts-list .acc-row')) {
+    const acc = draft[row.dataset.i];
+    const av = row.querySelector('.acc-head .acc-av');
+    if (acc && av) av.replaceWith(avatarNode(acc, 'acc-av-md'));
+  }
+}
+
 function rebuildAccountsDOM() {
   const container = document.getElementById('accounts-list');
   container.innerHTML = '';
@@ -2230,6 +2274,7 @@ function mountRelated(body, entry) {
       syncOpenAccToDraft();
       unlinkEntries(entry, target);
       renderAccDetail();
+      refreshVaultAvatars();
     });
   });
 
@@ -2254,6 +2299,7 @@ function mountRelated(body, entry) {
       syncOpenAccToDraft();
       setLinks(entry, [...linksOf(entry), btn.dataset.id]);
       renderAccDetail();
+      refreshVaultAvatars();
     }));
   };
   section.querySelector('.rel-link').addEventListener('click', e => {
