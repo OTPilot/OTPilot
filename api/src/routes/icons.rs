@@ -609,17 +609,31 @@ mod tests {
     use super::{extract_icon_hrefs, fetch_icon_png, ip_is_public};
 
     /// The configured bucket (S3_* env, e.g. `set -a; . ./.env`): stores
-    /// github.com's real icon (what the API would) and reads it back.
+    /// github.com's icon under a fresh key, reads the same bytes back from the
+    /// public URL, then deletes it.
     #[tokio::test]
     #[ignore]
     async fn stores_icon_in_bucket() {
         let store = super::IconStore::from_env().expect("S3_* env");
-        let stored = super::fetch_and_store(&store, "github.com", None)
+        let png = fetch_icon_png("github.com", None)
             .await
-            .expect("put");
-        assert!(stored);
-        let got = reqwest::get(store.public_url("github.com")).await.unwrap();
-        assert!(got.status().is_success(), "{}", got.status());
+            .expect("github.com icon");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let key = format!("otpilot-test-{nanos}.invalid");
+        store.put_png(&key, &png).await.expect("put");
+        let got = reqwest::get(store.public_url(&key)).await.unwrap();
+        let ok = got.status().is_success();
+        let bytes = got.bytes().await.unwrap();
+        store
+            .bucket
+            .delete_object(format!("/icons/{key}.png"))
+            .await
+            .expect("delete");
+        assert!(ok);
+        assert_eq!(bytes.as_ref(), png.as_slice());
     }
 
     /// Real sites (network): `cargo test icons -- --ignored`.
