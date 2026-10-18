@@ -1,6 +1,17 @@
 # Changelog
 
 
+## v2.1.6
+
+### Extension
+
+- Codes sent by email are filled without opening the email or Gmail: OTPilot reads the recent unread emails of your browser's Gmail session (no extra permission or sign-in) and takes the code from an email of the site you're signing in to, sent in the last 10 minutes — the newest one first, read whole when the code is past the preview. A page never gets a code another site sent. It keeps looking for 3 minutes. Open Outlook, Yahoo, Proton, Fastmail and Zoho tabs still work as before.
+
+### API
+
+- Site icons: more sites get theirs — fetched like a browser (some sites refused the old fetcher), from the CDN a site points to, and from a favicon service as a last resort; sites with no icon so far are asked again.
+
+
 ## v2.1.5
 
 ### Extension
