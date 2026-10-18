@@ -11,7 +11,8 @@
     "build": "tsc -b && vite-react-ssg build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "postinstall": "node scripts/patch-vite-react-ssg.mjs"
   },
   "dependencies": {
     "@sentry/react": "^10.57.0",
@@ -20,7 +21,7 @@
     "@vercel/analytics": "^2.0.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-router-dom": "^6.26.2",
+    "react-router-dom": "^7.18.4",
     "vite-react-ssg": "^0.9.1"
   },
   "devDependencies": {
@@ -37,7 +38,12 @@
     "tailwindcss": "^4.3.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
-    "vite": "^8.0.12",
-    "vitest": "^3.2.7"
+    "vite": "^8.3.4",
+    "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "vite-react-ssg": {
+      "react-router-dom": "$react-router-dom"
+    }
   }
 }
