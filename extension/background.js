@@ -1035,20 +1035,24 @@ async function resolveIconUrls(domains, hints) {
 // `prune` is set when `rawDomains` is the full current account set (popup), so
 // stale iconCache entries for deleted accounts can be evicted. It must NOT be set
 // for single-domain calls (e.g. enrollment) or they'd wipe the rest of the cache.
+// Every change to `iconCache` is a read-modify-write of the whole object, run
+// one at a time here (`fn(cache)` edits it, returns true to save), so one
+// writer never puts back entries another just removed.
+let _iconCacheQueue = Promise.resolve();
+function updateIconCache(fn) {
+  const run = _iconCacheQueue.then(async () => {
+    const { iconCache = {} } = await chrome.storage.local.get('iconCache');
+    if (fn(iconCache)) await chrome.storage.local.set({ iconCache });
+  });
+  _iconCacheQueue = run.catch(() => {});
+  return run;
+}
+
 async function handleResolveIcons(rawDomains, hints, prune) {
   const domains = [...new Set(rawDomains.map(normalizeIconDomain).filter(Boolean))];
   if (!domains.length) return {};
 
-  const { iconCache = {} } = await new Promise(r => chrome.storage.local.get('iconCache', r));
-  let changed = false;
-
-  // Evict cached icons for domains no longer present in the account set.
-  if (prune) {
-    const keep = new Set(domains);
-    for (const d of Object.keys(iconCache)) {
-      if (!keep.has(d)) { delete iconCache[d]; changed = true; }
-    }
-  }
+  const { iconCache = {} } = await chrome.storage.local.get('iconCache');
 
   // Remap hints onto normalized domains.
   const normHints = {};
@@ -1073,22 +1077,34 @@ async function handleResolveIcons(rawDomains, hints, prune) {
     const resolved = await resolveIconUrls(need, normHints);
     for (const d of need) {
       const info = resolved[d] || {};
-      if (info.none) { iconCache[d] = updated[d] = { dataUrl: null, fetchedAt: now }; continue; }
+      if (info.none) { updated[d] = { dataUrl: null, fetchedAt: now }; continue; }
       if (!info.url) continue; // unknown/pending → retry later, don't cache
       try {
         const r = await fetch(info.url);
         if (r.ok) {
           const buf = await r.arrayBuffer();
           const ct  = r.headers.get('content-type') || 'image/png';
-          iconCache[d] = updated[d] = { dataUrl: bytesToDataUrl(buf, ct), fetchedAt: now };
+          updated[d] = { dataUrl: bytesToDataUrl(buf, ct), fetchedAt: now };
         }
         // non-ok (e.g. 404 on a CDN guess) → leave uncached so it retries later
       } catch { /* transient — leave uncached to retry */ }
     }
-    if (Object.keys(updated).length) changed = true;
   }
 
-  if (changed) await new Promise(r => chrome.storage.local.set({ iconCache }, r));
+  // Written against the cache as it is now (not the copy read above, which a
+  // download may have outlived): this call's results, and the eviction of
+  // domains no longer in the account set.
+  await updateIconCache(cache => {
+    let changed = false;
+    if (prune) {
+      const keep = new Set(domains);
+      for (const d of Object.keys(cache)) {
+        if (!keep.has(d)) { delete cache[d]; changed = true; }
+      }
+    }
+    for (const [d, e] of Object.entries(updated)) { cache[d] = e; changed = true; }
+    return changed;
+  });
   return updated;
 }
 
@@ -1298,8 +1314,21 @@ async function setUninstallSurvey() {
 
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   if (reason === 'install') await chrome.storage.local.set({ installedAt: Date.now() });
+  if (reason === 'update') await forgetMissingIcons();
   setUninstallSurvey();
 });
+
+// A new version may come with a server that finds more icons: drop the cached
+// "no icon" answers so they're asked again now, not after ICON_NONE_TTL_MS.
+function forgetMissingIcons() {
+  return updateIconCache(cache => {
+    let changed = false;
+    for (const [d, e] of Object.entries(cache)) {
+      if (!e || !e.dataUrl) { delete cache[d]; changed = true; }
+    }
+    return changed;
+  });
+}
 chrome.runtime.onStartup.addListener(setUninstallSurvey);
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.userPlan) setUninstallSurvey();
