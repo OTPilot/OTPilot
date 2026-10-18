@@ -116,7 +116,7 @@ test('a download finishing after the update cleanup does not bring back "no icon
     return (await chrome.storage.local.get('iconCache')).iconCache;
   });
   expect(Object.keys(cache)).toEqual(['slow.test']);
-||||||| parent of 753cd9c (Icons: an item with no website shows its related login's icon)
+});
 
 test('an item with no website shows the icon of a related login', async ({ context, extensionId }) => {
   const page = await context.newPage();
