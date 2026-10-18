@@ -534,6 +534,7 @@ function requestIcons(hints = {}) {
     Object.assign(iconCache, updated);
     renderAccountBar();
     refreshDisplay(); // the big icon above the code only knows the real favicon once this lands
+    refreshHomeRelatedAvatars();
     // Refresh vault rows too, but only when no row is being edited.
     if (document.getElementById('settings-panel')?.style.display !== 'none' && openAccIdx < 0) {
       rebuildAccountsDOM();
@@ -965,10 +966,21 @@ function homeItemRows(item) {
 
 const homeRelatedAvatar = r => r.acc || { _kind: 'item', _id: r.id, name: r.name, item: r.item };
 
+// An icon downloaded after Home rendered: swap the related rows' avatars in
+// place (a rebuild would hide a secret the user revealed).
+function refreshHomeRelatedAvatars() {
+  const entries = new Map(homeVaultEntries().map(e => [e.id, e]));
+  for (const btn of document.querySelectorAll('#home-creds .home-rel-head[data-rel-id]')) {
+    const r = entries.get(btn.dataset.relId);
+    const av = btn.querySelector('.acc-av');
+    if (r && av) av.replaceWith(avatarNode(homeRelatedAvatar(r), 'acc-av-sm'));
+  }
+}
+
 function renderHomeCreds(acc) {
   const related = homeRelated(acc);
   const key = acc ? JSON.stringify([_teamPlan, _sharingRev, acc._id, acc.email || '', acc.password || '', acc.urls || '', acc.notes || '', acc.customFields || [],
-    related.map(r => [r.id, r.name, r.item?.updatedAt || r.acc?._updatedAt || '', !!accountIconDataUrl(homeRelatedAvatar(r))]), [..._homeOpenRelated]]) : '';
+    related.map(r => [r.id, r.name, r.item?.updatedAt || r.acc?._updatedAt || '']), [..._homeOpenRelated]]) : '';
   if (key === _homeCredsKey) return;
   _homeCredsKey = key;
   const box = document.getElementById('home-creds');
@@ -1005,6 +1017,7 @@ function renderHomeCreds(acc) {
       const open = r.kind !== 'login' && _homeOpenRelated.has(r.id);
       const btn = document.createElement('button');
       btn.className = 'home-rel-head';
+      btn.dataset.relId = r.id;
       btn.setAttribute('aria-expanded', String(open));
       btn.innerHTML = `${avatarHTML(homeRelatedAvatar(r), 'acc-av-sm')}<span class="home-rel-text"><span class="home-rel-name"></span><span class="home-rel-sub"></span></span><span class="home-rel-chev">${r.kind === 'login' ? '›' : open ? '▾' : '▸'}</span>`;
       btn.querySelector('.home-rel-name').textContent = r.name;

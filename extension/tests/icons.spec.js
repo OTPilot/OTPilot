@@ -186,7 +186,7 @@ test('deleting the related login in the vault drops its icon from the note befor
   await expect(note.locator('span.acc-av')).toHaveCount(1);
 });
 
-test('Home shows a related note\'s icon once it is downloaded', async ({ context, extensionId }) => {
+test('Home shows a related note\'s icon once it is downloaded, keeping what was revealed', async ({ context, extensionId }) => {
   const png = Buffer.from(PNG_DATA_URL.split(',')[1], 'base64');
   let release;
   const held = new Promise(r => { release = r; });
@@ -201,7 +201,12 @@ test('Home shows a related note\'s icon once it is downloaded', async ({ context
   await page.locator('#home-list .lc-row', { hasText: 'GitHub' }).click();
   const row = page.locator('#home-creds .home-rel-head', { hasText: 'Backup codes' });
   await expect(row.locator('span.acc-av')).toHaveCount(1);
+  // A password shown before the icon lands stays shown (no rebuild).
+  const password = page.locator('#home-creds .home-cred', { hasText: 'Password' });
+  await password.locator('.home-cred-btn', { hasText: 'Show' }).click();
+  await expect(password.locator('.home-cred-value')).toHaveText('p');
 
   release();
   await expect(row.locator('img.acc-av')).toHaveCount(1);
+  await expect(password.locator('.home-cred-value')).toHaveText('p');
 });
