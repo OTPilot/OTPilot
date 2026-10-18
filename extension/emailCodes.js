@@ -98,10 +98,24 @@ const EmailCodes = (() => {
   // online.bbva.com.ar → bbva.com.ar, mail.notion.so → notion.so,
   // accounts.google.com → google.com.
   const SECOND_LEVEL = new Set(['com', 'co', 'org', 'net', 'gov', 'gob', 'edu', 'ac', 'or', 'ne', 'go', 'mil', 'nom']);
+  // Hosts where anyone gets a subdomain (the Public Suffix List's private
+  // section, its common ones): user.github.io is its own site, never github.io.
+  const SHARED_HOSTING = new Set([
+    'github.io', 'gitlab.io', 'vercel.app', 'netlify.app', 'herokuapp.com', 'pages.dev', 'workers.dev',
+    'web.app', 'firebaseapp.com', 'appspot.com', 'azurewebsites.net', 'cloudfront.net', 'blogspot.com',
+    'onrender.com', 'fly.dev', 'glitch.me', 'repl.co', 'replit.app', 'surge.sh', 'wordpress.com',
+    'myshopify.com', 'wixsite.com', 'squarespace.com', 'webflow.io', 'framer.app', 'ngrok.io', 'ngrok-free.app',
+    'amplifyapp.com', 'azurestaticapps.net', 'cloudflareaccess.com', 's3.amazonaws.com', 'deno.dev', 'railway.app',
+    'up.railway.app', 'supabase.co', 'notion.site', 'carrd.co', 'neocities.org', 'bitbucket.io', 'readthedocs.io',
+  ]);
   function registrableDomain(host) {
     const labels = String(host || '').toLowerCase().replace(/\.+$/, '').split('.').filter(Boolean);
     const n = labels.length;
-    const keep = n >= 3 && labels[n - 1].length === 2 && SECOND_LEVEL.has(labels[n - 2]) ? 3 : 2;
+    let keep = n >= 3 && labels[n - 1].length === 2 && SECOND_LEVEL.has(labels[n - 2]) ? 3 : 2;
+    // Longest shared-hosting suffix → one more label (the tenant).
+    for (let k = Math.min(n - 1, 3); k >= 2; k--) {
+      if (SHARED_HOSTING.has(labels.slice(-k).join('.'))) { keep = k + 1; break; }
+    }
     return labels.slice(-keep).join('.');
   }
 

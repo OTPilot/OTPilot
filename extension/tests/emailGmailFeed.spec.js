@@ -118,3 +118,16 @@ test('a code handed out is not filled again', async ({ context, extensionId }) =
   await again.waitForTimeout(4000);
   await expect(again.locator('#result')).toHaveText('');
 });
+
+test('two pages at once: one gets the code; a new email with the same digits is a new code', async ({ context, extensionId }) => {
+  await setup(context, extensionId);
+  const entries = [entry({ title: 'Your code', summary: 'Your verification code is 482913', id: 'c1' })];
+  await routeGmail(context, entries);
+  const [a, b] = await Promise.all([openOtpPage(context), openOtpPage(context)]);
+  await a.waitForTimeout(4000);
+  const filled = [await a.locator('#result').textContent(), await b.locator('#result').textContent()];
+  expect(filled.filter(t => t === 'Filled: 482913')).toHaveLength(1);
+  entries.push(entry({ title: 'Your code', summary: 'Your verification code is 482913', minutesAgo: 0, id: 'c2' }));
+  const other = filled[0] ? b : a;
+  await expect(other.locator('#result')).toHaveText('Filled: 482913', { timeout: 10000 });
+});
