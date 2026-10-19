@@ -20,6 +20,10 @@ const faqs = [
     a: `Yes, without ever seeing them. Connect Claude Code, Codex, Cursor or any MCP agent, approve it in the extension, and allow it the accounts it may use, one by one. The agent asks OTPilot to sign in or run a command; OTPilot uses the password and 2FA code itself and returns only the result. Free covers ${FREE_AGENTS} agent with up to ${FREE_AGENT_ACCOUNTS} accounts; Personal and Team are unlimited.`,
   },
   {
+    q: 'Can I try Personal before paying?',
+    a: 'Yes. A new account gets 30 days of Personal free, with no card: sync your whole vault across every browser while it lasts. An account created earlier on the free plan can start the same trial from the billing page or the extension\'s Sync view, once. When it ends you go back to Free and nothing is deleted. Subscribing with more than two days of the trial left keeps them free: the first charge comes when the trial would have ended.',
+  },
+  {
     q: 'How does billing work? Can I cancel?',
     a: 'Personal is $3/month or $30/year; Team Lite is $8/month or $80/year per workspace. Plans renew automatically and you can cancel anytime from the billing page; you keep the plan until the end of the period you paid for. After that your vault stays on your devices, on the free plan: if you have more than 50 items you keep all of them, you just can\'t add new ones until you\'re back under the limit or upgrade again.',
   },

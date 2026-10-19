@@ -2,21 +2,8 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/api'
-
-type UserData = { id: string; plan: string; personal_subscription?: boolean; created_at: string }
-
-function useUserPlan(forceRefresh: boolean) {
-  return useQuery<UserData>({
-    queryKey: ['user-plan'],
-    queryFn: async () => {
-      const res = await apiFetch('/auth/sync-user', { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to load plan')
-      return res.json()
-    },
-    staleTime: forceRefresh ? 0 : 60_000,
-    refetchOnMount: forceRefresh ? 'always' : true,
-  })
-}
+import { formatTrialEnd, trialCarriesOver, useUserPlan } from '../../lib/plan'
+import TrialCard from './TrialCard'
 
 export default function Billing() {
   const [params] = useSearchParams()
@@ -64,7 +51,10 @@ export default function Billing() {
   })
 
   const plan = userData?.plan ?? 'free'
-  const isPaid = plan === 'personal' || plan === 'team_lite' || plan === 'team_pro'
+  // On the trial `plan` is personal, but subscribing is still open.
+  const isTrial = !!userData?.trial_active
+  const isPaid = (plan === 'personal' && !isTrial) || plan === 'team_lite' || plan === 'team_pro'
+  const trialEnd = isTrial ? userData?.trial_ends_at : null
   const isTeam = plan === 'team_lite' || plan === 'team_pro'
   const isOwner = !!team && !!userData && team.owner_id === userData.id
   const isNonOwnerMember = isTeam && !!team && !isOwner
@@ -136,6 +126,8 @@ export default function Billing() {
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 
+      {userData && <TrialCard user={userData} showSubscribe={false} />}
+
       {/* Billing-period toggle (applies to Team Lite) */}
       <div className="flex justify-center">
         <div className="inline-flex items-center gap-2 p-1 rounded-xl bg-white/5 border border-white/10">
@@ -172,10 +164,14 @@ export default function Billing() {
           features={personalFeatures}
           current={plan === 'personal'}
           highlight={!isPaid}
-          cta={isPaid ? (plan === 'personal' ? 'Current plan' : null) : (upgrading ? 'Redirecting to Stripe…' : (yearly ? 'Upgrade — $30/yr' : 'Upgrade — $3/mo'))}
+          cta={isPaid ? (plan === 'personal' ? 'Current plan' : null) : (upgrading ? 'Redirecting to Stripe…' : `${isTrial ? 'Subscribe' : 'Upgrade'} — ${yearly ? '$30/yr' : '$3/mo'}`)}
           ctaDisabled={isPaid || isLoading}
           onCtaClick={!isPaid ? handleUpgrade : undefined}
-          ctaNote={!isPaid ? 'Secure payment via Stripe · cancel anytime' : undefined}
+          ctaNote={!isPaid
+            ? (trialEnd && trialCarriesOver(trialEnd)
+              ? `Your trial stays free: the first charge is on ${formatTrialEnd(trialEnd)} · cancel anytime`
+              : 'Secure payment via Stripe · cancel anytime')
+            : undefined}
         />
 
         {/* Team Lite */}
@@ -221,7 +217,7 @@ export default function Billing() {
         </div>
       )}
 
-      {isPaid && (
+      {(isPaid || userData?.personal_subscription) && (
         <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-zinc-200">Manage subscription</p>

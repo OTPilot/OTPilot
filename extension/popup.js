@@ -3497,6 +3497,7 @@ function accountsEditorBusy() {
 
 function refreshAccountsUI() {
   renderAccountBar();
+  renderHomeBanner();
   if (document.getElementById('settings-panel').style.display === 'none') return;
   if (accountsEditorBusy()) {
     setStatus('Synced — other changes appear after you save or cancel');
@@ -4949,6 +4950,7 @@ async function lockPopup() {
   await syncActiveIndexToUrl();
   if (_popupLocked) return;
   renderAccountBar();
+  renderHomeBanner();
   startTimer();
   renderSharedCodes();
   showView('home');
@@ -5008,7 +5010,12 @@ function syncSetStatus(state, text) {
 
 async function renderSyncPanel() {
   const session = await SupabaseAuth.getSession();
-  if (!session) { syncShowView('sv-signin'); return; }
+  if (!session) {
+    syncShowView('sv-signin');
+    await showEmailSignInStep();
+    CloudSync.trialOffered().then(on => { document.getElementById('signin-trial-hint').hidden = !on; });
+    return;
+  }
 
   let plan;
   try {
@@ -5024,16 +5031,20 @@ async function renderSyncPanel() {
   const email = session.user.email ?? '';
   const labels = { free: 'Free', personal: 'Personal', team_lite: 'Team', team_pro: 'Team Pro' };
 
+  const { userTrial: trial } = await chrome.storage.local.get('userTrial');
+
   if (!plan || !canSync(plan)) {
     document.getElementById('sync-avatar-free').textContent = (email[0] ?? '?').toUpperCase();
     document.getElementById('sync-email-free').textContent = email;
     document.getElementById('sync-plan-badge-free').textContent = labels[plan] ?? 'Free';
+    renderFreeTrial(trial);
     syncShowView('sv-free');
     return;
   }
 
   const badgeEl = document.getElementById('sync-plan-badge');
-  if (badgeEl) badgeEl.textContent = labels[plan] ?? plan ?? '';
+  if (badgeEl) badgeEl.textContent = trial?.active ? 'Personal · Trial' : (labels[plan] ?? plan ?? '');
+  renderTrialCard(trial);
 
   const avatar = document.getElementById('sync-avatar');
   if (avatar) avatar.textContent = (email[0] ?? '?').toUpperCase();
@@ -5067,6 +5078,271 @@ async function renderSyncPanel() {
     : 'Ready';
   syncSetStatus('idle', readyText);
 }
+
+// ── Personal trial ────────────────────────────────────────────────────────────
+// 30 days of Personal, no card (api/src/trial.rs). sync-user reports it
+// (`userTrial`: endsAt / active / available, CloudSync.syncUser); Home shows
+// at most one banner about it and the Sync view the days left.
+
+const TRIAL_DAYS = 30;
+const TRIAL_ENDING_DAYS = 3;        // the "ends in N days" banner, as the email
+const TRIAL_NUDGE_MIN_CODES = 3;    // 2FA codes saved before the sync nudge shows
+const TRIAL_NUDGE_SNOOZE_DAYS = 14;
+const TRIAL_NUDGE_MAX = 3;          // "Not now" this many times and it's gone
+const TRIAL_ENDED_BANNER_DAYS = 30;
+const DAY_MS = 864e5;
+
+const trialDaysLeft = endsAt => Math.max(0, Math.ceil((Date.parse(endsAt) - Date.now()) / DAY_MS));
+const trialDate = endsAt => new Date(endsAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const billingUrl = () => CONFIG.DASHBOARD_URL + '/dashboard/billing';
+
+// Which banner Home shows, if any: the trial ending, the trial over, or
+// (never had one) the nudge to try sync.
+async function homeBanner() {
+  const d = await chrome.storage.local.get(['cloudSession', 'userPlan', 'userTrial', 'trialBanner', 'trialUsedHere']);
+  const trial = d.userTrial, seen = d.trialBanner ?? {}, now = Date.now();
+  // The trial notices are about the signed-in account (a session that ended
+  // on its own leaves `userTrial` behind).
+  if (trial?.endsAt && !d.cloudSession) return null;
+  if (trial?.active && trial.endsAt) {
+    const left = trialDaysLeft(trial.endsAt);
+    if (left > TRIAL_ENDING_DAYS) return null;
+    // Hideable for a day, except on the last one.
+    if (left > 1 && seen.endingUntil > now) return null;
+    return { kind: 'ending', left, endsAt: trial.endsAt };
+  }
+  if (trial?.endsAt && (d.userPlan ?? 'free') === 'free') {
+    const ended = Date.parse(trial.endsAt);
+    if (ended > now || seen.endedDismissed || now - ended > TRIAL_ENDED_BANNER_DAYS * DAY_MS) return null;
+    return { kind: 'ended' };
+  }
+  if (d.trialUsedHere || (seen.nudgeDismissals ?? 0) >= TRIAL_NUDGE_MAX || seen.nudgeUntil > now) return null;
+  const codes = accounts.filter(a => a.secret).length;
+  if (codes < TRIAL_NUDGE_MIN_CODES) return null;
+  if (d.cloudSession) {
+    if ((d.userPlan ?? 'free') !== 'free' || !trial?.available) return null;
+  } else if (!(await CloudSync.trialOffered())) return null;
+  return { kind: 'nudge', codes, signedIn: !!d.cloudSession };
+}
+
+async function setTrialBanner(patch) {
+  const { trialBanner = {} } = await chrome.storage.local.get('trialBanner');
+  await chrome.storage.local.set({ trialBanner: { ...trialBanner, ...patch } });
+}
+
+const HB_ICONS = {
+  nudge:  '<path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 12 3.5 3.5 0 0 0 6 19z"/>',
+  ending: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  ended:  '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+};
+
+let _bannerRender = 0;
+async function renderHomeBanner() {
+  const el = document.getElementById('home-banner');
+  if (!el) return;
+  const run = ++_bannerRender;
+  let b = null;
+  try { b = await homeBanner(); } catch { /* storage / network: no banner */ }
+  if (run !== _bannerRender) return; // a newer render started meanwhile
+  if (!b) { el.hidden = true; el.replaceChildren(); return; }
+
+  const items = accounts.length + otherItems.length;
+  // What the Free limit counts (2FA-only logins don't).
+  const counted = b.kind === 'ended' ? Vault.countedItems([...accounts.map(a => Vault.fromV1Account(a)), ...otherItems]) : 0;
+  const copy = {
+    nudge: {
+      tone: '', title: `Your ${b.codes} codes live only in this browser`,
+      sub: 'Lose it and you lose them. Sync free for 30 days, no card.',
+      go: 'Try sync free', x: 'Not now',
+    },
+    ending: {
+      tone: 'warn',
+      title: b.left <= 1 ? 'Your trial ends within a day' : `Your trial ends in ${b.left} days`,
+      sub: b.endsAt ? `On ${trialDate(b.endsAt)} sync pauses. Nothing is deleted.` : '',
+      go: 'Keep sync', x: b.left > 1 ? 'Later' : null,
+    },
+    ended: {
+      tone: 'calm', title: 'Your trial ended. Sync is paused.',
+      sub: counted > Vault.FREE_ITEM_LIMIT
+        ? `Your ${items} items are safe on this device; you can keep editing them. Adding more needs Personal.`
+        : `Your ${items} ${items === 1 ? 'item is' : 'items are'} safe on this device. Subscribe to sync again.`,
+      go: 'Subscribe', x: 'Dismiss',
+    },
+  }[b.kind];
+
+  el.className = `home-banner ${copy.tone}`.trim();
+  el.innerHTML = `
+    <span class="hb-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${HB_ICONS[b.kind]}</svg></span>
+    <span class="hb-text"><b></b><span></span></span>
+    <button type="button" class="hb-go"></button>
+    ${copy.x ? '<button type="button" class="hb-x"></button>' : ''}`;
+  el.querySelector('.hb-text b').textContent = copy.title;
+  el.querySelector('.hb-text span').textContent = copy.sub;
+  const go = el.querySelector('.hb-go');
+  go.textContent = copy.go;
+  if (copy.x) el.querySelector('.hb-x').textContent = copy.x;
+  el.hidden = false;
+
+  go.onclick = async () => {
+    if (b.kind !== 'nudge') { chrome.tabs.create({ url: billingUrl() }); return; }
+    // Signed in: start it here. Otherwise the Sign in view (it says new
+    // accounts get the trial). Either way, not again today.
+    await setTrialBanner({ nudgeUntil: Date.now() + DAY_MS });
+    if (b.signedIn) {
+      go.disabled = true;
+      try { await CloudSync.startTrial(); } catch (e) { setStatus(e.message, false); }
+    }
+    showView('sync');
+  };
+  el.querySelector('.hb-x')?.addEventListener('click', async () => {
+    if (b.kind === 'nudge') {
+      const { trialBanner = {} } = await chrome.storage.local.get('trialBanner');
+      await setTrialBanner({
+        nudgeDismissals: (trialBanner.nudgeDismissals ?? 0) + 1,
+        nudgeUntil: Date.now() + TRIAL_NUDGE_SNOOZE_DAYS * DAY_MS,
+      });
+    } else if (b.kind === 'ending') {
+      await setTrialBanner({ endingUntil: Date.now() + DAY_MS });
+    } else {
+      await setTrialBanner({ endedDismissed: true });
+    }
+    renderHomeBanner();
+  });
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && (changes.userTrial || changes.userPlan || changes.cloudSession)) renderHomeBanner();
+});
+
+// Sync view, Free plan: start the trial, or say it ended.
+function renderFreeTrial(trial) {
+  const offer = document.getElementById('sv-free-trial');
+  const ended = document.getElementById('sv-free-trial-ended');
+  const upgrade = document.getElementById('link-upgrade');
+  offer.hidden = !trial?.available;
+  document.getElementById('trial-err').textContent = '';
+  const over = trial?.endsAt && !trial.active && Date.parse(trial.endsAt) <= Date.now();
+  ended.hidden = !over;
+  if (over) ended.textContent = `Your Personal trial ended on ${trialDate(trial.endsAt)}. Everything you saved is still on this device; subscribe to sync it again.`;
+  // With the trial on offer, subscribing right away is the second choice.
+  upgrade.textContent = trial?.available ? 'Or subscribe to Personal' : 'Upgrade to Personal';
+  upgrade.className = trial?.available ? 'btn-sync-ghost' : 'btn-sync-primary';
+}
+
+// Sync view, during the trial: days left.
+function renderTrialCard(trial) {
+  const card = document.getElementById('sync-trial');
+  card.hidden = !(trial?.active && trial.endsAt);
+  if (card.hidden) return;
+  const left = trialDaysLeft(trial.endsAt);
+  document.getElementById('sync-trial-left').textContent = `${left} of ${TRIAL_DAYS} days left`;
+  document.getElementById('sync-trial-bar').style.width = `${Math.min(100, Math.round(left / TRIAL_DAYS * 100))}%`;
+  document.getElementById('sync-trial-note').textContent =
+    `Ends ${trialDate(trial.endsAt)}. No card on file, so nothing is charged. After that you go back to Free and everything stays on your devices.`;
+}
+
+document.getElementById('btn-start-trial').addEventListener('click', async e => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  try {
+    await CloudSync.startTrial();
+    await renderSyncPanel(); // Personal now: on to the recovery key / sync
+  } catch (err) {
+    document.getElementById('trial-err').textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Start free trial';
+  }
+});
+
+// ── Sign in with a code by email ──────────────────────────────────────────────
+// The popup closes while the user reads the email, so the address waiting for
+// its code is kept in session storage (10 min) and the code step comes back.
+
+const EMAIL_SIGNIN_MS = 10 * 60e3;
+
+const bgAsk = msg => new Promise((resolve, reject) => {
+  chrome.runtime.sendMessage(msg, res => {
+    if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
+    if (res?.ok) resolve(res);
+    else reject(new Error(res?.error ?? 'Something went wrong. Try again.'));
+  });
+});
+
+async function pendingEmailSignIn() {
+  const { emailSignIn } = await chrome.storage.session.get('emailSignIn');
+  return emailSignIn && Date.now() - emailSignIn.at < EMAIL_SIGNIN_MS ? emailSignIn : null;
+}
+
+async function showEmailSignInStep() {
+  const pending = await pendingEmailSignIn();
+  document.getElementById('email-signin-form').hidden = !!pending;
+  document.getElementById('email-code-form').hidden = !pending;
+  document.getElementById('signin-err').textContent = '';
+  if (pending) {
+    document.getElementById('signin-code-email').textContent = pending.email;
+    document.getElementById('signin-code').focus();
+  }
+}
+
+async function sendEmailCode(email, btn) {
+  const err = document.getElementById('signin-err');
+  err.textContent = '';
+  btn.disabled = true;
+  try {
+    await bgAsk({ action: 'sendEmailCode', email }); // stores `emailSignIn`
+    document.getElementById('signin-code').value = '';
+    await showEmailSignInStep();
+  } catch (e) {
+    err.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('email-signin-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const email = document.getElementById('signin-email').value.trim();
+  if (email) sendEmailCode(email, document.getElementById('btn-email-code'));
+});
+
+document.getElementById('email-code-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const pending = await pendingEmailSignIn();
+  if (!pending) { await showEmailSignInStep(); return; }
+  const btn = document.getElementById('btn-verify-code');
+  const err = document.getElementById('signin-err');
+  err.textContent = '';
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  try {
+    const { session } = await bgAsk({ action: 'verifyEmailCode', email: pending.email, code: document.getElementById('signin-code').value });
+    await chrome.storage.session.remove('emailSignIn');
+    SupabaseAuth.cacheSession(session); // avoid storage propagation race before syncUser
+    // Signed in from here on: a failed account refresh is retried by the
+    // Sync view (it calls sync-user again), never by asking for a new code.
+    try { await CloudSync.syncUser(); } catch (e) { console.error('syncUser:', e); }
+    await renderSyncPanel();
+  } catch (ex) {
+    err.textContent = ex.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign in';
+  }
+});
+
+document.getElementById('btn-code-resend').addEventListener('click', async e => {
+  const pending = await pendingEmailSignIn();
+  if (pending) sendEmailCode(pending.email, e.currentTarget);
+  else showEmailSignInStep();
+});
+
+document.getElementById('btn-code-other').addEventListener('click', async () => {
+  await chrome.storage.session.remove('emailSignIn');
+  await showEmailSignInStep();
+  document.getElementById('signin-email').focus();
+});
 
 let _syncInProgress = false;
 // After a sync changed the vault: reload the list, rebuild the locked-vault
@@ -5381,7 +5657,7 @@ let _stopSyncMode = 'free';
 document.getElementById('btn-free-signout').addEventListener('click', async () => {
   try { await CloudSync.leaveDevice() } catch (e) { console.error('leaveDevice:', e) }
   await SupabaseAuth.signOut();
-  await new Promise(r => chrome.storage.local.remove(['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'v1Export'], r));
+  await new Promise(r => chrome.storage.local.remove(['userPlan', 'userTrial', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'v1Export'], r));
   localChangedAt = null;
   lastSyncedAt   = null;
   tombstones     = {};
@@ -5405,7 +5681,7 @@ document.getElementById('btn-confirm-stop-sync').addEventListener('click', async
   await SupabaseAuth.signOut();
   if (_stopSyncMode === 'active') await CloudSync.deleteSyncKey();
   await new Promise(r => chrome.storage.local.remove(
-    ['userPlan', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'v1Export'], r
+    ['userPlan', 'userTrial', 'localChangedAt', 'lastSyncedAt', 'tombstones', 'v1Export'], r
   ));
   localChangedAt = null;
   lastSyncedAt   = null;

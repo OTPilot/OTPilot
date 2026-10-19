@@ -85,7 +85,7 @@ fn is_team_plan(plan: &str) -> bool {
 pub(crate) async fn dissolve_team(db: &sqlx::PgPool, team_id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
     sqlx::query(
-        "UPDATE users SET plan = CASE WHEN has_personal_cloud THEN 'personal' ELSE 'free' END \
+        "UPDATE users SET plan = CASE WHEN has_personal_cloud OR trial_ends_at > NOW() THEN 'personal' ELSE 'free' END \
          WHERE id IN (SELECT user_id FROM team_members WHERE team_id = $1)",
     )
     .bind(team_id)
@@ -314,7 +314,7 @@ pub(crate) async fn remove_member_atomic(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE users SET plan = CASE WHEN has_personal_cloud THEN 'personal' ELSE 'free' END WHERE id = $1",
+        "UPDATE users SET plan = CASE WHEN has_personal_cloud OR trial_ends_at > NOW() THEN 'personal' ELSE 'free' END WHERE id = $1",
     )
     .bind(user_id)
     .execute(&mut *tx)

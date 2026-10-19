@@ -5,6 +5,7 @@
 //! 2FA code, one button). Each email only fills in a `Mail`; the plain-text
 //! version (`Mail::text`) goes along for clients that don't render HTML.
 
+use chrono::{DateTime, Utc};
 use std::{
     sync::{Arc, OnceLock},
     time::Duration,
@@ -12,6 +13,8 @@ use std::{
 use tokio::sync::{mpsc, Semaphore};
 
 const SITE: &str = "https://otpilot.app";
+const STORE_URL: &str =
+    "https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk";
 
 /// What one email says; the layout is the same for all of them.
 #[derive(Default)]
@@ -204,18 +207,19 @@ fn outbox() -> &'static mpsc::Sender<Outgoing> {
 }
 
 /// Queues one email for Resend: the request that caused it doesn't wait for
-/// delivery. No-op when disabled or unconfigured.
-async fn send(enabled: bool, api_key: Option<&str>, from: &str, to: &str, mail: Mail) {
+/// delivery. No-op when disabled or unconfigured. False only when the queue
+/// was full and the email was dropped (a caller that claimed it can retry).
+async fn send(enabled: bool, api_key: Option<&str>, from: &str, to: &str, mail: Mail) -> bool {
     if !enabled {
         tracing::debug!(
             "[email] not sent (SEND_EMAILS is off) — subject: {}",
             mail.subject
         );
-        return;
+        return true;
     }
     let Some(key) = api_key else {
         tracing::warn!("SEND_EMAILS=true but RESEND_API_KEY is not set — email skipped");
-        return;
+        return true;
     };
     let outgoing = Outgoing {
         key: key.to_string(),
@@ -229,7 +233,9 @@ async fn send(enabled: bool, api_key: Option<&str>, from: &str, to: &str, mail: 
     };
     if outbox().try_send(outgoing).is_err() {
         tracing::warn!("[email] queue full — dropped: {}", mail.subject);
+        return false;
     }
+    true
 }
 
 /// Team invitation. `recipient_has_account` picks the copy: existing users get a
@@ -364,9 +370,16 @@ pub async fn send_item_shared_email(
     send(enabled, api_key, from, to, mail).await;
 }
 
-/// Welcome email sent once, when a user's account is first created (free plan).
-pub async fn send_welcome_email(enabled: bool, api_key: Option<&str>, from: &str, to: &str) {
-    let mail = Mail {
+/// A new account. `trial_ends` when it started with the Personal trial: the
+/// welcome then says so (one email, not a welcome plus a trial one).
+pub async fn send_welcome_email(
+    enabled: bool,
+    api_key: Option<&str>,
+    from: &str,
+    to: &str,
+    trial_ends: Option<DateTime<Utc>>,
+) {
+    let mut mail = Mail {
         subject: "Welcome to OTPilot".into(),
         eyebrow: "Welcome",
         title: "Your OTPilot account is ready".into(),
@@ -382,7 +395,180 @@ pub async fn send_welcome_email(enabled: bool, api_key: Option<&str>, from: &str
         )),
         ..Default::default()
     };
+    if let Some(ends) = trial_ends {
+        mail.paras.push(
+            "Your account comes with 30 days of Personal, free: turn on sync in the extension and your vault follows you to every browser, end-to-end encrypted.".into(),
+        );
+        mail.details = trial_details(ends);
+        mail.footnote = Some(TRIAL_AFTER.into());
+        mail.aside = None;
+    }
     send(enabled, api_key, from, to, mail).await;
+}
+
+/// What happens when a trial ends, said in every trial email.
+const TRIAL_AFTER: &str = "When the trial ends you go back to Free. Nothing is deleted.";
+
+fn long_date(at: DateTime<Utc>) -> String {
+    at.format("%B %-d, %Y").to_string()
+}
+
+fn trial_details(ends: DateTime<Utc>) -> Vec<(&'static str, String)> {
+    vec![
+        ("Plan", "Personal (trial)".into()),
+        ("Ends", long_date(ends)),
+        ("Card", "None needed".into()),
+    ]
+}
+
+/// An existing account started the Personal trial (from the extension or
+/// the dashboard).
+pub async fn send_trial_started_email(
+    enabled: bool,
+    api_key: Option<&str>,
+    from: &str,
+    to: &str,
+    ends: DateTime<Utc>,
+) {
+    let mail = Mail {
+        subject: "Sync is on: 30 days of Personal, free".into(),
+        eyebrow: "Personal trial",
+        title: "Your 30 days of sync start now".into(),
+        paras: vec![
+            "Your vault is encrypted on your device before it's uploaded, so we can't read it.".into(),
+            "Install OTPilot in another browser and sign in with this email to get your codes there too.".into(),
+        ],
+        details: trial_details(ends),
+        cta: ("Get OTPilot for another browser", STORE_URL.to_string()),
+        footnote: Some(TRIAL_AFTER.into()),
+        ..Default::default()
+    };
+    send(enabled, api_key, from, to, mail).await;
+}
+
+/// Whole days left until `ends`, rounded up (a trial ending in 48 h 30 min
+/// has 3 days left).
+fn days_left(ends: DateTime<Utc>, now: DateTime<Utc>) -> i64 {
+    ((ends - now).num_minutes() + 1439).div_euclid(1440).max(1)
+}
+
+/// `trial::REMINDER_DAYS` before the trial ends.
+pub async fn send_trial_reminder_email(
+    enabled: bool,
+    api_key: Option<&str>,
+    from: &str,
+    to: &str,
+    ends: DateTime<Utc>,
+    items: Option<i64>,
+    devices: i64,
+) -> bool {
+    send(
+        enabled,
+        api_key,
+        from,
+        to,
+        trial_reminder(ends, Utc::now(), items, devices),
+    )
+    .await
+}
+
+/// `items` is None when unknown (a vault synced only by a 1.x client, whose
+/// blob the server can't count): the email then claims nothing about it.
+fn trial_reminder(
+    ends: DateTime<Utc>,
+    now: DateTime<Utc>,
+    items: Option<i64>,
+    devices: i64,
+) -> Mail {
+    let days = days_left(ends, now);
+    let when = if days == 1 {
+        "tomorrow".to_string()
+    } else {
+        format!("in {days} days")
+    };
+    let date = long_date(ends);
+    let progress = match (items, devices) {
+        (None, _) => "Personal keeps your vault backed up and in sync across your browsers, end-to-end encrypted.".to_string(),
+        (Some(0), _) => "Sync hasn't stored anything yet: turn it on in the extension to try it before the trial ends.".to_string(),
+        (Some(i), d) if d >= 2 => format!("Since you started, OTPilot has kept {i} {} in sync across {d} browsers.", plural(i, "item")),
+        (Some(i), _) => format!("Since you started, OTPilot has backed up {i} {}, end-to-end encrypted.", plural(i, "item")),
+    };
+    let mut details = vec![("Ends", date.clone())];
+    if let Some(items) = items.filter(|&i| i > 0) {
+        details.push((
+            "Synced",
+            format!(
+                "{items} {} · {devices} {}",
+                plural(items, "item"),
+                plural(devices, "device")
+            ),
+        ));
+    }
+    details.push(("Personal", "$3/month or $30/year".into()));
+    Mail {
+        subject: format!("Your OTPilot trial ends {when}"),
+        eyebrow: "Trial ending",
+        title: format!("Your trial ends {when}"),
+        paras: vec![progress, format!("On {date} sync pauses unless you subscribe.")],
+        details,
+        cta: ("Keep sync", format!("{SITE}/dashboard/billing")),
+        footnote: Some("If you don't subscribe, everything stays on your devices and keeps working. Only sync stops.".into()),
+        aside: Some(("Paying yearly?", "Two months free", format!("{SITE}/dashboard/billing"))),
+    }
+}
+
+/// The trial ended (the user is on Free again).
+pub async fn send_trial_ended_email(
+    enabled: bool,
+    api_key: Option<&str>,
+    from: &str,
+    to: &str,
+    counted_items: Option<i64>,
+) -> bool {
+    send(enabled, api_key, from, to, trial_ended(counted_items)).await
+}
+
+/// `counted_items` is None when unknown (see `trial_reminder`).
+fn trial_ended(counted_items: Option<i64>) -> Mail {
+    let limit = FREE_ITEM_LIMIT;
+    let mut paras = vec![
+        "Your trial ended. Everything is still on each device and your codes keep working; they just don't sync between browsers anymore.".to_string(),
+    ];
+    if let Some(counted) = counted_items.filter(|&i| i > limit) {
+        paras.push(format!(
+            "Free holds {limit} items. You can keep editing the {counted} you have; adding more needs Personal."
+        ));
+    }
+    let mut details = vec![("Plan", "Free".to_string())];
+    if let Some(counted) = counted_items {
+        details.push(("Items", format!("{counted} of {limit} on Free")));
+    }
+    details.push(("Sync", "Paused".into()));
+    Mail {
+        subject: "Your OTPilot trial ended".into(),
+        eyebrow: "Trial ended",
+        title: "Sync is paused".into(),
+        paras,
+        details,
+        cta: ("Subscribe to Personal", format!("{SITE}/dashboard/billing")),
+        footnote: Some(
+            "Changes you make now stay on the device where you make them, until you subscribe."
+                .into(),
+        ),
+        ..Default::default()
+    }
+}
+
+/// `Vault.FREE_ITEM_LIMIT` in the extension (the server can't count items
+/// itself beyond `counts_for_limit`).
+const FREE_ITEM_LIMIT: i64 = 50;
+
+fn plural(n: i64, word: &str) -> String {
+    if n == 1 {
+        word.to_string()
+    } else {
+        format!("{word}s")
+    }
 }
 
 /// Sent when a user subscribes to the Personal (cloud sync) plan.
@@ -504,6 +690,55 @@ mod tests {
         assert!(html.contains("One &amp; two"));
         assert!(html.contains("accept/abc?x=1&amp;y=2"));
         assert!(html.contains("— team invitation"));
+    }
+
+    #[test]
+    fn days_left_rounds_up() {
+        let now = Utc::now();
+        assert_eq!(days_left(now + chrono::Duration::hours(50), now), 3);
+        assert_eq!(days_left(now + chrono::Duration::hours(72), now), 3);
+        assert_eq!(days_left(now + chrono::Duration::hours(5), now), 1);
+        assert_eq!(
+            days_left(now + chrono::Duration::minutes(48 * 60 + 30), now),
+            3
+        );
+        assert_eq!(
+            days_left(now + chrono::Duration::minutes(24 * 60 + 30), now),
+            2
+        );
+    }
+
+    #[test]
+    fn the_reminder_says_what_was_synced() {
+        let now = Utc::now();
+        let ends = now + chrono::Duration::hours(71);
+        let mail = trial_reminder(ends, now, Some(38), 2);
+        assert_eq!(mail.subject, "Your OTPilot trial ends in 3 days");
+        assert!(mail.paras[0].contains("38 items in sync across 2 browsers"));
+        assert!(mail
+            .details
+            .iter()
+            .any(|(k, v)| *k == "Synced" && v == "38 items · 2 devices"));
+
+        let tomorrow = trial_reminder(now + chrono::Duration::hours(20), now, Some(0), 1);
+        assert_eq!(tomorrow.title, "Your trial ends tomorrow");
+        assert!(tomorrow.paras[0].contains("hasn't stored anything"));
+        assert!(!tomorrow.details.iter().any(|(k, _)| *k == "Synced"));
+
+        // A 1.x-only vault: no count, so no claim that nothing synced.
+        let unknown = trial_reminder(ends, now, None, 1);
+        assert!(!unknown.paras[0].contains("hasn't stored"));
+        assert!(!unknown.details.iter().any(|(k, _)| *k == "Synced"));
+    }
+
+    #[test]
+    fn the_ended_email_mentions_the_free_limit_only_when_over_it() {
+        assert_eq!(trial_ended(Some(38)).paras.len(), 1);
+        let over = trial_ended(Some(72));
+        assert!(over.paras[1].contains("keep editing the 72"));
+        let unknown = trial_ended(None);
+        assert_eq!(unknown.paras.len(), 1);
+        assert!(!unknown.details.iter().any(|(k, _)| *k == "Items"));
     }
 
     #[test]
