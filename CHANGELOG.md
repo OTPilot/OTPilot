@@ -1,6 +1,14 @@
 # Changelog
 
 
+## v2.1.7
+
+### Extension
+
+- Site icons: sites that had no icon before the server could find theirs (e.g. bbva.es, belo.app) get it right after the update, instead of a day later.
+- Site icons: a secure note or any item without a website shows the icon of a login it's related to (the first linked login with an icon), in the vault and on Home; it follows links and deletions as you edit.
+
+
 ## v2.1.6
 
 ### Extension
