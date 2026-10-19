@@ -113,6 +113,7 @@ pub fn test_state(db: PgPool) -> AppState {
         resend_api_key: None,
         from_email: String::new(),
         send_emails: false,
+        trial_enabled: false,
         supabase_url: SUPABASE_URL.to_string(),
         supabase_service_key: String::new(),
         icons: None,

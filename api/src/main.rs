@@ -5,6 +5,7 @@ mod middleware;
 mod routes;
 #[cfg(all(test, feature = "db-tests"))]
 mod test_support;
+mod trial;
 
 use axum::{http::Method, Router};
 use std::collections::HashMap;
@@ -35,6 +36,10 @@ pub struct AppState {
     pub resend_api_key: Option<String>,
     pub from_email: String,
     pub send_emails: bool,
+    /// New accounts start the Personal trial, and existing Free ones may
+    /// (`PERSONAL_TRIAL`, off by default). Trials already running end and
+    /// get their emails either way.
+    pub trial_enabled: bool,
     pub supabase_url: String,
     pub supabase_service_key: String,
     /// S3/R2 store for domain favicons. None when not configured (feature disabled).
@@ -120,6 +125,9 @@ async fn main() -> anyhow::Result<()> {
     let send_emails = std::env::var("SEND_EMAILS")
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
+    let trial_enabled = std::env::var("PERSONAL_TRIAL")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
     let supabase_service_key =
         std::env::var("SUPABASE_SERVICE_ROLE_KEY").expect("SUPABASE_SERVICE_ROLE_KEY must be set");
 
@@ -143,11 +151,14 @@ async fn main() -> anyhow::Result<()> {
         resend_api_key,
         from_email,
         send_emails,
+        trial_enabled,
         supabase_url,
         supabase_service_key,
         icons,
         rate_limiter: Arc::new(middleware::rate_limit::RateLimiter::new()),
     };
+
+    trial::spawn(state.clone());
 
     let cors = cors();
 

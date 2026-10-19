@@ -81,7 +81,7 @@ Migrations live in `api/migrations/` and run automatically at startup via `sqlx:
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `users` | `id`, `plan`, `stripe_customer_id`, `created_at`, `pending_deletion_at`, `personal_subscription_id` | One row per Supabase user |
+| `users` | `id`, `plan`, `stripe_customer_id`, `created_at`, `pending_deletion_at`, `personal_subscription_id`, `trial_ends_at`, `trial_reminder_sent_at`, `trial_ended_sent_at` | One row per Supabase user; `trial_*` = the Personal trial (see Billing) |
 | `accounts` | `user_id`, `encrypted_blob`, `updated_at` | AES-GCM ciphertext only |
 | `teams` | `id`, `name`, `owner_id`, `stripe_subscription_id`, `seat_limit` | Team Lite; 1 team per owner |
 | `team_members` | `team_id`, `user_id`, `role` | `role` = owner/member |
@@ -192,7 +192,8 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | GET | `/users/me/deletion` | What deleting would do (subscriptions cancelled, owned team + member count, team left), for the dashboard's confirmation |
 | GET | `/accounts` | Return encrypted blob + `updated_at` |
 | PUT | `/accounts` | Upload encrypted blob |
-| POST | `/billing/checkout` | Create Stripe Checkout session |
+| POST | `/billing/checkout` | Create Stripe Checkout session (during the trial: `subscription_data[trial_end]` = its end, so the first charge waits) |
+| GET / POST | `/billing/trial` | **Public** GET: `{ enabled, days }` (is the trial on). POST: start the 30-day Personal trial (Free, never had one; 404 while `PERSONAL_TRIAL` is off) |
 | POST | `/billing/webhook` | Stripe webhook — sets `plan` on payment |
 | GET | `/devices` | List registered devices |
 | GET | `/devices/:id/logs` | Sync log for a device |
@@ -288,6 +289,8 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 `POST /billing/checkout` (body `{annual}`) creates a Stripe Checkout **subscription** for Personal ($3/mo or $30/yr, `STRIPE_PERSONAL_MONTHLY_PRICE_ID` / `STRIPE_PERSONAL_ANNUAL_PRICE_ID`; optional — checkout answers 503 until set). Both checkouts tag the session and subscription with `metadata.plan` (`personal` / `team_lite`) so the webhook can tell them apart. Stripe calls `POST /billing/webhook`; the webhook verifies the signature and sets `users.plan`. Plan values: `free`, `personal`, `team_lite`, `team_pro`.
 
 `users.has_personal_cloud` means "entitled to Personal": it's what a team downgrade falls back to (`CASE WHEN has_personal_cloud THEN 'personal' ELSE 'free'`). A Personal subscription sets it plus `personal_subscription_id`; `customer.subscription.deleted` for that id clears both and moves `personal` → `free` (a team plan stays). Buying Personal while on a team keeps the team plan effective. 1.x one-time buyers keep the flag without an id (grandfathered); a one-time session still completing after the 2.0 deploy is handled by the `mode=payment` branch. Webhooks can arrive out of order: every `subscription.deleted` id is recorded in `stripe_ended_subscriptions`, and a checkout completion for one of them grants nothing. One Personal subscription per user: a second completion keeps the stored one and cancels the new subscription in Stripe. Both checkouts reuse the user's `stripe_customer_id` (so the billing portal shows every subscription); `sync-user` returns `personal_subscription` so team members can still manage their own.
+
+**Personal trial** (`api/src/trial.rs`, behind `PERSONAL_TRIAL`): 30 days of Personal, no card. A new account starts it in `sync-user` (the welcome email says so); an existing Free one with `POST /billing/trial`. While it runs `plan = 'personal'` with `has_personal_cloud = false` and no `personal_subscription_id`, so everything reading the plan treats it as Personal; `trial_ends_at` is never cleared (one trial per account). `sync-user` returns `trial_ends_at`, `trial_active`, `trial_available` and expires the caller's ended trial on the spot. An hourly job (`trial::spawn`) expires trials, sends the reminder `REMINDER_DAYS` (3) before the end and the "trial ended" email, each claimed by an UPDATE so it goes once. Subscribing sets `has_personal_cloud` (no more trial emails); a team ending, or a Personal subscription ending, while the trial still runs falls back to it (`trial_ends_at > NOW()` in those CASEs).
 
 ### Plan label mapping
 `Overview.tsx` maps plan strings to display names via a `PLAN_LABELS` record. Add new plan tiers there when they're introduced in the backend.
