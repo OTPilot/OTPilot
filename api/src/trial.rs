@@ -295,4 +295,45 @@ mod tests {
         let r = row(&db.pool, user).await;
         assert_eq!((r.0.as_str(), r.3), ("team_lite", false));
     }
+    #[tokio::test]
+    async fn a_dropped_email_is_released_for_the_next_run() {
+        let db = test_db().await;
+        let state = test_state(db.pool.clone());
+        let user = create_user(&db.pool, "free").await;
+        start(&db.pool, user).await.unwrap();
+        ends_in(&db.pool, user, 24 * REMINDER_DAYS - 1).await;
+        tick(&state).await.unwrap();
+        assert!(row(&db.pool, user).await.2);
+
+        release(&db.pool, "trial_reminder_sent_at", &[user])
+            .await
+            .unwrap();
+        assert!(!row(&db.pool, user).await.2);
+        // Claimed again on the next run.
+        tick(&state).await.unwrap();
+        assert!(row(&db.pool, user).await.2);
+    }
+
+    #[tokio::test]
+    async fn a_vault_synced_only_by_1x_has_no_count() {
+        let db = test_db().await;
+        let user = create_user(&db.pool, "free").await;
+        let count = |pool: PgPool| async move {
+            sqlx::query_scalar::<_, Option<i64>>(&format!(
+                "SELECT {} FROM users WHERE id = $1",
+                items_sql("")
+            ))
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        assert_eq!(count(db.pool.clone()).await, Some(0));
+        sqlx::query("INSERT INTO accounts (user_id, encrypted_blob) VALUES ($1, 'x')")
+            .bind(user)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(count(db.pool.clone()).await, None);
+    }
 }
