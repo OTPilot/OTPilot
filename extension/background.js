@@ -708,6 +708,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
+  // Email sign-in (a code from the email), from the popup only: the session
+  // is written here, like Google's, so only this worker ever refreshes it.
+  if (msg.action === 'sendEmailCode' || msg.action === 'verifyEmailCode') {
+    if (!fromExtensionPage(_sender)) { sendResponse({ ok: false, error: 'Not allowed' }); return true; }
+    const email = String(msg.email || '').trim();
+    const run = msg.action === 'sendEmailCode'
+      ? SupabaseAuth.sendEmailCode(email).then(() => ({ ok: true }))
+      : SupabaseAuth.verifyEmailCode(email, String(msg.code || '').replace(/\D/g, ''))
+          .then(session => ({ ok: true, session }));
+    run.then(sendResponse).catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
   // Passive push from email-reader.js when a new OTP email arrives.
   if (msg.action === 'emailOtpDetected') {
     // Defense-in-depth: only accept pushes from a real webmail tab, so a

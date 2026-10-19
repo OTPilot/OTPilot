@@ -176,8 +176,43 @@ const CloudSync = (() => {
     });
     if (!res.ok) throw new Error(`sync-user ${res.status}`);
     const data = await res.json();
-    await new Promise(r => chrome.storage.local.set({ userPlan: data.plan ?? 'free' }, r));
+    const trial = trialOf(data);
+    await new Promise(r => chrome.storage.local.set({
+      userPlan: data.plan ?? 'free', userTrial: trial,
+      // Kept after sign-out: this browser's accounts already had a trial, so
+      // Home doesn't promise one to whoever signs in next.
+      ...(trial.endsAt ? { trialUsedHere: true } : {}),
+    }, r));
     return data;
+  }
+
+  // The Personal trial as sync-user reports it (an older API: none).
+  function trialOf(data) {
+    return {
+      endsAt: data.trial_ends_at ?? null,
+      active: !!data.trial_active,
+      available: !!data.trial_available,
+    };
+  }
+
+  // Starts the 30-day Personal trial, then refreshes plan + trial.
+  async function startTrial() {
+    const res = await apiFetch('/billing/trial', { method: 'POST' });
+    if (!res.ok) throw new Error(res.status === 400 ? 'This account already had its trial' : `trial ${res.status}`);
+    return syncUser();
+  }
+
+  // Whether the server offers the trial (public, so it can be promised
+  // before sign-in), cached 12 h. False when unknown.
+  async function trialOffered() {
+    const { trialOffer } = await chrome.storage.local.get('trialOffer');
+    if (trialOffer && Date.now() - trialOffer.at < 12 * 3600e3) return trialOffer.enabled;
+    try {
+      const res = await fetch(`${API_URL}/billing/trial`);
+      const enabled = res.ok && !!(await res.json()).enabled;
+      await chrome.storage.local.set({ trialOffer: { enabled, at: Date.now() } });
+      return enabled;
+    } catch { return !!trialOffer?.enabled; }
   }
 
   // Returns true if the server has an encrypted blob for this user.
@@ -351,7 +386,7 @@ const CloudSync = (() => {
 
   return {
     getSyncKey, generateSyncKey, saveSyncKey, deleteSyncKey, isSyncEnabled,
-    serverHasData, syncUser, pull, push, mergeWithTombstones,
+    serverHasData, syncUser, startTrial, trialOffered, pull, push, mergeWithTombstones,
     getServerMeta, executeCommand, leaveDevice,
     api: apiFetch, // authenticated API call, for vaultSync.js
   };

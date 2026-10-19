@@ -1,7 +1,9 @@
 'use strict';
 
 // Minimal Supabase Auth client for OTPilot extension.
-// Google OAuth only — uses chrome.identity.launchWebAuthFlow.
+// Google OAuth (chrome.identity.launchWebAuthFlow), or a one-time code sent by
+// email (the web's magic-link email carries the code too: `{{ .Token }}` in
+// Supabase's Magic Link and Confirm signup templates).
 // Session persisted in chrome.storage.local under 'cloudSession'.
 
 const SupabaseAuth = (() => {
@@ -131,6 +133,46 @@ const SupabaseAuth = (() => {
     });
   }
 
+  // Sends the sign-in email (creates the account when it's new). Its link
+  // signs in on the website; the extension uses the code it carries.
+  async function sendEmailCode(email) {
+    const res = await fetch(`${URL_BASE}/auth/v1/otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: ANON_KEY },
+      body: JSON.stringify({ email, create_user: true }),
+    });
+    if (!res.ok) throw new Error(await authError(res, 'Could not send the email'));
+  }
+
+  async function verifyEmailCode(email, token) {
+    const res = await fetch(`${URL_BASE}/auth/v1/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: ANON_KEY },
+      body: JSON.stringify({ type: 'email', email, token }),
+    });
+    if (!res.ok) throw new Error(await authError(res, 'That code didn\'t work'));
+    const d = await res.json();
+    const session = {
+      access_token:  d.access_token,
+      refresh_token: d.refresh_token,
+      expires_at:    Date.now() + d.expires_in * 1000,
+      user: { id: d.user.id, email: d.user.email },
+    };
+    await saveSession(session);
+    return session;
+  }
+
+  // Supabase's message for a failed auth call (rate limit, expired code…).
+  async function authError(res, fallback) {
+    if (res.status === 429) return 'Too many attempts. Wait a minute and try again.';
+    try {
+      const d = await res.json();
+      const msg = d.msg || d.error_description || d.message;
+      if (/expired|invalid/i.test(msg || '')) return 'That code is wrong or expired. Check the latest email, or send a new one.';
+      return msg || fallback;
+    } catch { return fallback; }
+  }
+
   async function signOut() {
     const token = await getAccessToken();
     if (token) {
@@ -150,5 +192,5 @@ const SupabaseAuth = (() => {
     } catch { /* storage unavailable */ }
   }
 
-  return { getSession, getAccessToken, signInWithGoogle, signOut, cacheSession };
+  return { getSession, getAccessToken, signInWithGoogle, sendEmailCode, verifyEmailCode, signOut, cacheSession };
 })();
