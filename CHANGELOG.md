@@ -1,6 +1,24 @@
 # Changelog
 
 
+## v2.1.8
+
+### Extension
+
+- Sign in to sync with an email code: besides Google, enter your email and type the 6-digit code OTPilot emails you (the link in that email signs you in on the website).
+- Personal trial: a new account gets 30 days of Personal free, no card. Sync shows the days left, and an existing Free account can start its trial there once. Home shows a note when the trial is ending (last 3 days) and after it ended, and suggests sync once you have a few 2FA codes (at most 3 times, 14 days apart).
+
+### API
+
+- 30-day Personal trial (`PERSONAL_TRIAL`): started by a new account's first sign-in, or once by an existing Free account (`POST /billing/trial`); `GET /billing/trial` says whether it's offered. Emails when it starts, 3 days before it ends (with what sync stored) and when it ended; at the end the account goes back to Free and keeps everything on each device.
+- Subscribing during the trial keeps the days left: the first charge waits for the trial's end when at least 2 days are left.
+
+### Web
+
+- Dashboard: the trial's days left on Overview and Billing, or the offer to start it; subscribing during the trial says when the first charge happens.
+- Pricing, FAQ and llms.txt: the 30-day trial.
+
+
 ## v2.1.7
 
 ### Extension
