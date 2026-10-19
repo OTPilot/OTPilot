@@ -144,8 +144,14 @@ async fn create_checkout(
     .await?
     .ok_or(ApiError::Forbidden)?; // missing, or being deleted
 
-    // Personal without the entitlement is the trial: subscribing is the point.
-    if user.has_personal_cloud || matches!(user.plan.as_str(), "team_lite" | "team_pro") {
+    // Personal without the entitlement, after a trial, is that trial:
+    // subscribing is the point. Without one it's paid some other way.
+    let paid_personal =
+        user.plan == "personal" && (user.has_personal_cloud || user.trial_ends_at.is_none());
+    if paid_personal
+        || user.has_personal_cloud
+        || matches!(user.plan.as_str(), "team_lite" | "team_pro")
+    {
         return Err(ApiError::BadRequest("Already on a paid plan".into()));
     }
 
