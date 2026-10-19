@@ -261,8 +261,8 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | `/` | `Landing.tsx` | Marketing page |
 | `/auth/login` | `Login.tsx` | Google OAuth + magic link |
 | `/auth/callback` | `Callback.tsx` | Supabase redirect handler |
-| `/dashboard` | `Overview.tsx` | Plan info, sync stats; calls `POST /auth/sync-user` |
-| `/dashboard/billing` | `Billing.tsx` | Stripe upgrade |
+| `/dashboard` | `Overview.tsx` | Plan info, sync stats; calls `POST /auth/sync-user` (`useUserPlan` in `lib/plan.ts`, shared with Billing). `TrialCard` shows the Personal trial's days left, or the offer to start it |
+| `/dashboard/billing` | `Billing.tsx` | Stripe upgrade; during the trial "Subscribe" (the first charge waits for the trial's end when ≥ 49 h are left, `trialCarriesOver`) |
 | `/dashboard/devices` | `Devices.tsx` | Device management (disconnect / erase) |
 | `/dashboard/team` | `Team.tsx` + `TeamSharing.tsx` | Members, invites, 2FA codes (2-of-2), and 2.0 collections + item sharing (`TeamSharing`): membership / roles / removing work on plain server data; names, titles, creating collections, adding members and sharing need the vault, unlocked in the tab with the recovery key (`lib/teamVault.ts` `unlock`: checks it against the synced v1 blob, which carries the team private key) or by the extension signed in to the same account, after the user allows it there (`lib/extensionBridge.ts` → `unlockWithKeys`; store ids, or `VITE_EXTENSION_IDS` for a dev build) |
 | `/dashboard/settings` | `Settings.tsx` | Account settings, deletion |

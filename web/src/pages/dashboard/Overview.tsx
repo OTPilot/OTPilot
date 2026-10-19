@@ -1,29 +1,7 @@
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../../lib/useAuth'
-import { apiFetch } from '../../lib/api'
-
-type UserData = {
-  id: string
-  plan: string
-  created_at: string
-  last_sync_at: string | null
-  accounts_count: number
-  syncs_this_month: number
-  devices_count: number
-}
-
-function useUserPlan() {
-  return useQuery<UserData>({
-    queryKey: ['user-plan'],
-    queryFn: async () => {
-      const res = await apiFetch('/auth/sync-user', { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to load plan')
-      return res.json()
-    },
-    staleTime: 60_000,
-  })
-}
+import { useUserPlan } from '../../lib/plan'
+import TrialCard from './TrialCard'
 
 function formatRelative(iso: string) {
   const diffMs = Date.now() - new Date(iso).getTime()
@@ -50,7 +28,9 @@ export default function Overview() {
     team_pro: 'Team Pro',
   }
 
-  const planLabel  = userData ? (PLAN_LABELS[userData.plan] ?? userData.plan) : '–'
+  const planLabel  = userData
+    ? (userData.trial_active ? 'Personal (trial)' : (PLAN_LABELS[userData.plan] ?? userData.plan))
+    : '–'
   const lastSync   = userData?.last_sync_at ? formatRelative(userData.last_sync_at) : 'Never'
 
   return (
@@ -59,6 +39,8 @@ export default function Overview() {
         <h1 className="text-xl font-bold text-zinc-100">Overview</h1>
         <p className="text-sm text-zinc-500 mt-1">Welcome back, {user?.email}</p>
       </div>
+
+      {userData && <TrialCard user={userData} />}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <StatCard label="Plan"             value={planLabel}                                          to="/dashboard/billing" />
