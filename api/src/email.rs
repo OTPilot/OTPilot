@@ -207,18 +207,19 @@ fn outbox() -> &'static mpsc::Sender<Outgoing> {
 }
 
 /// Queues one email for Resend: the request that caused it doesn't wait for
-/// delivery. No-op when disabled or unconfigured.
-async fn send(enabled: bool, api_key: Option<&str>, from: &str, to: &str, mail: Mail) {
+/// delivery. No-op when disabled or unconfigured. False only when the queue
+/// was full and the email was dropped (a caller that claimed it can retry).
+async fn send(enabled: bool, api_key: Option<&str>, from: &str, to: &str, mail: Mail) -> bool {
     if !enabled {
         tracing::debug!(
             "[email] not sent (SEND_EMAILS is off) — subject: {}",
             mail.subject
         );
-        return;
+        return true;
     }
     let Some(key) = api_key else {
         tracing::warn!("SEND_EMAILS=true but RESEND_API_KEY is not set — email skipped");
-        return;
+        return true;
     };
     let outgoing = Outgoing {
         key: key.to_string(),
@@ -232,7 +233,9 @@ async fn send(enabled: bool, api_key: Option<&str>, from: &str, to: &str, mail: 
     };
     if outbox().try_send(outgoing).is_err() {
         tracing::warn!("[email] queue full — dropped: {}", mail.subject);
+        return false;
     }
+    true
 }
 
 /// Team invitation. `recipient_has_account` picks the copy: existing users get a
@@ -456,9 +459,9 @@ pub async fn send_trial_reminder_email(
     from: &str,
     to: &str,
     ends: DateTime<Utc>,
-    items: i64,
+    items: Option<i64>,
     devices: i64,
-) {
+) -> bool {
     send(
         enabled,
         api_key,
@@ -466,10 +469,17 @@ pub async fn send_trial_reminder_email(
         to,
         trial_reminder(ends, Utc::now(), items, devices),
     )
-    .await;
+    .await
 }
 
-fn trial_reminder(ends: DateTime<Utc>, now: DateTime<Utc>, items: i64, devices: i64) -> Mail {
+/// `items` is None when unknown (a vault synced only by a 1.x client, whose
+/// blob the server can't count): the email then claims nothing about it.
+fn trial_reminder(
+    ends: DateTime<Utc>,
+    now: DateTime<Utc>,
+    items: Option<i64>,
+    devices: i64,
+) -> Mail {
     let days = days_left(ends, now);
     let when = if days == 1 {
         "tomorrow".to_string()
@@ -478,12 +488,13 @@ fn trial_reminder(ends: DateTime<Utc>, now: DateTime<Utc>, items: i64, devices: 
     };
     let date = long_date(ends);
     let progress = match (items, devices) {
-        (0, _) => "Sync hasn't stored anything yet: turn it on in the extension to try it before the trial ends.".to_string(),
-        (i, d) if d >= 2 => format!("Since you started, OTPilot has kept {i} {} in sync across {d} browsers.", plural(i, "item")),
-        (i, _) => format!("Since you started, OTPilot has backed up {i} {}, end-to-end encrypted.", plural(i, "item")),
+        (None, _) => "Personal keeps your vault backed up and in sync across your browsers, end-to-end encrypted.".to_string(),
+        (Some(0), _) => "Sync hasn't stored anything yet: turn it on in the extension to try it before the trial ends.".to_string(),
+        (Some(i), d) if d >= 2 => format!("Since you started, OTPilot has kept {i} {} in sync across {d} browsers.", plural(i, "item")),
+        (Some(i), _) => format!("Since you started, OTPilot has backed up {i} {}, end-to-end encrypted.", plural(i, "item")),
     };
     let mut details = vec![("Ends", date.clone())];
-    if items > 0 {
+    if let Some(items) = items.filter(|&i| i > 0) {
         details.push((
             "Synced",
             format!(
@@ -512,31 +523,33 @@ pub async fn send_trial_ended_email(
     api_key: Option<&str>,
     from: &str,
     to: &str,
-    counted_items: i64,
-) {
-    send(enabled, api_key, from, to, trial_ended(counted_items)).await;
+    counted_items: Option<i64>,
+) -> bool {
+    send(enabled, api_key, from, to, trial_ended(counted_items)).await
 }
 
-fn trial_ended(counted_items: i64) -> Mail {
+/// `counted_items` is None when unknown (see `trial_reminder`).
+fn trial_ended(counted_items: Option<i64>) -> Mail {
     let limit = FREE_ITEM_LIMIT;
     let mut paras = vec![
         "Your trial ended. Everything is still on each device and your codes keep working; they just don't sync between browsers anymore.".to_string(),
     ];
-    if counted_items > limit {
+    if let Some(counted) = counted_items.filter(|&i| i > limit) {
         paras.push(format!(
-            "Free holds {limit} items. You can keep editing the {counted_items} you have; adding more needs Personal."
+            "Free holds {limit} items. You can keep editing the {counted} you have; adding more needs Personal."
         ));
     }
+    let mut details = vec![("Plan", "Free".to_string())];
+    if let Some(counted) = counted_items {
+        details.push(("Items", format!("{counted} of {limit} on Free")));
+    }
+    details.push(("Sync", "Paused".into()));
     Mail {
         subject: "Your OTPilot trial ended".into(),
         eyebrow: "Trial ended",
         title: "Sync is paused".into(),
         paras,
-        details: vec![
-            ("Plan", "Free".into()),
-            ("Items", format!("{counted_items} of {limit} on Free")),
-            ("Sync", "Paused".into()),
-        ],
+        details,
         cta: ("Subscribe to Personal", format!("{SITE}/dashboard/billing")),
         footnote: Some(
             "Changes you make now stay on the device where you make them, until you subscribe."
@@ -699,7 +712,7 @@ mod tests {
     fn the_reminder_says_what_was_synced() {
         let now = Utc::now();
         let ends = now + chrono::Duration::hours(71);
-        let mail = trial_reminder(ends, now, 38, 2);
+        let mail = trial_reminder(ends, now, Some(38), 2);
         assert_eq!(mail.subject, "Your OTPilot trial ends in 3 days");
         assert!(mail.paras[0].contains("38 items in sync across 2 browsers"));
         assert!(mail
@@ -707,17 +720,25 @@ mod tests {
             .iter()
             .any(|(k, v)| *k == "Synced" && v == "38 items · 2 devices"));
 
-        let tomorrow = trial_reminder(now + chrono::Duration::hours(20), now, 0, 1);
+        let tomorrow = trial_reminder(now + chrono::Duration::hours(20), now, Some(0), 1);
         assert_eq!(tomorrow.title, "Your trial ends tomorrow");
         assert!(tomorrow.paras[0].contains("hasn't stored anything"));
         assert!(!tomorrow.details.iter().any(|(k, _)| *k == "Synced"));
+
+        // A 1.x-only vault: no count, so no claim that nothing synced.
+        let unknown = trial_reminder(ends, now, None, 1);
+        assert!(!unknown.paras[0].contains("hasn't stored"));
+        assert!(!unknown.details.iter().any(|(k, _)| *k == "Synced"));
     }
 
     #[test]
     fn the_ended_email_mentions_the_free_limit_only_when_over_it() {
-        assert_eq!(trial_ended(38).paras.len(), 1);
-        let over = trial_ended(72);
+        assert_eq!(trial_ended(Some(38)).paras.len(), 1);
+        let over = trial_ended(Some(72));
         assert!(over.paras[1].contains("keep editing the 72"));
+        let unknown = trial_ended(None);
+        assert_eq!(unknown.paras.len(), 1);
+        assert!(!unknown.details.iter().any(|(k, _)| *k == "Items"));
     }
 
     #[test]

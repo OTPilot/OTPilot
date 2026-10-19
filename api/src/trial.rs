@@ -11,7 +11,8 @@
 //! `spawn` runs `tick` every hour: expire ended trials, then send the
 //! reminder (`REMINDER_DAYS` before the end) and the "trial ended" email.
 //! Each email is claimed by setting its column in the same UPDATE that picks
-//! the users, so two API instances never send one twice. `sync-user` also
+//! the users, so two API instances never send one twice; one the email queue
+//! drops (full) is released for the next run. `sync-user` also
 //! expires the caller's trial on the spot (`expire`), so a client sees Free
 //! right at the end rather than up to an hour later.
 
@@ -77,11 +78,40 @@ pub fn spawn(state: AppState) {
 /// UPDATE itself: no per-user query can fail after the claim).
 #[derive(sqlx::FromRow)]
 struct Due {
+    id: Uuid,
     email: String,
     trial_ends_at: DateTime<Utc>,
-    /// Synced items (reminder) / items the Free limit counts (ended).
-    items: i64,
+    /// Synced items (reminder) / items the Free limit counts (ended). None
+    /// when only a 1.x client synced (its `accounts` blob can't be counted).
+    items: Option<i64>,
     devices: i64,
+}
+
+/// The item count of `Due`, NULL for a vault synced only through `/accounts`.
+fn items_sql(filter: &str) -> String {
+    format!(
+        "CASE WHEN EXISTS (SELECT 1 FROM vault_items v WHERE v.owner_id = users.id)
+                OR NOT EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = users.id)
+         THEN (SELECT COUNT(*) FROM vault_items v
+               WHERE v.owner_id = users.id AND v.deleted_at IS NULL{filter}) END AS items"
+    )
+}
+
+/// Un-claims emails the queue dropped, so the next run sends them.
+async fn release(db: &PgPool, column: &str, ids: &[Uuid]) -> Result<()> {
+    if !ids.is_empty() {
+        tracing::warn!(
+            "[trial] {} {column} email(s) dropped, retrying next run",
+            ids.len()
+        );
+        sqlx::query(&format!(
+            "UPDATE users SET {column} = NULL WHERE id = ANY($1)"
+        ))
+        .bind(ids)
+        .execute(db)
+        .await?;
+    }
+    Ok(())
 }
 
 /// One pass: expire, then the reminder and "ended" emails due now.
@@ -91,20 +121,21 @@ pub async fn tick(state: &AppState) -> Result<()> {
         tracing::info!("[trial] {expired} trial(s) ended");
     }
 
-    let reminders = sqlx::query_as::<_, Due>(
+    let reminders = sqlx::query_as::<_, Due>(&format!(
         "UPDATE users SET trial_reminder_sent_at = NOW()
          WHERE plan = 'personal' AND NOT has_personal_cloud
            AND trial_ends_at > NOW() AND trial_ends_at <= NOW() + make_interval(days => $1)
            AND trial_reminder_sent_at IS NULL AND email IS NOT NULL AND deletion_started_at IS NULL
-         RETURNING email, trial_ends_at,
-           (SELECT COUNT(*) FROM vault_items v WHERE v.owner_id = users.id AND v.deleted_at IS NULL) AS items,
+         RETURNING id, email, trial_ends_at, {},
            (SELECT COUNT(*) FROM devices d WHERE d.user_id = users.id) AS devices",
-    )
+        items_sql("")
+    ))
     .bind(REMINDER_DAYS)
     .fetch_all(&state.db)
     .await?;
+    let mut dropped = Vec::new();
     for due in reminders {
-        crate::email::send_trial_reminder_email(
+        let queued = crate::email::send_trial_reminder_email(
             state.send_emails,
             state.resend_api_key.as_deref(),
             &state.from_email,
@@ -114,23 +145,26 @@ pub async fn tick(state: &AppState) -> Result<()> {
             due.devices,
         )
         .await;
+        if !queued {
+            dropped.push(due.id);
+        }
     }
+    release(&state.db, "trial_reminder_sent_at", &dropped).await?;
 
-    let ended = sqlx::query_as::<_, Due>(
+    let ended = sqlx::query_as::<_, Due>(&format!(
         "UPDATE users SET trial_ended_sent_at = NOW()
          WHERE plan = 'free' AND NOT has_personal_cloud
            AND trial_ends_at <= NOW() AND trial_ends_at > NOW() - make_interval(days => $1)
            AND trial_ended_sent_at IS NULL AND email IS NOT NULL AND deletion_started_at IS NULL
-         RETURNING email, trial_ends_at,
-           (SELECT COUNT(*) FROM vault_items v
-            WHERE v.owner_id = users.id AND v.deleted_at IS NULL AND v.counts_for_limit) AS items,
-           0::bigint AS devices",
-    )
+         RETURNING id, email, trial_ends_at, {}, 0::bigint AS devices",
+        items_sql(" AND v.counts_for_limit")
+    ))
     .bind(ENDED_EMAIL_DAYS)
     .fetch_all(&state.db)
     .await?;
+    let mut dropped = Vec::new();
     for due in ended {
-        crate::email::send_trial_ended_email(
+        let queued = crate::email::send_trial_ended_email(
             state.send_emails,
             state.resend_api_key.as_deref(),
             &state.from_email,
@@ -138,7 +172,11 @@ pub async fn tick(state: &AppState) -> Result<()> {
             due.items,
         )
         .await;
+        if !queued {
+            dropped.push(due.id);
+        }
     }
+    release(&state.db, "trial_ended_sent_at", &dropped).await?;
     Ok(())
 }
 
@@ -256,5 +294,46 @@ mod tests {
         tick(&state).await.unwrap();
         let r = row(&db.pool, user).await;
         assert_eq!((r.0.as_str(), r.3), ("team_lite", false));
+    }
+    #[tokio::test]
+    async fn a_dropped_email_is_released_for_the_next_run() {
+        let db = test_db().await;
+        let state = test_state(db.pool.clone());
+        let user = create_user(&db.pool, "free").await;
+        start(&db.pool, user).await.unwrap();
+        ends_in(&db.pool, user, 24 * REMINDER_DAYS - 1).await;
+        tick(&state).await.unwrap();
+        assert!(row(&db.pool, user).await.2);
+
+        release(&db.pool, "trial_reminder_sent_at", &[user])
+            .await
+            .unwrap();
+        assert!(!row(&db.pool, user).await.2);
+        // Claimed again on the next run.
+        tick(&state).await.unwrap();
+        assert!(row(&db.pool, user).await.2);
+    }
+
+    #[tokio::test]
+    async fn a_vault_synced_only_by_1x_has_no_count() {
+        let db = test_db().await;
+        let user = create_user(&db.pool, "free").await;
+        let count = |pool: PgPool| async move {
+            sqlx::query_scalar::<_, Option<i64>>(&format!(
+                "SELECT {} FROM users WHERE id = $1",
+                items_sql("")
+            ))
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        assert_eq!(count(db.pool.clone()).await, Some(0));
+        sqlx::query("INSERT INTO accounts (user_id, encrypted_blob) VALUES ($1, 'x')")
+            .bind(user)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(count(db.pool.clone()).await, None);
     }
 }
