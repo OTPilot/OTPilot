@@ -869,5 +869,17 @@ mod db_tests {
         assert_eq!(body["trial_available"], false);
         let (s, _) = call(&app, user, Method::POST, "/billing/trial", None).await;
         assert_eq!(s, StatusCode::NOT_FOUND);
+        let (_, body) = call(&app, user, Method::GET, "/billing/trial", None).await;
+        assert_eq!(body["enabled"], false);
+        let (_, body) = call(
+            &trial_app(&db.pool),
+            user,
+            Method::GET,
+            "/billing/trial",
+            None,
+        )
+        .await;
+        assert_eq!(body["enabled"], true);
+        assert_eq!(body["days"], 30);
     }
 }

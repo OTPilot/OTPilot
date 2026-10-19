@@ -193,7 +193,7 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 | GET | `/accounts` | Return encrypted blob + `updated_at` |
 | PUT | `/accounts` | Upload encrypted blob |
 | POST | `/billing/checkout` | Create Stripe Checkout session (during the trial: `subscription_data[trial_end]` = its end, so the first charge waits) |
-| POST | `/billing/trial` | Start the 30-day Personal trial (Free, never had one; 404 while `PERSONAL_TRIAL` is off) |
+| GET / POST | `/billing/trial` | **Public** GET: `{ enabled, days }` (is the trial on). POST: start the 30-day Personal trial (Free, never had one; 404 while `PERSONAL_TRIAL` is off) |
 | POST | `/billing/webhook` | Stripe webhook — sets `plan` on payment |
 | GET | `/devices` | List registered devices |
 | GET | `/devices/:id/logs` | Sync log for a device |

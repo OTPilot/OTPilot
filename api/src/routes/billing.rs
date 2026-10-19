@@ -1,4 +1,10 @@
-use axum::{body::Bytes, extract::State, http::HeaderMap, routing::post, Json, Router};
+use axum::{
+    body::Bytes,
+    extract::State,
+    http::HeaderMap,
+    routing::{get, post},
+    Json, Router,
+};
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
 use sha2::Sha256;
@@ -13,7 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/billing/checkout", post(create_checkout))
         .route("/billing/checkout/team", post(create_team_checkout))
-        .route("/billing/trial", post(start_trial))
+        .route("/billing/trial", get(trial_offer).post(start_trial))
         .route("/billing/extra-seat", post(add_extra_seat))
         .route("/billing/portal", post(billing_portal))
         .route("/billing/webhook", post(webhook))
@@ -208,6 +214,12 @@ fn trial_carry_over(
     trial_ends_at
         .filter(|end| *end - now >= chrono::Duration::hours(MIN_TRIAL_CARRY_HOURS))
         .map(|end| end.timestamp().to_string())
+}
+
+/// **Public**: whether the Personal trial is on, so the extension can offer
+/// it before the user has an account.
+async fn trial_offer(State(state): State<AppState>) -> Json<Value> {
+    Json(json!({ "enabled": state.trial_enabled, "days": crate::trial::TRIAL_DAYS }))
 }
 
 /// Starts the caller's 30-day Personal trial (`trial::start`): Free accounts
