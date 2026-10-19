@@ -713,8 +713,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === 'sendEmailCode' || msg.action === 'verifyEmailCode') {
     if (!fromExtensionPage(_sender)) { sendResponse({ ok: false, error: 'Not allowed' }); return true; }
     const email = String(msg.email || '').trim();
+    // The address waiting for its code is stored here, not by the popup: the
+    // popup may close before this answer reaches it.
     const run = msg.action === 'sendEmailCode'
-      ? SupabaseAuth.sendEmailCode(email).then(() => ({ ok: true }))
+      ? SupabaseAuth.sendEmailCode(email)
+          .then(() => chrome.storage.session.set({ emailSignIn: { email, at: Date.now() } }))
+          .then(() => ({ ok: true }))
       : SupabaseAuth.verifyEmailCode(email, String(msg.code || '').replace(/\D/g, ''))
           .then(session => ({ ok: true, session }));
     run.then(sendResponse).catch(err => sendResponse({ ok: false, error: err.message }));

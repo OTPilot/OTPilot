@@ -23,6 +23,11 @@ async function homeWith(context, extensionId, { accounts = [], local = {} } = {}
     await writeAccounts(page, accounts);
     await page.reload();
   }
+  // Signed in without a sync key the popup opens on Sync: back to Home.
+  if (local.cloudSession) {
+    await expect(page.locator('#sync-panel')).toBeVisible();
+    await page.click('#nav-home');
+  }
   return page;
 }
 
@@ -62,7 +67,7 @@ test('no nudge with fewer codes, without the offer, or once this browser had a t
 });
 
 test('the last days of the trial show a reminder, hideable until the last day', async ({ context, extensionId }) => {
-  const trial = endsIn => ({ userPlan: 'personal', userTrial: { endsAt: new Date(Date.now() + endsIn).toISOString(), active: true, available: false } });
+  const trial = endsIn => ({ cloudSession: SESSION, userPlan: 'personal', userTrial: { endsAt: new Date(Date.now() + endsIn).toISOString(), active: true, available: false } });
 
   const page = await homeWith(context, extensionId, { accounts: codes(1), local: trial(2.5 * DAY) });
   const banner = page.locator('#home-banner');
@@ -83,10 +88,19 @@ test('the last days of the trial show a reminder, hideable until the last day', 
   await expect(early.locator('#home-banner')).toBeHidden();
 });
 
+test('no trial notice once the account is signed out', async ({ context, extensionId }) => {
+  const page = await homeWith(context, extensionId, {
+    accounts: codes(4),
+    local: { ...offered, userPlan: 'personal', userTrial: { endsAt: new Date(Date.now() + DAY).toISOString(), active: true, available: false } },
+  });
+  await page.evaluate(() => renderHomeBanner());
+  await expect(page.locator('#home-banner')).toBeHidden();
+});
+
 test('an ended trial says sync is paused until dismissed', async ({ context, extensionId }) => {
   const page = await homeWith(context, extensionId, {
     accounts: codes(2),
-    local: { userPlan: 'free', userTrial: { endsAt: new Date(Date.now() - DAY).toISOString(), active: false, available: false } },
+    local: { cloudSession: SESSION, userPlan: 'free', userTrial: { endsAt: new Date(Date.now() - DAY).toISOString(), active: false, available: false } },
   });
   const banner = page.locator('#home-banner');
   await expect(banner).toContainText('Your trial ended. Sync is paused.');
@@ -154,7 +168,8 @@ test('signing in with a code by email survives the popup closing', async ({ cont
       if (msg?.action === 'sendEmailCode' || msg?.action === 'verifyEmailCode') {
         window.__sent.push(msg);
         const ok = msg.action === 'sendEmailCode' || msg.code.replace(/\D/g, '') === '123456';
-        setTimeout(() => cb(ok ? { ok: true, session: { ...window.__session } } : { ok: false, error: 'That code is wrong or expired.' }));
+        const stored = msg.action === 'sendEmailCode' ? chrome.storage.session.set({ emailSignIn: { email: msg.email, at: Date.now() } }) : Promise.resolve();
+        stored.then(() => cb(ok ? { ok: true, session: { ...window.__session } } : { ok: false, error: 'That code is wrong or expired.' }));
         return;
       }
       return send(msg, cb);

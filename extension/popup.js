@@ -5101,6 +5101,9 @@ const billingUrl = () => CONFIG.DASHBOARD_URL + '/dashboard/billing';
 async function homeBanner() {
   const d = await chrome.storage.local.get(['cloudSession', 'userPlan', 'userTrial', 'trialBanner', 'trialUsedHere']);
   const trial = d.userTrial, seen = d.trialBanner ?? {}, now = Date.now();
+  // The trial notices are about the signed-in account (a session that ended
+  // on its own leaves `userTrial` behind).
+  if (trial?.endsAt && !d.cloudSession) return null;
   if (trial?.active && trial.endsAt) {
     const left = trialDaysLeft(trial.endsAt);
     if (left > TRIAL_ENDING_DAYS) return null;
@@ -5288,8 +5291,7 @@ async function sendEmailCode(email, btn) {
   err.textContent = '';
   btn.disabled = true;
   try {
-    await bgAsk({ action: 'sendEmailCode', email });
-    await chrome.storage.session.set({ emailSignIn: { email, at: Date.now() } });
+    await bgAsk({ action: 'sendEmailCode', email }); // stores `emailSignIn`
     document.getElementById('signin-code').value = '';
     await showEmailSignInStep();
   } catch (e) {
@@ -5318,7 +5320,9 @@ document.getElementById('email-code-form').addEventListener('submit', async e =>
     const { session } = await bgAsk({ action: 'verifyEmailCode', email: pending.email, code: document.getElementById('signin-code').value });
     await chrome.storage.session.remove('emailSignIn');
     SupabaseAuth.cacheSession(session); // avoid storage propagation race before syncUser
-    await CloudSync.syncUser();
+    // Signed in from here on: a failed account refresh is retried by the
+    // Sync view (it calls sync-user again), never by asking for a new code.
+    try { await CloudSync.syncUser(); } catch (e) { console.error('syncUser:', e); }
     await renderSyncPanel();
   } catch (ex) {
     err.textContent = ex.message;
