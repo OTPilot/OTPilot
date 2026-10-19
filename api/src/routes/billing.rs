@@ -13,6 +13,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/billing/checkout", post(create_checkout))
         .route("/billing/checkout/team", post(create_team_checkout))
+        .route("/billing/trial", post(start_trial))
         .route("/billing/extra-seat", post(add_extra_seat))
         .route("/billing/portal", post(billing_portal))
         .route("/billing/webhook", post(webhook))
@@ -107,9 +108,15 @@ const BASE_SEATS: i32 = 5;
 // ── Checkout ───────────────────────────────────────────────────────────────────
 
 #[derive(sqlx::FromRow)]
-struct UserPlanRow {
+struct CheckoutUserRow {
     plan: String,
+    has_personal_cloud: bool,
+    trial_ends_at: Option<chrono::DateTime<chrono::Utc>>,
 }
+
+/// Stripe Checkout refuses a `trial_end` less than 48 hours away; with less
+/// left than this the first charge is simply now.
+const MIN_TRIAL_CARRY_HOURS: i64 = 49;
 
 /// Personal subscription checkout ($3/mo or $30/yr). Body `{ "annual": bool }`.
 /// Returns the Stripe Checkout URL.
@@ -123,15 +130,16 @@ async fn create_checkout(
         .and_then(|v| v["annual"].as_bool())
         .unwrap_or(false);
 
-    let user = sqlx::query_as::<_, UserPlanRow>(
-        "SELECT plan FROM users WHERE id = $1 AND deletion_started_at IS NULL",
+    let user = sqlx::query_as::<_, CheckoutUserRow>(
+        "SELECT plan, has_personal_cloud, trial_ends_at FROM users WHERE id = $1 AND deletion_started_at IS NULL",
     )
     .bind(auth.id)
     .fetch_optional(&state.db)
     .await?
     .ok_or(ApiError::Forbidden)?; // missing, or being deleted
 
-    if matches!(user.plan.as_str(), "personal" | "team_lite" | "team_pro") {
+    // Personal without the entitlement is the trial: subscribing is the point.
+    if user.has_personal_cloud || matches!(user.plan.as_str(), "team_lite" | "team_pro") {
         return Err(ApiError::BadRequest("Already on a paid plan".into()));
     }
 
@@ -160,6 +168,12 @@ async fn create_checkout(
         ("metadata[plan]", "personal"),
         ("subscription_data[metadata][plan]", "personal"),
     ];
+    // Subscribing during the trial keeps its remaining days: the first
+    // charge comes when it would have ended.
+    let trial_end = trial_carry_over(user.trial_ends_at, chrono::Utc::now());
+    if let Some(end) = trial_end.as_deref() {
+        params.push(("subscription_data[trial_end]", end));
+    }
     let mut customer = None;
     params.extend(customer_params(&state.db, auth.id, &email, &mut customer).await?);
     params.push(("automatic_tax[enabled]", "true"));
@@ -183,6 +197,42 @@ async fn create_checkout(
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("No URL in Stripe response")))?;
 
     Ok(Json(json!({ "url": url })))
+}
+
+/// The Stripe `trial_end` (unix seconds) carrying a running trial over to a
+/// new subscription, when enough of it is left.
+fn trial_carry_over(
+    trial_ends_at: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
+    trial_ends_at
+        .filter(|end| *end - now >= chrono::Duration::hours(MIN_TRIAL_CARRY_HOURS))
+        .map(|end| end.timestamp().to_string())
+}
+
+/// Starts the caller's 30-day Personal trial (`trial::start`): Free accounts
+/// that never had one. Answers its end.
+async fn start_trial(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Value>> {
+    if !state.trial_enabled {
+        return Err(ApiError::NotFound);
+    }
+    let Some(ends) = crate::trial::start(&state.db, auth.id).await? else {
+        return Err(ApiError::BadRequest(
+            "No trial available for this account".into(),
+        ));
+    };
+    tracing::info!("user {} started the Personal trial", auth.id);
+    if let Some(email) = auth.email.as_deref() {
+        crate::email::send_trial_started_email(
+            state.send_emails,
+            state.resend_api_key.as_deref(),
+            &state.from_email,
+            email,
+            ends,
+        )
+        .await;
+    }
+    Ok(Json(json!({ "plan": "personal", "trial_ends_at": ends })))
 }
 
 /// Team Lite subscription checkout. Body `{ "annual": bool }`.
@@ -539,10 +589,12 @@ async fn webhook(
                 tracing::info!("team {team_id} dissolved on subscription cancel");
             } else {
                 // Personal subscription ended: back to Free (a team plan, if
-                // any, stays; it no longer falls back to Personal).
+                // any, stays; it no longer falls back to Personal), or to the
+                // trial when one is still running.
                 let ended = sqlx::query(
                     "UPDATE users SET has_personal_cloud = false, personal_subscription_id = NULL, \
-                     plan = CASE WHEN plan = 'personal' THEN 'free' ELSE plan END \
+                     plan = CASE WHEN plan = 'personal' AND NOT COALESCE(trial_ends_at > NOW(), false) \
+                     THEN 'free' ELSE plan END \
                      WHERE personal_subscription_id = $1",
                 )
                 .bind(sub_id)
@@ -685,6 +737,40 @@ mod db_tests {
         .fetch_one(db)
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_subscription_ending_during_the_trial_goes_back_to_the_trial() {
+        let (app, db, _guard) = app().await;
+        let user = create_user(&db, "free").await;
+        crate::trial::start(&db, user).await.unwrap();
+        assert_eq!(
+            send_event(&app, completed(user, "personal", "sub_t")).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            row(&db, user).await,
+            ("personal".into(), true, Some("sub_t".into()))
+        );
+        assert_eq!(send_event(&app, deleted("sub_t")).await, StatusCode::OK);
+        assert_eq!(row(&db, user).await, ("personal".into(), false, None));
+    }
+
+    #[tokio::test]
+    async fn a_team_ending_during_the_trial_goes_back_to_the_trial() {
+        let (app, db, _guard) = app().await;
+        let owner = create_user(&db, "free").await;
+        crate::trial::start(&db, owner).await.unwrap();
+        assert_eq!(
+            send_event(&app, completed(owner, "team_lite", "sub_team_t")).await,
+            StatusCode::OK
+        );
+        assert_eq!(row(&db, owner).await.0, "team_lite");
+        assert_eq!(
+            send_event(&app, deleted("sub_team_t")).await,
+            StatusCode::OK
+        );
+        assert_eq!(row(&db, owner).await, ("personal".into(), false, None));
     }
 
     #[tokio::test]
@@ -968,5 +1054,29 @@ mod db_tests {
             StatusCode::OK
         );
         assert_eq!(row(&pool, user).await.2.as_deref(), Some("sub_1"));
+    }
+}
+
+#[cfg(test)]
+mod trial_tests {
+    use super::*;
+
+    #[test]
+    fn the_remaining_trial_carries_over_only_when_stripe_accepts_it() {
+        let now = chrono::Utc::now();
+        let end = now + chrono::Duration::days(12);
+        assert_eq!(
+            trial_carry_over(Some(end), now),
+            Some(end.timestamp().to_string())
+        );
+        assert_eq!(
+            trial_carry_over(Some(now + chrono::Duration::hours(30)), now),
+            None
+        );
+        assert_eq!(
+            trial_carry_over(Some(now - chrono::Duration::days(1)), now),
+            None
+        );
+        assert_eq!(trial_carry_over(None, now), None);
     }
 }

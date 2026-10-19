@@ -32,6 +32,12 @@ struct SyncUserResponse {
     accounts_count: i32,
     syncs_this_month: i64,
     devices_count: i64,
+    /// End of the Personal trial (also once it's over: it was used).
+    trial_ends_at: Option<chrono::DateTime<Utc>>,
+    /// In the trial now (plan is `personal` because of it).
+    trial_active: bool,
+    /// Can start one (`POST /billing/trial`).
+    trial_available: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -72,15 +78,25 @@ async fn sync_user(
     // rows_affected == 1 means the row was just inserted → brand-new account.
     let is_new_user = insert.rows_affected() == 1;
     if is_new_user {
+        // New accounts start with the Personal trial.
+        let trial_ends = if state.trial_enabled {
+            crate::trial::start(&state.db, auth.id).await?
+        } else {
+            None
+        };
         if let Some(email) = auth.email.as_deref() {
             crate::email::send_welcome_email(
                 state.send_emails,
                 state.resend_api_key.as_deref(),
                 &state.from_email,
                 email,
+                trial_ends,
             )
             .await;
         }
+    } else {
+        // Seen as Free right when the trial ends, not at the next hourly pass.
+        crate::trial::expire(&state.db, Some(auth.id)).await?;
     }
 
     // Persist the email (from the JWT) so team features can show it.
@@ -201,12 +217,16 @@ async fn sync_user(
             (SELECT COUNT(*) FROM sync_logs
              WHERE user_id = u.id
                AND created_at >= date_trunc('month', NOW())) AS syncs_this_month,
-            (SELECT COUNT(*) FROM devices WHERE user_id = u.id) AS devices_count
+            (SELECT COUNT(*) FROM devices WHERE user_id = u.id) AS devices_count,
+            u.trial_ends_at,
+            (u.plan = 'personal' AND NOT u.has_personal_cloud AND COALESCE(u.trial_ends_at > NOW(), false)) AS trial_active,
+            ($2 AND u.plan = 'free' AND u.trial_ends_at IS NULL AND NOT u.has_personal_cloud) AS trial_available
         FROM users u
         WHERE u.id = $1
         "#,
     )
     .bind(auth.id)
+    .bind(state.trial_enabled)
     .fetch_one(&state.db)
     .await?;
 
@@ -781,5 +801,73 @@ mod db_tests {
         let (s, _) = call(&app, user, Method::DELETE, "/users/me", None).await;
         assert_eq!(s, StatusCode::NO_CONTENT);
         assert!(!exists(&db.pool, "SELECT 1 FROM users WHERE id = $1", user).await);
+    }
+
+    fn trial_app(db: &sqlx::PgPool) -> Router {
+        let mut state = test_state(db.clone());
+        state.trial_enabled = true;
+        router()
+            .merge(crate::routes::billing::router())
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn a_new_account_starts_the_trial_once() {
+        let db = test_db().await;
+        let app = trial_app(&db.pool);
+        let user = Uuid::new_v4();
+        let (s, body) = call(&app, user, Method::POST, "/auth/sync-user", None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body["plan"], "personal");
+        assert_eq!(body["trial_active"], true);
+        assert_eq!(body["trial_available"], false);
+        assert!(body["trial_ends_at"].is_string());
+
+        // Asking again changes nothing.
+        let (s, _) = call(&app, user, Method::POST, "/billing/trial", None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+
+        // Over: the next sync-user sees Free right away.
+        sqlx::query("UPDATE users SET trial_ends_at = NOW() - interval '1 minute' WHERE id = $1")
+            .bind(user)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let (_, body) = call(&app, user, Method::POST, "/auth/sync-user", None).await;
+        assert_eq!(body["plan"], "free");
+        assert_eq!(body["trial_active"], false);
+        assert_eq!(body["trial_available"], false);
+    }
+
+    #[tokio::test]
+    async fn an_existing_free_account_can_start_the_trial() {
+        let db = test_db().await;
+        let app = trial_app(&db.pool);
+        let user = create_user(&db.pool, "free").await;
+        let (_, body) = call(&app, user, Method::POST, "/auth/sync-user", None).await;
+        assert_eq!(
+            (body["plan"].as_str(), body["trial_available"].as_bool()),
+            (Some("free"), Some(true))
+        );
+
+        let (s, body) = call(&app, user, Method::POST, "/billing/trial", None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body["plan"], "personal");
+        let (_, body) = call(&app, user, Method::POST, "/auth/sync-user", None).await;
+        assert_eq!(body["trial_active"], true);
+    }
+
+    #[tokio::test]
+    async fn without_the_flag_there_is_no_trial() {
+        let db = test_db().await;
+        let app = router()
+            .merge(crate::routes::billing::router())
+            .with_state(test_state(db.pool.clone()));
+        let user = Uuid::new_v4();
+        let (_, body) = call(&app, user, Method::POST, "/auth/sync-user", None).await;
+        assert_eq!(body["plan"], "free");
+        assert_eq!(body["trial_available"], false);
+        let (s, _) = call(&app, user, Method::POST, "/billing/trial", None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
     }
 }
