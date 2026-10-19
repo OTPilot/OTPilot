@@ -21,7 +21,7 @@ const faqs = [
   },
   {
     q: 'Can I try Personal before paying?',
-    a: 'Yes. A new account gets 30 days of Personal free, with no card: sync your whole vault across every browser while it lasts. An account created earlier on the free plan can start the same trial from the billing page or the extension\'s Sync view, once. When it ends you go back to Free and nothing is deleted; subscribing during the trial keeps its remaining days free.',
+    a: 'Yes. A new account gets 30 days of Personal free, with no card: sync your whole vault across every browser while it lasts. An account created earlier on the free plan can start the same trial from the billing page or the extension\'s Sync view, once. When it ends you go back to Free and nothing is deleted. Subscribing with more than two days of the trial left keeps them free: the first charge comes when the trial would have ended.',
   },
   {
     q: 'How does billing work? Can I cancel?',

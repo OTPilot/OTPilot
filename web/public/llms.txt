@@ -22,7 +22,7 @@ OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) code
 - Recovery phrase phishing warning: when a recovery phrase is typed or pasted into a website (one field or a grid of word boxes), OTPilot warns that no real site asks for it — checked on the device, nothing is sent
 - End-to-end encrypted: the vault is encrypted on your device under a master password
 - Sync across devices (Personal plan, free for 30 days); import from Chrome, 1Password, Bitwarden, LastPass and more
-- Sign in with Google or with a code sent by email
+- Sign in with Google or by email (a link on the website, a code in the extension)
 - Team sharing: share a whole item or chosen fields end-to-end encrypted, or share live 2FA codes without the secret
 - AI agents (new in 2.1): Claude Code, Codex, Cursor or any MCP agent can sign in and run commands with the accounts you allow, without the secrets ever reaching the model
 - Open source, no telemetry

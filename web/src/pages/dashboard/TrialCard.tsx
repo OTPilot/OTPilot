@@ -60,13 +60,18 @@ function TrialOffer() {
   async function start() {
     setBusy(true)
     setError(null)
-    const res = await apiFetch('/billing/trial', { method: 'POST' })
-    setBusy(false)
-    if (!res.ok) {
-      setError(res.status === 400 ? 'This account already had its trial.' : 'Could not start the trial. Try again in a moment.')
-      return
+    try {
+      const res = await apiFetch('/billing/trial', { method: 'POST' })
+      if (!res.ok) {
+        setError(res.status === 400 ? 'This account already had its trial.' : 'Could not start the trial. Try again in a moment.')
+        return
+      }
+      await queryClient.invalidateQueries({ queryKey: ['user-plan'] })
+    } catch {
+      setError('Could not reach OTPilot. Check your connection and try again.')
+    } finally {
+      setBusy(false)
     }
-    await queryClient.invalidateQueries({ queryKey: ['user-plan'] })
   }
 
   return (
