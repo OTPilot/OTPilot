@@ -73,11 +73,15 @@ pub fn spawn(state: AppState) {
     });
 }
 
+/// A user an email is due for, with what it says (counted in the claiming
+/// UPDATE itself: no per-user query can fail after the claim).
 #[derive(sqlx::FromRow)]
 struct Due {
-    id: Uuid,
     email: String,
     trial_ends_at: DateTime<Utc>,
+    /// Synced items (reminder) / items the Free limit counts (ended).
+    items: i64,
+    devices: i64,
 }
 
 /// One pass: expire, then the reminder and "ended" emails due now.
@@ -92,21 +96,22 @@ pub async fn tick(state: &AppState) -> Result<()> {
          WHERE plan = 'personal' AND NOT has_personal_cloud
            AND trial_ends_at > NOW() AND trial_ends_at <= NOW() + make_interval(days => $1)
            AND trial_reminder_sent_at IS NULL AND email IS NOT NULL AND deletion_started_at IS NULL
-         RETURNING id, email, trial_ends_at",
+         RETURNING email, trial_ends_at,
+           (SELECT COUNT(*) FROM vault_items v WHERE v.owner_id = users.id AND v.deleted_at IS NULL) AS items,
+           (SELECT COUNT(*) FROM devices d WHERE d.user_id = users.id) AS devices",
     )
     .bind(REMINDER_DAYS)
     .fetch_all(&state.db)
     .await?;
     for due in reminders {
-        let (items, devices) = usage(&state.db, due.id).await?;
         crate::email::send_trial_reminder_email(
             state.send_emails,
             state.resend_api_key.as_deref(),
             &state.from_email,
             &due.email,
             due.trial_ends_at,
-            items,
-            devices,
+            due.items,
+            due.devices,
         )
         .await;
     }
@@ -116,41 +121,25 @@ pub async fn tick(state: &AppState) -> Result<()> {
          WHERE plan = 'free' AND NOT has_personal_cloud
            AND trial_ends_at <= NOW() AND trial_ends_at > NOW() - make_interval(days => $1)
            AND trial_ended_sent_at IS NULL AND email IS NOT NULL AND deletion_started_at IS NULL
-         RETURNING id, email, trial_ends_at",
+         RETURNING email, trial_ends_at,
+           (SELECT COUNT(*) FROM vault_items v
+            WHERE v.owner_id = users.id AND v.deleted_at IS NULL AND v.counts_for_limit) AS items,
+           0::bigint AS devices",
     )
     .bind(ENDED_EMAIL_DAYS)
     .fetch_all(&state.db)
     .await?;
     for due in ended {
-        let counted: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM vault_items
-             WHERE owner_id = $1 AND deleted_at IS NULL AND counts_for_limit",
-        )
-        .bind(due.id)
-        .fetch_one(&state.db)
-        .await?;
         crate::email::send_trial_ended_email(
             state.send_emails,
             state.resend_api_key.as_deref(),
             &state.from_email,
             &due.email,
-            counted,
+            due.items,
         )
         .await;
     }
     Ok(())
-}
-
-/// The user's synced items and registered devices.
-async fn usage(db: &PgPool, user: Uuid) -> Result<(i64, i64)> {
-    Ok(sqlx::query_as(
-        "SELECT
-            (SELECT COUNT(*) FROM vault_items WHERE owner_id = $1 AND deleted_at IS NULL),
-            (SELECT COUNT(*) FROM devices WHERE user_id = $1)",
-    )
-    .bind(user)
-    .fetch_one(db)
-    .await?)
 }
 
 #[cfg(all(test, feature = "db-tests"))]

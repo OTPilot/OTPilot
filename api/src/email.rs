@@ -443,10 +443,10 @@ pub async fn send_trial_started_email(
     send(enabled, api_key, from, to, mail).await;
 }
 
-/// Whole days left until `ends`, rounded up (a trial ending in 50 hours has
-/// 3 days left).
+/// Whole days left until `ends`, rounded up (a trial ending in 48 h 30 min
+/// has 3 days left).
 fn days_left(ends: DateTime<Utc>, now: DateTime<Utc>) -> i64 {
-    ((ends - now).num_hours() + 23).div_euclid(24).max(1)
+    ((ends - now).num_minutes() + 1439).div_euclid(1440).max(1)
 }
 
 /// `trial::REMINDER_DAYS` before the trial ends.
@@ -685,6 +685,14 @@ mod tests {
         assert_eq!(days_left(now + chrono::Duration::hours(50), now), 3);
         assert_eq!(days_left(now + chrono::Duration::hours(72), now), 3);
         assert_eq!(days_left(now + chrono::Duration::hours(5), now), 1);
+        assert_eq!(
+            days_left(now + chrono::Duration::minutes(48 * 60 + 30), now),
+            3
+        );
+        assert_eq!(
+            days_left(now + chrono::Duration::minutes(24 * 60 + 30), now),
+            2
+        );
     }
 
     #[test]
