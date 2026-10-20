@@ -1,6 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "OTPilot",
+  "name": "OTPilot – Password Manager, 2FA Authenticator & AI Agents",
+  "short_name": "OTPilot",
   "version": "2.1.9",
   "description": "Password manager with built-in 2FA, SSH keys, crypto wallets and safe sign-in for AI agents. Fills logins and 2FA codes anywhere.",
   "background": {
