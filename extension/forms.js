@@ -80,7 +80,48 @@
     // A change-password page with two unnamed fields: current, then new.
     if (CHANGE_PW_PAGE.test(location.pathname) && group.length === 2 && group[0] === el) return false;
     if (NEW_PW_PAGE.test(location.pathname)) return true;
-    return group.length >= 2;
+    if (group.length >= 2) return true;
+    // One field alone: new when what submits its form creates an account.
+    return submitCreatesAccount(el);
+  };
+  // "Sign up" / "Register" / "Create account" — never Sign in, Continue,
+  // Next or Submit alone, and not a bare "Join" (Join meeting, Join the
+  // discussion): only "Join now / free / today".
+  const CREATE_ACCOUNT = /\b(sign\s*up|registr\w*|join\s+(?:now|free|for\s+free|today)|create\s+(?:an?\s+|your\s+|new\s+)?account)\b/i;
+  const createsAccount = b => !!b && CREATE_ACCOUNT.test(buttonLabel(b)) && !NOT_SUBMIT.test(buttonLabel(b));
+  const CONTROLS = 'button, input[type="submit"], input[type="button"], [role="button"]';
+  // The field's form (or panel) creates an account: its submit control says
+  // so and no control next to it signs in. A combined sign-in / sign-up form
+  // or panel is a sign-in, whatever comes first in the DOM.
+  const submitCreatesAccount = el => {
+    // A control that creates an account ('Create account and continue')
+    // doesn't sign in, unless its label also says so.
+    const hasSignIn = root => [...root.querySelectorAll(CONTROLS)].some(b => isVisible(b) && signsInToSubmit(b)
+      && !(createsAccount(b) && !/\b(sign\s*in|log\s*in|login)\b/i.test(buttonLabel(b))));
+    if (el.form) {
+      if (hasSignIn(el.form)) return false;
+      return createsAccount(findSubmitButton(el.form) || formButton(el.form, createsAccount));
+    }
+    // Its username field (the nearest one before it) belongs to the panel.
+    const before = [...document.querySelectorAll('input')].filter(i => !i.form && i !== el
+      && ['text', 'email', 'tel'].includes(i.type) && isVisible(i)
+      && (i.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING));
+    // The username belongs to the panel only when it sits close to the
+    // password: a common ancestor within 4 levels. Never a search field.
+    const prev = before[before.length - 1];
+    let near = false;
+    if (prev && !isSearchField(prev)) {
+      let a = el.parentElement;
+      for (let i = 0; a && i < 4 && !near; i++, a = a.parentElement) near = a.contains(prev);
+    }
+    const own = near ? [el, prev] : [el];
+    // Bounded to the same 4 levels as `own`: a "Sign up" further away than
+    // the field's own panel (a footer) isn't this field's submit control.
+    const hit = buttonNear(el, createsAccount, own, 4);
+    if (!hit) return false;
+    let panel = el.parentElement;
+    while (panel && !panel.contains(hit)) panel = panel.parentElement;
+    return !(panel && hasSignIn(panel));
   };
 
   // The sign-in password field and its username field (or null).
@@ -753,10 +794,10 @@
   // A search box is never part of a sign-in, filled or not.
   const isSearchField = el => el.type === 'search' || el.getAttribute('role') === 'searchbox'
     || /^(q|query|s|search)$|search/i.test(`${el.name || ''} ${el.id || ''}`.trim());
-  function buttonNear(field, accepts, own = [field]) {
+  function buttonNear(field, accepts, own = [field], maxLevels = Infinity) {
     const other = el => !el.form && !own.includes(el) && FIELD_TYPES.includes(el.type) && isVisible(el)
       && (!el.value || isSearchField(el));
-    for (let scope = field.parentElement; scope && scope !== document.documentElement; scope = scope.parentElement) {
+    for (let scope = field.parentElement, level = 0; scope && scope !== document.documentElement && level < maxLevels; scope = scope.parentElement, level++) {
       if ([...scope.querySelectorAll('input')].some(other)) break;
       const hit = [...scope.querySelectorAll('button, input[type="submit"], input[type="button"]')]
         .find(b => !b.form && isVisible(b) && accepts(b));
