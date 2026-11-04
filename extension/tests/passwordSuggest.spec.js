@@ -140,3 +140,161 @@ test('a field labelled "Confirm current password" is never filled with the new o
   await expect(site.locator('input[name="a"]')).toHaveValue('');
   await expect(site.locator('input[name="b"]')).toHaveValue(value);
 });
+
+test('a single password field whose submit reads "Create account" gets the suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-create-button.html`);
+  await site.focus('input[name="pw"]');
+  await expect(site.locator('#otpilot-password-suggest')).toBeVisible();
+});
+
+test('a sign-in form with a "Sign up" control beside "Sign in" gets no suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-signin-link.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+test('a combined form with an implicit "Sign up" before "Sign in" stays a sign-in', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-combined-implicit.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+test('a "Join meeting" password form gets no suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-join-meeting.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+test('a form-less sign-in panel with "Sign up" before "Sign in" gets no suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-panel-both-a.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+test('a form-less sign-in panel with "Sign in" before "Sign up" gets no suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-panel-both-b.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+test('a form-less registration panel with "Create account" gets the suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-panel-create.html`);
+  await site.focus('input[name="pw"]');
+  await expect(site.locator('#otpilot-password-suggest')).toBeVisible();
+});
+
+test('a form whose single submit reads "Create account and continue" gets the suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-create-continue.html`);
+  await site.focus('input[name="pw"]');
+  await expect(site.locator('#otpilot-password-suggest')).toBeVisible();
+});
+
+test('one button "Sign in or create account" stays a sign-in: no suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-signin-or-create.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+test('a far-away header field no longer widens a form-less panel to a distant "Sign up"', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-panel-far-header.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+test('"Continue with Google" beside "Sign up" and a real sign-in button gets no suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-provider-buttons.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+// Documented behavior, not a wish: with no form, a search field next to the
+// password is never taken for its username (`own`), and being a stray input it
+// stops buttonNear's widening before it reaches "Create account": no offer.
+test('a search field beside a form-less password stops the panel from reaching "Create account": no suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-panel-search-near.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+// A lone password field is searched for its Sign up only within its own panel
+// (4 levels): a filled far-away header field plus a footer "Sign up" is no offer.
+test('a distant footer "Sign up" past a filled far-away header field gets no suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-panel-far-filled.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(600);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
+
+test('a form-less registration panel with name and email already filled still gets the suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-panel-filled-create.html`);
+  await site.focus('input[name="pw"]');
+  await expect(site.locator('#otpilot-password-suggest')).toBeVisible();
+});
+
+// Boundary of the form-less reach (buttonNear levels 1..4 from the password's
+// parentElement). Fixture ancestors: d1, d2, d3, d4 = 4th, then body.
+test('a form-less "Create account" whose common container is the 4th ancestor gets the suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-panel-reach-4.html`);
+  await site.focus('input[name="pw"]');
+  await expect(site.locator('#otpilot-password-suggest')).toBeVisible();
+});
+
+// Same structure with one more wrapper: the common container is the 5th ancestor.
+test('a form-less "Create account" whose common container is the 5th ancestor gets no suggestion', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/suggest-panel-reach-5.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
