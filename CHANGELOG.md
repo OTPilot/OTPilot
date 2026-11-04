@@ -1,6 +1,13 @@
 # Changelog
 
 
+## v2.1.9
+
+### Extension
+
+- Chrome Web Store name: "OTPilot – Password Manager, 2FA Authenticator & AI Agents" (another listing uses "OTPilot Authenticator"); the toolbar still reads "OTPilot".
+
+
 ## v2.1.8
 
 ### Extension
