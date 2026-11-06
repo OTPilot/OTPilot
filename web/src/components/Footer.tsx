@@ -13,7 +13,8 @@ const COLUMNS: { title: string; links: { href: string; label: string; external?:
       { href: '/ai-agents', label: 'AI agents' },
       { href: '/#pricing', label: 'Pricing' },
       { href: '/#faq', label: 'FAQ' },
-      { href: '/security', label: 'Security' },
+      { href: '/#security', label: 'Security' },
+      { href: '/security', label: 'Security model' },
     ],
   },
   { title: 'Compare', links: GUIDES.filter(g => g.kind === 'compare').map(g => ({ href: g.path, label: g.nav })) },
@@ -22,7 +23,7 @@ const COLUMNS: { title: string; links: { href: string; label: string; external?:
     title: 'Company',
     links: [
       { href: 'mailto:hello@otpilot.app', label: 'Contact' },
-      { href: 'https://github.com/otpilot-app/otpilot', label: 'GitHub', external: true },
+      { href: 'https://github.com/OTPilot/OTPilot', label: 'GitHub', external: true },
       { href: '/tos', label: 'Terms of Service' },
       { href: '/privacy', label: 'Privacy Policy' },
       { href: '/gdpr', label: 'GDPR' },
