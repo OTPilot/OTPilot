@@ -33,7 +33,27 @@ const faqs = [
   },
   {
     q: 'How does sharing with my team work?',
-    a: 'Two ways. Collections share everything (passwords, notes, 2FA) with the teammates you choose, end-to-end encrypted: each member gets the collection key wrapped to their own device key, so our servers never see the content. Members can view, edit or manage a collection. Or share just a live 2FA code: the secret is split in two halves, one on the teammate\'s device and one on our server, and the teammate only ever sees the current 6-digit code, never the secret.',
+    a: 'Two ways. Collections share everything (passwords, notes, 2FA) with the teammates you choose, end-to-end encrypted: each member gets the collection key wrapped to their own device key, so our servers never see the content. Members can view, edit or manage a collection. Or share just a live 2FA code: the key that protects the secret is split in two halves, one wrapped to the teammate\'s device key and one on our server, and the teammate only ever gets the current 6-digit code, never the secret. See "How does team 2FA sharing work?" for what that does and doesn\'t protect.',
+  },
+  {
+    q: 'How does team 2FA sharing work?',
+    a: 'The secret is encrypted with a key, and that key is split in two halves: one wrapped to the teammate\'s device key, the other kept on our server. Teammates get the live code, never the secret: they can\'t copy it, export it or add it to another app. To make each code the app sends its half, the server rebuilds the key, decrypts the secret for a moment, makes the code and discards both. So team 2FA codes are not end-to-end encrypted: our server sees the secret while it makes a code. The split protects against a database leak. Code use shows in the team activity log (team owner): views, and copies as reported by the teammate\'s app. Stop sharing at any time; remove a teammate and their access ends at once. Your personal vault, shared items, collections and agent copies are end-to-end encrypted.',
+  },
+  {
+    q: 'How does OTPilot protect AI agents without exposing secrets?',
+    a: 'An agent talks to the OTPilot MCP server on your computer, and no tool returns a secret. It asks OTPilot to sign in or run a command; OTPilot uses the password and 2FA code itself. Each allowed account is encrypted end-to-end for that agent\'s own key, a sign-in works only on the account\'s own site over HTTPS (plain HTTP only for local addresses), and a command gets its secrets as environment variables, with the output scrubbed.',
+  },
+  {
+    q: 'Can I control what an agent accesses?',
+    a: 'Yes. A new agent starts with zero accounts and you approve it in the extension after comparing its XXXX-XXXX code. Then you allow accounts one by one, each with a scope (2FA code only, the whole sign-in, or chosen fields), an expiry or "ask every time", and a command allowlist. You can revoke an agent or a single account at any time.',
+  },
+  {
+    q: 'Can I audit what an agent did?',
+    a: 'Yes. Every use through OTPilot\'s tools is logged in the extension\'s Agents view: which agent, which account and what it did, never a value.',
+  },
+  {
+    q: "What can't it protect against?",
+    a: 'An approved agent acts with its account, so only allow what you would trust it with. A command an agent runs could print a secret on purpose: output is scrubbed (base64, hex, URL and JSON forms), which is not a guarantee. A sign-in leaves a session file in .otpilot/ on your computer. An agent with its own shell on your machine can read the MCP\'s stored key and open the copies you granted, without a log entry. And nothing protects a compromised machine.',
   },
   {
     q: 'What happens if I leave a team, or the team plan is cancelled?',

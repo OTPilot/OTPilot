@@ -1,4 +1,6 @@
-const features = [
+import type { ReactNode } from 'react'
+
+const features: { id?: string; icon: ReactNode; title: string; description: string; accent: string; border: string; iconBg: string }[] = [
   {
     icon: (
       <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -18,7 +20,7 @@ const features = [
       </svg>
     ),
     title: 'End-to-end encrypted sync',
-    description: 'Every password, note and 2FA secret is encrypted on your device. The key lives only with you — our servers never see your data.',
+    description: 'Every password, note and 2FA secret is encrypted on your device. The key lives only with you — our servers never see your vault\'s contents.',
     accent: 'from-emerald-400/10 to-emerald-400/5',
     border: 'border-emerald-500/10',
     iconBg: 'bg-emerald-500/10 text-emerald-400',
@@ -29,8 +31,9 @@ const features = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
       </svg>
     ),
+    id: 'team-sharing',
     title: 'Secure team sharing',
-    description: 'Share collections of passwords with view or edit access, or just a live 2FA code without exposing its secret. Revoke anytime.',
+    description: 'Share collections of passwords with view or edit access, or just a live 2FA code without exposing its secret. Stop sharing at any time.',
     accent: 'from-cyan-400/10 to-cyan-400/5',
     border: 'border-cyan-500/10',
     iconBg: 'bg-cyan-500/10 text-cyan-400',
@@ -42,7 +45,7 @@ const features = [
       </svg>
     ),
     title: 'Works locally, always',
-    description: 'No account needed. Free covers unlimited 2FA codes and 50 passwords or notes, fully offline. Import from your old password manager in a click.',
+    description: 'Free covers unlimited 2FA codes and 50 passwords or notes, works offline. Import from your old password manager in a click.',
     accent: 'from-violet-400/10 to-violet-400/5',
     border: 'border-violet-500/10',
     iconBg: 'bg-violet-500/10 text-violet-400',
@@ -54,7 +57,7 @@ const features = [
       </svg>
     ),
     title: 'Open source',
-    description: 'The extension code is MIT licensed. The cloud backend is source-available. Audit it, trust it.',
+    description: 'The extension is GPL-3.0 and the API is AGPL-3.0. Read the code on GitHub, audit it, trust it.',
     accent: 'from-amber-400/10 to-amber-400/5',
     border: 'border-amber-500/10',
     iconBg: 'bg-amber-500/10 text-amber-400',
@@ -114,8 +117,9 @@ const features = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
       </svg>
     ),
+    id: 'developers',
     title: 'More than passwords',
-    description: 'Secure notes, servers and API keys, with your own fields grouped in sections. Link related items to an account and find everything in one place.',
+    description: 'Secure notes, servers, API keys, SSH keys and files (.env, .p8), with your own fields grouped in sections. Link related items to an account and find everything in one place.',
     accent: 'from-violet-400/10 to-violet-400/5',
     border: 'border-violet-500/10',
     iconBg: 'bg-violet-500/10 text-violet-400',
@@ -166,6 +170,7 @@ export default function Features() {
           {features.map((f) => (
             <div
               key={f.title}
+              id={f.id}
               className={`relative p-6 rounded-2xl border ${f.border} bg-gradient-to-br ${f.accent} backdrop-blur-sm group hover:border-white/10 transition-all`}
             >
               <div className={`w-10 h-10 rounded-xl ${f.iconBg} flex items-center justify-center mb-4`}>

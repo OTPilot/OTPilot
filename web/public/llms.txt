@@ -2,12 +2,12 @@
 
 > Password manager with built-in 2FA. Fills your password and your 2FA code on any login page. End-to-end encrypted, synced across devices, free to start.
 
-OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) codes together. On a login page it fills the username and password, then the 2FA code — no phone, no copying six digits. It also detects 2FA setup pages and saves the account in one click.
+OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) codes together. On a login page it fills the username and password, then the 2FA code — no phone, no copying six digits. It also detects 2FA setup pages and saves the account in one click. The homepage also covers team 2FA sharing, the security model and OTPilot for AI agents.
 
 ## Versions
 
 - 2.2: secure files and SSH keys — SSH keys (imported or generated), Apple .p8 keys, certificates, service-account JSON and .env files kept in the encrypted vault (up to 64 KB per item), usable by AI agents as a temporary file path; crypto wallets — recovery phrases checked against the BIP39 list, addresses per network with a QR code, and a warning when a website asks for a recovery phrase
-- 2.1 (October 2026): OTPilot for AI agents — an MCP server (`@otpilot/mcp`) lets Claude Code, Codex, Cursor or any MCP agent sign in and run commands with the accounts the user allows, without the agent seeing a password or a code
+- 2.1 (October 2026): OTPilot for AI agents — an MCP server (`@otpilot/mcp`) lets Claude Code, Codex, Cursor or any MCP agent sign in and run commands with the accounts the user allows, without handing the agent a password or a code
 - 2.0: a full password manager — passwords filled on login pages, an end-to-end encrypted vault (passwords, 2FA, notes, servers, API keys, custom fields), sync, team sharing and imports
 - 1.x: 2FA code auto-fill only (accounts move into the 2.0 vault automatically)
 
@@ -24,18 +24,20 @@ OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) code
 - Sync across devices (Personal plan, free for 30 days); import from Chrome, 1Password, Bitwarden, LastPass and more
 - Sign in with Google or by email (a link on the website, a code in the extension)
 - Team sharing: share a whole item or chosen fields end-to-end encrypted, or share live 2FA codes without the secret
-- AI agents (new in 2.1): Claude Code, Codex, Cursor or any MCP agent can sign in and run commands with the accounts you allow, without the secrets ever reaching the model
-- Open source, no telemetry
+- AI agents (new in 2.1): Claude Code, Codex, Cursor or any MCP agent can sign in and run commands with the accounts you allow, no tool returns a secret to the model
+- Team 2FA sharing: the key that protects the secret is split in two, teammates get the live code and never the secret, and the server sees the secret briefly while it makes each code (not end-to-end encrypted; the split protects against a database leak)
+- A security section on the homepage explains what is and isn't protected
+- Open source, no telemetry in the extension. Licences: extension GPL-3.0, API AGPL-3.0, MCP GPL-3.0, website MIT (https://github.com/OTPilot/OTPilot)
 
 ## Compared to alternatives
 
 - Google Authenticator / Authy: require your phone every login. OTPilot fills automatically.
-- 1Password / Bitwarden built-in TOTP: require cloud accounts. OTPilot is local by default.
+- 1Password / Bitwarden built-in TOTP: require cloud accounts. OTPilot needs no account for the vault.
 - Manual copy-paste: OTPilot eliminates this entirely.
 
 ## Team sharing
 
-OTPilot supports sharing TOTP codes with teammates without exposing the underlying secret. The owner uploads the secret encrypted with an independent sharing key. The backend generates the TOTP code on demand for recipients, who never receive the secret itself. Revocation is instant: the owner removes a recipient and their access is cut immediately. Sharing whole items (passwords, notes, fields) is separate and end-to-end encrypted: the server never sees them. Collections and shares can also be managed from the web dashboard, unlocked with the recovery key or, in Chrome and Edge, by the signed-in extension after the user allows it there.
+OTPilot supports sharing TOTP codes with teammates without exposing the underlying secret. The owner uploads the secret encrypted with an independent sharing key. The backend generates the TOTP code on demand for recipients, who never receive the secret itself. Stopping a share, or removing a teammate from the team, ends their access at once. The server rebuilds the secret briefly to make each code, so team codes are not end-to-end encrypted (the personal vault, item shares and collections are). Sharing whole items (passwords, notes, fields) is separate and end-to-end encrypted: the server never sees them. Collections and shares can also be managed from the web dashboard, unlocked with the recovery key or, in Chrome and Edge, by the signed-in extension after the user allows it there.
 
 Invitation flow:
 - With an account: invite appears directly in the extension
@@ -47,12 +49,12 @@ The user manages everything in the extension; the agent only talks to the OTPilo
 
 - Two approvals: an agent connects with a verification code checked in the extension and gets no accounts; each account is then allowed per agent, with a scope (2FA code only, whole sign-in, chosen fields) and a duration, or "ask every time"
 - Team plans: accounts teammates share with the user (directly or through a collection) can be allowed too; the agent's copy follows the shared item and goes when the user loses access to it
-- Each allowed account is encrypted for that agent's own key (kept in the OS keychain); the server only stores ciphertext; revoking an agent cuts its access
+- Each allowed account is encrypted for that agent's own key (kept in the OS keychain); the server stores ciphertext plus grant metadata (agent name, scopes, expiry, allowed commands, and the sites and programs each use touched); revoking an agent cuts its access
 - Activity log of every use; requests show on the extension's badge
 - Connect an agent: `npx -y @otpilot/mcp@latest connect` (prints a verification code; approve it in the extension's Agents view)
 - Files (SSH keys, .p8 keys, key files) reach a command as the path of a private temporary copy, deleted when it ends
 - A crypto wallet's recovery phrase, passphrase and private keys can never be allowed to an agent (its addresses can)
-- Limit: an agent that runs commands decides what they do and could try to reveal a secret on purpose; scrubbing, 2FA-only scopes and per-use approval narrow it
+- Limit: an agent that runs commands decides what they do and could try to reveal a secret on purpose (a command can print a secret); an agent with its own shell on the machine can read the MCP's stored key and open the copies it was granted, without a log entry; scrubbing, 2FA-only scopes and per-use approval narrow it
 
 ## Plans
 
