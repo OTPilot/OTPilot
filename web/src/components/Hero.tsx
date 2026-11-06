@@ -1,174 +1,138 @@
-import type { ReactElement } from 'react'
-import { detectBrowser, browserMeta, CHROME_STORE_URL, type Browser } from '../lib/browser'
+import { useState } from 'react'
+import { useBrowser, browserMeta, type Browser } from '../lib/browser'
+import HeroDemo from './HeroDemo'
 
-const BROWSER_ICONS: Record<Browser, ReactElement> = {
-  chrome: (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="12" r="10" fill="#EA4335"/>
-      <path d="M12 2a10 10 0 0 1 8.66 5H12a5 5 0 0 0 0 10l-4.33 7.5A10 10 0 0 1 12 2z" fill="#34A853"/>
-      <path d="M20.66 7H12a5 5 0 0 0-4.33 7.5L3.34 7A10 10 0 0 1 20.66 7z" fill="#4285F4"/>
-      <circle cx="12" cy="12" r="4" fill="white"/>
-      <circle cx="12" cy="12" r="3.2" fill="#1A73E8"/>
-    </svg>
-  ),
-  edge: (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
-      <path d="M21 12.5C21 7.25 17 3 12 3 7.86 3 4.4 5.7 3.24 9.5H12c2.76 0 5 2.24 5 5 0 1.38-.56 2.63-1.46 3.54C17.85 17.2 21 15.1 21 12.5z" fill="#0078D4"/>
-      <path d="M3 12.5c0 4.14 3.36 7.5 7.5 7.5 1.93 0 3.7-.73 5.04-1.96C14.56 17.13 14 15.88 14 14.5c0-1.38.56-2.63 1.46-3.54H8C5.24 10.96 3 11.6 3 12.5z" fill="#50E6FF"/>
-    </svg>
-  ),
-  firefox: (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="12" r="9.5" fill="#FF9500"/>
-      <path d="M18.5 8c-1-2.5-3.2-4-5.5-4-1.2 0-2.3.4-3.2 1-.9.6-1.6 1.4-2 2.3C6.5 8.7 6 10.3 6 12c0 3.3 2.7 6 6 6s6-2.7 6-6c0-1.4-.5-2.7-1.5-3.7L18.5 8z" fill="#FF6611"/>
-      <path d="M12 5c1.7 0 3.2.8 4.2 2H12c-2.2 0-4 1.8-4 4 0 .7.2 1.4.5 2H7.2C6.4 11.7 6 10.9 6 10c0-2.8 2.7-5 6-5z" fill="#FFCC00"/>
-    </svg>
-  ),
-  safari: (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="12" r="10" fill="#006CFF"/>
-      <circle cx="12" cy="12" r="10" fill="url(#safari-grad)"/>
-      <line x1="12" y1="3" x2="12" y2="21" stroke="white" strokeWidth="0.5" strokeOpacity="0.3"/>
-      <line x1="3" y1="12" x2="21" y2="12" stroke="white" strokeWidth="0.5" strokeOpacity="0.3"/>
-      <polygon points="12,6 13.5,12 12,10 10.5,12" fill="#FF3B30"/>
-      <polygon points="12,18 10.5,12 12,14 13.5,12" fill="white"/>
-      <defs>
-        <radialGradient id="safari-grad" cx="50%" cy="30%">
-          <stop offset="0%" stopColor="#40AFFF"/>
-          <stop offset="100%" stopColor="#0055CC"/>
-        </radialGradient>
-      </defs>
-    </svg>
-  ),
-  other: (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="12" r="10" fill="#EA4335"/>
-      <path d="M12 2a10 10 0 0 1 8.66 5H12a5 5 0 0 0 0 10l-4.33 7.5A10 10 0 0 1 12 2z" fill="#34A853"/>
-      <path d="M20.66 7H12a5 5 0 0 0-4.33 7.5L3.34 7A10 10 0 0 1 20.66 7z" fill="#4285F4"/>
-      <circle cx="12" cy="12" r="4" fill="white"/>
-      <circle cx="12" cy="12" r="3.2" fill="#1A73E8"/>
-    </svg>
-  ),
+function BrowserIcon({ browser }: { browser: Browser }) {
+  switch (browser) {
+    case 'edge':
+      return (
+        <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M21 12.5C21 7.25 17 3 12 3 7.86 3 4.4 5.7 3.24 9.5H12c2.76 0 5 2.24 5 5 0 1.38-.56 2.63-1.46 3.54C17.85 17.2 21 15.1 21 12.5z" fill="#0078D4"/>
+          <path d="M3 12.5c0 4.14 3.36 7.5 7.5 7.5 1.93 0 3.7-.73 5.04-1.96C14.56 17.13 14 15.88 14 14.5c0-1.38.56-2.63 1.46-3.54H8C5.24 10.96 3 11.6 3 12.5z" fill="#50E6FF"/>
+        </svg>
+      )
+    default:
+      return (
+        <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" fill="#EA4335"/>
+          <path d="M12 2a10 10 0 0 1 8.66 5H12a5 5 0 0 0 0 10l-4.33 7.5A10 10 0 0 1 12 2z" fill="#34A853"/>
+          <path d="M20.66 7H12a5 5 0 0 0-4.33 7.5L3.34 7A10 10 0 0 1 20.66 7z" fill="#4285F4"/>
+          <circle cx="12" cy="12" r="4" fill="white"/>
+          <circle cx="12" cy="12" r="3.2" fill="#1A73E8"/>
+        </svg>
+      )
+  }
 }
 
-const STRIP_BROWSERS: Browser[] = ['chrome', 'edge', 'firefox', 'safari']
+function Arrow({ className = 'w-4 h-4' }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+    </svg>
+  )
+}
+
+const ICON = 'w-4 h-4'
+const iconProps = { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const
+
+// The 4th trust item follows the demo's tab.
+const TRUST_4 = [
+  'AI agents only with your approval',
+  'Teammates get the code, never the secret',
+  'Approved per account, revocable',
+]
+
+// Only the browsers the extension ships on.
+const STRIP: Browser[] = ['chrome', 'edge']
+
+const PRIMARY = 'inline-flex items-center gap-2.5 min-h-12 px-6 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 text-black font-semibold hover:from-teal-400 hover:to-emerald-400 transition-colors shadow-lg shadow-teal-500/20'
 
 export default function Hero() {
-  const browser = detectBrowser()
-  const meta = browserMeta[browser]
+  const browser = useBrowser()
+  // No store listing (Firefox, Safari…): the Chrome CTA, as on 'other'.
+  const shown: Browser = browserMeta[browser].available ? browser : 'other'
+  const meta = browserMeta[shown]
+  const [tab, setTab] = useState(0)
+
+  const trust = [
+    { text: 'AES-256-GCM on your device', icon: <svg className={ICON} {...iconProps}><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg> },
+    { text: 'Master password never leaves it', icon: <svg className={ICON} {...iconProps}><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M16 7l3 3"/></svg> },
+    { text: 'Open source', icon: <svg className={ICON} {...iconProps}><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg> },
+    { text: TRUST_4[tab], icon: <svg className={ICON} {...iconProps}><path d="M12 3 4 6v6c0 4.5 3.2 7.8 8 9 4.8-1.2 8-4.5 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg> },
+  ]
 
   return (
-    <section className="relative min-h-screen flex items-center justify-center overflow-hidden pt-16">
-      {/* Background glow */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-teal-500/10 rounded-full blur-[120px]" />
-        <div className="absolute top-1/2 left-1/3 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-emerald-500/8 rounded-full blur-[100px]" />
+    <section className="relative overflow-hidden pt-[104px] pb-14 lg:pt-[120px] lg:pb-[72px]">
+      <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
+        <div className="absolute top-1/3 left-1/3 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-teal-500/10 rounded-full blur-[120px]" />
+        <div className="absolute top-1/2 right-0 -translate-y-1/2 w-[420px] h-[420px] bg-emerald-500/8 rounded-full blur-[100px]" />
       </div>
 
-      {/* Grid pattern */}
-      <div
-        className="absolute inset-0 opacity-[0.03]"
-        style={{
-          backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)',
-          backgroundSize: '60px 60px',
-        }}
-      />
+      <div className="relative z-10 max-w-6xl mx-auto px-6 grid gap-12 items-center lg:grid-cols-[minmax(0,1fr)_minmax(0,1.02fr)] lg:gap-14">
+        <div>
+          <a href="#ai-agents" className="inline-flex items-center gap-2 min-h-11 mb-1 text-[13px] text-zinc-400 hover:text-white transition-colors">
+            <span className="font-semibold text-violet-400">2.1</span> · AI agents
+            <Arrow className="w-3.5 h-3.5" />
+          </a>
 
-      <div className="relative z-10 max-w-6xl mx-auto px-6 text-center">
-        {/* Badge */}
-        <a
-          href="/ai-agents"
-          className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-5 py-2.5 rounded-2xl sm:rounded-full border border-violet-400/40 bg-violet-500/15 text-violet-200 text-sm md:text-base font-medium mb-10 shadow-lg shadow-violet-500/20 hover:border-violet-300/70 hover:bg-violet-500/20 transition-colors"
-        >
-          <span className="px-2 py-0.5 rounded-md bg-violet-400 text-black text-xs font-bold tracking-wider">NEW 2.1</span>
-          <span>
-            Let AI agents sign in <span className="text-white font-semibold">without seeing your passwords</span>
-            <svg className="inline w-4 h-4 ml-1 -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-            </svg>
-          </span>
-        </a>
+          <h1 className="mb-4 text-[clamp(38px,5.2vw,60px)] font-bold text-white tracking-tight leading-[1.06]">
+            Password manager with{' '}
+            <span className="bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent">built-in 2FA</span>
+            <span className="block mt-3.5 text-[clamp(19px,2.2vw,24px)] leading-snug font-normal tracking-normal text-zinc-400">
+              …and a safe way to let your AI agents sign in.
+            </span>
+          </h1>
 
-        <h1 className="text-5xl md:text-7xl font-bold text-white tracking-tight mb-6 leading-[1.05]">
-          Password manager{' '}
-          <br />with{' '}
-          <span className="bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent">
-            built-in 2FA
-          </span>
-        </h1>
+          <p className="mt-5 mb-7 max-w-[34em] text-lg leading-relaxed text-zinc-400">
+            Fills your password and your 2FA code on any login page. End-to-end encrypted. Free to start; sync across
+            devices with Personal.
+          </p>
 
-        <p className="text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto mb-10 leading-relaxed">
-          Fills your password and your 2FA code on any login page. End-to-end encrypted, synced
-          across devices, free to start.
-        </p>
-
-        <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-          {meta.available ? (
-            <a
-              href={meta.href!}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2.5 px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 text-black font-semibold hover:from-teal-400 hover:to-emerald-400 transition-all shadow-lg shadow-teal-500/20"
-            >
-              {BROWSER_ICONS[browser]}
+          <div className="flex flex-wrap gap-3">
+            <a href={meta.href!} target="_blank" rel="noopener noreferrer" className={PRIMARY}>
+              <BrowserIcon browser={shown} />
               Add to {meta.name} — It's free
             </a>
-          ) : (
-            <>
-              <span className="inline-flex items-center gap-2.5 px-6 py-3 rounded-xl bg-zinc-800/60 border border-zinc-700/50 text-zinc-500 font-semibold cursor-not-allowed select-none">
-                {BROWSER_ICONS[browser]}
-                {meta.name} — Coming soon
-              </span>
-              <a
-                href={CHROME_STORE_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2.5 px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 text-black font-semibold hover:from-teal-400 hover:to-emerald-400 transition-all shadow-lg shadow-teal-500/20"
-              >
-                {BROWSER_ICONS.chrome}
-                Get for Chrome instead
-              </a>
-            </>
-          )}
-          <a
-            href="#pricing"
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-white/10 text-zinc-300 text-sm font-medium hover:border-white/20 hover:text-white transition-all"
-          >
-            See cloud plans
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-            </svg>
-          </a>
-        </div>
+            <a
+              href="#security"
+              className="inline-flex items-center gap-2 min-h-12 px-[22px] rounded-xl border border-white/14 text-sm font-medium text-zinc-300 hover:border-white/28 hover:text-white transition-colors"
+            >
+              How it keeps you safe
+              <Arrow />
+            </a>
+          </div>
 
-        {/* Browser compatibility strip */}
-        <div className="mt-8 flex items-center justify-center gap-5">
-          {STRIP_BROWSERS.map(b => {
-            const m = browserMeta[b]
-            return m.available ? (
+          <ul className="mt-8 grid gap-x-5 gap-y-1 sm:grid-cols-2">
+            {trust.map((t, i) => (
+              <li key={i}>
+                <a href="#security" className="flex items-center gap-2.5 min-h-11 text-sm text-zinc-300 hover:text-white transition-colors">
+                  <span className="grid place-items-center shrink-0 w-[30px] h-[30px] rounded-lg bg-teal-500/10 border border-teal-400/20 text-teal-400">
+                    {t.icon}
+                  </span>
+                  <span>{t.text}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+
+          <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-1">
+            {STRIP.map(b => (
               <a
                 key={b}
-                href={m.href!}
+                href={browserMeta[b].href!}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                className="inline-flex items-center gap-1.5 min-h-11 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
               >
-                {BROWSER_ICONS[b]}
-                {m.name}
+                <BrowserIcon browser={b} />
+                {browserMeta[b].name}
               </a>
-            ) : (
-              <span key={b} className="flex items-center gap-1.5 text-xs text-zinc-700">
-                {BROWSER_ICONS[b]}
-                {m.name}
-                <span className="text-zinc-700 font-medium">· soon</span>
-              </span>
-            )
-          })}
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-zinc-500">No account required for the vault.</p>
         </div>
 
-        <p className="mt-5 text-xs text-zinc-600">
-          100% local by default · No account required · Open source
-        </p>
+        <HeroDemo tab={tab} onTabChange={setTab} />
       </div>
     </section>
   )
