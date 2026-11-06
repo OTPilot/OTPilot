@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { detectBrowser, browserMeta } from '../lib/browser'
+import { useBrowser, browserMeta } from '../lib/browser'
 import { FREE_AGENTS_LABEL } from '../lib/agents'
 
 // A plan line; `isNew` adds the NEW tag (features of the latest release).
@@ -7,7 +7,7 @@ type Feature = string | { text: string; isNew: true; href?: string }
 
 export default function Pricing() {
   const [yearly, setYearly] = useState(false)
-  const { name: browserLabel, available: browserAvailable, href: browserHref } = browserMeta[detectBrowser()]
+  const { name: browserLabel, available: browserAvailable, href: browserHref } = browserMeta[useBrowser()]
 
   const plans: {
     name: string
