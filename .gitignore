@@ -32,3 +32,9 @@ extra_files
 design
 test-results/
 playwright-report/
+
+# Carpe Team run artifacts (notes, dialogue, events).
+.pi/issues/
+
+# Carpe Team release drafts
+.pi/releases/

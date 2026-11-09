@@ -50,7 +50,7 @@ The user manages everything in the extension; the agent only talks to the OTPilo
 - Each allowed account is encrypted for that agent's own key (kept in the OS keychain); the server only stores ciphertext; revoking an agent cuts its access
 - Activity log of every use; requests show on the extension's badge
 - Connect an agent: `npx -y @otpilot/mcp@latest connect` (prints a verification code; approve it in the extension's Agents view)
-- Claude Code plugin (the MCP server plus a skill): `/plugin install otpilot --marketplace OTPilot/OTPilot`; the same skill works in Codex, Cursor and other agents that read skills
+- Claude Code plugin (the MCP server plus a skill): `/plugin install otpilot --marketplace OTPilot/OTPilot`; the same skill installs in Codex, Cursor and other agents with `npx skills add OTPilot/OTPilot`
 - Files (SSH keys, .p8 keys, key files) reach a command as the path of a private temporary copy, deleted when it ends
 - A crypto wallet's recovery phrase, passphrase and private keys can never be allowed to an agent (its addresses can)
 - Limit: an agent that runs commands decides what they do and could try to reveal a secret on purpose; scrubbing, 2FA-only scopes and per-use approval narrow it

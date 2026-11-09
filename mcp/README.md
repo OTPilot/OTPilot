@@ -28,7 +28,7 @@ Or add the server to your agent yourself (`connect` prints these for you):
 | Codex | `~/.codex/config.toml`: `[mcp_servers.otpilot]` `command = "npx"` `args = ["-y", "@otpilot/mcp@latest"]` |
 | Cursor | `~/.cursor/mcp.json`: `{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }` |
 
-**Skill for any agent:** [`plugin/skills/otpilot/SKILL.md`](https://github.com/OTPilot/OTPilot/blob/main/mcp/plugin/skills/otpilot/SKILL.md) teaches an agent when and how to use these tools (and how to set them up). Drop it in your agent's skills folder (`~/.codex/skills/otpilot/`, `.cursor/skills/otpilot/`…). This repository is its only official source.
+**Skill for any agent:** [`plugin/skills/otpilot/SKILL.md`](https://github.com/OTPilot/OTPilot/blob/main/mcp/plugin/skills/otpilot/SKILL.md) teaches an agent when and how to use these tools (and how to set them up). Install it with `npx skills add OTPilot/OTPilot` (it asks which agents), or copy it to your agent's skills folder. This repository is its only official source.
 
 For Codex and other agents that read `AGENTS.md`, add a line so they reach for it: *"For passwords, 2FA codes, API keys or any login, use the `otpilot` MCP tools (list_accounts, browser_login, run); never ask me to paste a secret."*
 
