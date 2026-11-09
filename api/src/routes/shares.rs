@@ -33,6 +33,7 @@ use crate::{
     error::{ApiError, Result},
     middleware::auth::AuthUser,
     routes::{
+        agents::{agent_copies_at_risk, revoke_lost_agent_copies, SharedScope},
         collections::lock_team,
         notifications::{announce, Notice},
         vault::validate_record,
@@ -342,6 +343,17 @@ async fn create_share(
     for g in &body.grants {
         check_grantee(&mut tx, team_id, auth.id, g).await?;
     }
+    // A share's id is never a vault item's: agent grants are keyed by the
+    // id, and a share reusing a teammate's item id would make their own item
+    // look shared with them.
+    let item_id_taken: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM vault_items WHERE id = $1)")
+            .bind(body.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if item_id_taken {
+        return Err(ApiError::BadRequest("that share id is taken".into()));
+    }
     let revision: Option<i64> = sqlx::query_scalar(
         "INSERT INTO shares (id, team_id, owner_id, item_id, whole, encrypted_item)
          VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING RETURNING revision",
@@ -451,10 +463,13 @@ async fn delete_share(
     if share.owner_id != auth.id {
         return Err(ApiError::NotFound);
     }
+    let at_risk = agent_copies_at_risk(&mut tx, SharedScope::Ids(&[id])).await?;
     sqlx::query("DELETE FROM shares WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    // The grantees' agents' copies go with it.
+    revoke_lost_agent_copies(&mut tx, at_risk).await?;
     tx.commit().await?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -584,6 +599,7 @@ async fn remove_grant(
     if share.owner_id != auth.id && !leaving {
         return Err(ApiError::NotFound);
     }
+    let at_risk = agent_copies_at_risk(&mut tx, SharedScope::Ids(&[id])).await?;
     let removed = sqlx::query(
         "DELETE FROM share_grants WHERE share_id = $1 AND (user_id = $2 OR collection_id = $3)",
     )
@@ -601,6 +617,9 @@ async fn remove_grant(
         .bind(id)
         .fetch_one(&mut *tx)
         .await?;
+    // The agents' copies of whoever can't open it any more (a member of a
+    // removed collection may still reach it another way).
+    revoke_lost_agent_copies(&mut tx, at_risk).await?;
     tx.commit().await?;
     Ok(Json(json!({ "ok": true, "share_deleted": deleted })))
 }

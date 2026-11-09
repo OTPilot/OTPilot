@@ -31,6 +31,7 @@ use uuid::Uuid;
 use crate::{
     error::{ApiError, Result},
     middleware::auth::AuthUser,
+    routes::agents::{agent_copies_at_risk, revoke_lost_agent_copies, SharedScope},
     AppState,
 };
 
@@ -84,6 +85,11 @@ fn is_team_plan(plan: &str) -> bool {
 /// there's no window where the team is gone but members are still on `team_lite`.
 pub(crate) async fn dissolve_team(db: &sqlx::PgPool, team_id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
+    // The team lock first (before the users rows, as remove_member_atomic):
+    // share and collection writes and agents::put_grant of this team's items
+    // wait, so none lands between the list below and the deletion.
+    crate::routes::collections::lock_team(&mut tx, team_id).await?;
+    let at_risk = agent_copies_at_risk(&mut tx, SharedScope::Team(team_id)).await?;
     sqlx::query(
         "UPDATE users SET plan = CASE WHEN has_personal_cloud OR trial_ends_at > NOW() THEN 'personal' ELSE 'free' END \
          WHERE id IN (SELECT user_id FROM team_members WHERE team_id = $1)",
@@ -95,6 +101,9 @@ pub(crate) async fn dissolve_team(db: &sqlx::PgPool, team_id: Uuid) -> Result<()
         .bind(team_id)
         .execute(&mut *tx)
         .await?;
+    // Its shares and collections went with it: so do the members' agents'
+    // copies of them (after the users rows, as agents::put_grant locks them).
+    revoke_lost_agent_copies(&mut tx, at_risk).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -267,6 +276,7 @@ pub(crate) async fn remove_member_atomic(
     if deleted == 0 {
         return Ok(0); // tx dropped without commit → nothing changed
     }
+    let at_risk = agent_copies_at_risk(&mut tx, SharedScope::Team(team_id)).await?;
     // Their team collections go too (only the shared items; their own vault
     // stays). The collection_member_removed trigger deletes collections left
     // without members and promotes a member where no manager is left.
@@ -319,6 +329,10 @@ pub(crate) async fn remove_member_atomic(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    // Last (after the users row, as agents::put_grant locks it first): the
+    // agents' copies of what they no longer open, and teammates' of the
+    // shares they owned.
+    revoke_lost_agent_copies(&mut tx, at_risk).await?;
     tx.commit().await?;
     Ok(deleted)
 }

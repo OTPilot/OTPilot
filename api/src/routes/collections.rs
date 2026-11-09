@@ -26,7 +26,10 @@ use uuid::Uuid;
 use crate::{
     error::{ApiError, Result},
     middleware::auth::AuthUser,
-    routes::vault::{conflict, item_json, validate_record, ItemRow, PAGE_SIZE},
+    routes::{
+        agents::{agent_copies_at_risk, revoke_lost_agent_copies, SharedScope},
+        vault::{conflict, item_json, validate_record, ItemRow, PAGE_SIZE},
+    },
     AppState,
 };
 
@@ -333,10 +336,13 @@ async fn delete_collection(
     // before a share row.
     lock_team(&mut tx, team_id).await?;
     allowed(&role_locked(&mut tx, cid, auth.id).await?, &["manage"])?;
+    let at_risk = agent_copies_at_risk(&mut tx, SharedScope::Collection(cid)).await?;
     sqlx::query("DELETE FROM collections WHERE id = $1")
         .bind(cid)
         .execute(&mut *tx)
         .await?;
+    // The members' agents' copies of its items and of shares granted to it.
+    revoke_lost_agent_copies(&mut tx, at_risk).await?;
     tx.commit().await?;
     audit(
         &state.db,
@@ -500,6 +506,7 @@ async fn remove_member(
     if uid != auth.id {
         allowed(&role, &["manage"])?;
     }
+    let at_risk = agent_copies_at_risk(&mut tx, SharedScope::Collection(cid)).await?;
     let removed =
         sqlx::query("DELETE FROM collection_members WHERE collection_id = $1 AND user_id = $2")
             .bind(cid)
@@ -511,7 +518,9 @@ async fn remove_member(
         return Err(ApiError::NotFound);
     }
     // The collection_member_removed trigger deletes an emptied collection and
-    // promotes a member when no manager is left.
+    // promotes a member when no manager is left. Then the removed member's
+    // agents' copies of what they no longer open.
+    revoke_lost_agent_copies(&mut tx, at_risk).await?;
     tx.commit().await?;
     audit(
         &state.db,
@@ -640,6 +649,10 @@ async fn put_item(
             .await?
         }
         None => {
+            // Never a share's id (see vault::is_share_id).
+            if crate::routes::vault::is_share_id(&mut tx, id).await? {
+                return Err(ApiError::BadRequest("that item id is taken".into()));
+            }
             let created: Option<i64> = sqlx::query_scalar(
                 "INSERT INTO vault_items (id, owner_id, collection_id, encrypted_item, counts_for_limit)
                  VALUES ($1, NULL, $2, $3, false) ON CONFLICT (id) DO NOTHING RETURNING revision",
@@ -690,6 +703,7 @@ async fn delete_item(
         }
         _ => return Err(ApiError::NotFound),
     }
+    let at_risk = agent_copies_at_risk(&mut tx, SharedScope::Ids(&[id])).await?;
     let revision: i64 = sqlx::query_scalar(
         "UPDATE vault_items SET encrypted_item = '', deleted_at = NOW(),
              revision = nextval('vault_revision_seq'), updated_at = NOW()
@@ -698,6 +712,8 @@ async fn delete_item(
     .bind(id)
     .fetch_one(&mut *tx)
     .await?;
+    // The members' agents' copies of it.
+    revoke_lost_agent_copies(&mut tx, at_risk).await?;
     tx.commit().await?;
     Ok(Json(json!({ "id": id, "revision": revision })).into_response())
 }
@@ -769,6 +785,19 @@ async fn convert_item(
         }
         _ => return Err(ApiError::NotFound), // gone (converted, deleted) or not this collection's
     }
+    // Agents' copies of the old id go (not moved: the copy is encrypted with
+    // that id, and no device approved a grant of the new one).
+    let at_risk = agent_copies_at_risk(&mut tx, SharedScope::Ids(&[id])).await?;
+    // Item and share ids never overlap (agent grants are keyed by the id):
+    // the new item's isn't a share's, the new share's isn't an item's (this
+    // new item's included, so checked after it's written).
+    let a_share: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM shares WHERE id = $1)")
+        .bind(body.item.id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if a_share {
+        return Err(ApiError::BadRequest("that item id is taken".into()));
+    }
     let created: Option<i64> = sqlx::query_scalar(
         "INSERT INTO vault_items (id, owner_id, encrypted_item, counts_for_limit)
          VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING RETURNING revision",
@@ -782,6 +811,14 @@ async fn convert_item(
     let Some(item_revision) = created else {
         return Err(ApiError::BadRequest("that item id is taken".into()));
     };
+    let an_item: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM vault_items WHERE id = $1)")
+            .bind(body.share.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if an_item {
+        return Err(ApiError::BadRequest("that share id is taken".into()));
+    }
     let share_revision: Option<i64> = sqlx::query_scalar(
         "INSERT INTO shares (id, team_id, owner_id, item_id, whole, encrypted_item)
          VALUES ($1, $2, $3, $4, true, $5) ON CONFLICT (id) DO NOTHING RETURNING revision",
@@ -814,6 +851,7 @@ async fn convert_item(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    revoke_lost_agent_copies(&mut tx, at_risk).await?;
     tx.commit().await?;
     Ok(
         Json(json!({ "item_revision": item_revision, "share_revision": share_revision }))
