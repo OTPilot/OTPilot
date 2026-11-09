@@ -784,6 +784,16 @@ async fn convert_item(
     // Agents' copies of the old id go (not moved: the copy is encrypted with
     // that id, and no device approved a grant of the new one).
     let at_risk = agent_copies_at_risk(&mut tx, SharedScope::Ids(&[id])).await?;
+    // Item and share ids never overlap (agent grants are keyed by the id):
+    // the new item's isn't a share's, the new share's isn't an item's (this
+    // new item's included, so checked after it's written).
+    let a_share: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM shares WHERE id = $1)")
+        .bind(body.item.id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if a_share {
+        return Err(ApiError::BadRequest("that item id is taken".into()));
+    }
     let created: Option<i64> = sqlx::query_scalar(
         "INSERT INTO vault_items (id, owner_id, encrypted_item, counts_for_limit)
          VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING RETURNING revision",
@@ -797,6 +807,14 @@ async fn convert_item(
     let Some(item_revision) = created else {
         return Err(ApiError::BadRequest("that item id is taken".into()));
     };
+    let an_item: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM vault_items WHERE id = $1)")
+            .bind(body.share.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if an_item {
+        return Err(ApiError::BadRequest("that share id is taken".into()));
+    }
     let share_revision: Option<i64> = sqlx::query_scalar(
         "INSERT INTO shares (id, team_id, owner_id, item_id, whole, encrypted_item)
          VALUES ($1, $2, $3, $4, true, $5) ON CONFLICT (id) DO NOTHING RETURNING revision",

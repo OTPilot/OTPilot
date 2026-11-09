@@ -320,6 +320,14 @@ async fn delete_item(
     .bind(id)
     .fetch_one(&mut *tx)
     .await?;
+    // Its shares locked before listing who opens them: an agent grant of one
+    // being written now (agents::put_grant holds it FOR SHARE) is seen, or
+    // waits and then finds it gone.
+    sqlx::query("SELECT 1 FROM shares WHERE owner_id = $1 AND item_id = $2 ORDER BY id FOR UPDATE")
+        .bind(auth.id)
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
     let at_risk = crate::routes::agents::agent_copies_at_risk(
         &mut tx,
         crate::routes::agents::SharedScope::SharesOfItem {

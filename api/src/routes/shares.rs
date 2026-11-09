@@ -343,6 +343,17 @@ async fn create_share(
     for g in &body.grants {
         check_grantee(&mut tx, team_id, auth.id, g).await?;
     }
+    // A share's id is never a vault item's: agent grants are keyed by the
+    // id, and a share reusing a teammate's item id would make their own item
+    // look shared with them.
+    let item_id_taken: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM vault_items WHERE id = $1)")
+            .bind(body.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if item_id_taken {
+        return Err(ApiError::BadRequest("that share id is taken".into()));
+    }
     let revision: Option<i64> = sqlx::query_scalar(
         "INSERT INTO shares (id, team_id, owner_id, item_id, whole, encrypted_item)
          VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING RETURNING revision",

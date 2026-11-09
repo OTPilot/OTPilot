@@ -36,7 +36,7 @@ use crate::{
         agent_auth::{hash_secret, new_secret, AgentAuth, TOKEN_PREFIX},
         auth::AuthUser,
     },
-    routes::vault::validate_record,
+    routes::{collections::lock_team, vault::validate_record},
     AppState,
 };
 
@@ -590,7 +590,10 @@ fn check_scope(scope: &Value) -> Result<()> {
     }
 }
 
-/// Writes the agent's copy of one of the user's items (new or updated).
+/// Writes the agent's copy of one of the user's items (new or updated). An
+/// item shared with the user (a share or a collection item, not one of their
+/// own vault items) only while they open it: 404 otherwise, so a stale or
+/// concurrent write never brings back a copy a revocation took away.
 async fn put_grant(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -616,8 +619,17 @@ async fn put_grant(
         )));
     }
     let mut tx = state.db.begin().await?;
+    // Lock order (see "Losing a shared item" below): the shared item's team
+    // lock(s), the users row, the share / collection item row, the grant row.
+    let teams = shared_item_teams(&mut tx, auth.id, item_id).await?;
+    for team in &teams {
+        lock_team(&mut tx, *team).await?;
+    }
     lock_user(&mut tx, auth.id).await?;
     if own_agent(&mut tx, auth.id, id).await? != "active" {
+        return Err(ApiError::NotFound);
+    }
+    if !teams.is_empty() && !still_reaches(&mut tx, auth.id, item_id).await? {
         return Err(ApiError::NotFound);
     }
     let revision_of = |item: Uuid| {
@@ -1101,6 +1113,29 @@ pub(crate) async fn pending_counts(db: &sqlx::PgPool, user: Uuid) -> Result<(i64
 // collections::remove_member, collections::delete_item,
 // collections::convert_item, teams::remove_member_atomic,
 // teams::dissolve_team. A new one must too.
+//
+// The other half is `put_grant`: a grant of a share or collection item is
+// only written while its user opens it, so one exists only while they do
+// (a share deleted altogether, or a deleted collection's item, leaves no row:
+// its id reads like a Free vault's item, and a new write of it is accepted;
+// a rewrite with `base_revision` isn't, its grant being gone).
+// A write racing a revocation must not slip between the revocation's step 1
+// and its change. Before step 1 every path holds a lock `put_grant` takes
+// before its own check: the team lock (`collections::lock_team`: shares
+// writes, collection membership / deletion, convert, team departure and
+// dissolution), or the item's row FOR UPDATE where no team lock is taken
+// (vault::delete_item locks the shares of the item, collections::delete_item
+// the collection item; `put_grant` holds them FOR SHARE). `put_grant`'s
+// order — team lock(s), users row, share / item row, grant row — follows the
+// paths' (team lock before the users rows they downgrade, rows before the
+// grants they delete; `revoke_lost_agent_copies` locks those in
+// (agent_id, item_id) order), so they wait instead of deadlocking.
+
+/// Whether `g.item_id` is one of the grant's user's own personal vault items:
+/// a share or collection item with the same id (ids are client-chosen) never
+/// makes it theirs to lose. No input in it.
+const OWN: &str = "(EXISTS (SELECT 1 FROM vault_items o
+                WHERE o.id = g.item_id AND o.collection_id IS NULL AND o.owner_id = a.user_id))";
 
 /// Whether the grant's user (`a.user_id`) opens `g.item_id` today as a share
 /// (directly or through a collection, never their own: as
@@ -1113,6 +1148,53 @@ const REACH: &str = "(EXISTS (SELECT 1 FROM shares s JOIN share_grants sg ON sg.
   OR EXISTS (SELECT 1 FROM vault_items v
                 JOIN collection_members m ON m.collection_id = v.collection_id
                 WHERE v.id = g.item_id AND v.deleted_at IS NULL AND m.user_id = a.user_id))";
+
+/// The teams of `item` when it's a share or a collection item and not one of
+/// `user`'s own vault items (empty: an own item, or one the server doesn't
+/// have, like a Free vault's), in id order: the team locks `put_grant` takes.
+async fn shared_item_teams(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user: Uuid,
+    item: Uuid,
+) -> Result<Vec<Uuid>> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT t FROM (SELECT team_id FROM shares WHERE id = $1
+                        UNION SELECT c.team_id FROM vault_items v
+                              JOIN collections c ON c.id = v.collection_id WHERE v.id = $1) x(t)
+         WHERE NOT EXISTS (SELECT 1 FROM (SELECT $1::uuid AS item_id) g, (SELECT $2::uuid AS user_id) a
+                           WHERE {OWN})
+         ORDER BY t"
+    ))
+    .bind(item)
+    .bind(user)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+/// Whether `user` opens shared `item` now, under its team lock(s): the share
+/// or collection item row is held FOR SHARE until the grant commits, so a
+/// deletion that doesn't take the team lock waits for it (or was seen).
+async fn still_reaches(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user: Uuid,
+    item: Uuid,
+) -> Result<bool> {
+    sqlx::query("SELECT 1 FROM shares WHERE id = $1 FOR SHARE")
+        .bind(item)
+        .fetch_all(&mut **tx)
+        .await?;
+    sqlx::query("SELECT 1 FROM vault_items WHERE id = $1 AND collection_id IS NOT NULL FOR SHARE")
+        .bind(item)
+        .fetch_all(&mut **tx)
+        .await?;
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT {REACH} FROM (SELECT $1::uuid AS item_id) g, (SELECT $2::uuid AS user_id) a"
+    ))
+    .bind(item)
+    .bind(user)
+    .fetch_one(&mut **tx)
+    .await?)
+}
 
 /// Which shared items a change may take away from someone.
 pub(crate) enum SharedScope<'a> {
@@ -1154,7 +1236,7 @@ pub(crate) async fn agent_copies_at_risk(
     let sql = format!(
         "WITH c(id) AS ({candidates})
          SELECT g.agent_id, g.item_id FROM agent_grants g JOIN agents a ON a.id = g.agent_id
-         WHERE g.item_id IN (SELECT id FROM c) AND {REACH}"
+         WHERE g.item_id IN (SELECT id FROM c) AND {REACH} AND NOT {OWN}"
     );
     let query = sqlx::query_as::<_, (Uuid, Uuid)>(&sql);
     let query = match scope {
@@ -1176,11 +1258,23 @@ pub(crate) async fn revoke_lost_agent_copies(
         return Ok(0);
     }
     let (agents, items): (Vec<Uuid>, Vec<Uuid>) = at_risk.0.into_iter().unzip();
+    // Locked first in a stable order: two revocations over the same grants
+    // wait for each other instead of deadlocking.
+    sqlx::query(
+        "SELECT 1 FROM agent_grants g
+         JOIN UNNEST($1::uuid[], $2::uuid[]) AS r(agent_id, item_id)
+           ON g.agent_id = r.agent_id AND g.item_id = r.item_id
+         ORDER BY g.agent_id, g.item_id FOR UPDATE OF g",
+    )
+    .bind(&agents)
+    .bind(&items)
+    .fetch_all(&mut **tx)
+    .await?;
     let gone: Vec<(Uuid, Uuid)> = sqlx::query_as(&format!(
         "DELETE FROM agent_grants g
          USING agents a, UNNEST($1::uuid[], $2::uuid[]) AS r(agent_id, item_id)
          WHERE g.agent_id = r.agent_id AND g.item_id = r.item_id AND a.id = g.agent_id
-           AND NOT {REACH}
+           AND NOT {REACH} AND NOT {OWN}
          RETURNING g.agent_id, g.item_id"
     ))
     .bind(&agents)
@@ -2171,6 +2265,29 @@ mod tests {
         assert_eq!(s, StatusCode::OK, "{uri}: {b}");
     }
 
+    /// A grant written straight to the table (data the routes no longer let in).
+    async fn grant_row(db: &sqlx::PgPool, agent: Uuid, item: Uuid) {
+        sqlx::query(
+            "INSERT INTO agent_grants (agent_id, item_id, scope, encrypted_item, wrapped_key)
+             VALUES ($1, $2, '{\"kind\": \"2fa\"}', $3, 'wk')",
+        )
+        .bind(agent)
+        .bind(item)
+        .bind(record().to_string())
+        .execute(db)
+        .await
+        .unwrap();
+    }
+
+    async fn grant_count(db: &sqlx::PgPool, agent: Uuid, item: Uuid) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM agent_grants WHERE agent_id = $1 AND item_id = $2")
+            .bind(agent)
+            .bind(item)
+            .fetch_one(db)
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn revoking_a_share_deletes_the_grantees_agent_copy_and_its_release() {
         let db = test_db().await;
@@ -2711,23 +2828,6 @@ mod tests {
         .await;
         let x = collection_item(&db.pool, k).await;
         let sid = share(&app, owner, owner_item, json!([to(free), to_collection(k)])).await;
-        // A share whose id is Ceci's own item's, not granted to her.
-        let same_id = share_as(
-            &app,
-            owner,
-            ceci_item,
-            item(&db.pool, owner).await,
-            json!([to(free)]),
-        )
-        .await;
-        ok(
-            &app,
-            owner,
-            Method::DELETE,
-            &format!("/shares/{same_id}"),
-            None,
-        )
-        .await;
         ok(
             &app,
             owner,
@@ -2795,8 +2895,13 @@ mod tests {
         let (outsider_agent, outsider_token) = connect(&app, outsider).await;
         for id in [x, sid] {
             give(&app, ceci, ceci_agent, id).await;
-            // The same ids, held by someone outside the team.
-            give(&app, outsider, outsider_agent, id).await;
+            // The same ids, held by someone outside the team (a Free vault's
+            // ids, written before these existed: today it's refused).
+            assert_eq!(
+                grant(&app, outsider, outsider_agent, id, json!({})).await.0,
+                StatusCode::NOT_FOUND
+            );
+            grant_row(&db.pool, outsider_agent, id).await;
         }
         ok(&app, owner, Method::DELETE, &format!("/shares/{sid}"), None).await;
         ok(
@@ -2812,5 +2917,375 @@ mod tests {
             .unwrap();
         assert!(copies(&app, &ceci_token).await.is_empty());
         assert_eq!(copies(&app, &outsider_token).await, sorted(vec![x, sid]));
+    }
+
+    #[tokio::test]
+    async fn a_share_reusing_an_own_item_id_is_refused_and_never_revokes_it() {
+        let db = test_db().await;
+        let app = shared_app(db.pool.clone());
+        let (owner, ceci) = (
+            create_user(&db.pool, "team_lite").await,
+            create_user(&db.pool, "team_lite").await,
+        );
+        let t = team(&db.pool, owner, &[ceci]).await;
+        let ceci_item = item(&db.pool, ceci).await;
+        let (agent, token) = connect(&app, ceci).await;
+        give(&app, ceci, agent, ceci_item).await;
+        // A teammate's share can't take Ceci's item id…
+        let (s, b) = call(
+            &app,
+            owner,
+            Method::POST,
+            "/shares",
+            Some(json!({ "id": ceci_item, "item_id": item(&db.pool, owner).await, "whole": true, "record": record(), "grants": [to(ceci)] })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
+        // …nor a conversion's new share; its new item can't take a share's id.
+        let k = collection(&db.pool, t, &[(owner, "manage"), (ceci, "edit")]).await;
+        let x = collection_item(&db.pool, k).await;
+        let existing = share(&app, owner, item(&db.pool, owner).await, json!([to(ceci)])).await;
+        for (new_item, new_share) in [(Uuid::new_v4(), ceci_item), (existing, Uuid::new_v4())] {
+            let (s, b) = call(
+                &app,
+                owner,
+                Method::POST,
+                &format!("/collections/{k}/items/{x}/convert"),
+                Some(json!({
+                    "base_revision": revision(&db.pool, x).await,
+                    "item": { "id": new_item, "record": record() },
+                    "share": { "id": new_share, "record": record(), "wrapped_key": "k" },
+                })),
+            )
+            .await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
+        }
+        let live: bool =
+            sqlx::query_scalar("SELECT deleted_at IS NULL FROM vault_items WHERE id = $1")
+                .bind(x)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert!(live, "nothing converted");
+
+        // One made before the check, granted to her: still her own item.
+        sqlx::query(
+            "INSERT INTO shares (id, team_id, owner_id, item_id, whole, encrypted_item)
+             VALUES ($1, $2, $3, $4, true, 'x')",
+        )
+        .bind(ceci_item)
+        .bind(t)
+        .bind(owner)
+        .bind(item(&db.pool, owner).await)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO share_grants (share_id, user_id, role, wrapped_key, granted_by)
+             VALUES ($1, $2, 'view', 'k', $3)",
+        )
+        .bind(ceci_item)
+        .bind(ceci)
+        .bind(owner)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        give(&app, ceci, agent, ceci_item).await; // rewritten as her own
+        ok(
+            &app,
+            owner,
+            Method::DELETE,
+            &format!("/shares/{ceci_item}"),
+            None,
+        )
+        .await;
+        crate::routes::teams::dissolve_team(&db.pool, t)
+            .await
+            .unwrap();
+        assert_eq!(copies(&app, &token).await, vec![ceci_item]);
+    }
+
+    #[tokio::test]
+    async fn a_grant_of_a_shared_item_is_only_written_while_its_user_opens_it() {
+        let db = test_db().await;
+        let app = shared_app(db.pool.clone());
+        let (owner, ceci, juan, eve) = (
+            create_user(&db.pool, "team_lite").await,
+            create_user(&db.pool, "team_lite").await,
+            create_user(&db.pool, "team_lite").await,
+            create_user(&db.pool, "team_lite").await,
+        );
+        let t = team(&db.pool, owner, &[ceci, juan]).await;
+        let k = collection(&db.pool, t, &[(owner, "manage"), (ceci, "view")]).await;
+        let x = collection_item(&db.pool, k).await;
+        let sid = share(
+            &app,
+            owner,
+            item(&db.pool, owner).await,
+            json!([to(ceci), to(juan)]),
+        )
+        .await;
+        let gone = share(&app, owner, item(&db.pool, owner).await, json!([to(ceci)])).await;
+        // Someone who doesn't open them (outside the team, or the owner of
+        // the share): nothing written.
+        let (eve_agent, _) = connect(&app, eve).await;
+        let (owner_agent, _) = connect(&app, owner).await;
+        for (user, agent, id) in [
+            (eve, eve_agent, x),
+            (eve, eve_agent, sid),
+            (owner, owner_agent, sid),
+        ] {
+            let (s, _) = grant(&app, user, agent, id, json!({})).await;
+            assert_eq!(s, StatusCode::NOT_FOUND);
+            assert_eq!(grant_count(&db.pool, agent, id).await, 0);
+        }
+        // Ceci opens them.
+        let (agent, token) = connect(&app, ceci).await;
+        let mut revs = vec![];
+        for id in [sid, x, gone] {
+            let (s, b) = grant(&app, ceci, agent, id, json!({})).await;
+            assert_eq!(s, StatusCode::OK, "{b}");
+            revs.push(b["revision"].as_i64().unwrap());
+        }
+        // She loses them: removed from the share (Juan keeps it), from the
+        // collection, and the other share deleted.
+        ok(
+            &app,
+            owner,
+            Method::DELETE,
+            &format!("/shares/{sid}/grants?user_id={ceci}"),
+            None,
+        )
+        .await;
+        ok(
+            &app,
+            owner,
+            Method::DELETE,
+            &format!("/collections/{k}/members/{ceci}"),
+            None,
+        )
+        .await;
+        ok(
+            &app,
+            owner,
+            Method::DELETE,
+            &format!("/shares/{gone}"),
+            None,
+        )
+        .await;
+        assert!(copies(&app, &token).await.is_empty());
+        // Her extension, before it sees the loss: a stale rewrite, or a new
+        // write, brings nothing back.
+        for (id, rev) in [(sid, revs[0]), (x, revs[1]), (gone, revs[2])] {
+            let (s, _) = grant(&app, ceci, agent, id, json!({ "base_revision": rev })).await;
+            assert_eq!(s, StatusCode::NOT_FOUND);
+            assert_eq!(grant_count(&db.pool, agent, id).await, 0);
+        }
+        for id in [sid, x] {
+            let (s, _) = grant(&app, ceci, agent, id, json!({})).await;
+            assert_eq!(s, StatusCode::NOT_FOUND);
+            assert_eq!(grant_count(&db.pool, agent, id).await, 0);
+        }
+        // Nor moved onto one: the source stays.
+        let own = item(&db.pool, ceci).await;
+        let (_, b) = grant(&app, ceci, agent, own, json!({})).await;
+        let (s, _) = grant(
+            &app,
+            ceci,
+            agent,
+            x,
+            json!({ "move_from": own, "base_revision": b["revision"] }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        assert_eq!(copies(&app, &token).await, vec![own]);
+    }
+
+    #[tokio::test]
+    async fn a_grant_written_during_a_revocation_waits_for_it() {
+        let db = test_db().await;
+        let app = shared_app(db.pool.clone());
+        let (owner, ceci, juan) = (
+            create_user(&db.pool, "team_lite").await,
+            create_user(&db.pool, "team_lite").await,
+            create_user(&db.pool, "team_lite").await,
+        );
+        let t = team(&db.pool, owner, &[ceci, juan]).await;
+        let (agent, _) = connect(&app, ceci).await;
+        let write = |id: Uuid| {
+            let app = app.clone();
+            tokio::spawn(async move { grant(&app, ceci, agent, id, json!({})).await.0 })
+        };
+        // A path holding the team lock (removing her grant).
+        let sid = share(
+            &app,
+            owner,
+            item(&db.pool, owner).await,
+            json!([to(ceci), to(juan)]),
+        )
+        .await;
+        let mut removal = db.pool.begin().await.unwrap();
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtext('team_membership'), hashtext($1::text))",
+        )
+        .bind(t)
+        .execute(&mut *removal)
+        .await
+        .unwrap();
+        let writing = write(sid);
+        crate::test_support::wait_for_lock_waits(&db.pool, 1).await;
+        sqlx::query("DELETE FROM share_grants WHERE share_id = $1 AND user_id = $2")
+            .bind(sid)
+            .bind(ceci)
+            .execute(&mut *removal)
+            .await
+            .unwrap();
+        removal.commit().await.unwrap();
+        assert_eq!(writing.await.unwrap(), StatusCode::NOT_FOUND);
+        assert_eq!(grant_count(&db.pool, agent, sid).await, 0);
+        // A path holding only the share row (the owner deleting the item).
+        let other = item(&db.pool, owner).await;
+        let sid = share(&app, owner, other, json!([to(ceci), to(juan)])).await;
+        let mut deletion = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM shares WHERE id = $1 FOR UPDATE")
+            .bind(sid)
+            .execute(&mut *deletion)
+            .await
+            .unwrap();
+        let writing = write(sid);
+        crate::test_support::wait_for_lock_waits(&db.pool, 1).await;
+        sqlx::query("DELETE FROM shares WHERE id = $1")
+            .bind(sid)
+            .execute(&mut *deletion)
+            .await
+            .unwrap();
+        deletion.commit().await.unwrap();
+        assert_eq!(writing.await.unwrap(), StatusCode::NOT_FOUND);
+        assert_eq!(grant_count(&db.pool, agent, sid).await, 0);
+        // A path holding a collection item's row (deleting it).
+        let k = collection(&db.pool, t, &[(owner, "manage"), (ceci, "view")]).await;
+        let x = collection_item(&db.pool, k).await;
+        let mut deletion = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM vault_items WHERE id = $1 FOR UPDATE")
+            .bind(x)
+            .execute(&mut *deletion)
+            .await
+            .unwrap();
+        let writing = write(x);
+        crate::test_support::wait_for_lock_waits(&db.pool, 1).await;
+        sqlx::query("UPDATE vault_items SET deleted_at = NOW(), encrypted_item = '' WHERE id = $1")
+            .bind(x)
+            .execute(&mut *deletion)
+            .await
+            .unwrap();
+        deletion.commit().await.unwrap();
+        assert_eq!(writing.await.unwrap(), StatusCode::NOT_FOUND);
+        assert_eq!(grant_count(&db.pool, agent, x).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_refused_conversion_or_deletion_keeps_the_copies() {
+        let db = test_db().await;
+        let app = shared_app(db.pool.clone());
+        let (owner, ceci) = (
+            create_user(&db.pool, "team_lite").await,
+            create_user(&db.pool, "team_lite").await,
+        );
+        let t = team(&db.pool, owner, &[ceci]).await;
+        let k = collection(&db.pool, t, &[(owner, "manage"), (ceci, "edit")]).await;
+        let other = collection(&db.pool, t, &[(owner, "manage")]).await;
+        let x = collection_item(&db.pool, k).await;
+        let (agent, token) = connect(&app, ceci).await;
+        give(&app, ceci, agent, x).await;
+        let rev = revision(&db.pool, x).await;
+        let taken = item(&db.pool, owner).await;
+        for (cid, base, share_id, want) in [
+            (k, rev - 1, Uuid::new_v4(), StatusCode::CONFLICT),
+            (other, rev, Uuid::new_v4(), StatusCode::NOT_FOUND),
+            // Refused after the at-risk list and the new item were written.
+            (k, rev, taken, StatusCode::BAD_REQUEST),
+        ] {
+            let (s, b) = call(
+                &app,
+                owner,
+                Method::POST,
+                &format!("/collections/{cid}/items/{x}/convert"),
+                Some(json!({
+                    "base_revision": base,
+                    "item": { "id": Uuid::new_v4(), "record": record() },
+                    "share": { "id": share_id, "record": record(), "wrapped_key": "k" },
+                })),
+            )
+            .await;
+            assert_eq!(s, want, "{b}");
+        }
+        let (s, _) = call(
+            &app,
+            owner,
+            Method::DELETE,
+            &format!("/collections/{k}/items/{x}?base_revision={}", rev - 1),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert_eq!(copies(&app, &token).await, vec![x]);
+        assert_eq!(revision(&db.pool, x).await, rev);
+    }
+
+    #[tokio::test]
+    async fn deleting_an_account_revokes_teammates_copies_of_its_shares() {
+        let db = test_db().await;
+        // Supabase's admin API, answering yes (no Stripe: nobody pays here).
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().fallback(|| async { StatusCode::OK }),
+            )
+            .await
+            .unwrap()
+        });
+        let mut state = test_state(db.pool.clone());
+        state.supabase_admin_base = base;
+        let app = router()
+            .merge(crate::routes::shares::router())
+            .merge(crate::routes::auth::router())
+            .with_state(state);
+        let (owner, ceci, juan) = (
+            create_user(&db.pool, "team_lite").await,
+            create_user(&db.pool, "team_lite").await,
+            create_user(&db.pool, "team_lite").await,
+        );
+        let t = team(&db.pool, owner, &[ceci, juan]).await;
+        let k = collection(
+            &db.pool,
+            t,
+            &[(owner, "manage"), (ceci, "edit"), (juan, "view")],
+        )
+        .await;
+        let by_ceci = share(&app, ceci, item(&db.pool, ceci).await, json!([to(owner)])).await;
+        let via_k = share(
+            &app,
+            ceci,
+            item(&db.pool, ceci).await,
+            json!([to_collection(k)]),
+        )
+        .await;
+        let by_owner = share(&app, owner, item(&db.pool, owner).await, json!([to(juan)])).await;
+        let (owner_agent, owner_token) = connect(&app, owner).await;
+        let (juan_agent, juan_token) = connect(&app, juan).await;
+        give(&app, owner, owner_agent, by_ceci).await;
+        give(&app, juan, juan_agent, via_k).await;
+        give(&app, juan, juan_agent, by_owner).await;
+        // A member deletes her account (she leaves the team).
+        let (s, b) = call(&app, ceci, Method::DELETE, "/users/me", None).await;
+        assert_eq!(s, StatusCode::NO_CONTENT, "{b}");
+        assert!(copies(&app, &owner_token).await.is_empty());
+        assert_eq!(copies(&app, &juan_token).await, vec![by_owner]);
+        // The owner deletes theirs (the team is dissolved).
+        let (s, b) = call(&app, owner, Method::DELETE, "/users/me", None).await;
+        assert_eq!(s, StatusCode::NO_CONTENT, "{b}");
+        assert!(copies(&app, &juan_token).await.is_empty());
     }
 }

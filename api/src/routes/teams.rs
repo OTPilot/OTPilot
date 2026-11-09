@@ -85,6 +85,10 @@ fn is_team_plan(plan: &str) -> bool {
 /// there's no window where the team is gone but members are still on `team_lite`.
 pub(crate) async fn dissolve_team(db: &sqlx::PgPool, team_id: Uuid) -> Result<()> {
     let mut tx = db.begin().await?;
+    // The team lock first (before the users rows, as remove_member_atomic):
+    // share and collection writes and agents::put_grant of this team's items
+    // wait, so none lands between the list below and the deletion.
+    crate::routes::collections::lock_team(&mut tx, team_id).await?;
     let at_risk = agent_copies_at_risk(&mut tx, SharedScope::Team(team_id)).await?;
     sqlx::query(
         "UPDATE users SET plan = CASE WHEN has_personal_cloud OR trial_ends_at > NOW() THEN 'personal' ELSE 'free' END \
