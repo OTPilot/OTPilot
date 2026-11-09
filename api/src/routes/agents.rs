@@ -640,8 +640,21 @@ async fn put_grant(
         .bind(item)
     };
     let exists = if let Some(from) = body.move_from {
+        // Both grant rows locked in (agent_id, item_id) order, as
+        // `revoke_lost_agent_copies` does, so the two wait for each other
+        // instead of deadlocking.
+        let locked: Vec<(Uuid, i64)> = sqlx::query_as(
+            "SELECT item_id, revision FROM agent_grants
+             WHERE agent_id = $1 AND item_id IN ($2, $3)
+             ORDER BY agent_id, item_id FOR UPDATE",
+        )
+        .bind(id)
+        .bind(from)
+        .bind(item_id)
+        .fetch_all(&mut *tx)
+        .await?;
         // The source must still be there as read; it goes, this takes its place.
-        let source: Option<i64> = revision_of(from).fetch_optional(&mut *tx).await?;
+        let source = locked.iter().find(|(i, _)| *i == from).map(|(_, r)| *r);
         if source.is_none() || (body.base_revision.is_some() && body.base_revision != source) {
             return Err(ApiError::NotFound);
         }
@@ -3003,6 +3016,118 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(copies(&app, &token).await, vec![ceci_item]);
+    }
+
+    #[tokio::test]
+    async fn a_new_item_never_takes_a_shares_id() {
+        let db = test_db().await;
+        let app = shared_app(db.pool.clone());
+        let (owner, ceci) = (
+            create_user(&db.pool, "team_lite").await,
+            create_user(&db.pool, "team_lite").await,
+        );
+        let t = team(&db.pool, owner, &[ceci]).await;
+        let k = collection(&db.pool, t, &[(owner, "manage"), (ceci, "edit")]).await;
+        let sid = share(&app, owner, item(&db.pool, owner).await, json!([to(ceci)])).await;
+        // The grantee (or anyone, its owner too) can't create an item with it:
+        // a personal one…
+        for user in [ceci, owner] {
+            let (s, b) = call(
+                &app,
+                user,
+                Method::PUT,
+                &format!("/vault/items/{sid}"),
+                Some(json!({ "record": record() })),
+            )
+            .await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
+            // …in a batch (`taken`: the extension moves its item to a new id)…
+            let fresh = Uuid::new_v4();
+            let (s, b) = call(
+                &app,
+                user,
+                Method::POST,
+                "/vault/items/batch",
+                Some(json!({ "items": [
+                    { "id": sid, "record": record() },
+                    { "id": fresh, "record": record() },
+                ] })),
+            )
+            .await;
+            assert_eq!(s, StatusCode::OK, "{b}");
+            assert_eq!(b["taken"], json!([sid]));
+            assert_eq!(b["conflicts"], json!([]));
+            assert_eq!(b["created"][0]["id"], json!(fresh));
+            // …or a collection's.
+            let (s, b) = call(
+                &app,
+                user,
+                Method::PUT,
+                &format!("/collections/{k}/items/{sid}"),
+                Some(json!({ "record": record() })),
+            )
+            .await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
+        }
+        let items: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM vault_items WHERE id = $1")
+            .bind(sid)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(items, 0);
+        // So her agent's grant of it is the share's, and goes with her grant.
+        let (agent, token) = connect(&app, ceci).await;
+        give(&app, ceci, agent, sid).await;
+        ok(
+            &app,
+            owner,
+            Method::DELETE,
+            &format!("/shares/{sid}/grants?user_id={ceci}"),
+            None,
+        )
+        .await;
+        assert!(copies(&app, &token).await.is_empty());
+
+        // An item of hers with a share's id from before this rule stays hers:
+        // still updatable, in a batch a conflict (pulled, not moved), and its
+        // agent copy is kept when the share grant goes (it's her item's).
+        let other = share(&app, owner, item(&db.pool, owner).await, json!([to(ceci)])).await;
+        sqlx::query("INSERT INTO vault_items (id, owner_id, encrypted_item) VALUES ($1, $2, $3)")
+            .bind(other)
+            .bind(ceci)
+            .bind(record().to_string())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let (s, b) = call(
+            &app,
+            ceci,
+            Method::PUT,
+            &format!("/vault/items/{other}"),
+            Some(json!({ "record": record(), "base_revision": revision(&db.pool, other).await })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+        let (_, b) = call(
+            &app,
+            ceci,
+            Method::POST,
+            "/vault/items/batch",
+            Some(json!({ "items": [{ "id": other, "record": record() }] })),
+        )
+        .await;
+        assert_eq!(b["conflicts"], json!([other]));
+        assert_eq!(b["taken"], json!([]));
+        give(&app, ceci, agent, other).await;
+        ok(
+            &app,
+            owner,
+            Method::DELETE,
+            &format!("/shares/{other}/grants?user_id={ceci}"),
+            None,
+        )
+        .await;
+        assert_eq!(copies(&app, &token).await, vec![other]);
     }
 
     #[tokio::test]

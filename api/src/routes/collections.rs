@@ -649,6 +649,10 @@ async fn put_item(
             .await?
         }
         None => {
+            // Never a share's id (see vault::is_share_id).
+            if crate::routes::vault::is_share_id(&mut tx, id).await? {
+                return Err(ApiError::BadRequest("that item id is taken".into()));
+            }
             let created: Option<i64> = sqlx::query_scalar(
                 "INSERT INTO vault_items (id, owner_id, collection_id, encrypted_item, counts_for_limit)
                  VALUES ($1, NULL, $2, $3, false) ON CONFLICT (id) DO NOTHING RETURNING revision",

@@ -143,6 +143,31 @@ async fn mark_migrated(
     Ok(())
 }
 
+/// Whether `id` is a share's. A new vault item (personal or a collection's)
+/// never takes one: agent grants are keyed by the id, and an item of the
+/// grantee's with their share's id would read as their own — never revoked
+/// when they lose the share, and written without the reach check.
+/// (`shares::create_share` and `collections::convert_item` check the other
+/// way.)
+///
+/// Not serialized against a share being created with the same id: the check
+/// and the insert can only miss a share that hasn't committed, and a share's
+/// id is unknown to anyone but its owner until it has (the client draws it
+/// at random; grantees learn it from `/shares/with-me`). The owner racing
+/// themselves gains nothing: OWN is per user, and their own share never
+/// gives their agents a grant to lose.
+pub(crate) async fn is_share_id(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: Uuid,
+) -> Result<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM shares WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?,
+    )
+}
+
 #[derive(Deserialize)]
 struct ListParams {
     #[serde(default)]
@@ -236,6 +261,9 @@ async fn put_item(
         }
         // ON CONFLICT covers two devices creating the same id at once.
         None => {
+            if is_share_id(&mut tx, id).await? {
+                return Err(ApiError::BadRequest("that item id is taken".into()));
+            }
             sqlx::query_scalar(
                 "INSERT INTO vault_items (id, owner_id, encrypted_item, counts_for_limit)
                  VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING RETURNING revision",
@@ -371,9 +399,9 @@ struct BatchRequest {
 
 /// Creates many new items at once (the v1 migration, imports). Ids that
 /// already exist are never overwritten: one of the caller's own comes back in
-/// `conflicts` (the client pulls it and settles it), one held by another user
-/// or a collection in `taken` (the client gives its item a new id — never
-/// learning whose it is).
+/// `conflicts` (the client pulls it and settles it), one held by another user,
+/// a collection or a share in `taken` (the client gives its item a new id —
+/// never learning whose it is).
 async fn create_batch(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -396,16 +424,22 @@ async fn create_batch(
     let mut conflicts = Vec::new();
     let mut taken = Vec::new();
     for (item, record) in body.items.iter().zip(&records) {
-        let revision: Option<i64> = sqlx::query_scalar(
-            "INSERT INTO vault_items (id, owner_id, encrypted_item, counts_for_limit)
-             VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING RETURNING revision",
-        )
-        .bind(item.id)
-        .bind(auth.id)
-        .bind(record)
-        .bind(item.counts_for_limit)
-        .fetch_optional(&mut *tx)
-        .await?;
+        // A share's id is never created (not even when it's also an item of
+        // the caller's from before that rule: that one is a conflict below).
+        let revision: Option<i64> = if is_share_id(&mut tx, item.id).await? {
+            None
+        } else {
+            sqlx::query_scalar(
+                "INSERT INTO vault_items (id, owner_id, encrypted_item, counts_for_limit)
+                 VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING RETURNING revision",
+            )
+            .bind(item.id)
+            .bind(auth.id)
+            .bind(record)
+            .bind(item.counts_for_limit)
+            .fetch_optional(&mut *tx)
+            .await?
+        };
         match revision {
             Some(revision) => created.push(json!({ "id": item.id, "revision": revision })),
             None => {
