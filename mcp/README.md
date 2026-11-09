@@ -1,5 +1,7 @@
 # OTPilot for AI agents (`@otpilot/mcp`)
 
+[![skills.sh](https://skills.sh/b/OTPilot/OTPilot)](https://skills.sh/OTPilot/OTPilot)
+
 Let **Claude Code, Codex, Cursor** or any MCP agent sign in to websites and run commands with your passwords and 2FA codes — **without the agent ever seeing them**. You choose which accounts each agent may use, in the [OTPilot](https://otpilot.app) browser extension.
 
 ```bash

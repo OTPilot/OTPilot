@@ -19,7 +19,7 @@ If you have no `list_accounts` tool, OTPilot isn't connected to this agent yet. 
    - Cursor, `~/.cursor/mcp.json`: `{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest", "--profile", "<profile>"] } } }`
 4. Restart the agent so it loads the tools.
 
-If a tool says the agent is no longer connected, it was revoked: ask the user to run `connect` again.
+If a tool says the agent is no longer connected (it was revoked), ask the user to reconnect with the same `--profile` as this agent's server configuration (`npx -y @otpilot/mcp@latest connect --profile <profile>`), approve it and allow its accounts in the extension, then restart the agent so it loads the new credentials.
 
 ## Find what you can use
 
