@@ -7,6 +7,20 @@ description: Use the user's OTPilot accounts (passwords, 2FA codes, API keys, da
 
 OTPilot holds the user's passwords and 2FA codes. You can **use** the accounts the user allowed you, through the `otpilot` MCP tools; you never see the values. Never ask the user to paste a password, a 2FA code or a secret into the chat.
 
+## Setup (only if the `otpilot` tools aren't available)
+
+If you have no `list_accounts` tool, OTPilot isn't connected to this agent yet. Don't work around it with a pasted secret: ask the user to set it up (it needs the OTPilot browser extension, https://otpilot.app, and a free account):
+
+1. In a terminal: `npx -y @otpilot/mcp@latest connect --name "<this agent, e.g. Codex>"`. It shows a verification code and opens a page to sign in to OTPilot.
+2. In the extension, **Agents**: approve the agent if the code matches, then allow it some accounts.
+3. Add the server to this agent with the line `connect` prints, for example:
+   - Claude Code: `claude mcp add otpilot -- npx -y @otpilot/mcp@latest --profile <profile>`
+   - Codex, `~/.codex/config.toml`: `[mcp_servers.otpilot]` `command = "npx"` `args = ["-y", "@otpilot/mcp@latest", "--profile", "<profile>"]`
+   - Cursor, `~/.cursor/mcp.json`: `{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest", "--profile", "<profile>"] } } }`
+4. Restart the agent so it loads the tools.
+
+If a tool says the agent is no longer connected, it was revoked: ask the user to run `connect` again.
+
 ## Find what you can use
 
 Call `list_accounts`. Each account says what it allows: its **2FA code** only, its **sign-in** (username, password, 2FA), or chosen fields; whether it **asks the user every time**; and whether it's limited to some commands.
@@ -24,7 +38,7 @@ const context = await browser.newContext({ storageState: '.otpilot/staging.json'
 
 With the Playwright MCP or a test runner, pass the same file as the storage state. Keep `.otpilot/` out of git (add it to `.gitignore`).
 
-If it returns `needs_user` (wrong password, a captcha, an unusual step), tell the user what happened; don't retry in a loop.
+A site behind a bot check gets a visible browser window where the user may have to solve it (`show_browser: false` never opens one, e.g. on a server). If it can't finish (wrong password, a captcha, an unusual step), tell the user what happened; don't retry in a loop.
 
 ## Run a command that needs a secret
 
