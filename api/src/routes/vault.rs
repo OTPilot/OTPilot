@@ -320,6 +320,14 @@ async fn delete_item(
     .bind(id)
     .fetch_one(&mut *tx)
     .await?;
+    let at_risk = crate::routes::agents::agent_copies_at_risk(
+        &mut tx,
+        crate::routes::agents::SharedScope::SharesOfItem {
+            owner: auth.id,
+            item: id,
+        },
+    )
+    .await?;
     // Its shared copies go with it (docs/sharing.md), and its agents' copies.
     sqlx::query("DELETE FROM shares WHERE owner_id = $1 AND item_id = $2")
         .bind(auth.id)
@@ -334,6 +342,8 @@ async fn delete_item(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    // And the grantees' agents' copies of those shares.
+    crate::routes::agents::revoke_lost_agent_copies(&mut tx, at_risk).await?;
     tx.commit().await?;
     Ok(Json(json!({ "id": id, "revision": revision })).into_response())
 }
