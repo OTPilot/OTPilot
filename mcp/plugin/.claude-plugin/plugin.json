@@ -1,6 +1,6 @@
 {
   "name": "otpilot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Use the accounts you allow in OTPilot — passwords and 2FA codes — to sign in to websites and run commands, without the agent ever seeing them.",
   "author": { "name": "OTPilot", "url": "https://otpilot.app" },
   "homepage": "https://otpilot.app/ai-agents",

@@ -52,6 +52,7 @@ The user manages everything in the extension; the agent only talks to the OTPilo
 - Each allowed account is encrypted for that agent's own key (kept in the OS keychain); the server stores ciphertext plus grant metadata (agent name, scopes, expiry, allowed commands, and the sites and programs each use touched); revoking an agent cuts its access
 - Activity log of every use; requests show on the extension's badge
 - Connect an agent: `npx -y @otpilot/mcp@latest connect` (prints a verification code; approve it in the extension's Agents view)
+- Claude Code plugin (the MCP server plus a skill): `/plugin install otpilot --marketplace OTPilot/OTPilot`; the same skill installs in Codex, Cursor and other agents with `npx skills add OTPilot/OTPilot`
 - Files (SSH keys, .p8 keys, key files) reach a command as the path of a private temporary copy, deleted when it ends
 - A crypto wallet's recovery phrase, passphrase and private keys can never be allowed to an agent (its addresses can)
 - Limit: an agent that runs commands decides what they do and could try to reveal a secret on purpose (a command can print a secret); an agent with its own shell on the machine can read the MCP's stored key and open the copies it was granted, without a log entry; scrubbing, 2FA-only scopes and per-use approval narrow it
@@ -67,6 +68,7 @@ The user manages everything in the extension; the agent only talks to the OTPilo
 - Website: https://otpilot.app
 - OTPilot for AI agents: https://otpilot.app/ai-agents
 - MCP server on npm: https://www.npmjs.com/package/@otpilot/mcp
+- Agent skill (official source): https://github.com/OTPilot/OTPilot/blob/main/mcp/plugin/skills/otpilot/SKILL.md
 - Security model: https://otpilot.app/security
 - Chrome Web Store: https://chromewebstore.google.com/detail/otpilot/mbfpjhjhcmgcchnnnnjcdblkbjifgjpk
 - GitHub: https://github.com/OTPilot/OTPilot
