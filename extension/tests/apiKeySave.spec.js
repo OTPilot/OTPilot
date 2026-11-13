@@ -124,11 +124,10 @@ test('one login: linked by default, saved, key never in card', async ({ context,
   expect(api.urls).toEqual(['localhost']);
   expect(api.links).toEqual([login.id]);
   expect(fieldOf(api, 'apiKey')).toBe(KEY);
-  // Same key again: already saved.
+  // Same key again: already saved, no offer.
   await s.reload(); await s.waitForTimeout(400); await s.click('#create');
-  await expect.poll(() => card.count('.otpilot-apikey-save')).toBe(1);
-  await card.click('.otpilot-apikey-save');
-  await expect.poll(() => card.text()).toContain('Already saved in OTPilot');
+  await s.waitForTimeout(1200);
+  await expect(s.locator('#otpilot-apikey-save')).toHaveCount(0);
   expect(await apiItems(popup)).toHaveLength(1);
 });
 
@@ -325,6 +324,47 @@ test('a read-only field filled later by a script (input.value =) is offered', as
   await card.click('.otpilot-apikey-save');
   await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
   expect(fieldOf((await apiItems(popup))[0], 'apiKey')).toBe(KEY);
+});
+
+// A credentials list that keeps showing the key (freesound.org/apiv2/apply/):
+// no dialog, no copy-once wording, no Copy button.
+const LIST = 'http://localhost:8765/apiv2/apply/';
+const FS_ID = 'ploe7oU6RJwIiRZFR5rL';
+const FS_KEY = 'D9URVVhDa8cbraYBnKDW4BDd5RZcrpHtXhgMeZ32';
+const listPage = (header = 'Client secret/Api key') => `<!doctype html><html><body><h1>Freesound API credentials</h1>
+<table><thead><tr><th>Name</th><th>Client id</th><th>${header}</th><th>Redirect url</th><th>Actions</th></tr></thead>
+<tbody><tr><td>demoreel</td><td>${FS_ID}</td><td>${FS_KEY}</td><td>https://demoreel.test/cb</td><td><a href="#">edit</a></td></tr></tbody></table>
+<h2>Create new API credentials</h2><form><label>Name*<input name="name"></label></form></body></html>`;
+async function listSite(context, body) {
+  const s = await context.newPage();
+  await s.route(LIST, r => r.fulfill({ contentType: 'text/html', body }));
+  await s.goto(LIST);
+  return s;
+}
+
+test('a credentials table (Freesound): the key column is offered with its client id and name; once saved, not again', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const s = await listSite(context, listPage());
+  const card = cardOf(s);
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  expect(await card.text('.otpilot-apikey-masked')).toBe('••••••••' + FS_KEY.slice(-4));
+  expect(await card.prop('.otpilot-apikey-name', 'value')).toContain('demoreel');
+  expect(await card.html()).not.toContain(FS_KEY.slice(0, 20));
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  const [api] = await apiItems(popup);
+  expect([fieldOf(api, 'clientId'), fieldOf(api, 'clientSecret')]).toEqual([FS_ID, FS_KEY]);
+  expect(api.urls).toEqual(['localhost']);
+  // Next visit: already saved, no card.
+  await s.reload(); await s.waitForTimeout(1500);
+  await expect(s.locator('#otpilot-apikey-save')).toHaveCount(0);
+});
+
+test('a table whose column is not a key column (an id, a name) is not offered', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const s = await listSite(context, listPage('Request id'));
+  await s.waitForTimeout(1500);
+  await expect(s.locator('#otpilot-apikey-save')).toHaveCount(0);
 });
 
 test('a key inside a same-origin or cross-origin iframe is not offered', async ({ context, extensionId }) => {

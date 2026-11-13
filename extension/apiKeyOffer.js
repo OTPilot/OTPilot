@@ -1,7 +1,7 @@
 'use strict';
 
 // Offers to save an API key a page shows once (a "copy your key now" dialog)
-// as an API credential item. Detection rules: apiKeys.js. Loaded after
+// or lists in a credentials table, as an API credential item. Detection rules: apiKeys.js. Loaded after
 // content.js (same isolated world): uses its overlay helpers (makeOverlay,
 // OVERLAY_HEADER, themeUi, mountUnlockFrame, showToast, requestSiteIcon,
 // guessIssuerFromPage). Top frame only: a key in a cross-origin iframe isn't
@@ -13,6 +13,8 @@
 // masked. The background takes the host from the sender, re-checks the lock,
 // the Free limit, duplicates and the login to link, and never sends the key
 // back. Dismissals are remembered for the page by a fingerprint of the value.
+// Before a click only the key's SHA-256 goes to the background, which answers
+// whether this site's API credentials already hold it (then no card).
 //
 // The card lives in a closed shadow root: with the vault unlocked it names
 // the site's logins (title, username), and a page that shows a fake key
@@ -117,6 +119,40 @@
     }
   }
 
+  // A table cell's column header and its row's cells by header (a list of
+  // credentials: Name | Client id | Client secret/Api key), or null.
+  const cellText = c => (c?.textContent || '').trim().replace(/\s+/g, ' ');
+  function columnOf(el) {
+    const cell = el.closest('td, th, [role="cell"], [role="gridcell"]');
+    if (!cell || ours(cell)) return null;
+    let cells, headers;
+    if (cell.tagName === 'TD' || cell.tagName === 'TH') {
+      const table = cell.closest('table');
+      const row = cell.parentElement;
+      if (!table || !row) return null;
+      const headRow = table.tHead?.rows[0] || [...table.rows].find(r => r !== row && r.querySelector('th'));
+      if (!headRow) return null;
+      cells = [...row.cells];
+      headers = [...headRow.cells].map(cellText);
+    } else {
+      const row = cell.closest('[role="row"]');
+      const grid = cell.closest('[role="table"], [role="grid"]');
+      const headRow = grid && [...grid.querySelectorAll('[role="row"]')].find(r => r.querySelector('[role="columnheader"]'));
+      if (!row || !headRow) return null;
+      cells = [...row.querySelectorAll('[role="cell"], [role="gridcell"], [role="rowheader"]')];
+      headers = [...headRow.querySelectorAll('[role="columnheader"]')].map(cellText);
+    }
+    const index = cells.indexOf(cell);
+    if (index < 0 || headers.length !== cells.length) return null;
+    const by = re => { const i = headers.findIndex(h => re.test(h)); return i >= 0 && i !== index ? cellText(cells[i]) : ''; };
+    const id = by(ApiKeys.ID_COLUMN);
+    return {
+      header: headers[index],
+      keyId: /^[^\s]{6,128}$/.test(id) && !ApiKeys.isMasked(id) ? id : '',
+      name: (n => n.length <= 60 ? n : '')(by(ApiKeys.NAME_COLUMN)),
+    };
+  }
+
   // An AWS access key ID's secret (or the reverse) in the same container.
   function awsPartner(container, wanted, budget) {
     for (const { value } of shownValues(container, budget)) if (wanted(value)) return value;
@@ -136,7 +172,11 @@
         if (!ApiKeys.known(value) && !ApiKeys.generic(value) && !ApiKeys.isAwsKeyId(value) && !ApiKeys.isAwsSecret(value)) continue;
         const container = containerOf(el);
         const ctx = contextOf(container, cache);
-        if (requireCopyOnce && !ctx.copyOnce) continue;
+        const column = columnOf(el);
+        const keyColumn = !!column && ApiKeys.isKeyColumn(column.header);
+        // A credentials table shows the key on every visit: no copy-once
+        // wording there, even at load.
+        if (requireCopyOnce && !ctx.copyOnce && !keyColumn) continue;
         let found = null;
         const awsId = ApiKeys.isAwsSecret(value) ? awsPartner(container, ApiKeys.isAwsKeyId, budget) : null;
         if (ApiKeys.isAwsKeyId(value)) {
@@ -147,11 +187,12 @@
           // token is judged like any other key below.
           found = { value, keyId: awsId, environment: '' };
         } else {
-          const d = ApiKeys.decide(value, ctx);
-          if (d) found = { value, environment: d.environment };
+          const d = ApiKeys.decide(value, { ...ctx, keyColumn });
+          if (d?.tier === 3) found = { value, keyId: column.keyId, keyName: column.name, environment: d.environment, table: true };
+          else if (d) found = { value, environment: d.environment };
         }
         if (!found) continue;
-        if (found.keyId && !ctx.copyOnce && !ctx.copyControl) continue;
+        if (found.keyId && !found.table && !ctx.copyOnce && !ctx.copyControl) continue;
         if (dismissed.has(ApiKeys.fingerprint(found.value))) continue;
         return { ...found, el, container };
       }
@@ -221,8 +262,19 @@
     }, true);
   }
 
+  // SHA-256 of the key (hex), so the background can tell it's already saved
+  // without the key leaving this script before a click; null without Web
+  // Crypto (a plain-http page).
+  async function keyHash(value) {
+    try {
+      const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+      return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch { return null; }
+  }
+
+  let askHash = null; // the hash of the key on offer
   async function askContext() {
-    try { return await chrome.runtime.sendMessage({ action: 'vaultApiKeyContext' }); } catch { return null; }
+    try { return await chrome.runtime.sendMessage({ action: 'vaultApiKeyContext', hash: askHash }); } catch { return null; }
   }
 
   // `roots`: what the scan that found the key looked at, scanned again once
@@ -230,7 +282,10 @@
   async function offer(found, roots) {
     if (busy || stopped || !chrome.runtime?.id) return;
     busy = true;
+    askHash = await keyHash(found.value);
     const ctx = await askContext();
+    // Saved already (a credentials page shows it on every visit): no card.
+    if (ctx?.exists) { dismissed.add(ApiKeys.fingerprint(found.value)); idle(); return; }
     if (!ctx || ctx.never || (ctx.state !== 'locked' && ctx.state !== 'unlocked')) {
       // "Never" for this site, or no vault set up: nothing on this page.
       // No answer: this key isn't asked about again on every change.
@@ -241,7 +296,7 @@
     if (!found.el.isConnected || document.getElementById(CARD_ID)) { idle(); return; }
 
     const site = guessIssuerFromPage();
-    const keyName = keyNameIn(found.container, found.value);
+    const keyName = found.keyName || keyNameIn(found.container, found.value);
     let cand = { ...found, name: keyName ? `${site} – ${keyName}` : site };
     delete cand.el; delete cand.container;
     const fp = ApiKeys.fingerprint(cand.value);
@@ -276,7 +331,7 @@
         async () => {
           const next = await askContext();
           if (!el.isConnected || !cand) return;
-          if (next?.state === 'unlocked' && !next.never) render(next); else dismiss();
+          if (next?.state === 'unlocked' && !next.never && !next.exists) render(next); else dismiss();
         },
         dismiss);
     }

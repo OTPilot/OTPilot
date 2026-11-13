@@ -581,7 +581,7 @@ function apiKeyLinkCandidates(items, host) {
     .map(i => ({ id: i.id, name: i.title || '', username: Vault.getValue(i, 'username') }));
 }
 
-async function apiKeyContext(sender) {
+async function apiKeyContext(sender, hash) {
   const host = senderHost(sender);
   if (!host) return { state: 'setup', never: true, limit: false, logins: [] };
   const never = ((await chrome.storage.local.get(API_KEY_NEVER))[API_KEY_NEVER] || []).includes(host);
@@ -589,7 +589,26 @@ async function apiKeyContext(sender) {
   if (never || state !== 'unlocked') return { state, never, limit: false, logins: [] };
   const { items } = await VaultStore.readAll(await VaultKeys.getKey());
   const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+  if (await apiKeySavedFor(items, host, hash)) return { state, never, exists: true, limit: false, logins: [] };
   return { state, never, limit: !Vault.canSaveItem(items, userPlan, Vault.newItem('api')), logins: apiKeyLinkCandidates(items, host) };
+}
+
+// Is the key shown (its SHA-256, hex) already in one of this site's API
+// credentials? The page's own key, for its own site only: a credentials
+// list shows it on every visit, and the offer isn't made again.
+async function apiKeySavedFor(items, host, hash) {
+  if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash)) return false;
+  const page = host.replace(/^www\./, '');
+  const sha = async v => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(v)))]
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+  for (const i of items) {
+    if (i.type !== 'api' || !(i.urls || []).some(u => { const h = savedHostOf(u); return h && relatedHost(h, page); })) continue;
+    for (const id of ['apiKey', 'clientSecret']) {
+      const v = Vault.getValue(i, id);
+      if (v && (await sha(v)) === hash) return true;
+    }
+  }
+  return false;
 }
 
 const NO_SPACE_OR_CONTROL = /^[^\s\u0000-\u001f\u007f]+$/;
@@ -1024,7 +1043,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   // API keys shown by a page (apiKeyOffer.js): host from the sender only.
   if (msg.action === 'vaultApiKeyContext') {
-    apiKeyContext(_sender).then(sendResponse).catch(() => sendResponse(null));
+    apiKeyContext(_sender, msg.hash).then(sendResponse).catch(() => sendResponse(null));
     return true;
   }
 

@@ -11,6 +11,9 @@
 // 2. A generic high-entropy token, only with every signal: a key word, the
 //    copy-once wording, a Copy control, and a page path that reads like a
 //    keys / tokens / settings page.
+// 3. A known-prefix or generic token in a table cell (a credentials list
+//    that keeps showing the key: Freesound, many OAuth app pages) whose
+//    column header names a key / secret / token, not an id.
 // AWS: the access key ID (AKIA…) isn't the secret; it's offered only with
 // its 40-character secret beside it (clientId + clientSecret).
 const ApiKeys = (() => {
@@ -70,9 +73,14 @@ const ApiKeys = (() => {
   const KEY_WORDS = /api[\s_-]?keys?|access[\s_-]?keys?|secret[\s_-]?keys?|token|secret/i;
   const COPY_ONCE = /only (?:be )?(?:shown|displayed) once|won['’]t be able to (?:see|view)|will not be able to (?:see|view)|(?:will not|won['’]t) be (?:shown|displayed) again|copy (?:it|this)(?: \w+)? now|make sure to copy|store (?:it|this) (?:somewhere )?safe|this is the only time/i;
   const COPY_CONTROL = /\bcopy\b/i;
+  // A table column holding keys ("Client secret/Api key", "Token"), and one
+  // holding the id beside it ("Client id", "Key ID"), and the key's name.
+  const KEY_COLUMN = /api[\s_-]?keys?|secret|token|access[\s_-]?keys?/i;
+  const ID_COLUMN = /^(?:client|app(?:lication)?|key|access[\s_-]?key|consumer)[\s_-]?id$/i;
+  const NAME_COLUMN = /^(?:name|key[\s_-]?name|label|description|app(?:lication)?(?:[\s_-]?name)?)$/i;
   // The generic tier also needs a page path like a keys / settings page: a
   // whole segment (delimited like content.js's PATH_RE), never a substring.
-  const PATH_RE = /(?:^|[/\-_.=?&#])(?:api|keys?|tokens?|credentials?|developers?|secrets?|access|integrations?|apps|oauth|settings)(?=[/\-_.=?&#]|$)/;
+  const PATH_RE = /(?:^|[/\-_.=?&#])(?:api(?:v?\d+)?|keys?|tokens?|credentials?|developers?|secrets?|access|integrations?|apps|oauth|settings)(?=[/\-_.=?&#]|$)/;
 
   // Shannon entropy, bits per character.
   function entropy(s) {
@@ -123,10 +131,21 @@ const ApiKeys = (() => {
   const isAwsSecret = value => plausible(value) && AWS_SECRET.test(value)
     && classes(value) >= 3 && entropy(value) >= 4 && !isAwsKeyId(value);
 
-  // `context`: { keyWord, copyOnce, copyControl, path } from around the value.
+  // A column header that names keys, not their ids ("Client secret/Api key"
+  // yes, "Client id" / "Key ID" no).
+  const isKeyColumn = header => {
+    const h = String(header || '').trim();
+    return !!h && h.length <= 60 && KEY_COLUMN.test(h) && !ID_COLUMN.test(h);
+  };
+
+  // `context`: { keyWord, copyOnce, copyControl, path, keyColumn } from
+  // around the value (`keyColumn`: it sits in a table under a key column).
   // → { tier, provider, prefix, environment } or null (no offer).
   function decide(value, context = {}) {
     const k = known(value);
+    if (context.keyColumn && (k || generic(value))) {
+      return { tier: 3, provider: k?.provider || '', prefix: k?.prefix || '', environment: k?.environment || '' };
+    }
     if (k) {
       if (!context.copyOnce && !context.copyControl) return null;
       return { tier: 1, provider: k.provider, prefix: k.prefix, environment: k.environment || '' };
@@ -173,7 +192,7 @@ const ApiKeys = (() => {
   }
 
   return {
-    PREFIXES, KEY_WORDS, COPY_ONCE, COPY_CONTROL,
+    PREFIXES, KEY_WORDS, COPY_ONCE, COPY_CONTROL, ID_COLUMN, NAME_COLUMN, isKeyColumn,
     known, generic, decide, pathAllowed, environment, mask, isMasked, entropy, fingerprint,
     isAwsKeyId, isAwsSecret,
   };
