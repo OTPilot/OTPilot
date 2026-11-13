@@ -54,6 +54,7 @@ const ApiKeys = (() => {
     { prefix: 'shpat_', provider: 'Shopify', min: 38, tail: /^[a-fA-F0-9]+$/ },
     { prefix: 'sntrys_', provider: 'Sentry', min: 60, tail: /^[A-Za-z0-9_+/=]+$/ },
     { prefix: 'AIza', provider: 'Google', len: 39, tail: /^[A-Za-z0-9_-]+$/ },
+    { prefix: 'GOCSPX-', provider: 'Google', min: 35, tail: /^[A-Za-z0-9_-]+$/ },
   ];
 
   const MAX_LENGTH = 1024;

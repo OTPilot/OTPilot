@@ -647,7 +647,9 @@
       display: flex; align-items: center;
       justify-content: space-between; margin-bottom: 12px;
     }
-    .acc-body-head .acc-body-title { font-size: 13px; font-weight: 700; color: var(--ink-0); }
+    .acc-body-head .acc-body-title { font-size: 13px; font-weight: 700; color: var(--ink-0); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .acc-body-head .btn-del { flex-shrink: 0; white-space: nowrap; }
+    .acc-body-head .type-tag { flex-shrink: 0; }
 
     .settings-footer { padding: 8px 14px 10px; border-top: 1px solid var(--border); flex-shrink: 0; }
     .settings-footer-actions { display: flex; gap: 6px; margin-top: 6px; }
