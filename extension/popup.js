@@ -294,6 +294,28 @@ function tagsOf(a) {
   return [(a.category || '').trim(), ...(a.moreTags || []).map(t => String(t).trim())].filter(Boolean);
 }
 
+// What a search matches for a login (v1 account) or an item entry: title,
+// summary, tags, URLs and the values of non-secret fields. Never passwords,
+// hidden fields, wallet secrets, file contents or notes.
+const SEARCHABLE_KINDS = ['text', 'email', 'url', 'phone', 'date'];
+function searchText(entry) {
+  const parts = [entry.name, entry.email, ...tagsOf(entry)];
+  const fieldValues = (fields, item) => (fields || []).forEach(f => {
+    if (!SEARCHABLE_KINDS.includes(f.kind || 'text')) return;
+    if (item && Vault.isWalletSecret(item, f)) return;
+    if (f.value != null && f.value !== '') parts.push(String(f.value));
+  });
+  if (entry._kind) {
+    const item = entry.item || {};
+    parts.push(...(item.urls || []));
+    fieldValues(item.fields, item);
+  } else {
+    parts.push(...String(entry.urls || '').split('\n'));
+    fieldValues(entry.customFields);
+  }
+  return parts.filter(Boolean).join('\n').toLowerCase();
+}
+
 function getCategories(list = accounts) {
   return [...new Set(list.flatMap(tagsOf))].sort((a, b) => a.localeCompare(b));
 }
@@ -493,7 +515,8 @@ function avatarNode(acc, extraClass = '') {
 // this user (the full set: the background prunes icons of any other domain).
 function iconDomains() {
   const shared = sharedItems.map(s => accountIconDomain({ item: s.item }));
-  return [...new Set([...accounts.map(accountIconDomain), ...shared].filter(Boolean))];
+  const others = otherItems.map(item => accountIconDomain({ item }));
+  return [...new Set([...accounts.map(accountIconDomain), ...shared, ...others].filter(Boolean))];
 }
 
 // Best-effort: if the popup's active tab happens to be the site an account was
@@ -610,7 +633,7 @@ function renderAccountBar() {
   const countEl = document.getElementById('home-count');
   const q = (document.getElementById('home-search')?.value || '').trim().toLowerCase();
 
-  const matchesQuery = acc => !q || (acc.name || '').toLowerCase().includes(q) || (acc.email || '').toLowerCase().includes(q);
+  const matchesQuery = acc => !q || searchText(acc).includes(q);
   const entries = accounts
     .map((acc, i) => ({ acc, i }))
     .filter(e => matchesFilters(e.acc, { types: false }))
@@ -620,16 +643,23 @@ function renderAccountBar() {
   const shared = allShared.filter(a => !filters.tags.length && matchesFilters(a, { types: false })).filter(matchesQuery);
   const total = accounts.length + allShared.length;
 
+  // While searching, non-login items (own + shared) match too.
+  const vaultItems = !q ? [] : [
+    ...otherItems.map(entryOf),
+    ...sharedItems.filter(s => s.item?.type !== 'login').map(sharedEntryOf),
+  ].filter(e => matchesFilters(e, { types: false }) && searchText(e).includes(q))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
   countEl.textContent = q
-    ? `${entries.length + shared.length} result${entries.length + shared.length === 1 ? '' : 's'}`
+    ? `${entries.length + shared.length + vaultItems.length} result${entries.length + shared.length + vaultItems.length === 1 ? '' : 's'}`
     : filterCount({ types: false }) ? `${entries.length + shared.length} of ${total} accounts`
       : `${total} account${total === 1 ? '' : 's'}`;
 
   list.innerHTML = '';
-  if (!entries.length && !shared.length) {
+  if (!entries.length && !shared.length && !vaultItems.length) {
     const empty = document.createElement('div');
     empty.className = 'lc-empty';
-    empty.textContent = !total ? 'No accounts yet — add one in Settings' : q ? `No account matches "${q}"` : 'No account matches the filters';
+    empty.textContent = q ? `Nothing matches "${q}"` : !total ? 'No accounts yet — add one in Settings' : 'No account matches the filters';
     list.appendChild(empty);
     return;
   }
@@ -708,6 +738,28 @@ function renderAccountBar() {
       launch.addEventListener('click', () => launchAccount(acc));
       item.appendChild(launch);
     }
+    list.appendChild(item);
+  });
+
+  if (vaultItems.length) {
+    const head = document.createElement('div');
+    head.className = 'lc-section';
+    head.textContent = 'Vault items';
+    list.appendChild(head);
+  }
+  vaultItems.forEach(e => {
+    const row = document.createElement('button');
+    row.className = 'lc-row lc-row-item';
+    const text = document.createElement('span');
+    text.className = 'lc-row-text';
+    text.innerHTML = '<span class="lc-row-name"></span><span class="lc-row-sub"></span>';
+    text.querySelector('.lc-row-name').textContent = e.name || `Untitled ${typeLabel(e.type).toLowerCase()}`;
+    text.querySelector('.lc-row-sub').textContent = [typeLabel(e.type), e.email].filter(Boolean).join(' · ');
+    row.append(avatarNode(e), text);
+    row.addEventListener('click', () => showView('accounts', { openItemId: e._id }));
+    const item = document.createElement('div');
+    item.className = 'lc-item';
+    item.appendChild(row);
     list.appendChild(item);
   });
 }
@@ -1430,13 +1482,11 @@ function updateVaultCount() {
 }
 
 function applyVaultSearch() {
-  const q = (document.getElementById('acc-search')?.value || '').toLowerCase();
+  const q = (document.getElementById('acc-search')?.value || '').trim().toLowerCase();
   document.querySelectorAll('.acc-row').forEach(row => {
     const i = parseInt(row.dataset.i, 10);
     const acc = draft[i];
-    const textMatch = !q
-      || (acc.name  || '').toLowerCase().includes(q)
-      || (acc.email || '').toLowerCase().includes(q);
+    const textMatch = !q || searchText(acc).includes(q);
     row.style.display = (textMatch && matchesFilters(acc)) ? '' : 'none';
   });
   updateVaultCount();
@@ -2433,14 +2483,15 @@ ${val}</textarea>`;
     </div>
     ${(item.fields || []).filter(f => !f.custom).map(fieldHTML).join('')}
     ${Vault.TYPES[entry.type]?.addresses ? walletAddressesHTML(item, readOnly) : ''}
-    ${Vault.TYPES[entry.type]?.urls ? `
+    ${Vault.TYPES[entry.type]?.totp ? `
     <div class="acc-field">
       <label>2FA secret (optional, base32 or hex)</label>
       <div class="field-row">
         <input class="item-totp" type="password" value="${esc(item.totp?.secret || '')}" autocomplete="off">
         <button class="btn-eye btn-eye-totp" title="Show/hide">${SVG_EYE}</button>
       </div>
-    </div>
+    </div>` : ''}
+    ${Vault.TYPES[entry.type]?.urls ? `
     <div class="acc-field">
       <label>URLs (one per line, * wildcard ok)</label>
       <textarea class="item-urls">
@@ -3325,7 +3376,10 @@ document.addEventListener('click', e => {
   if (!e.target.closest?.('#add-type-menu, #quick-add-menu')) closeAddMenu();
 });
 
-document.getElementById('acc-search').addEventListener('input', applyVaultSearch);
+document.getElementById('acc-search').addEventListener('input', () => {
+  syncOpenAccToDraft(); // a new row's title isn't in the draft until read back
+  applyVaultSearch();
+});
 
 // Files dropped on the vault become new items (a file field takes a file
 // dropped on it itself). Anywhere else, dropping does nothing — never

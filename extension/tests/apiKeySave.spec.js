@@ -1,0 +1,442 @@
+// API keys shown once on a page (apiKeyOffer.js + background vaultAddApiKey,
+// vaultApiKeyContext, apiKeyNeverSave) and the pure detection rules (apiKeys.js).
+import { test, expect, seedUnlocked, seedLocked, waitForVault, writeAccounts } from './fixtures.js';
+const KEY = 'sk-proj-' + 'Ab3dEf9hIjK1mNoPq7sTuVwXyZ0aB2cD4eF6gH8iJ0kL2mN4oP6qR8sT0uV2wX4y';
+const PAGE = 'http://localhost:8765/settings/api-keys';
+const html = (key, extra = '') => `<!doctype html><html><head><title>Keys</title></head><body>
+<h1>API keys</h1><button id="create">Create new secret key</button>${extra}
+<script>document.getElementById('create').onclick = () => {
+  const d = document.createElement('div'); d.setAttribute('role','dialog');
+  d.innerHTML = '<h2>Save your key</h2><p>Please save your secret key in a safe place since you won\\'t be able to view it again.</p>'
+   + '<input readonly value="${key}"><button>Copy</button>';
+  document.body.appendChild(d);
+};</script></body></html>`;
+async function vaultWith(context, extensionId, accounts, local = {}, locked = false) {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await (locked ? seedLocked : seedUnlocked)(page, { accounts: [], ...local });
+  await page.reload();
+  if (!locked) { await waitForVault(page); if (accounts.length) await writeAccounts(page, accounts); }
+  return page;
+}
+const items = page => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items);
+async function site(context, body) {
+  const s = await context.newPage();
+  await s.route(PAGE, r => r.fulfill({ contentType: 'text/html', body }));
+  await s.goto(PAGE);
+  await s.waitForTimeout(500);
+  return s;
+}
+// The card is in a closed shadow root, which page scripts (and Playwright's
+// locators) can't reach. Tests reach it through DevTools (CDP sees closed
+// roots) and click it with the mouse: trusted events, like the user's.
+function cardOf(page) {
+  let cdp;
+  const rootId = async () => {
+    cdp ??= await page.context().newCDPSession(page);
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+    const find = n => {
+      const a = n.attributes || [];
+      for (let i = 0; i < a.length; i += 2) if (a[i] === 'id' && a[i + 1] === 'otpilot-apikey-save') return n;
+      for (const c of [...(n.children || []), ...(n.shadowRoots || [])]) { const f = find(c); if (f) return f; }
+      return null;
+    };
+    const sr = find(root)?.shadowRoots?.[0];
+    if (!sr) return null;
+    return (await cdp.send('DOM.resolveNode', { backendNodeId: sr.backendNodeId })).object.objectId;
+  };
+  // `fn` runs with `this` = the card's shadow root; null without a card.
+  const run = async (fn, ...args) => {
+    const objectId = await rootId();
+    if (!objectId) return null;
+    const { result, exceptionDetails } = await cdp.send('Runtime.callFunctionOn', {
+      objectId, functionDeclaration: fn.toString(), arguments: args.map(value => ({ value })), returnByValue: true,
+    });
+    if (exceptionDetails) throw new Error(exceptionDetails.exception?.description || exceptionDetails.text);
+    return result.value ?? null;
+  };
+  return {
+    run,
+    shown: async () => !!(await run(function () { return true; })),
+    text: (sel = '.otpilot-apikey-root') => run(function (s) { return this.querySelector(s)?.textContent ?? null; }, sel),
+    html: () => run(function () { return this.innerHTML; }),
+    prop: (sel, p) => run(function (s, k) { const e = this.querySelector(s); return e ? e[k] : null; }, sel, p),
+    attr: (sel, name) => run(function (s, n) { return this.querySelector(s)?.getAttribute(n) ?? null; }, sel, name),
+    count: sel => run(function (s) { return this.querySelectorAll(s).length; }, sel),
+    async click(sel) {
+      const r = await run(function (s) {
+        const e = this.querySelector(s);
+        if (!e) return null;
+        const b = e.getBoundingClientRect();
+        return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+      }, sel);
+      if (!r) throw new Error(`no ${sel} in the card`);
+      await page.mouse.click(r.x, r.y);
+    },
+  };
+}
+const apiItems = async popup => (await items(popup)).filter(i => i.type === 'api');
+const ApiKeysMask = k => `${['sk-proj-', 'ghp_', 'sk_live_'].find(p => k.startsWith(p)) || ''}••••••••${k.slice(-4)}`;
+const fieldOf = (item, id) => item.fields.find(f => f.id === id)?.value;
+
+// What a page script could try, on the page and with find-in-page (which,
+// unlike the DOM, sees into closed shadow roots).
+const pageSees = (page, words) => page.evaluate(ws => {
+  const host = document.getElementById('otpilot-apikey-save');
+  document.execCommand('selectAll');
+  const selected = String(getSelection());
+  getSelection().removeAllRanges();
+  const dump = [document.documentElement.outerHTML, document.body.innerText, document.body.textContent, selected].join('\n');
+  return {
+    host: !!host, shadowRoot: host?.shadowRoot ?? null, children: host?.childNodes.length,
+    ours: document.querySelectorAll('option, select, label, .otpilot-apikey-link, .otpilot-apikey-save').length,
+    leaked: ws.filter(w => dump.includes(w) || window.find(w)),
+  };
+}, words);
+
+test('one login: linked by default, saved, key never in card', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ name: 'OpenAI', email: 'me@x.com', secret: '', urls: 'localhost', password: 'pw' }]);
+  const s = await site(context, html(KEY));
+  const card = cardOf(s);
+  await s.click('#create');
+  await expect.poll(() => card.text()).toContain('Save this API key from localhost?');
+  expect(await card.text('.otpilot-apikey-masked')).toBe('sk-proj-••••••••' + KEY.slice(-4));
+  expect(await card.prop('.otpilot-apikey-link input', 'checked')).toBe(true);
+  // The line names the site, never the login (nothing drawn names it before a click).
+  expect(await card.text('.otpilot-apikey-link-text')).toBe('Link to your saved localhost login');
+  expect(await card.html()).not.toContain('OpenAI');
+  expect(await card.html()).not.toContain('me@x.com');
+  expect(await card.html()).not.toContain(KEY.slice(8, 30));
+  // A script click (not the user's) saves nothing.
+  await card.run(function () { this.querySelector('.otpilot-apikey-save').click(); });
+  await s.waitForTimeout(400);
+  expect(await apiItems(popup)).toHaveLength(0);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(() => card.shown()).toBe(false);
+  // The toast is in the page's DOM: it doesn't name the login.
+  await expect(s.locator('body')).toContainText('API key saved to OTPilot, linked to your login');
+  expect((await pageSees(s, ['OpenAI', 'me@x.com'])).leaked).toEqual([]);
+  const all = await items(popup);
+  const login = all.find(i => i.type === 'login');
+  const api = all.find(i => i.type === 'api');
+  expect(api.title).toBe('Localhost');
+  expect(api.urls).toEqual(['localhost']);
+  expect(api.links).toEqual([login.id]);
+  expect(fieldOf(api, 'apiKey')).toBe(KEY);
+  // Same key again: already saved.
+  await s.reload(); await s.waitForTimeout(400); await s.click('#create');
+  await expect.poll(() => card.count('.otpilot-apikey-save')).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(() => card.text()).toContain('Already saved in OTPilot');
+  expect(await apiItems(popup)).toHaveLength(1);
+});
+
+
+test('the page cannot read the card: no login name or username in its DOM', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [
+    { name: 'Zebrafinch Ops', email: 'quokka@corp.test', secret: '', urls: 'localhost', password: 'pw' },
+    { name: 'Marmoset Dev', email: 'wallaby@corp.test', secret: '', urls: 'localhost', password: 'pw' }]);
+  const s = await site(context, html(KEY));
+  const card = cardOf(s);
+  await s.click('#create');
+  await expect.poll(() => card.count('select option')).toBe(3);
+  // The options name them (shown once the user opens the select); closed,
+  // it draws "Don't link".
+  const shown = await card.text();
+  for (const w of ['Zebrafinch', 'quokka@corp.test', 'Marmoset', 'wallaby@corp.test']) expect(shown).toContain(w);
+  expect(await card.run(function () { const s = this.querySelector('select'); return s.options[s.selectedIndex].text; })).toBe("Don't link");
+  // The page's scripts find nothing.
+  expect(await pageSees(s, ['Zebrafinch', 'quokka', 'Marmoset', 'wallaby'])).toEqual({ host: true, shadowRoot: null, children: 0, ours: 0, leaked: [] });
+
+  // One login: a ticked line naming the site only, no title / tooltip.
+  await writeAccounts(popup, [{ name: 'Zebrafinch Ops', email: 'quokka@corp.test', secret: '', urls: 'localhost', password: 'pw' }]);
+  const one = await site(context, html(KEY));
+  const card1 = cardOf(one);
+  await one.click('#create');
+  await expect.poll(() => card1.text('.otpilot-apikey-link-text')).toBe('Link to your saved localhost login');
+  const drawn = await card1.html();
+  for (const w of ['Zebrafinch', 'quokka']) expect(drawn).not.toContain(w);
+  expect(await card1.attr('.otpilot-apikey-link', 'title')).toBe(null);
+  expect(await pageSees(one, ['Zebrafinch', 'quokka'])).toEqual({ host: true, shadowRoot: null, children: 0, ours: 0, leaked: [] });
+  // Tokens the page rewrites on the host don't change the card's font.
+  await one.evaluate(() => document.getElementById('otpilot-apikey-save').style.setProperty('--font-ui', '"PageFont"'));
+  const fonts = await card1.run(function () {
+    return ['.otpilot-apikey-link-text', '.otpilot-apikey-name', '.otpilot-apikey-save', '.otpilot-apikey-masked']
+      .map(s => getComputedStyle(this.querySelector(s)).fontFamily);
+  });
+  expect(fonts).toEqual(['system-ui, sans-serif', 'system-ui, sans-serif', 'system-ui, sans-serif', 'monospace']);
+});
+
+test('a page modal with a focus trap: the Name field still takes typing', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  // A simple trap, like Radix FocusScope / react-focus-lock: focus leaving
+  // the dialog (document focusin capture, focusout with a relatedTarget
+  // outside) is pulled back to the dialog's input.
+  const s = await site(context, `<!doctype html><html><body><button id="c">Create</button><script>
+const pull = () => document.querySelector('[role=dialog] .filter');
+document.addEventListener('focusin', e => { const d = document.querySelector('[role=dialog]'); if (d && !d.contains(e.target)) pull().focus(); }, true);
+document.addEventListener('focusout', e => { const d = document.querySelector('[role=dialog]'); if (d && e.relatedTarget && !d.contains(e.relatedTarget)) pull().focus(); });
+c.onclick = () => {
+  const d = document.createElement('div'); d.setAttribute('role', 'dialog');
+  d.innerHTML = '<p>Copy your secret key now. You won\\'t be able to see it again.</p><input class="filter" aria-label="Filter"><input readonly value="${KEY}"><button>Copy</button>';
+  document.body.appendChild(d); pull().focus();
+};</script></body></html>`);
+  const card = cardOf(s);
+  await s.click('#c');
+  await expect.poll(() => card.count('.otpilot-apikey-name')).toBe(1);
+  await card.click('.otpilot-apikey-name');
+  await s.keyboard.press('End');
+  await s.keyboard.type(' trapped');
+  await expect.poll(() => card.prop('.otpilot-apikey-name', 'value')).toBe('Localhost trapped');
+  expect(await s.locator('.filter').inputValue()).toBe('');
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  expect((await apiItems(popup))[0].title).toBe('Localhost trapped');
+});
+
+test('several logins: Don\'t link by default', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [
+    { name: 'A', email: 'a@x.com', secret: '', urls: 'localhost', password: 'pw' },
+    { name: 'B', email: 'b@x.com', secret: '', urls: 'localhost', password: 'pw' }]);
+  const s = await site(context, html(KEY));
+  const card = cardOf(s);
+  await s.click('#create');
+  await expect.poll(() => card.prop('select', 'value')).toBe('');
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  expect((await apiItems(popup))[0].links ?? []).toEqual([]);
+});
+
+test('no logins, masked key, docs page: no link line / no offer', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const s = await site(context, html('sk-proj-••••••••a9F2'));
+  await s.click('#create'); await s.waitForTimeout(1200);
+  await expect(s.locator('#otpilot-apikey-save')).toHaveCount(0);
+  const docs = await site(context, `<html><body><pre>curl -H "Authorization: Bearer ${KEY}" https://api.x</pre><button>Copy</button></body></html>`);
+  await docs.waitForTimeout(1200);
+  await expect(docs.locator('#otpilot-apikey-save')).toHaveCount(0);
+  const s2 = await site(context, html(KEY));
+  const card = cardOf(s2);
+  await s2.click('#create');
+  await expect.poll(() => card.count('.otpilot-apikey-save')).toBe(1);
+  expect(await card.count('.otpilot-apikey-link')).toBe(0);
+});
+
+test('Never stores the host; Free limit disables Save; locked shows unlock frame', async ({ context, extensionId }) => {
+  const full = Array.from({ length: 50 }, (_, i) => ({ name: `S${i}`, email: '', secret: '', urls: `s${i}.example`, password: 'x' }));
+  const popup = await vaultWith(context, extensionId, full, { userPlan: 'free' });
+  const s = await site(context, html(KEY));
+  const card = cardOf(s);
+  await s.click('#create');
+  await expect.poll(() => card.text('.otpilot-save-limit')).toContain('50 items');
+  expect(await card.prop('.otpilot-apikey-save', 'disabled')).toBe(true);
+  await card.click('.otpilot-apikey-never');
+  await expect.poll(() => popup.evaluate(async () => (await chrome.storage.local.get('apiKeyNeverSave')).apiKeyNeverSave)).toEqual(['localhost']);
+  const s2 = await site(context, html(KEY));
+  await s2.click('#create'); await s2.waitForTimeout(1200);
+  await expect(s2.locator('#otpilot-apikey-save')).toHaveCount(0);
+});
+test('locked: unlock frame', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [], {}, true);
+  const s = await site(context, html(KEY));
+  const card = cardOf(s);
+  await s.click('#create');
+  await expect.poll(() => card.count('iframe')).toBe(1);
+  await expect.poll(() => s.frames().some(f => f.url().includes('/unlock.html'))).toBe(true);
+});
+
+test('a code sample on a docs page and a key with no copy control are not offered', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const bare = await site(context, `<html><body><p>Your new key:</p><code>${KEY}</code></body></html>`);
+  await bare.waitForTimeout(1200);
+  await expect(bare.locator('#otpilot-apikey-save')).toHaveCount(0);
+});
+
+test('a generic token on a page with every signal is offered; without the copy-once wording it is not', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const token = 'q7Zk2mXv9LpR4tYw8NbC3dFgH6jKs1Ae';
+  const withAll = await site(context, `<html><body><button id="c">Create</button><script>c.onclick=()=>{const d=document.createElement('div');d.setAttribute('role','dialog');d.innerHTML='<p>Your API key. Copy it now, it will not be shown again.</p><input readonly value="${token}"><button>Copy</button>';document.body.appendChild(d)}</script></body></html>`);
+  await withAll.click('#c');
+  await expect.poll(() => cardOf(withAll).count('.otpilot-apikey-save')).toBe(1);
+  const quiet = await site(context, `<html><body><button id="c">Create</button><script>c.onclick=()=>{const d=document.createElement('div');d.setAttribute('role','dialog');d.innerHTML='<p>API key</p><input readonly value="${token}"><button>Copy</button>';document.body.appendChild(d)}</script></body></html>`);
+  await quiet.click('#c'); await quiet.waitForTimeout(1200);
+  await expect(quiet.locator('#otpilot-apikey-save')).toHaveCount(0);
+});
+
+test('Not now closes the card and saves nothing', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const s = await site(context, html(KEY));
+  const card = cardOf(s);
+  await s.click('#create');
+  await expect.poll(() => card.count('.otpilot-apikey-later')).toBe(1);
+  await card.click('.otpilot-apikey-later');
+  await expect.poll(() => card.shown()).toBe(false);
+  await expect(s.locator('#otpilot-apikey-save')).toHaveCount(0);
+  expect(await apiItems(popup)).toHaveLength(0);
+});
+
+const AWS_ID = 'AKIAZ3MXQ7P2LR5TW8NB';
+const AWS_SECRET = 'q8Vt2/Lm9ZrX4+bN7kP3wYc6Hs1JdF5gT0aRe8Uz';
+const awsPage = parts => `<!doctype html><html><body><button id="c">Create access key</button><script>c.onclick = () => {
+  const d = document.createElement('div'); d.setAttribute('role', 'dialog');
+  d.innerHTML = '<h2>Retrieve access keys</h2><p>This is the only time that the secret access key can be viewed. Copy it now.</p>'
+    + ${JSON.stringify(parts)} + '<button>Copy</button>';
+  document.body.appendChild(d);
+};</script></body></html>`;
+
+test('AWS: the access key ID and its secret are saved together; one half alone is not offered', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const idOnly = await site(context, awsPage(`<label>Access key</label><input readonly value="${AWS_ID}">`));
+  await idOnly.click('#c'); await idOnly.waitForTimeout(1200);
+  await expect(idOnly.locator('#otpilot-apikey-save')).toHaveCount(0);
+  const secretOnly = await site(context, awsPage(`<label>Secret access key</label><input readonly value="${AWS_SECRET}">`));
+  await secretOnly.click('#c'); await secretOnly.waitForTimeout(1200);
+  await expect(secretOnly.locator('#otpilot-apikey-save')).toHaveCount(0);
+
+  const s = await site(context, awsPage(`<label>Access key</label><input readonly value="${AWS_ID}"><label>Secret access key</label><input readonly value="${AWS_SECRET}">`));
+  const card = cardOf(s);
+  await s.click('#c');
+  await expect.poll(() => card.text('.otpilot-apikey-masked')).toBe('••••••••' + AWS_SECRET.slice(-4));
+  expect(await card.html()).not.toContain(AWS_SECRET.slice(0, 20));
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  const [api] = await apiItems(popup);
+  expect([fieldOf(api, 'clientId'), fieldOf(api, 'clientSecret'), fieldOf(api, 'apiKey')]).toEqual([AWS_ID, AWS_SECRET, '']);
+});
+
+test('a key inside a same-origin or cross-origin iframe is not offered', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const frameBody = `<!doctype html><html><body><div role="dialog"><p>Copy it now: you won't be able to see it again.</p><input readonly value="${KEY}"><button>Copy</button></div>
+<script>setTimeout(() => { const d = document.createElement('div'); d.setAttribute('role', 'dialog'); d.innerHTML = '<p>Copy it now.</p><input readonly value="${KEY}"><button>Copy</button>'; document.body.appendChild(d); }, 100);</script></body></html>`;
+  for (const src of ['http://localhost:8765/settings/frame-keys', 'http://127.0.0.1:8765/settings/frame-keys']) {
+    const s = await context.newPage();
+    await s.route(src, r => r.fulfill({ contentType: 'text/html', body: frameBody }));
+    await s.route(PAGE, r => r.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body><h1>API keys</h1><iframe src="${src}" width="600" height="300"></iframe></body></html>` }));
+    await s.goto(PAGE);
+    const frame = s.frameLocator('iframe');
+    await expect(frame.locator('input').first()).toHaveValue(KEY);
+    await s.waitForTimeout(1200);
+    await expect(s.locator('#otpilot-apikey-save')).toHaveCount(0);
+    await expect(frame.locator('#otpilot-apikey-save')).toHaveCount(0);
+    await s.close();
+  }
+});
+
+test('keys shown in quick succession or while a card is up are offered one after the other', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const KEY2 = 'ghp_aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD1fH3jL5';
+  const KEY3 = 'sk_live_' + 'Zq4Wm8Rt2Yp6Lk3Nv9Bx7Cd5Hf1Jg0Ks';
+  const dialog = k => `<p>Make sure to copy your token now.</p><input readonly value="${k}"><button>Copy</button>`;
+  const s = await site(context, `<!doctype html><html><body><button id="c">Create</button><script>
+window.add = html => { const d = document.createElement('div'); d.setAttribute('role', 'dialog'); d.innerHTML = html; document.body.appendChild(d); };
+c.onclick = () => { add(${JSON.stringify(dialog(KEY))}); setTimeout(() => add(${JSON.stringify(dialog(KEY2))}), 50); };
+</script></body></html>`);
+  const card = cardOf(s);
+  const masked = k => ApiKeysMask(k);
+  await s.click('#c');
+  await expect.poll(() => card.text('.otpilot-apikey-masked')).toBe(masked(KEY));
+  // A third key while the card is up: kept for later, the card stays.
+  await s.evaluate(html => window.add(html), dialog(KEY3));
+  await s.waitForTimeout(700);
+  expect(await card.text('.otpilot-apikey-masked')).toBe(masked(KEY));
+  await card.click('.otpilot-apikey-later');
+  const offered = [];
+  for (let i = 0; i < 2; i++) {
+    await expect.poll(() => card.text('.otpilot-apikey-masked')).not.toBe(null);
+    offered.push(await card.text('.otpilot-apikey-masked'));
+    await card.click('.otpilot-apikey-save');
+    await expect.poll(async () => (await apiItems(popup)).length).toBe(i + 1);
+    await expect.poll(async () => offered.includes(await card.text('.otpilot-apikey-masked'))).toBe(false);
+  }
+  expect(offered.sort()).toEqual([masked(KEY2), masked(KEY3)].sort());
+  expect((await apiItems(popup)).map(i => fieldOf(i, 'apiKey')).sort()).toEqual([KEY2, KEY3].sort());
+  // All handled: nothing more.
+  await s.waitForTimeout(800);
+  expect(await card.shown()).toBe(false);
+});
+
+test('the login to link was deleted meanwhile: the card asks again, then saves unlinked', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ name: 'OpenAI', email: 'me@x.com', secret: '', urls: 'localhost', password: 'pw' }]);
+  const s = await site(context, html(KEY));
+  const card = cardOf(s);
+  await s.click('#create');
+  await expect.poll(() => card.prop('.otpilot-apikey-link input', 'checked')).toBe(true);
+  await card.run(function () { const n = this.querySelector('.otpilot-apikey-name'); n.value = 'Prod key'; });
+  await writeAccounts(popup, []);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(() => card.text('.otpilot-apikey-note')).toBe('That login changed. Pick again.');
+  expect(await card.count('.otpilot-apikey-link')).toBe(0);
+  expect(await card.prop('.otpilot-apikey-name', 'value')).toBe('Prod key');
+  expect(await apiItems(popup)).toHaveLength(0);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  const [api] = await apiItems(popup);
+  expect([api.title, api.links ?? null, fieldOf(api, 'apiKey')]).toEqual(['Prod key', null, KEY]);
+});
+
+// ── apiKeys.js, pure ──────────────────────────────────────────────────────
+test.describe('ApiKeys detection', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('http://localhost:8765/blank', r => r.fulfill({ contentType: 'text/html', body: '<html></html>' }));
+    await page.goto('http://localhost:8765/blank');
+    await page.addScriptTag({ path: new URL('../apiKeys.js', import.meta.url).pathname });
+  });
+  const run = (page, fn, arg) => page.evaluate(`(${fn})(${JSON.stringify(arg)})`);
+
+  test('known prefixes need their shape and one context signal', async ({ page }) => {
+    const r = await run(page, a => ({
+      openai: ApiKeys.decide(a.openai, { copyOnce: true })?.provider,
+      ghp: ApiKeys.decide('ghp_' + a.rand36, { copyControl: true })?.provider,
+      stripe: ApiKeys.decide('sk_live_' + a.rand36, { copyOnce: true })?.environment,
+      noContext: ApiKeys.decide(a.openai, {}),
+      shortGhp: ApiKeys.decide('ghp_' + a.rand36.slice(0, 20), { copyOnce: true }),
+    }), { openai: KEY, rand36: 'aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD1fH3jL5' });
+    expect(r).toEqual({ openai: 'OpenAI', ghp: 'GitHub', stripe: 'live', noContext: null, shortGhp: null });
+  });
+
+  test('pk_ publishable keys are never offered', async ({ page }) => {
+    const r = await run(page, () => {
+      const v = 'pk_live_' + 'aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD1fH3jL5';
+      return [ApiKeys.decide(v, { copyOnce: true, copyControl: true, keyWord: true, path: '/settings/api-keys' }), ApiKeys.known(v), ApiKeys.generic(v)];
+    });
+    expect(r).toEqual([null, null, false]);
+  });
+
+  test('placeholders, masked values and low entropy are refused', async ({ page }) => {
+    const r = await run(page, () => {
+      const ctx = { copyOnce: true, copyControl: true, keyWord: true, path: '/api-keys' };
+      return [
+        ApiKeys.decide('sk-proj-YOUR_API_KEY_HERE_0123456789abcdefghijklmnop', ctx),
+        ApiKeys.decide('sk-proj-••••••••••••••••••••••••••••••••••••a9F2', ctx),
+        ApiKeys.decide('sk_test_' + 'a'.repeat(32), ctx),
+        ApiKeys.decide('aaaaaaaaaaaaaaaaaaaaaaaaaaaa1111', ctx),
+        ApiKeys.decide('my-project-name-for-the-demo-app', ctx),
+        ApiKeys.decide('123e4567-e89b-12d3-a456-426614174000', ctx),
+        ApiKeys.isMasked('sk-…a9F2'),
+      ];
+    });
+    expect(r).toEqual([null, null, null, null, null, null, true]);
+  });
+
+  test('the generic tier needs every signal and a keys-like path segment', async ({ page }) => {
+    const r = await run(page, () => {
+      const t = 'q7Zk2mXv9LpR4tYw8NbC3dFgH6jKs1Ae';
+      const all = { copyOnce: true, copyControl: true, keyWord: true, path: '/settings/api-keys' };
+      return [
+        !!ApiKeys.decide(t, all),
+        ...['copyOnce', 'copyControl', 'keyWord'].map(k => !!ApiKeys.decide(t, { ...all, [k]: false })),
+        !!ApiKeys.decide(t, { ...all, path: '/blog/2024/hello' }),
+        !!ApiKeys.decide(t, { ...all, path: '/monkeys' }), // a substring is not a segment
+      ];
+    });
+    expect(r).toEqual([true, false, false, false, false, false]);
+  });
+
+  test('mask keeps the prefix and the last four, entropy is in bits', async ({ page }) => {
+    const r = await run(page, k => [ApiKeys.mask(k), ApiKeys.entropy('aaaa'), ApiKeys.entropy('abcd')], KEY);
+    expect(r[0]).toBe('sk-proj-••••••••' + KEY.slice(-4));
+    expect(r[1]).toBe(0);
+    expect(r[2]).toBe(2);
+  });
+});

@@ -559,6 +559,99 @@ async function resolvePendingLogin(sender, id, choice, target) {
 
 chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove([pendingLoginKey(tabId), pendingUsernameKey(tabId), launchKey(tabId)]); });
 
+// ── Saving an API key a page shows (apiKeyOffer.js) ───────────────────────────
+// The key comes from an untrusted page, once, on the user's click. The host
+// is the sender's (top frame), never the message's; the lock, the Free limit
+// (over every item, not just logins), duplicates and the login to link are
+// re-checked under the item-limit lock. The key is never sent back.
+// "Never" is its own per-host list: refusing keys never silences login offers.
+const API_KEY_NEVER = 'apiKeyNeverSave';
+
+const savedHostOf = u => String(u).trim().toLowerCase()
+  .replace(/^[a-z]+:\/\//, '').replace(/^\*\./, '').replace(/^www\./, '').split(/[/:?#]/)[0];
+
+// The user's own logins for the page's site (this host, a parent or a
+// subdomain, as attachCandidates): names and usernames only. Shared logins
+// aren't offered: links are ids in the user's own vault.
+function apiKeyLinkCandidates(items, host) {
+  const page = host.replace(/^www\./, '');
+  return items
+    .filter(i => i.type === 'login' && (i.urls || []).some(u => { const h = savedHostOf(u); return h && relatedHost(h, page); }))
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    .map(i => ({ id: i.id, name: i.title || '', username: Vault.getValue(i, 'username') }));
+}
+
+async function apiKeyContext(sender) {
+  const host = senderHost(sender);
+  if (!host) return { state: 'setup', never: true, limit: false, logins: [] };
+  const never = ((await chrome.storage.local.get(API_KEY_NEVER))[API_KEY_NEVER] || []).includes(host);
+  const state = await VaultLock.state();
+  if (never || state !== 'unlocked') return { state, never, limit: false, logins: [] };
+  const { items } = await VaultStore.readAll(await VaultKeys.getKey());
+  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+  return { state, never, limit: !Vault.canSaveItem(items, userPlan, Vault.newItem('api')), logins: apiKeyLinkCandidates(items, host) };
+}
+
+const NO_SPACE_OR_CONTROL = /^[^\s\u0000-\u001f\u007f]+$/;
+
+// The message's fields, checked, or null.
+function apiKeyRequest(msg) {
+  const key = msg?.key;
+  if (typeof key !== 'string' || key.length < 16 || key.length > 1024 || !NO_SPACE_OR_CONTROL.test(key)) return null;
+  const keyId = msg.keyId ?? '';
+  if (typeof keyId !== 'string' || keyId.length > 128 || (keyId && !NO_SPACE_OR_CONTROL.test(keyId))) return null;
+  const name = msg.name ?? '';
+  if (typeof name !== 'string' || name.length > 120) return null;
+  const environment = msg.environment ?? '';
+  if (!['', 'live', 'test'].includes(environment)) return null;
+  const linkTo = msg.linkTo ?? null;
+  if (linkTo !== null && (typeof linkTo !== 'string' || !linkTo || linkTo.length > 64)) return null;
+  return { key, keyId, name: name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim(), environment, linkTo };
+}
+
+// → { ok: true, id, linked } | { ok: false, exists: true } | { ok: false, limit: true }
+//   | { ok: false, link: true } (the login to link is gone or no longer covers
+//   the site: the card asks for the logins again) | { ok: false }
+async function addApiKey(sender, msg) {
+  const host = senderHost(sender);
+  const req = apiKeyRequest(msg);
+  if (!host || !req || (await VaultLock.state()) !== 'unlocked') return { ok: false };
+  return navigator.locks.request('otpilot-item-limit', async () => {
+    const vk = await VaultKeys.getKey();
+    if (!vk) return { ok: false };
+    const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
+    const item = Vault.newItem('api', { title: req.name || host.replace(/^www\./, ''), urls: [host] });
+    const put = (id, value) => { const f = Vault.getField(item, id); if (f) f.value = value; };
+    // AWS: the access key ID and its secret; anything else is one API key.
+    if (req.keyId) { put('clientId', req.keyId); put('clientSecret', req.key); } else put('apiKey', req.key);
+    put('environment', req.environment);
+    // The login's Related list shows it as a backlink.
+    if (req.linkTo) item.links = [req.linkTo];
+    const res = await VaultAccounts.addItem(item, vk, items => {
+      const same = i => i.type === 'api' && (Vault.getValue(i, 'apiKey') === req.key || Vault.getValue(i, 'clientSecret') === req.key);
+      if (items.some(same)) return 'exists';
+      if (!Vault.canSaveItem(items, userPlan, item)) return 'limit';
+      if (req.linkTo && !apiKeyLinkCandidates(items, host).some(l => l.id === req.linkTo)) return 'link';
+      return null;
+    });
+    if (!res.ok) return ['exists', 'limit', 'link'].includes(res.reason) ? { ok: false, [res.reason]: true } : { ok: false };
+    await VaultLock.touch().catch(() => {});
+    vaultChangedByPage();
+    return { ok: true, id: res.id, linked: !!req.linkTo };
+  });
+}
+
+async function apiKeyNeverSave(sender) {
+  const host = senderHost(sender);
+  if (!host) return { ok: false };
+  // One read-modify-write at a time (two tabs answering together).
+  await navigator.locks.request('otpilot-apikey-never', async () => {
+    const never = (await chrome.storage.local.get(API_KEY_NEVER))[API_KEY_NEVER] || [];
+    if (!never.includes(host)) await chrome.storage.local.set({ [API_KEY_NEVER]: [...never, host] });
+  });
+  return { ok: true };
+}
+
 // The custom properties of the active theme, from theme.css (the single
 // definition of every theme): ":root" is the default, the rest are
 // body[data-theme="x"] blocks that override it.
@@ -926,6 +1019,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.action === 'vaultResolvePendingLogin') {
     resolvePendingLogin(_sender, msg.id, msg.choice, typeof msg.target === 'string' ? msg.target : undefined).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // API keys shown by a page (apiKeyOffer.js): host from the sender only.
+  if (msg.action === 'vaultApiKeyContext') {
+    apiKeyContext(_sender).then(sendResponse).catch(() => sendResponse(null));
+    return true;
+  }
+
+  if (msg.action === 'vaultAddApiKey') {
+    addApiKey(_sender, msg).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  if (msg.action === 'apiKeyNeverSave') {
+    apiKeyNeverSave(_sender).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 

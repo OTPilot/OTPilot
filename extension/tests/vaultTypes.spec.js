@@ -814,3 +814,81 @@ test('Advanced settings: Auto-fill and Sign in automatically are saved on the lo
   await page.click('#btn-save-all');
   await expect.poll(read).toEqual([false, undefined, true]);
 });
+
+// ── Search ────────────────────────────────────────────────────────────────
+const SEARCH_ITEMS = [
+  ['api', { title: 'Stripe prod', urls: ['dashboard.stripe.com'], tags: ['Payments'] }, { apiKey: 'sk_live_SECRETVALUE123', environment: 'production-env' }],
+  ['note', { title: 'Plain note', notes: 'hidden-in-notes' }],
+];
+
+test('the api credential shows URLs and no 2FA block', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { items: SEARCH_ITEMS });
+  await page.locator('.acc-head', { hasText: 'Stripe prod' }).click();
+  await expect(page.locator('#acc-detail .item-urls')).toHaveValue('dashboard.stripe.com');
+  await expect(page.locator('#acc-detail .item-totp')).toHaveCount(0);
+});
+
+test('Home finds an API credential by title; a click opens it in the vault', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, {
+    accounts: [{ name: 'Some login', email: 'a@b.c', secret: '', urls: 'x.example', password: 'p' }],
+    items: SEARCH_ITEMS,
+  });
+  await page.click('#nav-home');
+  await page.fill('#home-search', 'stripe');
+  await expect(page.locator('#home-list .lc-section')).toHaveText('Vault items');
+  const row = page.locator('#home-list .lc-row-item', { hasText: 'Stripe prod' });
+  await expect(row).toHaveCount(1);
+  await expect(page.locator('#home-count')).toHaveText('1 result');
+  await row.click();
+  await expect(page.locator('#settings-panel')).toBeVisible();
+  await expect(page.locator('#acc-detail .item-title')).toHaveValue('Stripe prod');
+});
+
+test('Vault search matches host, tag and a non-secret field, never a secret value or notes', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { items: SEARCH_ITEMS });
+  const visible = () => page.locator('.acc-row:visible .acc-head');
+  const search = async q => { await page.fill('#acc-search', q); };
+  await search('dashboard.stripe');          // host
+  await expect(visible()).toHaveCount(1);
+  await expect(visible()).toContainText('Stripe prod');
+  await search('payments');                  // tag
+  await expect(visible()).toHaveCount(1);
+  await search('production-env');            // a text field
+  await expect(visible()).toHaveCount(1);
+  await search('SECRETVALUE');               // a hidden field: no match
+  await expect(visible()).toHaveCount(0);
+  await search('hidden-in-notes');           // notes: no match
+  await expect(visible()).toHaveCount(0);
+});
+
+test('an unsaved new item is found by its typed title', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { items: SEARCH_ITEMS });
+  await page.click('#btn-add');
+  await page.click('#add-type-menu [data-add-type="note"]');
+  await page.fill('#acc-detail .item-title', 'Zebra thoughts');
+  await page.fill('#acc-search', 'zebra');
+  await expect(page.locator('.acc-row:visible .acc-head')).toHaveCount(1);
+  await expect(page.locator('.acc-row:visible .acc-head')).toContainText('Zebra thoughts');
+  await expect(page.locator('#acc-detail .item-title')).toHaveValue('Zebra thoughts');
+});
+
+test('Home with only non-login items, no search or filter, keeps the original empty text', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { items: SEARCH_ITEMS });
+  await page.click('#nav-home');
+  await expect(page.locator('#home-list .lc-empty')).toHaveText('No accounts yet — add one in Settings');
+  await page.fill('#home-search', 'zzzz');
+  await expect(page.locator('#home-list .lc-empty')).toHaveText('Nothing matches "zzzz"');
+});
+
+test('Home tag filter also filters the Vault items found by a search', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { items: SEARCH_ITEMS });
+  await page.evaluate(() => chrome.storage.local.set({ listFilters: { tags: ['Payments'], types: [], twofa: false } }));
+  await page.reload();
+  await page.click('#nav-home');
+  await page.fill('#home-search', 'plain');
+  await expect(page.locator('#home-list .lc-row-item')).toHaveCount(0);
+  await expect(page.locator('#home-list .lc-empty')).toHaveText('Nothing matches "plain"');
+  await page.fill('#home-search', 'stripe');
+  await expect(page.locator('#home-list .lc-row-item')).toHaveCount(1);
+  await expect(page.locator('#home-count')).toHaveText('1 result');
+});
