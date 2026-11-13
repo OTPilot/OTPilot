@@ -319,6 +319,30 @@ const VaultAccounts = (() => {
     return index;
   }
 
+  // One new item of any type from a page (an API key). The read, the checks
+  // and the write run under one vault lock, with `key` still the vault key
+  // (else nothing is written and this throws). `check(items)` gets every
+  // decrypted item — logins and others, for the Free limit and duplicates —
+  // and returns null to write `item`, or a reason not to.
+  // → { ok: true, id } | { ok: false, reason }
+  async function addItem(item, key, check = () => null) {
+    await VaultMigration.migrate();
+    return VaultStore.transaction(async tx => {
+      if ((await VaultKeys.getKey()) !== key) throw new Error('the vault key changed');
+      const records = await tx.listRecords();
+      if (Object.prototype.hasOwnProperty.call(records, item.id)) return { ok: false, reason: 'id' };
+      const items = [];
+      for (const rec of Object.values(records)) {
+        try { items.push(await VaultCrypto.decryptItem(rec, key)); } catch { /* unreadable: not counted */ }
+      }
+      const reason = await check(items);
+      if (reason) return { ok: false, reason };
+      const next = { ...structuredClone(item), updatedAt: new Date().toISOString() };
+      await putItems(tx, [next], key);
+      return { ok: true, id: next.id };
+    });
+  }
+
   // Updates one account if it still matches `expected` (the v1 fields the
   // caller saw). Returns false if it changed or disappeared meanwhile.
   async function update(id, expected, patch, key) {
@@ -337,5 +361,5 @@ const VaultAccounts = (() => {
     return ok;
   }
 
-  return { customFieldsOf, withCustomFields, load, loadOthers, save, exceedsFreeLimit, add, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
+  return { customFieldsOf, withCustomFields, load, loadOthers, save, exceedsFreeLimit, add, addItem, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
 })();

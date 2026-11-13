@@ -55,6 +55,9 @@ const Vault = (() => {
         { id: 'environment', label: 'Environment', kind: 'text' },
         { id: 'expires', label: 'Expires', kind: 'date' },
       ],
+      // The site it belongs to (a key saved from a page gets that page's
+      // host): kept by the CSV importer, and the item's icon. No 2FA.
+      urls: true,
     },
     ssh: {
       label: 'SSH key',
