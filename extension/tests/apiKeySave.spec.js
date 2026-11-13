@@ -305,6 +305,28 @@ test('AWS: the access key ID and its secret are saved together; one half alone i
   expect([fieldOf(api, 'clientId'), fieldOf(api, 'clientSecret'), fieldOf(api, 'apiKey')]).toEqual([AWS_ID, AWS_SECRET, '']);
 });
 
+test('a 40-character generic token (AWS-secret shaped) without an access key ID is judged as a generic key', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const token = 'q8Vt2Lm9ZrX4bN7kP3wYc6Hs1JdF5gT0aRe8Uz4Q';
+  expect(token).toHaveLength(40);
+  const s = await site(context, awsPage(`<label>Your API key</label><input readonly value="${token}">`));
+  const card = cardOf(s);
+  await s.click('#c');
+  await expect.poll(() => card.count('.otpilot-apikey-save')).toBe(1);
+});
+
+test('a read-only field filled later by a script (input.value =) is offered', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const s = await site(context, `<!doctype html><html><body><div role="dialog"><p>Save your secret key in a safe place since you won't be able to view it again.</p>
+    <input id="k" readonly value=""><button>Copy</button></div>
+    <script>setTimeout(() => { document.getElementById('k').value = ${JSON.stringify(KEY)}; }, 1500);</script></body></html>`);
+  const card = cardOf(s);
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  expect(fieldOf((await apiItems(popup))[0], 'apiKey')).toBe(KEY);
+});
+
 test('a key inside a same-origin or cross-origin iframe is not offered', async ({ context, extensionId }) => {
   await vaultWith(context, extensionId, []);
   const frameBody = `<!doctype html><html><body><div role="dialog"><p>Copy it now: you won't be able to see it again.</p><input readonly value="${KEY}"><button>Copy</button></div>

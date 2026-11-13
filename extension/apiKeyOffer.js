@@ -138,12 +138,14 @@
         const ctx = contextOf(container, cache);
         if (requireCopyOnce && !ctx.copyOnce) continue;
         let found = null;
+        const awsId = ApiKeys.isAwsSecret(value) ? awsPartner(container, ApiKeys.isAwsKeyId, budget) : null;
         if (ApiKeys.isAwsKeyId(value)) {
           const secret = awsPartner(container, ApiKeys.isAwsSecret, budget);
           if (secret) found = { value: secret, keyId: value, environment: '' };
-        } else if (ApiKeys.isAwsSecret(value)) {
-          const id = awsPartner(container, ApiKeys.isAwsKeyId, budget);
-          if (id) found = { value, keyId: id, environment: '' };
+        } else if (awsId) {
+          // An AWS secret only beside its access key ID; otherwise a 40-char
+          // token is judged like any other key below.
+          found = { value, keyId: awsId, environment: '' };
         } else {
           const d = ApiKeys.decide(value, ctx);
           if (d) found = { value, environment: d.environment };
@@ -462,14 +464,46 @@
     if (found) offer(found, outer);
   }
 
+  // A read-only field whose value a script sets later (`input.value = key`)
+  // changes no attribute and fires no event, so the observer can't see it.
+  // Fields added (or present at load) are polled for a while: every
+  // FIELD_POLL_MS, for FIELD_WATCH_MS, at most FIELD_MAX fields.
+  const FIELD_POLL_MS = 500, FIELD_WATCH_MS = 15000, FIELD_MAX = 50;
+  const watched = new Map(); // field -> { value, until }
+  let fieldTimer = null;
+  function watchFields(root) {
+    if (stopped || root.nodeType !== 1 || ours(root)) return;
+    const fields = [...(root.matches('input, textarea') ? [root] : []), ...root.querySelectorAll('input, textarea')];
+    const until = Date.now() + FIELD_WATCH_MS;
+    for (const f of fields) {
+      if (watched.size >= FIELD_MAX) break;
+      if (!(f.readOnly || f.disabled) || ours(f)) continue;
+      watched.set(f, { value: f.value, until });
+    }
+    if (watched.size && !fieldTimer) fieldTimer = setInterval(pollFields, FIELD_POLL_MS);
+  }
+  function pollFields() {
+    if (!chrome.runtime?.id || stopped) { watched.clear(); }
+    const now = Date.now();
+    for (const [f, w] of watched) {
+      if (!f.isConnected || now > w.until) { watched.delete(f); continue; }
+      if (f.value !== w.value) {
+        w.value = f.value;
+        pending.add(f);
+        if (!busy) schedule();
+      }
+    }
+    if (!watched.size) { clearInterval(fieldTimer); fieldTimer = null; }
+  }
+
   const observer = new MutationObserver(records => {
-    if (!chrome.runtime?.id) { observer.disconnect(); clearTimeout(timer); pending.clear(); return; }
+    if (!chrome.runtime?.id) { observer.disconnect(); clearTimeout(timer); pending.clear(); watched.clear(); return; }
     if (stopped) { observer.disconnect(); return; }
     for (const r of records) {
       if (r.type === 'childList') {
         for (const n of r.addedNodes) {
           const e = n.nodeType === 1 ? n : n.parentElement;
-          if (e && !ours(e)) pending.add(e);
+          if (e && !ours(e)) { pending.add(e); if (n.nodeType === 1) watchFields(n); }
         }
       } else {
         const e = r.target.nodeType === 1 ? r.target : r.target.parentElement;
@@ -486,6 +520,7 @@
   // A page that shows the key right away (GitHub after creating a token):
   // only with the copy-once wording (so the page isn't scanned again without
   // it once that card closes: only what changed meanwhile is).
+  watchFields(document.body);
   const atLoad = findKey([document.body], true);
   if (atLoad) offer(atLoad, []);
 })();
