@@ -360,6 +360,41 @@ test('a credentials table (Freesound): the key column is offered with its client
   await expect(s.locator('#otpilot-apikey-save')).toHaveCount(0);
 });
 
+test('a credentials table with two keys: the second comes up after the first (saved or dismissed); a client id in a read-only field is kept', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const KEY2 = 'Z7qWm3Xc9VbN2kLp5RtY8uIo4AsD6fGh1JkE0wQz';
+  const two = `<!doctype html><html><body><table><tr><th>Name</th><th>Client id</th><th>Client secret/Api key</th></tr>
+<tr><td>one</td><td>${FS_ID}</td><td>${FS_KEY}</td></tr>
+<tr><td>two</td><td><input readonly value="clientTwo123"></td><td>${KEY2}</td></tr></table></body></html>`;
+  const s = await listSite(context, two);
+  const card = cardOf(s);
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  // The second row's key, once the first card is gone.
+  await expect.poll(async () => (await card.prop('.otpilot-apikey-name', 'value')) || '', { timeout: 5000 }).toContain('two');
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(2);
+  const second = (await apiItems(popup)).find(i => fieldOf(i, 'clientSecret') === KEY2);
+  expect(fieldOf(second, 'clientId')).toBe('clientTwo123');
+  // Next visit: the first is saved (no card), the second too: nothing.
+  await s.reload(); await s.waitForTimeout(1500);
+  await expect(s.locator('#otpilot-apikey-save')).toHaveCount(0);
+});
+
+test('a credentials table whose first key is already saved: the next one is offered', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const first = await listSite(context, listPage());
+  const c1 = cardOf(first);
+  await expect.poll(() => c1.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await c1.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  await first.close();
+  const KEY2 = 'Z7qWm3Xc9VbN2kLp5RtY8uIo4AsD6fGh1JkE0wQz';
+  const s = await listSite(context, listPage().replace('</tbody>', `<tr><td>second</td><td>idTwo1234</td><td>${KEY2}</td><td></td><td></td></tr></tbody>`));
+  const card = cardOf(s);
+  await expect.poll(async () => (await card.prop('.otpilot-apikey-name', 'value')) || '', { timeout: 5000 }).toContain('second');
+});
+
 test('a table whose column is not a key column (an id, a name) is not offered', async ({ context, extensionId }) => {
   await vaultWith(context, extensionId, []);
   const s = await listSite(context, listPage('Request id'));

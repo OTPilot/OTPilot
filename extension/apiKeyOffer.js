@@ -122,6 +122,8 @@
   // A table cell's column header and its row's cells by header (a list of
   // credentials: Name | Client id | Client secret/Api key), or null.
   const cellText = c => (c?.textContent || '').trim().replace(/\s+/g, ' ');
+  // A row cell's value: a field's (a read-only input showing the id), else its text.
+  const cellValue = c => { const f = c?.querySelector('input, textarea'); return f ? f.value.trim() : cellText(c); };
   function columnOf(el) {
     const cell = el.closest('td, th, [role="cell"], [role="gridcell"]');
     if (!cell || ours(cell)) return null;
@@ -144,7 +146,7 @@
     }
     const index = cells.indexOf(cell);
     if (index < 0 || headers.length !== cells.length) return null;
-    const by = re => { const i = headers.findIndex(h => re.test(h)); return i >= 0 && i !== index ? cellText(cells[i]) : ''; };
+    const by = re => { const i = headers.findIndex(h => re.test(h)); return i >= 0 && i !== index ? cellValue(cells[i]) : ''; };
     const id = by(ApiKeys.ID_COLUMN);
     return {
       header: headers[index],
@@ -279,18 +281,20 @@
 
   // `roots`: what the scan that found the key looked at, scanned again once
   // the card is gone (a second key shown meanwhile).
-  async function offer(found, roots) {
+  // `atLoad`: found by the scan at load; once this offer is over that scan
+  // runs again (same strict rules), so a table's next unsaved key comes up.
+  async function offer(found, roots, atLoad = false) {
     if (busy || stopped || !chrome.runtime?.id) return;
     busy = true;
     askHash = await keyHash(found.value);
     const ctx = await askContext();
     // Saved already (a credentials page shows it on every visit): no card.
-    if (ctx?.exists) { dismissed.add(ApiKeys.fingerprint(found.value)); idle(); return; }
+    if (ctx?.exists) { dismissed.add(ApiKeys.fingerprint(found.value)); idle(roots, atLoad); return; }
     if (!ctx || ctx.never || (ctx.state !== 'locked' && ctx.state !== 'unlocked')) {
       // "Never" for this site, or no vault set up: nothing on this page.
       // No answer: this key isn't asked about again on every change.
       if (ctx) stopped = true; else dismissed.add(ApiKeys.fingerprint(found.value));
-      idle();
+      idle(roots, atLoad);
       return;
     }
     if (!found.el.isConnected || document.getElementById(CARD_ID)) { idle(); return; }
@@ -315,7 +319,7 @@
       cand = null; // the key leaves this script's memory with the card
       el.remove();
       if (cardHost === el) cardHost = null;
-      idle(roots);
+      idle(roots, atLoad);
     };
     const dismiss = () => { dismissed.add(fp); close(); };
 
@@ -497,10 +501,15 @@
 
   // The offer is over. `rescan`: the roots it came from (its card closed —
   // its key is dismissed by then, so only another key can come up).
-  function idle(rescan) {
+  function idle(rescan, atLoad) {
     busy = false;
     if (stopped) { pending.clear(); return; }
     for (const r of rescan || []) pending.add(r);
+    // Each key offered at load is dismissed (or saved) by now, so this ends.
+    if (atLoad) {
+      const next = findKey([document.body], true);
+      if (next) { offer(next, [], true); return; }
+    }
     if (pending.size) schedule();
   }
 
@@ -577,5 +586,5 @@
   // it once that card closes: only what changed meanwhile is).
   watchFields(document.body);
   const atLoad = findKey([document.body], true);
-  if (atLoad) offer(atLoad, []);
+  if (atLoad) offer(atLoad, [], true);
 })();
