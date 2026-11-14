@@ -20,18 +20,18 @@ const colors = overlay => overlay.evaluate(el => ({
   primary: getComputedStyle(el.querySelector('.otpilot-primary')).backgroundColor,
 }));
 
-test('overlays use the default theme when none is chosen', async ({ context, extensionId }) => {
+test('overlays use the default theme (Daylight) when none is chosen', async ({ context, extensionId }) => {
   const { overlay } = await suggestionWithTheme(context, extensionId, null);
   await expect.poll(() => colors(overlay)).toEqual({
-    bg: 'rgb(30, 41, 59)', title: 'rgb(241, 245, 249)', primary: 'rgb(14, 165, 233)',
+    bg: 'rgb(255, 255, 255)', title: 'rgb(23, 28, 23)', primary: 'rgb(47, 111, 79)',
   });
 });
 
 test('overlays use the chosen theme and follow a change while open', async ({ context, extensionId }) => {
-  const { popup, overlay } = await suggestionWithTheme(context, extensionId, 'daylight');
-  // Daylight: white surface, dark ink, green accent (theme.css).
+  const { popup, overlay } = await suggestionWithTheme(context, extensionId, 'original');
+  // Original: slate surface, light ink, sky-blue accent (theme.css).
   await expect.poll(() => colors(overlay)).toEqual({
-    bg: 'rgb(255, 255, 255)', title: 'rgb(23, 28, 23)', primary: 'rgb(47, 111, 79)',
+    bg: 'rgb(30, 41, 59)', title: 'rgb(241, 245, 249)', primary: 'rgb(14, 165, 233)',
   });
 
   await popup.evaluate(() => chrome.storage.local.set({ theme: 'vault' }));
@@ -47,9 +47,9 @@ test('the page\'s own CSS variables never leak into OTPilot overlays', async ({ 
   const overlay = page.locator('#otpilot-suggestion');
   await expect(overlay).toBeVisible();
   // Checked right away (before the theme request could answer) and after.
-  expect((await colors(overlay)).bg).toBe('rgb(30, 41, 59)');
+  expect((await colors(overlay)).bg).toBe('rgb(255, 255, 255)');
   await expect.poll(() => colors(overlay)).toEqual({
-    bg: 'rgb(30, 41, 59)', title: 'rgb(241, 245, 249)', primary: 'rgb(14, 165, 233)',
+    bg: 'rgb(255, 255, 255)', title: 'rgb(23, 28, 23)', primary: 'rgb(47, 111, 79)',
   });
 });
 
@@ -155,4 +155,13 @@ test('opening the popup applies the stored theme without writing it back', async
   await popup.click('#nav-config');
   await popup.locator('.theme-row', { hasText: 'Vault' }).click();
   expect(await popup.evaluate(() => window.themeWrites)).toEqual(['vault']);
+});
+
+// The unlock frame paints html too: the chosen theme reaches it (no white strip).
+test('unlock frame: html follows the chosen theme', async ({ context, extensionId }) => {
+  const p = await context.newPage();
+  await p.goto(`chrome-extension://${extensionId}/popup.html`);
+  await p.evaluate(() => chrome.storage.local.set({ theme: 'original' }));
+  await p.goto(`chrome-extension://${extensionId}/unlock.html`);
+  await expect.poll(() => p.evaluate(() => getComputedStyle(document.documentElement).backgroundColor)).toBe('rgb(30, 41, 59)');
 });

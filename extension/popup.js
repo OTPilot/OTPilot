@@ -54,13 +54,13 @@ function findSharedCode(acc) {
 // a theme is two steps: 1) a body[data-theme="id"] token block in theme.css
 // (same custom-property names as the others), 2) one entry here.
 const THEMES = [
+  { id: 'daylight', name: 'Daylight', desc: 'Calm paper-white, forest-green accent.',   swatch: ['#faf9f5', '#2f6f4f'] },
   { id: 'original', name: 'Original', desc: 'The classic slate & sky-blue look.',       swatch: ['#0f172a', '#38bdf8'] },
   { id: 'vault',    name: 'Vault',    desc: 'Graphite & brass — precise and premium.', swatch: ['#1c1a17', '#c9a15a'] },
-  { id: 'daylight', name: 'Daylight', desc: 'Calm paper-white, forest-green accent.',   swatch: ['#faf9f5', '#2f6f4f'] },
   { id: 'terminal', name: 'Terminal', desc: 'Monospace control panel, cyan accent.',    swatch: ['#0a0e14', '#33c2cf'] },
   { id: 'signal',   name: 'Signal',   desc: 'Bold navy, coral accent, rounded.',        swatch: ['#101b2d', '#ff6a55'] },
 ];
-const DEFAULT_THEME = 'original';
+const DEFAULT_THEME = 'daylight';
 
 // `persist`: only when the user picks a theme. Applying the stored one at
 // startup must not write it back — a theme changed meanwhile (another popup,
