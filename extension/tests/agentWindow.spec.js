@@ -167,6 +167,7 @@ test('a new request while the window shows another view brings it back to Agents
   await run();
   await expect.poll(() => popups(context).length).toBe(1);
   const win = popups(context)[0];
+  await expect(win.locator('#agents-panel')).toBeVisible(); // the window finished opening on Agents
   await win.click('#nav-home');
   await expect(win.locator('#agents-panel')).toBeHidden();
   await worker.evaluate(() => { __agents.requests.push({ id: 'rq2', agent_id: 'ag1', query: 'aws', item_id: null }); });
@@ -198,6 +199,7 @@ test('a new request never takes the window away from the vault editor', async ({
   await run();
   await expect.poll(() => popups(context).length).toBe(1);
   const win = popups(context)[0];
+  await expect(win.locator('#agents-panel')).toBeVisible();
   await win.click('#nav-settings');
   await win.click('#btn-add');
   await win.locator('#add-type-menu [data-add-type="note"]').click();
