@@ -212,7 +212,8 @@
         if (ours(e)) continue;
         let value;
         if (e.matches('input, textarea')) { if (!(e.readOnly || e.disabled)) continue; value = e.value.trim(); }
-        else { if (e.children.length || e.matches('script, style, noscript, template, option')) continue; value = (e.textContent || '').trim(); }
+        // Never a control (a "Copy client ID" button's icon text).
+        else { if (e.children.length || e.matches('script, style, noscript, template, option, button, a, select, label, [role="button"], [role="link"]') || e.closest('button, a, [role="button"], [role="link"]')) continue; value = (e.textContent || '').trim(); }
         if (!value || value === key || !/^[^\s]{6,128}$/.test(value) || ApiKeys.isMasked(value) || !visible(e)) continue;
         const label = labelOf(e);
         if (ID_LABEL.test(label) && !ApiKeys.KEY_WORDS.test(label.replace(ID_LABEL, ''))) ids.add(value);

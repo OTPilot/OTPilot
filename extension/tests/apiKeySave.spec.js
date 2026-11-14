@@ -622,7 +622,7 @@ test('two clients on one page: a revealed secret is paired with its own Client I
   const s = await site(context, `<!doctype html><html><body><h1>Clients</h1>
     <section><h2>Web client</h2><div><span>Client ID</span><span>webClient77</span></div>
       <div><label for="s1">Client secret</label><input id="s1" readonly value="••••••••"></div></section>
-    <section><h2>CLI client</h2><div><label>Client ID</label><pre>cliOne12</pre></div>
+    <section><h2>CLI client</h2><div><label>Client ID</label><pre>cliOne12</pre><button aria-label="Copy client ID">content_copy</button></div>
       <div><label for="s2">Client secret</label><input id="s2" readonly value="••••••••"><button id="show2">Show</button></div></section>
     <script>show2.onclick = () => { s2.value = ${JSON.stringify(SECRET2)}; };</script></body></html>`);
   const card = cardOf(s);
