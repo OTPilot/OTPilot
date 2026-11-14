@@ -159,17 +159,26 @@
   // panel or modal drawn in the top layer (Google Cloud's "API key created"),
   // or under a z-index the page also maxes out. A manual popover is in the
   // top layer, above what's there already. A modal <dialog> makes everything
-  // outside it inert: the card then goes inside the topmost one.
+  // outside it inert: the card then goes inside the active one (the one
+  // holding focus; document order isn't opening order).
+  function activeModal() {
+    try {
+      const modals = [...document.querySelectorAll('dialog')].filter(d => d.matches(':modal'));
+      return modals.find(d => d.contains(document.activeElement)) || modals.pop() || null;
+    } catch { return null; }
+  }
   function showOnTop(el) {
-    let modal = null;
-    try { modal = [...document.querySelectorAll('dialog')].filter(d => d.matches(':modal')).pop() || null; } catch {}
-    (modal || document.body).appendChild(el);
+    const modal = activeModal();
+    if (el.parentElement !== (modal || document.body)) {
+      if (el.matches?.(':popover-open')) try { el.hidePopover(); } catch {}
+      (modal || document.body).appendChild(el);
+    }
     if (typeof el.showPopover !== 'function') return;
     el.setAttribute('popover', 'manual');
     // The popover UA style (inset: 0, margin: auto, padding, border, colors)
     // would move and restyle the card.
     Object.assign(el.style, { inset: 'auto', top: '16px', right: '16px', margin: '0', padding: '0', overflow: 'hidden', color: 'inherit' });
-    try { el.showPopover(); } catch {}
+    try { if (!el.matches(':popover-open')) el.showPopover(); } catch {}
   }
 
   // A value labelled as the id that goes with the key ("Client ID", "App
@@ -386,7 +395,16 @@
     for (const ev of ['keydown', 'keyup', 'keypress', 'focusin', 'focusout']) el.addEventListener(ev, e => e.stopPropagation());
     const shadow = el.attachShadow({ mode: 'closed' });
     let stopUnlock = () => {};
+    // The page may remove or close the modal the card is in: the card moves
+    // back out (to the active modal or the body); if it was removed with it,
+    // the offer ends, so later keys still get one.
+    const watchdog = setInterval(() => {
+      if (!el.isConnected) { close(); return; }
+      const parent = el.parentElement;
+      if (parent?.tagName === 'DIALOG' ? !parent.matches(':modal') : activeModal()) showOnTop(el);
+    }, 500);
     const close = () => {
+      clearInterval(watchdog);
       stopUnlock();
       cand = null; // the key leaves this script's memory with the card
       el.remove();
