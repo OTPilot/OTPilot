@@ -556,14 +556,20 @@ function renderActiveAgent(detail, a) {
 document.getElementById('nav-agents').addEventListener('click', () => showView('agents'));
 
 // The window opened for agents waiting, asked to show a new one (the
-// background focused it): back to the Agents view, or its list redrawn —
-// never while the user is typing in a field, which a switch would hide.
+// background focused it): back to the Agents view only from Home or Generate
+// (the vault editor, Settings, Sync or Team may hold unsaved input — the dot
+// on Agents says it then), or its list redrawn like the timer's: checked
+// again after the request, so a form opened meanwhile stays.
 if (AGENTS_WINDOW) chrome.runtime.onMessage.addListener(msg => {
   if (msg?.action !== 'agentsShow') return;
   const panel = document.getElementById('agents-panel');
-  const typing = /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || '');
-  if (panel.style.display === 'none') { if (!typing) showView('agents'); }
-  else if (!agentsBusy(panel)) renderAgentsPanel();
+  if (panel.style.display === 'none') {
+    const shown = id => document.getElementById(id)?.style.display !== 'none';
+    if (shown('home-view') || shown('generate-panel')) showView('agents');
+    return;
+  }
+  if (agentsBusy(panel)) return;
+  Agents.list().then(fresh => renderAgentsPanel(fresh), () => {});
 });
 
 // While the Agents view is open, new requests and agents waiting show up on

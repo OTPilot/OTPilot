@@ -175,3 +175,38 @@ test('a new request while the window shows another view brings it back to Agents
   expect(popups(context)).toHaveLength(1);
   await worker.evaluate(() => chrome.action.setBadgeText({ text: '' }));
 });
+
+test('a new request never takes the window away from the vault editor', async ({ context, extensionId }) => {
+  const setup = await context.newPage();
+  await setup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await setup.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedUnlocked(setup, { accounts: [] });
+  await setup.close();
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker');
+  await worker.evaluate(() => {
+    globalThis.__agents = { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] };
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async url => String(url).endsWith('/notifications')
+      ? new Response(JSON.stringify({ invites: [], notices: [], agents: { pending: 1, requests: __agents.requests.length } }))
+      : realFetch(url);
+    SupabaseAuth.getAccessToken = async () => 'token';
+    Agents.list = async () => structuredClone(__agents);
+    return chrome.storage.session.remove('agentsAnnounced');
+  });
+  const run = () => worker.evaluate(async () => { await refreshNotices(); await navigator.locks.request('otpilot-agents-announce', () => {}); });
+  await run();
+  await expect.poll(() => popups(context).length).toBe(1);
+  const win = popups(context)[0];
+  await win.click('#nav-settings');
+  await win.click('#btn-add');
+  await win.locator('#add-type-menu [data-add-type="note"]').click();
+  await win.fill('#acc-detail .item-title', 'Unsaved note');
+  await win.click('#acc-detail .acc-body-head'); // focus off the field
+  await worker.evaluate(() => { __agents.requests.push({ id: 'rq3', agent_id: 'ag1', query: 'aws', item_id: null }); });
+  await run();
+  await win.waitForTimeout(500);
+  await expect(win.locator('#settings-panel')).toBeVisible();
+  await expect(win.locator('#acc-detail .item-title')).toHaveValue('Unsaved note');
+  await worker.evaluate(() => chrome.action.setBadgeText({ text: '' }));
+});
