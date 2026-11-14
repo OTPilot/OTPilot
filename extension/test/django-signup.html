@@ -1,0 +1,11 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Account</title></head>
+<!-- A Django-style form: password1 / password2, no autocomplete, a bare
+     "Join" button, an action that says nothing. -->
+<body>
+  <form method="post" action="/account/" onsubmit="return false">
+    <input type="text" name="username">
+    <input type="password" name="password1">
+    <button type="submit">Join</button>
+  </form>
+</body></html>

@@ -39,7 +39,8 @@
   // confirm, repeat…), a reset / change-password or sign-up page, or one of
   // two password fields side by side (password + confirmation; with a third,
   // the first is the current one). Never one marked current-password.
-  const NEW_PW_HINT = /new[-_ ]?(pass|pw|pwd)|\bnew\b|confirm|repeat|retype|\bagain\b|nuev|repet|nouveau|nouvelle/i;
+  // `password1`: Django's registration field (sign-in uses `password`).
+  const NEW_PW_HINT = /new[-_ ]?(pass|pw|pwd)|\bnew\b|confirm|repeat|retype|\bagain\b|nuev|repet|nouveau|nouvelle|\bpassword1\b/i;
   const CURRENT_PW_HINT = /current|\bold\b|old[-_ ]?(pass|pw|pwd)|existing|actual|anterior|viej|ancien|aktuell/i;
   const CHANGE_PW_PAGE = /(change|update)[-_]?pass/i;
   const NEW_PW_PAGE = /(reset|change|new|set|create|update|forgot|recover)[-_]?pass|sign[-_]?up|register|registr|create[-_]?account/i;
@@ -63,6 +64,11 @@
     }
     return [el];
   };
+  const formRegisters = form => {
+    let action = '';
+    try { action = new URL(form.getAttribute('action') || '', location.href).pathname; } catch {}
+    return NEW_PW_PAGE.test(`${action} ${form.id} ${form.getAttribute('name') || ''}`);
+  };
   const isNewPassword = el => {
     if (!(el instanceof HTMLInputElement) || el.type !== 'password') return false;
     const ac = autocompleteOf(el);
@@ -80,6 +86,9 @@
     // A change-password page with two unnamed fields: current, then new.
     if (CHANGE_PW_PAGE.test(location.pathname) && group.length === 2 && group[0] === el) return false;
     if (NEW_PW_PAGE.test(location.pathname)) return true;
+    // A sign-up form on another page (a "Join" modal on the login page):
+    // its action / id / name say so.
+    if (el.form && formRegisters(el.form)) return true;
     if (group.length >= 2) return true;
     // One field alone: new when what submits its form creates an account.
     return submitCreatesAccount(el);

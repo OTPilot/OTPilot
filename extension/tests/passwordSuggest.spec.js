@@ -298,3 +298,24 @@ test('a form-less "Create account" whose common container is the 5th ancestor ge
   await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
   await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
 });
+
+test('a "Join" modal on the login page (a form whose id / action say it registers) gets the suggestion; the sign-in form beside it does not', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/modal-join.html`);
+  await site.focus('input[name="password"]');
+  await site.waitForTimeout(600);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await site.click('#join');
+  await site.focus('#id_password1_registration');
+  await expect(site.locator('#otpilot-password-suggest')).toBeVisible();
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(1);
+});
+
+test('a Django-style password1 field gets the suggestion even with a bare "Join" and a neutral action', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/django-signup.html`);
+  await site.focus('input[name="password1"]');
+  await expect(site.locator('#otpilot-password-suggest')).toBeVisible();
+});

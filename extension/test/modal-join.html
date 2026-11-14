@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Log in</title></head>
+<!-- Freesound's /home/login/: a sign-in form, and a "Join" modal loaded on
+     click whose single password field has no autocomplete and whose submit
+     reads just "Join"; only the form's id / action say it registers. -->
+<body>
+  <form id="loginForm" method="post" action="/home/login/" onsubmit="return false">
+    <input type="text" name="username" autocomplete="username">
+    <input type="password" name="password" autocomplete="current-password">
+    <button type="submit">Log in</button>
+  </form>
+  <a id="join" href="#">Don't have an account? Join now</a>
+  <div id="wrap"></div>
+  <script>
+    document.getElementById('join').onclick = e => {
+      e.preventDefault();
+      document.getElementById('wrap').innerHTML = `<div class="modal" role="dialog" aria-label="Registration modal">
+        <h4>Join Example</h4>
+        <form id="registerModalForm" method="post" action="/home/registration_modal/?in_modal=1" onsubmit="return false" novalidate>
+          <input type="text" name="username" placeholder="Username">
+          <input type="email" name="email1" placeholder="Email">
+          <input type="email" name="email2" placeholder="Email confirmation">
+          <input type="password" name="password1" placeholder="Password" id="id_password1_registration">
+          <button type="submit">Join</button>
+        </form></div>`;
+    };
+  </script>
+</body></html>
