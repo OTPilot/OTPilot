@@ -57,6 +57,8 @@ test('the Agents window closes itself once nothing waits any more', async ({ con
   await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
   await seedUnlocked(page, { accounts: [], userPlan: 'personal', cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800000 } });
   await page.goto(`chrome-extension://${extensionId}/popup.html?view=agents&window=1`);
+  // Its own first list (the real API, failing here) is drawn before the fake takes over.
+  await expect(page.locator('#agents-detail')).not.toBeEmpty();
   await page.evaluate(() => { SupabaseAuth.getSession = async () => ({ user: { id: 'user-me' } }); });
   await installFakeAgents(page);
   await page.evaluate(() => fakeAgents.addAgent({ name: 'Codex' }));
@@ -75,8 +77,8 @@ test('approving the only agent in the window keeps it open for the add-account f
   // Signed in, no sync set up: the popup would normally jump to Sync.
   await seedUnlocked(page, { accounts: [], userPlan: 'free', cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800000 } });
   await page.goto(`chrome-extension://${extensionId}/popup.html?view=agents&window=1`);
-  await page.waitForTimeout(800);
   await expect(page.locator('#agents-panel')).toBeVisible();
+  await expect(page.locator('#agents-detail')).not.toBeEmpty();
   await page.evaluate(() => { SupabaseAuth.getSession = async () => ({ user: { id: 'user-me' } }); });
   await installFakeAgents(page);
   await page.evaluate(() => fakeAgents.addAgent({ name: 'Codex' }));
@@ -112,6 +114,8 @@ test('a window whose first list is already empty (answered elsewhere) closes its
   await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
   await seedUnlocked(page, { accounts: [], userPlan: 'personal', cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800000 } });
   await page.goto(`chrome-extension://${extensionId}/popup.html?view=agents&window=1`);
+  // Its own first list (the real API, failing here) is drawn before the fake takes over.
+  await expect(page.locator('#agents-detail')).not.toBeEmpty();
   await page.evaluate(() => { SupabaseAuth.getSession = async () => ({ user: { id: 'user-me' } }); });
   await installFakeAgents(page);
   page.evaluate(() => renderAgentsPanel()).catch(() => {});
