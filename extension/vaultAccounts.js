@@ -343,6 +343,27 @@ const VaultAccounts = (() => {
     });
   }
 
+  // Changes one stored item under the vault lock: `change(item, items)`
+  // returns the next item, or a string (the reason nothing is written).
+  // → { ok: true, id } | { ok: false, reason } ('gone' when it doesn't exist).
+  async function changeItem(id, key, change) {
+    await VaultMigration.migrate();
+    return VaultStore.transaction(async tx => {
+      if ((await VaultKeys.getKey()) !== key) throw new Error('the vault key changed');
+      const items = [];
+      for (const rec of Object.values(await tx.listRecords())) {
+        try { items.push(await VaultCrypto.decryptItem(rec, key)); } catch { /* unreadable */ }
+      }
+      const item = items.find(i => i.id === id);
+      if (!item) return { ok: false, reason: 'gone' };
+      const next = await change(structuredClone(item), items);
+      if (typeof next === 'string') return { ok: false, reason: next };
+      next.updatedAt = new Date().toISOString();
+      await putItems(tx, [next], key);
+      return { ok: true, id };
+    });
+  }
+
   // Updates one account if it still matches `expected` (the v1 fields the
   // caller saw). Returns false if it changed or disappeared meanwhile.
   async function update(id, expected, patch, key) {
@@ -361,5 +382,5 @@ const VaultAccounts = (() => {
     return ok;
   }
 
-  return { customFieldsOf, withCustomFields, load, loadOthers, save, exceedsFreeLimit, add, addItem, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
+  return { customFieldsOf, withCustomFields, load, loadOthers, save, exceedsFreeLimit, add, addItem, changeItem, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
 })();

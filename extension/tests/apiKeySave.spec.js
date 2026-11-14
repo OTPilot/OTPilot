@@ -691,3 +691,73 @@ test('two modals open, the newer earlier in the document: the card goes into the
   await card.click('.otpilot-apikey-later');
   await expect.poll(() => card.shown()).toBe(false);
 });
+
+// ── A rotated key: replace the key of one of the site's API credentials ──
+async function withApiItem(popup, { title, apiKey, clientSecret }) {
+  return popup.evaluate(async ({ title, apiKey, clientSecret }) => {
+    const key = await VaultKeys.getKey();
+    const it = Vault.newItem('api', { title, urls: ['localhost'] });
+    if (apiKey) Vault.getField(it, 'apiKey').value = apiKey;
+    if (clientSecret) Vault.getField(it, 'clientSecret').value = clientSecret;
+    await VaultStore.save([it], key);
+    return it.id;
+  }, { title, apiKey, clientSecret });
+}
+// Picks an option of the card's target select like the user: focus it with a
+// click, then the keyboard (trusted events).
+// (Typing "R" picks the first "Replace…" option of the closed select.)
+async function pickTarget(page, card) {
+  await card.click('.otpilot-apikey-target');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('r');
+}
+
+test('a site with an API credential: Save as new by default; "Replace the key in" updates it, keeping the old key in its history', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const OLD = 'sk-proj-' + 'Old0ld0ld0ld0ldAbCdEfGhIjKlMnOpQrStUvWxYz0123456789ab';
+  const id = await withApiItem(popup, { title: 'Prod key (secret name)', apiKey: OLD });
+  const s = await site(context, html(KEY));
+  const card = cardOf(s);
+  await s.click('#create');
+  await expect.poll(() => card.count('.otpilot-apikey-target')).toBe(1);
+  // Nothing drawn names the credential: the select shows "Save as new".
+  expect(await card.run(function () { const t = this.querySelector('.otpilot-apikey-target'); return t.options[t.selectedIndex].text; })).toBe('Save as a new API key');
+  expect((await pageSees(s, ['Prod key (secret name)'])).leaked).toEqual([]);
+  await pickTarget(s, card);
+  await expect.poll(() => card.text('.otpilot-apikey-save')).toBe('Update');
+  await card.click('.otpilot-apikey-save');
+  await expect(s.locator('body')).toContainText('API key updated in OTPilot');
+  const api = await apiItems(popup);
+  expect(api).toHaveLength(1);
+  expect([api[0].id, api[0].title, fieldOf(api[0], 'apiKey'), api[0].passwordHistory?.[0]?.value]).toEqual([id, 'Prod key (secret name)', KEY, OLD]);
+});
+
+test('Save as new (the default) beside an existing credential adds a second one; a client-secret credential gets its secret replaced; Free limit never blocks a replace', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  await withApiItem(popup, { title: 'Other', apiKey: 'sk-proj-' + 'Zz9yXx8wWv7uUt6sSr5qQp4oOn3mMl2kKj1iIh0gGf9eEd8cCb7aZZ' });
+  const s = await site(context, html(KEY));
+  const card = cardOf(s);
+  await s.click('#create');
+  await expect.poll(() => card.count('.otpilot-apikey-save')).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(2);
+
+  // Free vault full: a replace still works (no new item).
+  const popup2 = await vaultWith(context, extensionId, [], { userPlan: 'free' });
+  await popup2.evaluate(async () => {
+    const key = await VaultKeys.getKey();
+    await VaultStore.save(Array.from({ length: 50 }, (_, i) => Vault.newItem('note', { title: `n${i}` })), key);
+  });
+  const id = await withApiItem(popup2, { title: 'OAuth app', clientSecret: 'old-secret-value-123456' });
+  const s2 = await site(context, html(KEY));
+  const c2 = cardOf(s2);
+  await s2.click('#create');
+  await expect.poll(() => c2.count('.otpilot-save-limit')).toBe(1);
+  expect(await c2.prop('.otpilot-apikey-save', 'disabled')).toBe(true);
+  await pickTarget(s2, c2);
+  await expect.poll(() => c2.prop('.otpilot-apikey-save', 'disabled')).toBe(false);
+  await c2.click('.otpilot-apikey-save');
+  await expect(s2.locator('body')).toContainText('API key updated in OTPilot');
+  const it = (await apiItems(popup2)).find(i => i.id === id);
+  expect([fieldOf(it, 'clientSecret'), fieldOf(it, 'apiKey'), it.passwordHistory[0].value]).toEqual([KEY, '', 'old-secret-value-123456']);
+});
