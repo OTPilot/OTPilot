@@ -686,8 +686,11 @@ async function replaceApiKey(req, host, vk) {
   const res = await VaultAccounts.changeItem(req.replace, vk, (item, items) => {
     if (items.some(i => i.type === 'api' && (Vault.getValue(i, 'apiKey') === req.key || Vault.getValue(i, 'clientSecret') === req.key))) return 'exists';
     if (!apiKeyReplaceCandidates([item], host).length) return 'replace';
-    // The field the item keeps its key in: a client secret (with its id), or the API key.
-    const field = req.keyId || (!Vault.getValue(item, 'apiKey') && Vault.getValue(item, 'clientSecret')) ? 'clientSecret' : 'apiKey';
+    // The field the item already keeps its key in (whatever the page shows
+    // beside it); an empty one: a client secret when there's an id, else the API key.
+    const field = Vault.getValue(item, 'apiKey') ? 'apiKey'
+      : Vault.getValue(item, 'clientSecret') ? 'clientSecret'
+      : req.keyId ? 'clientSecret' : 'apiKey';
     const set = (id, value) => { const f = Vault.getField(item, id); if (f) f.value = value; };
     const old = Vault.getValue(item, field);
     if (old) item.passwordHistory = [{ value: old, changedAt: new Date().toISOString() }, ...(item.passwordHistory || [])].slice(0, 5);

@@ -761,3 +761,23 @@ test('Save as new (the default) beside an existing credential adds a second one;
   const it = (await apiItems(popup2)).find(i => i.id === id);
   expect([fieldOf(it, 'clientSecret'), fieldOf(it, 'apiKey'), it.passwordHistory[0].value]).toEqual([KEY, '', 'old-secret-value-123456']);
 });
+
+test('replacing a credential that keeps an API key: the key goes there even when the page also shows a client ID', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const OLD = 'sk-proj-' + 'Old0ld0ld0ld0ldAbCdEfGhIjKlMnOpQrStUvWxYz0123456789ab';
+  const id = await withApiItem(popup, { title: 'Prod', apiKey: OLD });
+  const NEW = 'GOCSPX' + '-Ab3dEf9hIjK1mNoPq7sTuVwXyZ0a';
+  const s = await site(context, `<!doctype html><html><body><button id="c">Create</button><script>c.onclick = () => {
+    const d = document.createElement('div'); d.setAttribute('role', 'dialog');
+    d.innerHTML = '<div><div>Client ID</div><div>client-77</div></div><div><div>Client secret</div><div>${NEW}</div><button>Copy</button></div>';
+    document.body.appendChild(d);
+  };</script></body></html>`);
+  const card = cardOf(s);
+  await s.click('#c');
+  await expect.poll(() => card.count('.otpilot-apikey-target')).toBe(1);
+  await pickTarget(s, card);
+  await card.click('.otpilot-apikey-save');
+  await expect(s.locator('body')).toContainText('API key updated in OTPilot');
+  const it = (await apiItems(popup)).find(i => i.id === id);
+  expect([fieldOf(it, 'apiKey'), fieldOf(it, 'clientSecret'), fieldOf(it, 'clientId'), it.passwordHistory[0].value]).toEqual([NEW, '', 'client-77', OLD]);
+});
