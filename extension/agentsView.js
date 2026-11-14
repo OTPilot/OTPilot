@@ -98,8 +98,16 @@ async function renderAgentsPanel(fresh = null) {
   // that waited is answered, it closes itself.
   if (AGENTS_WINDOW) {
     if (pending.length || requests.length) _agentsWindowWaited = true;
+    // Checked again when the time comes: approving opens the add-account
+    // form, and a new request may have come in.
     // (window.close() only closes windows a script opened: remove its tab.)
-    else if (_agentsWindowWaited) setTimeout(() => chrome.tabs.getCurrent(t => (t ? chrome.tabs.remove(t.id) : window.close())), 1200);
+    else if (_agentsWindowWaited) setTimeout(() => {
+      const panel = document.getElementById('agents-panel');
+      const d = _agentsData || {};
+      const waits = (d.agents || []).some(a => a.status === 'pending') || (d.requests || []).length;
+      if (waits || _agentsSel?.adding || (panel && agentsBusy(panel))) return;
+      chrome.tabs.getCurrent(t => (t ? chrome.tabs.remove(t.id) : window.close()));
+    }, 1200);
   }
   const active = agents.filter(a => a.status === 'active');
   updateAgentsDot(pending.length + requests.length);

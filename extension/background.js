@@ -1283,7 +1283,8 @@ async function refreshNotices() {
   // every minute (a request then opens its window soon, not at the next
   // 5-minute poll).
   const { agentsKnown } = await chrome.storage.local.get('agentsKnown');
-  if (agentsWaiting || agentsKnown) chrome.alarms.create(AGENTS_ALARM, { periodInMinutes: agentsWaiting ? 0.5 : 1 });
+  // (Signed out: neither — the next sign-in refreshes.)
+  if (account && (agentsWaiting || agentsKnown)) chrome.alarms.create(AGENTS_ALARM, { periodInMinutes: agentsWaiting ? 0.5 : 1 });
   else chrome.alarms.clear(AGENTS_ALARM);
   if (agentsWaiting) announceWaitingAgents();
   return data;

@@ -5815,7 +5815,8 @@ async function silentPullSync() {
       const session = await SupabaseAuth.getSession();
       if (!session) return;
       const syncKey = await CloudSync.getSyncKey();
-      if (!syncKey) showView('sync');
+      // Opened for an agent waiting: it stays on the Agents view.
+      if (!syncKey && new URLSearchParams(location.search).get('view') !== 'agents') showView('sync');
     } catch {}
   })();
 
