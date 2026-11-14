@@ -1315,7 +1315,11 @@ function announceWaitingAgents() {
     let windowId = seen.windowId ?? null;
     if (fresh.length) {
       const open = windowId != null && await chrome.windows.get(windowId).then(() => true, () => false);
-      if (open) await chrome.windows.update(windowId, { focused: true }).catch(() => {});
+      if (open) {
+        await chrome.windows.update(windowId, { focused: true }).catch(() => {});
+        // It may show another view now: back to Agents (agentsView.js).
+        chrome.runtime.sendMessage({ action: 'agentsShow' }).catch(() => {});
+      }
       else {
         windowId = null;
         try {

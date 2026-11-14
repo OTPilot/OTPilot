@@ -144,3 +144,34 @@ test('an account whose agents are not known yet is asked once, then checked ever
   });
   expect(r).toEqual({ calls: 1, alarm: 1 });
 });
+
+test('a new request while the window shows another view brings it back to Agents', async ({ context, extensionId }) => {
+  const setup = await context.newPage();
+  await setup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await setup.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedUnlocked(setup, { accounts: [] });
+  await setup.close();
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker');
+  await worker.evaluate(() => {
+    globalThis.__agents = { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] };
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async url => String(url).endsWith('/notifications')
+      ? new Response(JSON.stringify({ invites: [], notices: [], agents: { pending: 1, requests: __agents.requests.length } }))
+      : realFetch(url);
+    SupabaseAuth.getAccessToken = async () => 'token';
+    Agents.list = async () => structuredClone(__agents);
+    return chrome.storage.session.remove('agentsAnnounced');
+  });
+  const run = () => worker.evaluate(async () => { await refreshNotices(); await navigator.locks.request('otpilot-agents-announce', () => {}); });
+  await run();
+  await expect.poll(() => popups(context).length).toBe(1);
+  const win = popups(context)[0];
+  await win.click('#nav-home');
+  await expect(win.locator('#agents-panel')).toBeHidden();
+  await worker.evaluate(() => { __agents.requests.push({ id: 'rq2', agent_id: 'ag1', query: 'aws', item_id: null }); });
+  await run();
+  await expect(win.locator('#agents-panel')).toBeVisible();
+  expect(popups(context)).toHaveLength(1);
+  await worker.evaluate(() => chrome.action.setBadgeText({ text: '' }));
+});

@@ -555,6 +555,17 @@ function renderActiveAgent(detail, a) {
 
 document.getElementById('nav-agents').addEventListener('click', () => showView('agents'));
 
+// The window opened for agents waiting, asked to show a new one (the
+// background focused it): back to the Agents view, or its list redrawn —
+// never while the user is typing in a field, which a switch would hide.
+if (AGENTS_WINDOW) chrome.runtime.onMessage.addListener(msg => {
+  if (msg?.action !== 'agentsShow') return;
+  const panel = document.getElementById('agents-panel');
+  const typing = /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || '');
+  if (panel.style.display === 'none') { if (!typing) showView('agents'); }
+  else if (!agentsBusy(panel)) renderAgentsPanel();
+});
+
 // While the Agents view is open, new requests and agents waiting show up on
 // their own (every 10 s): redrawn only when that changed, and never under a
 // form the user is filling in.
