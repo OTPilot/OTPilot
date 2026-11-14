@@ -1282,7 +1282,12 @@ async function refreshNotices() {
   // alarm) instead of every poll, until nothing waits. With agents connected,
   // every minute (a request then opens its window soon, not at the next
   // 5-minute poll).
-  const { agentsKnown } = await chrome.storage.local.get('agentsKnown');
+  let { agentsKnown } = await chrome.storage.local.get('agentsKnown');
+  // Not known yet (an update, a new sign-in): asked once, so an account with
+  // agents gets the faster check without opening the Agents view first.
+  if (account && agentsKnown === undefined && !agentsWaiting) {
+    agentsKnown = await Agents.list().then(d => (d.agents || []).length > 0, () => undefined);
+  }
   // (Signed out: neither — the next sign-in refreshes.)
   if (account && (agentsWaiting || agentsKnown)) chrome.alarms.create(AGENTS_ALARM, { periodInMinutes: agentsWaiting ? 0.5 : 1 });
   else chrome.alarms.clear(AGENTS_ALARM);
@@ -1353,8 +1358,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   const c = changes.cloudSession;
   if (area !== 'local' || !c || !!c.oldValue === !!c.newValue) return;
+  // Whether the account has agents is learnt again for the next one.
+  chrome.storage.local.remove('agentsKnown');
   if (c.newValue) refreshNotices();
-  else chrome.action.setBadgeText({ text: '' });
+  else { chrome.action.setBadgeText({ text: '' }); chrome.alarms.clear(AGENTS_ALARM); }
 });
 
 // ── Unlocking the web dashboard ──────────────────────────────────────────────
