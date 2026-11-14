@@ -155,6 +155,79 @@
     };
   }
 
+  // The card above everything the page shows: the key is often in a side
+  // panel or modal drawn in the top layer (Google Cloud's "API key created"),
+  // or under a z-index the page also maxes out. A manual popover is in the
+  // top layer, above what's there already. A modal <dialog> makes everything
+  // outside it inert: the card then goes inside the active one (the one
+  // holding focus; document order isn't opening order).
+  function activeModal() {
+    try {
+      const modals = [...document.querySelectorAll('dialog')].filter(d => d.matches(':modal'));
+      return modals.find(d => d.contains(document.activeElement)) || modals.pop() || null;
+    } catch { return null; }
+  }
+  function showOnTop(el) {
+    const modal = activeModal();
+    if (el.parentElement !== (modal || document.body)) {
+      if (el.matches?.(':popover-open')) try { el.hidePopover(); } catch {}
+      (modal || document.body).appendChild(el);
+    }
+    if (typeof el.showPopover !== 'function') return;
+    el.setAttribute('popover', 'manual');
+    // The popover UA style (inset: 0, margin: auto, padding, border, colors)
+    // would move and restyle the card.
+    Object.assign(el.style, { inset: 'auto', top: '16px', right: '16px', margin: '0', padding: '0', overflow: 'hidden', color: 'inherit' });
+    try { if (!el.matches(':popover-open')) el.showPopover(); } catch {}
+  }
+
+  // A value labelled as the id that goes with the key ("Client ID", "App
+  // ID", "Key ID"…) in the same container, or ''.
+  const ID_LABEL = /\b(?:client|app(?:lication)?|consumer|access[\s_-]?key|key)[\s_-]?id\b|\bconsumer[\s_-]?key\b/i;
+  function labelOf(el) {
+    const own = [el.labels?.[0]?.textContent, el.getAttribute?.('aria-label'),
+      ...(el.getAttribute?.('aria-labelledby') || '').split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.textContent)]
+      .filter(Boolean).join(' ').trim();
+    if (own) return own;
+    // The nearest text before it: a sibling, or its parents' (≤ 3 levels).
+    for (let c = el, depth = 0; c && depth < 4; c = c.parentElement, depth++) {
+      for (let p = c.previousElementSibling; p; p = p.previousElementSibling) {
+        const t = (p.textContent || '').trim();
+        if (t) return t.length <= 80 ? t : '';
+      }
+    }
+    return '';
+  }
+  // The id that goes with the key at `el`: the nearest labelled one. Scopes
+  // widen from the key's parent up to `container`; the first scope holding
+  // one id wins, and a scope holding two different ones (two clients side
+  // by side) gives none, so a secret is never paired with another client's
+  // id. Ids are 6-128 characters (the background's limit).
+  function labelledId(el, container, key) {
+    const idsIn = scope => {
+      const ids = new Set();
+      let n = 0;
+      for (const e of scope.querySelectorAll('*')) { // fields and any element holding text alone (span, pre, td…)
+        if (++n > 2000) break;
+        if (ours(e)) continue;
+        let value;
+        if (e.matches('input, textarea')) { if (!(e.readOnly || e.disabled)) continue; value = e.value.trim(); }
+        // Never a control (a "Copy client ID" button's icon text).
+        else { if (e.children.length || e.matches('script, style, noscript, template, option, button, a, select, label, [role="button"], [role="link"]') || e.closest('button, a, [role="button"], [role="link"]')) continue; value = (e.textContent || '').trim(); }
+        if (!value || value === key || !/^[^\s]{6,128}$/.test(value) || ApiKeys.isMasked(value) || !visible(e)) continue;
+        const label = labelOf(e);
+        if (ID_LABEL.test(label) && !ApiKeys.KEY_WORDS.test(label.replace(ID_LABEL, ''))) ids.add(value);
+      }
+      return ids;
+    };
+    for (let scope = el.parentElement; scope; scope = scope.parentElement) {
+      const ids = idsIn(scope);
+      if (ids.size === 1) return [...ids][0];
+      if (ids.size > 1 || scope === container || scope === document.body) return '';
+    }
+    return '';
+  }
+
   // An AWS access key ID's secret (or the reverse) in the same container.
   function awsPartner(container, wanted, budget) {
     for (const { value } of shownValues(container, budget)) if (wanted(value)) return value;
@@ -175,7 +248,11 @@
         const container = containerOf(el);
         const ctx = contextOf(container, cache);
         const column = columnOf(el);
-        const keyColumn = !!column && ApiKeys.isKeyColumn(column.header);
+        // In a credentials table under a key column, or labelled as one
+        // ("Client secret", "API key"): a page that keeps showing the key
+        // (or reveals it on "Show"), without copy-once wording.
+        const tableKey = !!column && ApiKeys.isKeyColumn(column.header);
+        const keyColumn = tableKey || ApiKeys.isKeyColumn(labelOf(el));
         // A credentials table shows the key on every visit: no copy-once
         // wording there, even at load.
         if (requireCopyOnce && !ctx.copyOnce && !keyColumn) continue;
@@ -190,11 +267,16 @@
           found = { value, keyId: awsId, environment: '' };
         } else {
           const d = ApiKeys.decide(value, { ...ctx, keyColumn });
-          if (d?.tier === 3) found = { value, keyId: column.keyId, keyName: column.name, environment: d.environment, table: true };
-          else if (d) found = { value, environment: d.environment };
+          if (d?.tier === 3 && tableKey) found = { value, keyId: column.keyId, keyName: column.name, environment: d.environment, table: true };
+          else if (d?.tier === 3) found = { value, keyId: labelledId(el, container, value), environment: d.environment, table: true };
+          else if (d) {
+            // A client secret beside its client ID (an OAuth app's dialog).
+            const keyId = labelledId(el, container, value);
+            found = { value, environment: d.environment, ...(keyId ? { keyId, labelled: true } : {}) };
+          }
         }
         if (!found) continue;
-        if (found.keyId && !found.table && !ctx.copyOnce && !ctx.copyControl) continue;
+        if (found.keyId && !found.table && !found.labelled && !ctx.copyOnce && !ctx.copyControl) continue;
         if (dismissed.has(ApiKeys.fingerprint(found.value))) continue;
         return { ...found, el, container };
       }
@@ -314,7 +396,16 @@
     for (const ev of ['keydown', 'keyup', 'keypress', 'focusin', 'focusout']) el.addEventListener(ev, e => e.stopPropagation());
     const shadow = el.attachShadow({ mode: 'closed' });
     let stopUnlock = () => {};
+    // The page may remove or close the modal the card is in: the card moves
+    // back out (to the active modal or the body); if it was removed with it,
+    // the offer ends, so later keys still get one.
+    const watchdog = setInterval(() => {
+      if (!el.isConnected) { close(); return; }
+      const parent = el.parentElement;
+      if (parent?.tagName === 'DIALOG' ? !parent.matches(':modal') : activeModal()) showOnTop(el);
+    }, 500);
     const close = () => {
+      clearInterval(watchdog);
       stopUnlock();
       cand = null; // the key leaves this script's memory with the card
       el.remove();
@@ -327,7 +418,7 @@
     shadow.querySelector('.otpilot-overlay-close').addEventListener('click', trusted(dismiss));
     const body = shadow.querySelector('.otpilot-apikey-body');
     cardHost = el;
-    document.body.appendChild(el);
+    showOnTop(el);
 
     function renderLocked() {
       body.textContent = '';
@@ -540,8 +631,10 @@
     const fields = [...(root.matches('input, textarea') ? [root] : []), ...root.querySelectorAll('input, textarea')];
     const until = Date.now() + FIELD_WATCH_MS;
     for (const f of fields) {
-      if (watched.size >= FIELD_MAX) break;
       if (!(f.readOnly || f.disabled) || ours(f)) continue;
+      const w = watched.get(f);
+      if (w) { w.until = until; continue; } // keeps the value it had: a change is still seen
+      if (watched.size >= FIELD_MAX) break;
       watched.set(f, { value: f.value, until });
     }
     if (watched.size && !fieldTimer) fieldTimer = setInterval(pollFields, FIELD_POLL_MS);
@@ -579,12 +672,28 @@
   });
 
   if (!document.body) return;
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['value'] });
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['value', 'open', 'hidden', 'aria-hidden'] });
 
   // A page that shows the key right away (GitHub after creating a token):
   // only with the copy-once wording (so the page isn't scanned again without
   // it once that card closes: only what changed meanwhile is).
   watchFields(document.body);
+  // A "Show" / "Reveal" click often sets a field's value by script: watch
+  // the fields again for a while after each real click or key press.
+  let clickScan = null;
+  for (const type of ['click', 'keyup']) {
+    document.addEventListener(type, e => {
+      if (!e.isTrusted || stopped || busy || !chrome.runtime?.id || ours(e.target)) return;
+      // Keys: only those that press a button (not typing in a field).
+      if (type === 'keyup' && e.key !== 'Enter' && e.key !== ' ') return;
+      // Now, in the capture phase: before the page's own handler sets it.
+      watchFields(document.body);
+      // A modal or panel shown by a class / style change (no node added):
+      // the page is scanned once shortly after the click.
+      clearTimeout(clickScan);
+      clickScan = setTimeout(() => { if (!stopped) { pending.add(document.body); if (!busy) schedule(); } }, 400);
+    }, true);
+  }
   const atLoad = findKey([document.body], true);
   if (atLoad) offer(atLoad, [], true);
 })();

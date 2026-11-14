@@ -258,7 +258,7 @@ test('a generic token on a page with every signal is offered; without the copy-o
   const withAll = await site(context, `<html><body><button id="c">Create</button><script>c.onclick=()=>{const d=document.createElement('div');d.setAttribute('role','dialog');d.innerHTML='<p>Your API key. Copy it now, it will not be shown again.</p><input readonly value="${token}"><button>Copy</button>';document.body.appendChild(d)}</script></body></html>`);
   await withAll.click('#c');
   await expect.poll(() => cardOf(withAll).count('.otpilot-apikey-save')).toBe(1);
-  const quiet = await site(context, `<html><body><button id="c">Create</button><script>c.onclick=()=>{const d=document.createElement('div');d.setAttribute('role','dialog');d.innerHTML='<p>API key</p><input readonly value="${token}"><button>Copy</button>';document.body.appendChild(d)}</script></body></html>`);
+  const quiet = await site(context, `<html><body><button id="c">Create</button><script>c.onclick=()=>{const d=document.createElement('div');d.setAttribute('role','dialog');d.innerHTML='<p>API key</p><p>Here it is.</p><input readonly value="${token}"><button>Copy</button>';document.body.appendChild(d)}</script></body></html>`);
   await quiet.click('#c'); await quiet.waitForTimeout(1200);
   await expect(quiet.locator('#otpilot-apikey-save')).toHaveCount(0);
 });
@@ -329,8 +329,8 @@ test('a read-only field filled later by a script (input.value =) is offered', as
 // A credentials list that keeps showing the key (freesound.org/apiv2/apply/):
 // no dialog, no copy-once wording, no Copy button.
 const LIST = 'http://localhost:8765/apiv2/apply/';
-const FS_ID = 'ploe7oU6RJwIiRZFR5rL';
-const FS_KEY = 'D9URVVhDa8cbraYBnKDW4BDd5RZcrpHtXhgMeZ32';
+const FS_ID = 'qT4mZ8rVx2LkP9wNb6Hd';
+const FS_KEY = 'Xk7Pq2Wm9Rt4Yv8Nb3Lz6Hc1Jd5Gf0Sa2Ue7Qo4';
 const listPage = (header = 'Client secret/Api key') => `<!doctype html><html><body><h1>Freesound API credentials</h1>
 <table><thead><tr><th>Name</th><th>Client id</th><th>${header}</th><th>Redirect url</th><th>Actions</th></tr></thead>
 <tbody><tr><td>demoreel</td><td>${FS_ID}</td><td>${FS_KEY}</td><td>https://demoreel.test/cb</td><td><a href="#">edit</a></td></tr></tbody></table>
@@ -536,4 +536,158 @@ test.describe('ApiKeys detection', () => {
     expect(r[1]).toBe(0);
     expect(r[2]).toBe(2);
   });
+});
+
+// ── Pages that cover the card, reveal the key later, or pair it with an id ──
+// Made-up values, split so secret scanners don't take them for real ones.
+const GKEY = 'AIza' + 'SyQ7fake0-xR2mLp9VbN3kTw8ZcY4HdJ6sE';
+
+test('a side panel drawn over everything (Google Cloud) does not hide the card: it is in the top layer', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const s = await site(context, `<!doctype html><html><body><button id="c">Create</button><script>c.onclick = () => {
+    const p = document.createElement('div');
+    p.style.cssText = 'position:fixed;top:0;right:0;width:600px;height:100vh;background:#333;z-index:2147483647';
+    p.innerHTML = '<h2>API key created</h2><label for="k">Your API key</label><input id="k" readonly value="${GKEY}"><button aria-label="Copy to clipboard">⧉</button>';
+    setTimeout(() => document.body.appendChild(p), 50);
+  };</script></body></html>`);
+  const card = cardOf(s);
+  await s.click('#c');
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  // The panel is appended after the card would be: the card still wins.
+  await s.evaluate(() => { const p = document.createElement('div'); p.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.3)'; document.body.appendChild(p); });
+  const onTop = await s.evaluate(() => {
+    const host = document.getElementById('otpilot-apikey-save');
+    const r = host.getBoundingClientRect();
+    return document.elementFromPoint(r.x + r.width / 2, r.y + 10) === host && host.matches(':popover-open');
+  });
+  expect(onTop).toBe(true);
+});
+
+test('a key in a modal <dialog>: the card goes inside it and Save works', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const s = await site(context, `<!doctype html><html><body><button id="c">Create</button><dialog id="d"><h2>API key created</h2>
+    <label for="k">Your API key</label><input id="k" readonly value="${GKEY}"><button>Copy</button></dialog>
+    <script>c.onclick = () => d.showModal();</script></body></html>`);
+  const card = cardOf(s);
+  await s.click('#c');
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  expect(await s.evaluate(() => !!document.querySelector('dialog #otpilot-apikey-save'))).toBe(true);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  expect(fieldOf((await apiItems(popup))[0], 'apiKey')).toBe(GKEY);
+});
+
+test('a secret shown only after "Show" (labelled Client secret), with its Client ID: both saved', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const SECRET = 'GOCSPX' + '-q7Zk2mXv9LpR4tYw8NbC3dFgH6jKs1A';
+  const ID = '1234567890-abcdefg.apps.' + 'googleusercontent.com';
+  // Long after load (the first polling window is over), by script on a click.
+  const s = await site(context, `<!doctype html><html><body><h1>Client details</h1>
+    <div><span>Client ID</span><span>${ID}</span></div>
+    <div><label for="sec">Client secret</label><input id="sec" readonly value="••••••••••••"><button id="show">Show</button></div>
+    <script>show.onclick = () => { sec.value = ${JSON.stringify(SECRET)}; };</script></body></html>`);
+  await s.waitForTimeout(16000);
+  const card = cardOf(s);
+  await expect(s.locator('#otpilot-apikey-save')).toHaveCount(0);
+  await s.click('#show');
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  const [api] = await apiItems(popup);
+  expect([fieldOf(api, 'clientId'), fieldOf(api, 'clientSecret')]).toEqual([ID, SECRET]);
+});
+
+test('an OAuth "client created" dialog: the Client ID beside the secret is saved too', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const SECRET = 'GOCSPX' + '-Ab3dEf9hIjK1mNoPq7sTuVwXyZ0a';
+  const ID = '98765-zyxwv.apps.' + 'googleusercontent.com';
+  const s = await site(context, `<!doctype html><html><body><button id="c">Create</button><script>c.onclick = () => {
+    const d = document.createElement('div'); d.setAttribute('role', 'dialog');
+    d.innerHTML = '<h2>OAuth client created</h2><div><div>Client ID</div><div>${ID}</div><button>Copy</button></div>'
+      + '<div><div>Client secret</div><div>${SECRET}</div><button>Copy</button></div>';
+    document.body.appendChild(d);
+  };</script></body></html>`);
+  const card = cardOf(s);
+  await s.click('#c');
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  const [api] = await apiItems(popup);
+  expect([fieldOf(api, 'clientId'), fieldOf(api, 'clientSecret')]).toEqual([ID, SECRET]);
+});
+
+test('two clients on one page: a revealed secret is paired with its own Client ID (a short one in a span too), never the other\'s', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const SECRET2 = 'GOCSPX' + '-Zx9Wv8Ut7Sr6Qp5On4Ml3Kj2Ih1G';
+  const s = await site(context, `<!doctype html><html><body><h1>Clients</h1>
+    <section><h2>Web client</h2><div><span>Client ID</span><span>webClient77</span></div>
+      <div><label for="s1">Client secret</label><input id="s1" readonly value="••••••••"></div></section>
+    <section><h2>CLI client</h2><div><label>Client ID</label><pre>cliOne12</pre><button aria-label="Copy client ID">content_copy</button></div>
+      <div><label for="s2">Client secret</label><input id="s2" readonly value="••••••••"><button id="show2">Show</button></div></section>
+    <script>show2.onclick = () => { s2.value = ${JSON.stringify(SECRET2)}; };</script></body></html>`);
+  const card = cardOf(s);
+  await s.click('#show2');
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  const [api] = await apiItems(popup);
+  expect([fieldOf(api, 'clientId'), fieldOf(api, 'clientSecret')]).toEqual(['cliOne12', SECRET2]);
+});
+
+test('a key whose nearest scope shows two different client IDs gets none', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const SECRET = 'GOCSPX' + '-Ab3dEf9hIjK1mNoPq7sTuVwXyZ0a';
+  const s = await site(context, `<!doctype html><html><body><div role="dialog"><h2>Keys</h2>
+    <div><span>Client ID</span><span>firstClient1</span></div><div><span>Client ID</span><span>secondClient2</span></div>
+    <div><label for="k">Client secret</label><input id="k" readonly value="${SECRET}"><button>Copy</button></div></div></body></html>`);
+  const card = cardOf(s);
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  const [api] = await apiItems(popup);
+  expect([fieldOf(api, 'clientId'), fieldOf(api, 'apiKey')]).toEqual(['', SECRET]);
+});
+
+test('the page closes or removes the modal holding the card: the card moves out, or the offer ends and a later key is offered', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const KEY2 = 'sk-proj-' + 'Zz9yXx8wWv7uUt6sSr5qQp4oOn3mMl2kKj1iIh0gGf9eEd8cCb7a';
+  const page = (id, key) => `<dialog id="${id}"><h2>API key created</h2><label for="k${id}">Your API key</label><input id="k${id}" readonly value="${key}"><button>Copy</button></dialog>`;
+  const s = await site(context, `<!doctype html><html><body><button id="a">A</button><button id="b">B</button>${page('d1', GKEY)}
+    <script>a.onclick = () => d1.showModal();</script></body></html>`);
+  const card = cardOf(s);
+  await s.click('#a');
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  // Closed (not removed): the card leaves the dialog and stays usable.
+  await s.evaluate(() => document.getElementById('d1').close());
+  await expect.poll(() => s.evaluate(() => document.getElementById('otpilot-apikey-save')?.parentElement?.tagName)).toBe('BODY');
+  expect(await s.evaluate(() => document.getElementById('otpilot-apikey-save').matches(':popover-open'))).toBe(true);
+  await card.click('.otpilot-apikey-later');
+  await expect.poll(() => card.shown()).toBe(false);
+
+  // Removed with the card inside: the offer ends; a later key gets one.
+  const s2 = await site(context, `<!doctype html><html><body><button id="a">A</button>${page('d1', GKEY)}
+    <script>a.onclick = () => d1.showModal();</script></body></html>`);
+  const c2 = cardOf(s2);
+  await s2.click('#a');
+  await expect.poll(() => c2.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await s2.evaluate(() => document.getElementById('d1').remove());
+  await s2.waitForTimeout(800);
+  await s2.evaluate(k => { const d = document.createElement('div'); d.setAttribute('role', 'dialog');
+    d.innerHTML = '<p>Copy it now, you won\'t be able to see it again.</p><input readonly value="' + k + '"><button>Copy</button>'; document.body.appendChild(d); }, KEY2);
+  await expect.poll(() => c2.text('.otpilot-apikey-masked'), { timeout: 5000 }).toBe('sk-proj-••••••••' + KEY2.slice(-4));
+});
+
+test('two modals open, the newer earlier in the document: the card goes into the active one', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const s = await site(context, `<!doctype html><html><body><button id="a">A</button>
+    <dialog id="newer"><h2>API key created</h2><label for="k">Your API key</label><input id="k" readonly value="${GKEY}"><button id="cp">Copy</button></dialog>
+    <dialog id="older"><p>Settings</p><button id="next">Create key</button></dialog>
+    <script>a.onclick = () => older.showModal(); next.onclick = () => { newer.showModal(); cp.focus(); };</script></body></html>`);
+  const card = cardOf(s);
+  await s.click('#a');
+  await s.click('#next');
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  expect(await s.evaluate(() => document.getElementById('otpilot-apikey-save').parentElement.id)).toBe('newer');
+  await card.click('.otpilot-apikey-later');
+  await expect.poll(() => card.shown()).toBe(false);
 });
