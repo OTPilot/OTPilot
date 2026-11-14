@@ -144,11 +144,11 @@ function findOTPInput() {
 // the host page defines (--surface, --bg…) never show through while the
 // chosen theme loads, or if it can't be loaded.
 const DEFAULT_THEME_VARS = {
-  '--bg': '#0f172a', '--surface': '#1e293b', '--surface-2': '#334155', '--border': '#1e3a5f',
-  '--ink-0': '#f1f5f9', '--ink-1': '#e2e8f0', '--ink-2': '#cbd5e1',
-  '--ink-3': '#94a3b8', '--ink-4': '#64748b', '--ink-5': '#475569',
-  '--accent': '#0ea5e9', '--accent-2': '#38bdf8', '--on-accent': '#ffffff',
-  '--danger': '#f87171', '--warning': '#f59e0b', '--success': '#4ade80',
+  '--bg': '#faf9f5', '--surface': '#ffffff', '--surface-2': '#eeece3', '--border': '#e3ded1',
+  '--ink-0': '#171c17', '--ink-1': '#262b25', '--ink-2': '#454b42',
+  '--ink-3': '#6b7268', '--ink-4': '#8b9184', '--ink-5': '#a8ac9e',
+  '--accent': '#2f6f4f', '--accent-2': '#3d8a63', '--on-accent': '#ffffff',
+  '--danger': '#c94f3f', '--warning': '#b8792c', '--success': '#2f6f4f',
   '--font-ui': "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
 };
 
