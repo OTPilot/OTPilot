@@ -87,8 +87,9 @@
     if (CHANGE_PW_PAGE.test(location.pathname) && group.length === 2 && group[0] === el) return false;
     if (NEW_PW_PAGE.test(location.pathname)) return true;
     // A sign-up form on another page (a "Join" modal on the login page):
-    // its action / id / name say so.
-    if (el.form && formRegisters(el.form)) return true;
+    // its action / id / name say so, and nothing in it signs in (a combined
+    // "login-register" form stays a sign-in).
+    if (el.form && formRegisters(el.form) && !formSignsIn(el.form)) return true;
     if (group.length >= 2) return true;
     // One field alone: new when what submits its form creates an account.
     return submitCreatesAccount(el);
@@ -102,11 +103,12 @@
   // The field's form (or panel) creates an account: its submit control says
   // so and no control next to it signs in. A combined sign-in / sign-up form
   // or panel is a sign-in, whatever comes first in the DOM.
+  // A control in `root` signs in. One that creates an account ('Create
+  // account and continue') doesn't, unless its label also says so.
+  const formSignsIn = root => [...root.querySelectorAll(CONTROLS)].some(b => isVisible(b) && signsInToSubmit(b)
+    && !(createsAccount(b) && !/\b(sign\s*in|log\s*in|login)\b/i.test(buttonLabel(b))));
   const submitCreatesAccount = el => {
-    // A control that creates an account ('Create account and continue')
-    // doesn't sign in, unless its label also says so.
-    const hasSignIn = root => [...root.querySelectorAll(CONTROLS)].some(b => isVisible(b) && signsInToSubmit(b)
-      && !(createsAccount(b) && !/\b(sign\s*in|log\s*in|login)\b/i.test(buttonLabel(b))));
+    const hasSignIn = formSignsIn;
     if (el.form) {
       if (hasSignIn(el.form)) return false;
       return createsAccount(findSubmitButton(el.form) || formButton(el.form, createsAccount));

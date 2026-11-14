@@ -319,3 +319,22 @@ test('a Django-style password1 field gets the suggestion even with a bare "Join"
   await site.focus('input[name="password1"]');
   await expect(site.locator('#otpilot-password-suggest')).toBeVisible();
 });
+
+test('a Join modal whose field has a neutral name: the form\'s id / action alone make it a sign-up', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/modal-join-pw.html`);
+  await site.click('#join');
+  await site.focus('#id_password1_registration');
+  await expect(site.locator('#otpilot-password-suggest')).toBeVisible();
+});
+
+test('a combined form whose id says "register" but whose button signs in stays a sign-in', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/combined-account-form.html`);
+  await site.focus('input[name="pw"]');
+  await site.waitForTimeout(800);
+  await expect(site.locator('#otpilot-password-suggest')).toHaveCount(0);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+});
