@@ -189,10 +189,31 @@
     }
     return '';
   }
-  function labelledId(container, key, budget) {
-    for (const { value, el } of shownValues(container, budget)) {
-      if (!value || value === key || !/^[^\s]{6,256}$/.test(value) || ApiKeys.isMasked(value)) continue;
-      if (ID_LABEL.test(labelOf(el)) && !ApiKeys.KEY_WORDS.test(labelOf(el).replace(ID_LABEL, ''))) return value;
+  // The id that goes with the key at `el`: the nearest labelled one. Scopes
+  // widen from the key's parent up to `container`; the first scope holding
+  // one id wins, and a scope holding two different ones (two clients side
+  // by side) gives none, so a secret is never paired with another client's
+  // id. Ids are 6-128 characters (the background's limit).
+  function labelledId(el, container, key) {
+    const idsIn = scope => {
+      const ids = new Set();
+      let n = 0;
+      for (const e of scope.querySelectorAll('input, textarea, span, div, p, td, dd, code, kbd, strong, b')) {
+        if (++n > 2000) break;
+        if (ours(e)) continue;
+        let value;
+        if (e.matches('input, textarea')) { if (!(e.readOnly || e.disabled)) continue; value = e.value.trim(); }
+        else { if (e.children.length) continue; value = (e.textContent || '').trim(); }
+        if (!value || value === key || !/^[^\s]{6,128}$/.test(value) || ApiKeys.isMasked(value) || !visible(e)) continue;
+        const label = labelOf(e);
+        if (ID_LABEL.test(label) && !ApiKeys.KEY_WORDS.test(label.replace(ID_LABEL, ''))) ids.add(value);
+      }
+      return ids;
+    };
+    for (let scope = el.parentElement; scope; scope = scope.parentElement) {
+      const ids = idsIn(scope);
+      if (ids.size === 1) return [...ids][0];
+      if (ids.size > 1 || scope === container || scope === document.body) return '';
     }
     return '';
   }
@@ -237,10 +258,10 @@
         } else {
           const d = ApiKeys.decide(value, { ...ctx, keyColumn });
           if (d?.tier === 3 && tableKey) found = { value, keyId: column.keyId, keyName: column.name, environment: d.environment, table: true };
-          else if (d?.tier === 3) found = { value, keyId: labelledId(container, value, budget), environment: d.environment, table: true };
+          else if (d?.tier === 3) found = { value, keyId: labelledId(el, container, value), environment: d.environment, table: true };
           else if (d) {
             // A client secret beside its client ID (an OAuth app's dialog).
-            const keyId = labelledId(container, value, budget);
+            const keyId = labelledId(el, container, value);
             found = { value, environment: d.environment, ...(keyId ? { keyId, labelled: true } : {}) };
           }
         }

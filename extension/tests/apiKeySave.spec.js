@@ -615,3 +615,35 @@ test('an OAuth "client created" dialog: the Client ID beside the secret is saved
   const [api] = await apiItems(popup);
   expect([fieldOf(api, 'clientId'), fieldOf(api, 'clientSecret')]).toEqual([ID, SECRET]);
 });
+
+test('two clients on one page: a revealed secret is paired with its own Client ID (a short one in a span too), never the other\'s', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const SECRET2 = 'GOCSPX' + '-Zx9Wv8Ut7Sr6Qp5On4Ml3Kj2Ih1G';
+  const s = await site(context, `<!doctype html><html><body><h1>Clients</h1>
+    <section><h2>Web client</h2><div><span>Client ID</span><span>webClient77</span></div>
+      <div><label for="s1">Client secret</label><input id="s1" readonly value="••••••••"></div></section>
+    <section><h2>CLI client</h2><div><span>Client ID</span><span>cliOne12</span></div>
+      <div><label for="s2">Client secret</label><input id="s2" readonly value="••••••••"><button id="show2">Show</button></div></section>
+    <script>show2.onclick = () => { s2.value = ${JSON.stringify(SECRET2)}; };</script></body></html>`);
+  const card = cardOf(s);
+  await s.click('#show2');
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  const [api] = await apiItems(popup);
+  expect([fieldOf(api, 'clientId'), fieldOf(api, 'clientSecret')]).toEqual(['cliOne12', SECRET2]);
+});
+
+test('a key whose nearest scope shows two different client IDs gets none', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const SECRET = 'GOCSPX' + '-Ab3dEf9hIjK1mNoPq7sTuVwXyZ0a';
+  const s = await site(context, `<!doctype html><html><body><div role="dialog"><h2>Keys</h2>
+    <div><span>Client ID</span><span>firstClient1</span></div><div><span>Client ID</span><span>secondClient2</span></div>
+    <div><label for="k">Client secret</label><input id="k" readonly value="${SECRET}"><button>Copy</button></div></div></body></html>`);
+  const card = cardOf(s);
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  const [api] = await apiItems(popup);
+  expect([fieldOf(api, 'clientId'), fieldOf(api, 'apiKey')]).toEqual(['', SECRET]);
+});
