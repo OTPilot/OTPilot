@@ -60,6 +60,9 @@ function updateAgentsDot(n) {
 
 // `fresh`: the list already fetched (the timer's), so nothing changes between
 // its last check and the redraw.
+const AGENTS_WINDOW = new URLSearchParams(location.search).get('window') === '1';
+let _agentsWindowWaited = false;
+
 async function renderAgentsPanel(fresh = null) {
   const list = document.getElementById('agents-list');
   const detail = document.getElementById('agents-detail');
@@ -91,6 +94,13 @@ async function renderAgentsPanel(fresh = null) {
   }
   const { agents, requests } = _agentsData;
   const pending = agents.filter(a => a.status === 'pending');
+  // The window the background opened for an agent waiting: once everything
+  // that waited is answered, it closes itself.
+  if (AGENTS_WINDOW) {
+    if (pending.length || requests.length) _agentsWindowWaited = true;
+    // (window.close() only closes windows a script opened: remove its tab.)
+    else if (_agentsWindowWaited) setTimeout(() => chrome.tabs.getCurrent(t => (t ? chrome.tabs.remove(t.id) : window.close())), 1200);
+  }
   const active = agents.filter(a => a.status === 'active');
   updateAgentsDot(pending.length + requests.length);
 

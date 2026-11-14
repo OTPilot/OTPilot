@@ -1279,10 +1279,49 @@ async function refreshNotices() {
   await chrome.action.setBadgeText({ text: n ? String(Math.min(n, 99)) : '' });
   if (n) await chrome.action.setBadgeBackgroundColor({ color: '#0284c7' });
   // An AI agent is waiting for an answer: check every 30 s (the shortest
-  // alarm) instead of every poll, until nothing waits.
-  if (agentsWaiting) chrome.alarms.create(AGENTS_ALARM, { periodInMinutes: 0.5 });
+  // alarm) instead of every poll, until nothing waits. With agents connected,
+  // every minute (a request then opens its window soon, not at the next
+  // 5-minute poll).
+  const { agentsKnown } = await chrome.storage.local.get('agentsKnown');
+  if (agentsWaiting || agentsKnown) chrome.alarms.create(AGENTS_ALARM, { periodInMinutes: agentsWaiting ? 0.5 : 1 });
   else chrome.alarms.clear(AGENTS_ALARM);
+  if (agentsWaiting) announceWaitingAgents();
   return data;
+}
+
+// An agent waiting for the user (one to approve, or a request) opens the
+// popup's Agents view in its own window, like the dashboard-unlock approval:
+// once per agent / request. Closed without an answer, only the badge stays.
+// An open window is focused instead of opening a second one.
+const AGENTS_ANNOUNCED = 'agentsAnnounced'; // session: { ids: [...], windowId }
+function announceWaitingAgents() {
+  return navigator.locks.request('otpilot-agents-announce', async () => {
+    let data;
+    try { data = await Agents.list(); } catch { return; }
+    const ids = [
+      ...(data.agents || []).filter(a => a.status === 'pending').map(a => `a:${a.id}`),
+      ...(data.requests || []).map(r => `r:${r.id}`),
+    ];
+    const { [AGENTS_ANNOUNCED]: seen = {} } = await chrome.storage.session.get(AGENTS_ANNOUNCED);
+    const known = seen.ids || [];
+    const fresh = ids.filter(id => !known.includes(id));
+    // Only what still waits is remembered (an answered one never comes back).
+    let windowId = seen.windowId ?? null;
+    if (fresh.length) {
+      const open = windowId != null && await chrome.windows.get(windowId).then(() => true, () => false);
+      if (open) await chrome.windows.update(windowId, { focused: true }).catch(() => {});
+      else {
+        windowId = null;
+        try {
+          const win = await chrome.windows.create({
+            url: chrome.runtime.getURL('popup.html?view=agents&window=1'), type: 'popup', width: 620, height: 640, focused: true,
+          });
+          windowId = win.id;
+        } catch {}
+      }
+    }
+    await chrome.storage.session.set({ [AGENTS_ANNOUNCED]: { ids, windowId } });
+  });
 }
 
 const AGENTS_ALARM = 'otpilot-agents-waiting';

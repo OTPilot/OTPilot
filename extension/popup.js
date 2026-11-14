@@ -5787,6 +5787,8 @@ async function silentPullSync() {
 
   const justAuthenticated = await initLock();
   await loadState();
+  // Opened by the background for an AI agent waiting (?view=agents).
+  if (new URLSearchParams(location.search).get('view') === 'agents') showView('agents');
   await syncActiveIndexToUrl();
   // The user may have opened Accounts while the vault was still loading.
   refreshAccountsUI();
