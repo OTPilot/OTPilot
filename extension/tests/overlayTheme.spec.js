@@ -156,3 +156,12 @@ test('opening the popup applies the stored theme without writing it back', async
   await popup.locator('.theme-row', { hasText: 'Vault' }).click();
   expect(await popup.evaluate(() => window.themeWrites)).toEqual(['vault']);
 });
+
+// The unlock frame paints html too: the chosen theme reaches it (no white strip).
+test('unlock frame: html follows the chosen theme', async ({ context, extensionId }) => {
+  const p = await context.newPage();
+  await p.goto(`chrome-extension://${extensionId}/popup.html`);
+  await p.evaluate(() => chrome.storage.local.set({ theme: 'original' }));
+  await p.goto(`chrome-extension://${extensionId}/unlock.html`);
+  await expect.poll(() => p.evaluate(() => getComputedStyle(document.documentElement).backgroundColor)).toBe('rgb(30, 41, 59)');
+});
