@@ -471,6 +471,31 @@
       });
       body.appendChild(masked);
 
+      // This site's API credentials: save as new (the default) or replace
+      // one's key (a rotated key). Their titles are only in the options, so
+      // nothing drawn names one before the user opens the select.
+      const apiItems = Array.isArray(c.apiItems) ? c.apiItems : [];
+      let replaceTarget = () => '';
+      let targetSelect = null;
+      if (apiItems.length) {
+        targetSelect = document.createElement('select');
+        targetSelect.className = 'otpilot-apikey-target otpilot-save-target';
+        Object.assign(targetSelect.style, fieldStyle, { margin: '0 0 8px' });
+        const asNew = document.createElement('option');
+        asNew.value = '';
+        asNew.textContent = 'Save as a new API key';
+        targetSelect.appendChild(asNew);
+        for (const it of apiItems) {
+          const o = document.createElement('option');
+          o.value = it.id;
+          o.textContent = `Replace the key in: ${it.name || host}`;
+          targetSelect.appendChild(o);
+        }
+        targetSelect.value = '';
+        body.insertBefore(targetSelect, name);
+        replaceTarget = () => targetSelect.value;
+      }
+
       // Linking to the site's login: one → ticked; several → "Don't link"
       // until the user picks; none → no line. No login's title or username
       // is drawn before the user acts (the line names the site, the select
@@ -530,30 +555,52 @@
       body.appendChild(row);
 
       const showLimit = () => { save.disabled = true; body.insertBefore(limitNote, row); };
+      // Replacing a key: no new item (no name, no link, never the limit).
+      const applyTarget = () => {
+        const replacing = !!replaceTarget();
+        name.style.display = replacing ? 'none' : '';
+        body.querySelectorAll('.otpilot-apikey-link').forEach(e => { e.style.display = replacing ? 'none' : ''; });
+        save.textContent = replacing ? 'Update' : 'Save';
+        if (c.limit) {
+          save.disabled = !replacing;
+          if (replacing) limitNote.remove(); else body.insertBefore(limitNote, row);
+        }
+      };
       if (c.limit) showLimit();
+      targetSelect?.addEventListener('change', trusted(applyTarget));
 
       save.addEventListener('click', trusted(async () => {
         if (!cand || save.disabled) return;
         save.disabled = true;
-        const target = linkTo();
+        const replace = replaceTarget();
+        const target = replace ? '' : linkTo();
         let res;
         try {
           res = await chrome.runtime.sendMessage({
             action: 'vaultAddApiKey', key: cand.value, name: name.value.trim().slice(0, 120), environment: cand.environment || '',
-            ...(cand.keyId ? { keyId: cand.keyId } : {}), ...(target ? { linkTo: target } : {}),
+            ...(cand.keyId ? { keyId: cand.keyId } : {}), ...(target ? { linkTo: target } : {}), ...(replace ? { replace } : {}),
           });
         } catch { res = null; }
         if (!el.isConnected) return;
         if (res?.ok) {
           dismiss();
           // The toast is in the page's DOM: it never names the login.
-          showToast(res.linked ? 'API key saved to OTPilot, linked to your login' : 'API key saved to OTPilot');
+          showToast(res.replaced ? 'API key updated in OTPilot'
+            : res.linked ? 'API key saved to OTPilot, linked to your login' : 'API key saved to OTPilot');
           requestSiteIcon(host); // the saved item's site (its URL)
         } else if (res?.exists) {
           dismissed.add(fp);
           renderExists();
         } else if (res?.limit) {
           showLimit();
+        } else if (res?.replace) {
+          // The credential picked was deleted or moved to another site.
+          cand.name = name.value;
+          const next = await askContext();
+          if (!el.isConnected || !cand) return;
+          if (next?.state === 'unlocked' && !next.never && !next.exists) render(next, 'That API key changed. Pick again.');
+          else if (next?.state === 'locked') renderLocked();
+          else dismiss();
         } else if (res?.link) {
           // The login picked was deleted or no longer covers this site:
           // the logins again, with the name the user typed.

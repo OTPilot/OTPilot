@@ -581,6 +581,16 @@ function apiKeyLinkCandidates(items, host) {
     .map(i => ({ id: i.id, name: i.title || '', username: Vault.getValue(i, 'username') }));
 }
 
+// The user's API credentials for the page's site (same rule as the logins
+// to link): titles only.
+function apiKeyReplaceCandidates(items, host) {
+  const page = host.replace(/^www\./, '');
+  return items
+    .filter(i => i.type === 'api' && (i.urls || []).some(u => { const h = savedHostOf(u); return h && relatedHost(h, page); }))
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    .map(i => ({ id: i.id, name: i.title || '' }));
+}
+
 async function apiKeyContext(sender, hash) {
   const host = senderHost(sender);
   if (!host) return { state: 'setup', never: true, limit: false, logins: [] };
@@ -590,7 +600,11 @@ async function apiKeyContext(sender, hash) {
   const { items } = await VaultStore.readAll(await VaultKeys.getKey());
   const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
   if (await apiKeySavedFor(items, host, hash)) return { state, never, exists: true, limit: false, logins: [] };
-  return { state, never, limit: !Vault.canSaveItem(items, userPlan, Vault.newItem('api')), logins: apiKeyLinkCandidates(items, host) };
+  return {
+    state, never, limit: !Vault.canSaveItem(items, userPlan, Vault.newItem('api')), logins: apiKeyLinkCandidates(items, host),
+    // This site's API credentials: the new key can replace one's (a rotated key).
+    apiItems: apiKeyReplaceCandidates(items, host),
+  };
 }
 
 // Is the key shown (its SHA-256, hex) already in one of this site's API
@@ -625,7 +639,9 @@ function apiKeyRequest(msg) {
   if (!['', 'live', 'test'].includes(environment)) return null;
   const linkTo = msg.linkTo ?? null;
   if (linkTo !== null && (typeof linkTo !== 'string' || !linkTo || linkTo.length > 64)) return null;
-  return { key, keyId, name: name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim(), environment, linkTo };
+  const replace = msg.replace ?? null;
+  if (replace !== null && (typeof replace !== 'string' || !replace || replace.length > 64)) return null;
+  return { key, keyId, name: name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim(), environment, linkTo, replace };
 }
 
 // → { ok: true, id, linked } | { ok: false, exists: true } | { ok: false, limit: true }
@@ -638,6 +654,7 @@ async function addApiKey(sender, msg) {
   return navigator.locks.request('otpilot-item-limit', async () => {
     const vk = await VaultKeys.getKey();
     if (!vk) return { ok: false };
+    if (req.replace) return replaceApiKey(req, host, vk);
     const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
     const item = Vault.newItem('api', { title: req.name || host.replace(/^www\./, ''), urls: [host] });
     const put = (id, value) => { const f = Vault.getField(item, id); if (f) f.value = value; };
@@ -658,6 +675,34 @@ async function addApiKey(sender, msg) {
     vaultChangedByPage();
     return { ok: true, id: res.id, linked: !!req.linkTo };
   });
+}
+
+// A rotated key: it replaces the key of one of this site's API credentials
+// (re-checked here: an api item for a related host). The old value goes to
+// the item's history; the name and links stay. Never the limit: no new item.
+// → { ok: true, id, replaced: true } | { ok: false, exists: true }
+//   | { ok: false, replace: true } (gone or no longer this site's) | { ok: false }
+async function replaceApiKey(req, host, vk) {
+  const res = await VaultAccounts.changeItem(req.replace, vk, (item, items) => {
+    if (items.some(i => i.type === 'api' && (Vault.getValue(i, 'apiKey') === req.key || Vault.getValue(i, 'clientSecret') === req.key))) return 'exists';
+    if (!apiKeyReplaceCandidates([item], host).length) return 'replace';
+    // The field the item already keeps its key in (whatever the page shows
+    // beside it); an empty one: a client secret when there's an id, else the API key.
+    const field = Vault.getValue(item, 'apiKey') ? 'apiKey'
+      : Vault.getValue(item, 'clientSecret') ? 'clientSecret'
+      : req.keyId ? 'clientSecret' : 'apiKey';
+    const set = (id, value) => { const f = Vault.getField(item, id); if (f) f.value = value; };
+    const old = Vault.getValue(item, field);
+    if (old) item.passwordHistory = [{ value: old, changedAt: new Date().toISOString() }, ...(item.passwordHistory || [])].slice(0, 5);
+    set(field, req.key);
+    if (req.keyId) set('clientId', req.keyId);
+    if (req.environment) set('environment', req.environment);
+    return item;
+  });
+  if (!res.ok) return res.reason === 'exists' ? { ok: false, exists: true } : ['gone', 'replace'].includes(res.reason) ? { ok: false, replace: true } : { ok: false };
+  await VaultLock.touch().catch(() => {});
+  vaultChangedByPage();
+  return { ok: true, id: res.id, replaced: true };
 }
 
 async function apiKeyNeverSave(sender) {
