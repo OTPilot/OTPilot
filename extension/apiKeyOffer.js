@@ -207,12 +207,12 @@
     const idsIn = scope => {
       const ids = new Set();
       let n = 0;
-      for (const e of scope.querySelectorAll('input, textarea, span, div, p, td, dd, code, kbd, strong, b')) {
+      for (const e of scope.querySelectorAll('*')) { // fields and any element holding text alone (span, pre, td…)
         if (++n > 2000) break;
         if (ours(e)) continue;
         let value;
         if (e.matches('input, textarea')) { if (!(e.readOnly || e.disabled)) continue; value = e.value.trim(); }
-        else { if (e.children.length) continue; value = (e.textContent || '').trim(); }
+        else { if (e.children.length || e.matches('script, style, noscript, template, option')) continue; value = (e.textContent || '').trim(); }
         if (!value || value === key || !/^[^\s]{6,128}$/.test(value) || ApiKeys.isMasked(value) || !visible(e)) continue;
         const label = labelOf(e);
         if (ID_LABEL.test(label) && !ApiKeys.KEY_WORDS.test(label.replace(ID_LABEL, ''))) ids.add(value);
