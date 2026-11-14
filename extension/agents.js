@@ -88,6 +88,9 @@ const Agents = (() => {
   // reports a key other than the pinned one).
   async function list() {
     const data = await ok('/agents');
+    // Agents connected: the background checks for their requests every
+    // minute (refreshNotices), not only at the 5-minute poll.
+    chrome.storage.local.set({ agentsKnown: (data.agents || []).length > 0 }).catch(() => {});
     const p = await pins();
     for (const a of data.agents) {
       a.code = await code(a.public_key);

@@ -60,6 +60,8 @@ function updateAgentsDot(n) {
 
 // `fresh`: the list already fetched (the timer's), so nothing changes between
 // its last check and the redraw.
+const AGENTS_WINDOW = new URLSearchParams(location.search).get('window') === '1';
+
 async function renderAgentsPanel(fresh = null) {
   const list = document.getElementById('agents-list');
   const detail = document.getElementById('agents-detail');
@@ -91,6 +93,19 @@ async function renderAgentsPanel(fresh = null) {
   }
   const { agents, requests } = _agentsData;
   const pending = agents.filter(a => a.status === 'pending');
+  // The window the background opened for an agent waiting closes itself
+  // once nothing waits: everything answered, or already nothing on its first
+  // list (answered elsewhere, or expired behind the unlock screen). Checked
+  // again when the time comes: approving opens the add-account form, and a
+  // new request may have come in.
+  // (window.close() only closes windows a script opened: remove its tab.)
+  if (AGENTS_WINDOW && !pending.length && !requests.length) setTimeout(() => {
+    const panel = document.getElementById('agents-panel');
+    const d = _agentsData || {};
+    const waits = (d.agents || []).some(a => a.status === 'pending') || (d.requests || []).length;
+    if (waits || _agentsSel?.adding || (panel && agentsBusy(panel))) return;
+    chrome.tabs.getCurrent(t => (t ? chrome.tabs.remove(t.id) : window.close()));
+  }, 1200);
   const active = agents.filter(a => a.status === 'active');
   updateAgentsDot(pending.length + requests.length);
 
@@ -539,6 +554,23 @@ function renderActiveAgent(detail, a) {
 }
 
 document.getElementById('nav-agents').addEventListener('click', () => showView('agents'));
+
+// The window opened for agents waiting, asked to show a new one (the
+// background focused it): back to the Agents view only from Home or Generate
+// (the vault editor, Settings, Sync or Team may hold unsaved input — the dot
+// on Agents says it then), or its list redrawn like the timer's: checked
+// again after the request, so a form opened meanwhile stays.
+if (AGENTS_WINDOW) chrome.runtime.onMessage.addListener(msg => {
+  if (msg?.action !== 'agentsShow') return;
+  const panel = document.getElementById('agents-panel');
+  if (panel.style.display === 'none') {
+    const shown = id => document.getElementById(id)?.style.display !== 'none';
+    if (shown('home-view') || shown('generate-panel')) showView('agents');
+    return;
+  }
+  if (agentsBusy(panel)) return;
+  Agents.list().then(fresh => renderAgentsPanel(fresh), () => {});
+});
 
 // While the Agents view is open, new requests and agents waiting show up on
 // their own (every 10 s): redrawn only when that changed, and never under a
