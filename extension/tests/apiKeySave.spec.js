@@ -577,6 +577,52 @@ test('a key in a modal <dialog>: the card goes inside it and Save works', async 
   expect(fieldOf((await apiItems(popup))[0], 'apiKey')).toBe(GKEY);
 });
 
+test('the "saved" toast shows above a modal <dialog> still open (Google Cloud panel)', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  // A dialog wide enough to cover the toast's corner, under its backdrop.
+  const s = await site(context, `<!doctype html><html><body><button id="c">Create</button>
+    <dialog id="d" style="position:fixed;inset:0 0 0 auto;width:600px;max-width:none;height:100vh;max-height:none;margin:0;background:#333;color:#fff">
+    <h2>API key created</h2><label for="k">Your API key</label><input id="k" readonly value="${GKEY}"><button>Copy</button></dialog>
+    <script>c.onclick = () => d.showModal();</script></body></html>`);
+  const card = cardOf(s);
+  await s.click('#c');
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  // The dialog is still open, and the toast is what's drawn at its center.
+  const toastOnTop = () => s.evaluate(() => {
+    const t = [...document.querySelectorAll('[data-otpilot-ui]')].find(e => /API key saved to OTPilot/.test(e.textContent));
+    if (!t) return 'no toast';
+    // The toast ignores the pointer: hit-test it as if it didn't.
+    t.style.pointerEvents = 'auto';
+    const r = t.getBoundingClientRect();
+    const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return document.getElementById('d').matches(':modal') && t.matches(':popover-open') && !!at && t.contains(at);
+  });
+  await expect.poll(toastOnTop, { timeout: 2000 }).toBe(true);
+});
+
+test('with no modal open, the toast is in the top layer too: above a page popover', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  // A page popover covering the viewport, opened at load (before the toast).
+  const s = await site(context, html(KEY, `<div id="cover" popover="manual" style="inset:0;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;background:rgba(0,0,0,.4)"></div>
+<script>cover.showPopover();</script>`));
+  const card = cardOf(s);
+  await s.evaluate(() => document.getElementById('create').click()); // under the cover
+  await expect.poll(() => card.count('.otpilot-apikey-save'), { timeout: 5000 }).toBe(1);
+  await card.click('.otpilot-apikey-save');
+  await expect.poll(async () => (await apiItems(popup)).length).toBe(1);
+  const onTop = () => s.evaluate(() => {
+    const t = [...document.querySelectorAll('[data-otpilot-ui]')].find(e => /API key saved to OTPilot/.test(e.textContent));
+    if (!t) return 'no toast';
+    t.style.pointerEvents = 'auto'; // the toast ignores the pointer: hit-test it as if it didn't
+    const r = t.getBoundingClientRect();
+    const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return t.parentElement === document.body && t.matches(':popover-open') && !!at && t.contains(at);
+  });
+  await expect.poll(onTop, { timeout: 2000 }).toBe(true);
+});
+
 test('a secret shown only after "Show" (labelled Client secret), with its Client ID: both saved', async ({ context, extensionId }) => {
   const popup = await vaultWith(context, extensionId, []);
   const SECRET = 'GOCSPX' + '-q7Zk2mXv9LpR4tYw8NbC3dFgH6jKs1A';
