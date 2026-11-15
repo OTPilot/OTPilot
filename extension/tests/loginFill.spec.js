@@ -501,3 +501,20 @@ test('locked: unlocking an offer that opened on its own keeps Auto-fill off logi
   // The one login it named is filled; "Quiet" is never offered.
   await unlockThen(site.frameLocator('#otpilot-login-fill iframe'), () => pwExpect(site.locator('input[name="password"]')).toHaveValue('hunter2!'));
 });
+
+test('locked: the unlock frame opened by a click takes the keyboard (no autofocus attribute, which Chrome blocks cross-origin)', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, [github]);
+  await page.evaluate(() => VaultLock.lock());
+  const site = await context.newPage();
+  const warnings = [];
+  site.on('console', m => { if (/autofocus/i.test(m.text())) warnings.push(m.text()); });
+  await site.goto(`${SITE}/login.html`);
+  await site.focus('input[name="password"]');
+  await site.locator('#otpilot-login-dropdown .otpilot-login-unlock').click();
+  const frame = site.frameLocator('#otpilot-login-dropdown iframe');
+  await expect(frame.locator('body')).toHaveAttribute('data-ready', '1');
+  await expect(frame.locator('#pw')).toBeFocused();
+  await site.keyboard.type('test');
+  await expect(frame.locator('#pw')).toHaveValue('test');
+  expect(warnings).toEqual([]);
+});
