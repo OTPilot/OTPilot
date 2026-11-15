@@ -16,13 +16,18 @@
   </form>
   <script>
     setTimeout(() => {
-      for (const f of document.querySelectorAll('input')) {
+      // The username: a manager's 20px icon 8px from the edge. The password:
+      // the site's 16px eye 2px from the edge (only under the badge's right part).
+      const [user, pass] = document.querySelectorAll('input');
+      const put = (f, size, gap) => {
         const r = f.getBoundingClientRect();
         const icon = document.createElement('div');
         icon.className = 'other-manager-icon';
-        icon.style.cssText = `position:fixed;z-index:2147483647;width:20px;height:20px;background:#d22;left:${r.right - 28}px;top:${r.top + (r.height - 20) / 2}px`;
+        icon.style.cssText = `position:fixed;z-index:2147483647;width:${size}px;height:${size}px;background:#d22;left:${r.right - size - gap}px;top:${r.top + (r.height - size) / 2}px`;
         document.body.appendChild(icon);
-      }
+      };
+      put(user, 20, 8);
+      put(pass, 16, 2);
     }, 300);
   </script>
 </body></html>

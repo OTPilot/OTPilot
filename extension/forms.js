@@ -198,16 +198,18 @@
     _filling = true;
     try {
       if (fields.username && res.username) fillInputValue(fields.username, res.username);
-      if (fields.password && res.password) fillInputValue(fields.password, res.password);
+      // No password saved: the field is emptied (never another account's
+      // password beside this username) and focused for the user to type it
+      // — OTPilot offers to add it to this login afterwards. Still filling:
+      // that focus mustn't reopen the dropdown.
+      if (fields.password) fillInputValue(fields.password, res.password || '');
+      if (res.noPassword && fields.password) {
+        closeOverlay();
+        closeDropdown();
+        fields.password.focus();
+        return;
+      }
     } finally { _filling = false; }
-    // No password saved: the username is in, the user types the password
-    // (and OTPilot offers to add it to this login afterwards).
-    if (res.noPassword && fields.password) {
-      closeOverlay();
-      closeDropdown();
-      fields.password.focus();
-      return;
-    }
     if (autoLogin !== false) {
       if (fields.password) submitAfterFill(fields.password, passwordButtonFor);
       else submitAfterFill(fields.username, signInButtonFor);
@@ -295,7 +297,7 @@
       if (_dismissed || res.state === 'setup' || !offered.logins.some(l => l.hasPassword !== false)) return;
       closeOverlay();
       const el = makeOverlay(OVERLAY_ID);
-      render(el, offered, undefined, autoOffered);
+      render(el, offered, undefined, r => forFields(autoOffered(r)));
       document.body.appendChild(el);
     } finally {
       _checking = false;
@@ -719,8 +721,17 @@
     if (!show) return;
     const top = r.top + (r.height - size) / 2;
     let left = r.right - size - 6;
+    // Sampled across the badge's whole area (a small icon may sit under
+    // its right part only).
+    const coveredIn = l => {
+      for (const fx of [0.1, 0.5, 0.9]) for (const fy of [0.25, 0.5, 0.75]) {
+        const o = coveredAt(field, l + size * fx, top + size * fy);
+        if (o) return o;
+      }
+      return null;
+    };
     for (let i = 0; i < 3 && left > r.left + r.width / 2; i++) {
-      const other = coveredAt(field, left + size / 2, top + size / 2) || coveredAt(field, left + 3, top + size / 2);
+      const other = coveredIn(left);
       if (!other) break;
       left = Math.min(left, other.getBoundingClientRect().left) - size - 4;
     }

@@ -595,6 +595,8 @@ test('a 2FA-only login (username, no password) is offered in the field\'s dropdo
   ]);
   const site = await context.newPage();
   await site.goto(`${SITE}/login.html`);
+  // Another account's password already in the field (another manager's fill).
+  await site.fill('input[name="password"]', 'someone-elses');
   await site.locator('.otpilot-field-badge[data-kind="login"]').first().click();
   const drop = site.locator('#otpilot-login-dropdown');
   await expect(drop.locator('.otpilot-login-choice')).toHaveCount(2);
@@ -604,6 +606,8 @@ test('a 2FA-only login (username, no password) is offered in the field\'s dropdo
   await expect(site.locator('input[name="email"]')).toHaveValue('carpedev');
   await expect(site.locator('input[name="password"]')).toHaveValue('');
   await expect(site.locator('input[name="password"]')).toBeFocused();
+  await site.waitForTimeout(500);
+  await expect(drop).toHaveCount(0); // focusing the password doesn't reopen the picker
   await expect(site).toHaveURL(/login\.html/); // not submitted
 
   // Only 2FA-only logins for the site: no corner offer on its own.
