@@ -49,7 +49,11 @@
   document.getElementById('eye').addEventListener('click', () => {
     pw.type = pw.type === 'password' ? 'text' : 'password';
   });
+  // No `autofocus`: Chrome blocks it in a cross-origin frame (and logs
+  // "Blocked autofocusing…" in the extension's errors). Focused by script
+  // instead, and again whenever the frame gets focus.
   pw.focus();
+  window.addEventListener('focus', () => { if (document.activeElement !== pw) pw.focus(); });
   // Wired up: a click or Enter from now on is handled (tests wait for this;
   // the button and field exist in the HTML before this script runs).
   document.body.dataset.ready = '1';
