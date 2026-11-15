@@ -153,12 +153,16 @@ function loadSharedKeys() {
     if (!['team_lite', 'team_pro'].includes(userPlan) || (await VaultLock.state()) !== 'unlocked') return;
     let ok = true;
     try {
-      for (const c of await VaultCollections.list()) if (c.key) await VaultCollections.pull(c).catch(() => {});
+      const list = await VaultCollections.list();
+      if (list.offline) ok = false;
+      for (const c of list) if (c.key) await VaultCollections.pull(c).catch(() => {});
     } catch { ok = false; /* offline: what's stored */ }
-    await VaultShares.refresh().catch(() => { ok = false; });
-    // Both loaded: not again this session. A part that failed is retried
-    // (after the minute), even though the other's keys are there.
-    if (ok) await chrome.storage.session.set({ [SHARED_KEYS_READY]: true });
+    const shares = await VaultShares.refresh().catch(() => null);
+    if (!shares || shares.offline) ok = false;
+    // Both loaded from the server, for this unlocked session: not again until
+    // the keys go. A part that failed — or only came from the offline cache,
+    // which opens no key — is retried after the minute.
+    if (ok && (await VaultLock.state()) === 'unlocked') await chrome.storage.session.set({ [SHARED_KEYS_READY]: true });
   })().catch(() => {}).finally(() => { _sharedKeysLoad = null; });
   return _sharedKeysLoad;
 }

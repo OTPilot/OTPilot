@@ -331,7 +331,8 @@ const VaultShares = (() => {
       if (e.status) throw e;
       const cachedList = (await local.get(LIST))[LIST];
       if (!userId || cachedList?.userId !== userId) throw e;
-      return readable(cachedList.shares);
+      // The cached list (no connection): `offline` says the keys weren't opened.
+      return Object.assign(await readable(cachedList.shares), { offline: true });
     }
     const collectionKeys = (await session.get('collectionKeys')).collectionKeys || {};
     const keys = await cachedKeys();

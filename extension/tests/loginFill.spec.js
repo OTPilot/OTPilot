@@ -567,7 +567,8 @@ test('loading the shared keys retries the part that failed, even with the other 
     let shareCalls = 0;
     VaultCollections.list = async () => { await chrome.storage.session.set({ collectionKeys: { [cid]: ck } }); return []; };
     VaultShares.refresh = async () => {
-      if (++shareCalls === 1) throw new Error('offline');
+      // Offline first: the cached list, no key opened.
+      if (++shareCalls === 1) return Object.assign([], { offline: true });
       await chrome.storage.session.set({ shareKeys: { [sid]: sk } });
       return [];
     };
