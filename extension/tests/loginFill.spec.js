@@ -546,3 +546,39 @@ test('shared logins are offered before the popup opened this session: the backgr
   await choice.click();
   await expect(site.locator('input[name="password"]')).toHaveValue('team-pass');
 });
+
+test('loading the shared keys retries the part that failed, even with the other part\'s keys there', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, []);
+  const ids = await page.evaluate(async () => {
+    const cid = crypto.randomUUID(), sid = crypto.randomUUID();
+    const ck = VaultCrypto.b64e(VaultCrypto.generateKey()), sk = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const a = Vault.newItem('login', { title: 'From collection', urls: ['localhost'] });
+    Vault.getField(a, 'username').value = 'a@team.test'; Vault.getField(a, 'password').value = 'pa';
+    const b = Vault.newItem('login', { title: 'Shared with me', urls: ['localhost'] });
+    Vault.getField(b, 'username').value = 'b@team.test'; Vault.getField(b, 'password').value = 'pb';
+    await chrome.storage.local.set({ [`cr:${cid}:${a.id}`]: await VaultCrypto.encryptItem(a, ck), [`sr:${sid}`]: await VaultCrypto.encryptItem(b, sk) });
+    await chrome.storage.session.remove(['collectionKeys', 'shareKeys', 'sharedKeysReady']);
+    await chrome.storage.local.set({ userPlan: 'team_lite', cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800000 } });
+    return { cid, ck, sid, sk };
+  });
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  await worker.evaluate(({ cid, ck, sid, sk }) => {
+    _sharedKeysAt = 0;
+    let shareCalls = 0;
+    VaultCollections.list = async () => { await chrome.storage.session.set({ collectionKeys: { [cid]: ck } }); return []; };
+    VaultShares.refresh = async () => {
+      if (++shareCalls === 1) throw new Error('offline');
+      await chrome.storage.session.set({ shareKeys: { [sid]: sk } });
+      return [];
+    };
+  }, ids);
+  const first = await context.newPage();
+  await first.goto(`${SITE}/login.html`);
+  await expect(first.locator('#otpilot-login-fill')).toContainText('From collection');
+  await expect(first.locator('#otpilot-login-fill')).not.toContainText('Shared with me');
+  await worker.evaluate(() => { _sharedKeysAt = 0; }); // the minute passed
+  const second = await context.newPage();
+  await second.goto(`${SITE}/login.html`);
+  await expect(second.locator('#otpilot-login-fill')).toContainText('Shared with me');
+  await expect(second.locator('#otpilot-login-fill')).toContainText('From collection');
+});

@@ -137,6 +137,13 @@ async function attachCandidates(sender, email = '') {
 // itself — team plans, vault unlocked, at most once a minute — and pulls
 // the collections' and shares' records with them.
 let _sharedKeysLoad = null, _sharedKeysAt = 0;
+const SHARED_KEYS_READY = 'sharedKeysReady'; // session: both loaded this session
+// The keys going away (the vault locked, sign-out): loaded again next time.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'session') return;
+  const gone = k => changes[k] && changes[k].newValue === undefined;
+  if (gone('collectionKeys') || gone('shareKeys')) chrome.storage.session.remove(SHARED_KEYS_READY);
+});
 function loadSharedKeys() {
   if (_sharedKeysLoad) return _sharedKeysLoad;
   if (Date.now() - _sharedKeysAt < 60_000) return Promise.resolve();
@@ -144,18 +151,22 @@ function loadSharedKeys() {
   _sharedKeysLoad = (async () => {
     const { userPlan } = await chrome.storage.local.get('userPlan');
     if (!['team_lite', 'team_pro'].includes(userPlan) || (await VaultLock.state()) !== 'unlocked') return;
+    let ok = true;
     try {
       for (const c of await VaultCollections.list()) if (c.key) await VaultCollections.pull(c).catch(() => {});
-    } catch { /* offline: what's stored */ }
-    await VaultShares.refresh().catch(() => {});
+    } catch { ok = false; /* offline: what's stored */ }
+    await VaultShares.refresh().catch(() => { ok = false; });
+    // Both loaded: not again this session. A part that failed is retried
+    // (after the minute), even though the other's keys are there.
+    if (ok) await chrome.storage.session.set({ [SHARED_KEYS_READY]: true });
   })().catch(() => {}).finally(() => { _sharedKeysLoad = null; });
   return _sharedKeysLoad;
 }
-// This session's keys, loaded first when there are none (≤ 5 s).
+// This session's keys, loaded first unless they were this session (≤ 5 s).
 async function sharedKeys() {
-  const get = () => chrome.storage.session.get(['collectionKeys', 'shareKeys']);
-  let { collectionKeys = {}, shareKeys = {} } = await get();
-  if (!Object.keys(collectionKeys).length && !Object.keys(shareKeys).length) {
+  const get = () => chrome.storage.session.get(['collectionKeys', 'shareKeys', SHARED_KEYS_READY]);
+  let { collectionKeys = {}, shareKeys = {}, [SHARED_KEYS_READY]: ready } = await get();
+  if (!ready) {
     await Promise.race([loadSharedKeys(), new Promise(res => setTimeout(res, 5000))]);
     ({ collectionKeys = {}, shareKeys = {} } = await get());
   }
@@ -488,7 +499,8 @@ async function planPendingLogin({ host, username, password }) {
   const shared = sharedAll.filter(i => Vault.loginCoversHost(i.urls, host));
   // Signing in with a shared login's exact username and password: it's that
   // login, even when its copy has no website for this page.
-  if (!match && sharedAll.some(i => Vault.getValue(i, 'password') === password && (!username || userOf(i) === username))) return { kind: 'none' };
+  // (A username is needed: a password alone may be a personal login's new one.)
+  if (!match && username && sharedAll.some(i => Vault.getValue(i, 'password') === password && userOf(i) === username)) return { kind: 'none' };
   if (!match && username) {
     const sharedLoose = shared.filter(i => userOf(i).toLowerCase() === username.toLowerCase());
     if (shared.some(i => userOf(i) === username) || sharedLoose.length === 1) return { kind: 'none' };
