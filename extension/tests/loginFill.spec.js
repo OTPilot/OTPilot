@@ -59,7 +59,7 @@ test('a matching login is offered and filled only on click', async ({ context, e
   await expect(site.locator('input[name="new_pw"]')).toHaveValue('');
 });
 
-test('only logins with a password whose URLs cover the page are offered', async ({ context, extensionId }) => {
+test('logins whose URLs cover the page are offered; one without a password says so', async ({ context, extensionId }) => {
   await vaultWith(context, extensionId, [
     github,
     { name: 'Elsewhere', email: 'x@example.com', secret: '', urls: 'example.com', password: 'nope' },
@@ -69,11 +69,13 @@ test('only logins with a password whose URLs cover the page are offered', async 
   const site = await context.newPage();
   await site.goto(`${SITE}/login.html`);
   const choices = site.locator('#otpilot-login-fill .otpilot-login-choice');
-  await expect(choices).toHaveCount(2);
+  await expect(choices).toHaveCount(3);
   await expect(choices.nth(0)).toContainText('GitHub');
-  await expect(choices.nth(1)).toContainText('Work GitHub');
+  await expect(choices.nth(1)).toContainText('Codes only');
+  await expect(choices.nth(1)).toContainText('no password saved');
+  await expect(choices.nth(2)).toContainText('Work GitHub');
 
-  await choices.nth(1).click();
+  await choices.nth(2).click();
   await expect(site.locator('input[name="password"]')).toHaveValue('w0rk');
 });
 
@@ -582,4 +584,58 @@ test('loading the shared keys retries the part that failed, even with the other 
   await second.goto(`${SITE}/login.html`);
   await expect(second.locator('#otpilot-login-fill')).toContainText('Shared with me');
   await expect(second.locator('#otpilot-login-fill')).toContainText('From collection');
+});
+
+// ── Logins without a password; other managers' icons ─────────────────────────
+
+test('a 2FA-only login (username, no password) is offered in the field\'s dropdown and fills the username alone; not on a password-only step, nor as a corner offer', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [
+    { name: 'Twitter', email: 'carpedev', secret: 'JBSWY3DPEHPK3PXP', urls: 'localhost', password: '' },
+    { name: 'Twitter', email: 'otpilotapp', secret: 'JBSWY3DPEHPK3PXP', urls: 'localhost', password: 'pw-otpilot' },
+  ]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  // Another account's password already in the field (another manager's fill).
+  await site.fill('input[name="password"]', 'someone-elses');
+  await site.locator('.otpilot-field-badge[data-kind="login"]').first().click();
+  const drop = site.locator('#otpilot-login-dropdown');
+  await expect(drop.locator('.otpilot-login-choice')).toHaveCount(2);
+  const choice = drop.locator('.otpilot-login-choice', { hasText: 'carpedev' });
+  await expect(choice).toContainText('no password saved');
+  await choice.click();
+  await expect(site.locator('input[name="email"]')).toHaveValue('carpedev');
+  await expect(site.locator('input[name="password"]')).toHaveValue('');
+  await expect(site.locator('input[name="password"]')).toBeFocused();
+  await site.waitForTimeout(500);
+  await expect(drop).toHaveCount(0); // focusing the password doesn't reopen the picker
+  await expect(site).toHaveURL(/login\.html/); // not submitted
+
+  // Only 2FA-only logins for the site: no corner offer on its own.
+  await vaultWith(context, extensionId, [{ name: 'Twitter', email: 'carpedev', secret: 'JBSWY3DPEHPK3PXP', urls: 'localhost', password: '' }]);
+  const quiet = await context.newPage();
+  await quiet.goto(`${SITE}/login.html`);
+  await quiet.waitForTimeout(1000);
+  await expect(quiet.locator('#otpilot-login-fill')).toHaveCount(0);
+});
+
+test('another manager\'s icon at the field\'s edge: the OTPilot badge sits beside it, not under it, and is bigger', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/other-manager.html`);
+  await expect(site.locator('.other-manager-icon')).toHaveCount(2);
+  const badges = site.locator('.otpilot-field-badge[data-kind="login"]');
+  await expect(badges).toHaveCount(2);
+  await site.evaluate(() => window.dispatchEvent(new Event('resize')));
+  await expect.poll(() => site.evaluate(() => {
+    const icons = [...document.querySelectorAll('.other-manager-icon')].map(e => e.getBoundingClientRect());
+    return [...document.querySelectorAll('.otpilot-field-badge')].every(b => {
+      const r = b.getBoundingClientRect();
+      return icons.every(i => r.right <= i.left || r.left >= i.right || r.bottom <= i.top || r.top >= i.bottom);
+    });
+  })).toBe(true);
+  const box = await badges.first().boundingBox();
+  expect(box.width).toBeGreaterThanOrEqual(22);
+  // Still inside its field, and clickable.
+  await badges.first().click();
+  await expect(site.locator('#otpilot-login-dropdown')).toBeVisible();
 });

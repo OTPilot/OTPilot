@@ -175,6 +175,10 @@
   // Offered on their own (the corner offer, focusing a field): the logins
   // with Auto-fill on. The badge lists every login of the site.
   const autoOffered = res => ({ ...res, logins: res.logins.filter(l => l.autofill !== false) });
+  // A login without a password (2FA only) fills a username: not offered
+  // where the page asks for the password alone.
+  const forFields = (res, fields = findFillFields()) => (fields && !fields.username
+    ? { ...res, logins: res.logins.filter(l => l.hasPassword !== false) } : res);
 
   // `login`: { id, autoLogin } from vaultLoginsForPage. With "Sign in
   // automatically" on, the form (or the username step) is submitted after
@@ -186,7 +190,7 @@
     const usernameOnly = !!fields && !fields.password;
     let res;
     try { res = await chrome.runtime.sendMessage({ action: 'vaultFillLogin', id, usernameOnly }); } catch { res = null; }
-    if (!fields || !res?.ok || (usernameOnly && !res.username)) {
+    if (!fields || !res?.ok || ((usernameOnly || res.noPassword) && !res.username)) {
       showToast(usernameOnly && res?.ok ? 'This login has no username saved' : 'OTPilot could not fill this login', false);
       return;
     }
@@ -194,7 +198,17 @@
     _filling = true;
     try {
       if (fields.username && res.username) fillInputValue(fields.username, res.username);
-      if (fields.password) fillInputValue(fields.password, res.password);
+      // No password saved: the field is emptied (never another account's
+      // password beside this username) and focused for the user to type it
+      // — OTPilot offers to add it to this login afterwards. Still filling:
+      // that focus mustn't reopen the dropdown.
+      if (fields.password) fillInputValue(fields.password, res.password || '');
+      if (res.noPassword && fields.password) {
+        closeOverlay();
+        closeDropdown();
+        fields.password.focus();
+        return;
+      }
     } finally { _filling = false; }
     if (autoLogin !== false) {
       if (fields.password) submitAfterFill(fields.password, passwordButtonFor);
@@ -257,8 +271,9 @@
         background: 'var(--bg, #0f172a)', border: '1px solid var(--border, #1e3a5f)', borderRadius: '8px', cursor: 'pointer',
         color: 'var(--ink-0, #f1f5f9)', font: 'inherit', fontSize: '13px',
       });
+      const sub = [login.username, login.hasPassword === false ? 'no password saved' : ''].filter(Boolean).join(' · ');
       btn.innerHTML = `<div style="font-weight:600;">${esc(login.name)}</div>`
-        + (login.username ? `<div style="color:var(--ink-3, #94a3b8);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(login.username)}</div>` : '');
+        + (sub ? `<div style="color:var(--ink-3, #94a3b8);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(sub)}</div>` : '');
       btn.addEventListener('click', trusted(() => fill(login)));
       body.appendChild(btn);
     }
@@ -276,11 +291,13 @@
       const res = await loginsForPage();
       _pageLogins = res.state === 'setup' ? null : res;
       syncBadges();
-      const offered = autoOffered(res);
-      if (_dismissed || res.state === 'setup' || !offered.logins.length) return;
+      const offered = forFields(autoOffered(res), fields);
+      // The corner offer opens on its own only for a login with a password
+      // (a 2FA-only login is in the field's dropdown, not on every page).
+      if (_dismissed || res.state === 'setup' || !offered.logins.some(l => l.hasPassword !== false)) return;
       closeOverlay();
       const el = makeOverlay(OVERLAY_ID);
-      render(el, offered, undefined, autoOffered);
+      render(el, offered, undefined, r => forFields(autoOffered(r)));
       document.body.appendChild(el);
     } finally {
       _checking = false;
@@ -561,7 +578,7 @@
   // password. The corner offer stays as well.
   const DROP_ID = 'otpilot-login-dropdown';
   const BADGE_CLASS = 'otpilot-field-badge';
-  const BADGE = 18;
+  const BADGE = 22;
   let _pageLogins = null;        // the last vaultLoginsForPage answer for this page's form
   let _filling = false;          // a fill is focusing fields
   const _badges = new Map();     // field -> badge
@@ -647,10 +664,10 @@
     _pendingField = null;
     _pageLogins = res.state === 'setup' ? null : res;
     if (!_pageLogins || !field.isConnected) return;
-    const shown = explicit ? res : autoOffered(res);
+    const shown = forFields(explicit ? res : autoOffered(res));
     if (!shown.logins.length && !explicit) return;
     const el = makeAnchored(DROP_ID, field);
-    render(el, shown, closeDropdown, explicit ? res => res : autoOffered);
+    render(el, shown, closeDropdown, explicit ? r => forFields(r) : r => forFields(autoOffered(r)));
     showAnchored(el, field);
   }
 
@@ -664,7 +681,7 @@
     themeUi(b);
     b.innerHTML = BADGE_SVG;
     Object.assign(b.style, {
-      position: 'fixed', zIndex: '2147483646', width: `${BADGE + 4}px`, height: `${BADGE + 4}px`, padding: '2px',
+      position: 'fixed', zIndex: '2147483647', width: `${BADGE + 4}px`, height: `${BADGE + 4}px`, padding: '2px',
       margin: '0', border: '0', background: 'transparent', cursor: 'pointer', lineHeight: '0', opacity: '.9',
     });
     isolate(b, true);
@@ -675,17 +692,52 @@
     return b;
   }
 
+  // Something drawn over the field at (x, y) that isn't the field, the page
+  // around it or ours: another password manager's icon (LastPass, 1Password,
+  // Bitwarden…), or the site's own (show password, clear).
+  function coveredAt(field, x, y) {
+    let stack;
+    try { stack = document.elementsFromPoint(x, y); } catch { return null; }
+    for (const el of stack) {
+      if (el === field || el.closest?.(`.${BADGE_CLASS}, [data-otpilot-ui]`)) continue;
+      if (el.contains(field)) return null; // down to the page under the field: nothing on top
+      // An icon is small: a floating label or a wrapper drawn over the
+      // whole field isn't one (it's skipped, and what's under it checked).
+      const o = el.getBoundingClientRect();
+      if (o.width > 64 || o.height > 64) continue;
+      return el;
+    }
+    return null;
+  }
+
   // Inside the field's right edge, sized to fit it (hidden on a field too
-  // small or scrolled away).
+  // small or scrolled away). Where another icon sits there (a password
+  // manager's, the site's eye), it moves left, beside it.
   function placeBadge(b, field) {
     const r = field.getBoundingClientRect();
-    const size = Math.min(BADGE + 4, Math.floor(r.height - 2));
+    const size = Math.min(BADGE + 4, Math.floor(r.height - 6));
     const show = size >= 14 && r.width > size * 4 && isVisible(field);
     b.style.display = show ? '' : 'none';
     if (!show) return;
+    const top = r.top + (r.height - size) / 2;
+    let left = r.right - size - 6;
+    // Sampled across the badge's whole area (a small icon may sit under
+    // its right part only).
+    const coveredIn = l => {
+      for (const fx of [0.1, 0.5, 0.9]) for (const fy of [0.25, 0.5, 0.75]) {
+        const o = coveredAt(field, l + size * fx, top + size * fy);
+        if (o) return o;
+      }
+      return null;
+    };
+    for (let i = 0; i < 3 && left > r.left + r.width / 2; i++) {
+      const other = coveredIn(left);
+      if (!other) break;
+      left = Math.min(left, other.getBoundingClientRect().left) - size - 4;
+    }
     Object.assign(b.style, {
       width: `${size}px`, height: `${size}px`, padding: `${Math.max(1, Math.round(size / 10))}px`,
-      left: `${r.right - size - 4}px`, top: `${r.top + (r.height - size) / 2}px`,
+      left: `${left}px`, top: `${top}px`,
     });
     const svg = b.firstElementChild;
     if (svg) { svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%'); }
