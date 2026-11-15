@@ -105,7 +105,8 @@ const VaultCollections = (() => {
       out.push({ id: c.id, teamId: c.team_id, name, role: c.role, members: c.members, key, offline });
     }
     if (!offline) await forgetOthers(new Set(collections.map(c => c.id)));
-    return out;
+    // `offline` on the list too (an empty cached one has no entry to say it).
+    return Object.assign(out, { offline });
   }
 
   async function create(teamId, name) {

@@ -741,3 +741,26 @@ test('a two-step sign-in starting on a subdomain also keeps the password page ho
   ]);
   void popup;
 });
+
+test('signing in with a shared login\'s exact username and password offers no personal copy, even when its copy has no website', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  await popup.evaluate(async () => {
+    const sid = crypto.randomUUID();
+    const sk = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const item = Vault.newItem('login', { title: 'Shared, no site', urls: [] });
+    Vault.getField(item, 'username').value = 'ops@team.test';
+    Vault.getField(item, 'password').value = 'team-pass';
+    await chrome.storage.local.set({ [`sr:${sid}`]: await VaultCrypto.encryptItem(item, sk) });
+    await chrome.storage.session.set({ shareKeys: { [sid]: sk } });
+    await chrome.storage.local.set({ cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800000 } });
+  });
+  const site = await context.newPage();
+  await signIn(site, 'ops@team.test', 'team-pass');
+  await expect(site).toHaveURL(/welcome\.html/);
+  await site.waitForTimeout(1200);
+  await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
+  // Another password for that username is still offered.
+  const other = await context.newPage();
+  await signIn(other, 'ops@team.test', 'my-own-pass');
+  await expect(other.locator('#otpilot-login-save')).toBeVisible();
+});
