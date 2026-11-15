@@ -131,10 +131,41 @@ async function attachCandidates(sender, email = '') {
 // Logins of the team collections unlocked this session (vaultCollections.js:
 // keys in chrome.storage.session `collectionKeys`, cleared on lock; records
 // under cr:<cid>:<id>). Only read here, for filling.
+// Shared logins open with this session's keys (collectionKeys / shareKeys),
+// which the popup loads when it opens. A page can ask before it has (after a
+// browser restart, an unlock from the page): the background then loads them
+// itself — team plans, vault unlocked, at most once a minute — and pulls
+// the collections' and shares' records with them.
+let _sharedKeysLoad = null, _sharedKeysAt = 0;
+function loadSharedKeys() {
+  if (_sharedKeysLoad) return _sharedKeysLoad;
+  if (Date.now() - _sharedKeysAt < 60_000) return Promise.resolve();
+  _sharedKeysAt = Date.now();
+  _sharedKeysLoad = (async () => {
+    const { userPlan } = await chrome.storage.local.get('userPlan');
+    if (!['team_lite', 'team_pro'].includes(userPlan) || (await VaultLock.state()) !== 'unlocked') return;
+    try {
+      for (const c of await VaultCollections.list()) if (c.key) await VaultCollections.pull(c).catch(() => {});
+    } catch { /* offline: what's stored */ }
+    await VaultShares.refresh().catch(() => {});
+  })().catch(() => {}).finally(() => { _sharedKeysLoad = null; });
+  return _sharedKeysLoad;
+}
+// This session's keys, loaded first when there are none (≤ 5 s).
+async function sharedKeys() {
+  const get = () => chrome.storage.session.get(['collectionKeys', 'shareKeys']);
+  let { collectionKeys = {}, shareKeys = {} } = await get();
+  if (!Object.keys(collectionKeys).length && !Object.keys(shareKeys).length) {
+    await Promise.race([loadSharedKeys(), new Promise(res => setTimeout(res, 5000))]);
+    ({ collectionKeys = {}, shareKeys = {} } = await get());
+  }
+  return { keys: collectionKeys, shareKeys };
+}
+
 async function sharedLogins() {
   // Only for a signed-in account (what's shared is the account's, not the device's).
   if (!(await SupabaseAuth.getSession().catch(() => null))) return [];
-  const { collectionKeys: keys = {}, shareKeys = {} } = await chrome.storage.session.get(['collectionKeys', 'shareKeys']);
+  const { keys, shareKeys } = await sharedKeys();
   if (!Object.keys(keys).length && !Object.keys(shareKeys).length) return [];
   const out = [];
   for (const [k, rec] of Object.entries(await chrome.storage.local.get(null))) {
@@ -154,7 +185,7 @@ async function sharedLogins() {
 // each unlocked collection), not every record.
 async function sharedLogin(id) {
   if (!(await SupabaseAuth.getSession().catch(() => null))) return null;
-  const { collectionKeys: keys = {}, shareKeys = {} } = await chrome.storage.session.get(['collectionKeys', 'shareKeys']);
+  const { keys, shareKeys } = await sharedKeys();
   // A copy shared with me: its record is stored under the share's id.
   if (shareKeys[id]) {
     const rec = (await chrome.storage.local.get(`sr:${id}`))[`sr:${id}`];
@@ -453,7 +484,11 @@ async function planPendingLogin({ host, username, password }) {
   // collection; the background doesn't.)
   // Compared by username only when one was captured: without one, the
   // personal logins below are still offered.
-  const shared = match ? [] : (await sharedLogins()).filter(i => Vault.loginCoversHost(i.urls, host));
+  const sharedAll = match ? [] : await sharedLogins();
+  const shared = sharedAll.filter(i => Vault.loginCoversHost(i.urls, host));
+  // Signing in with a shared login's exact username and password: it's that
+  // login, even when its copy has no website for this page.
+  if (!match && sharedAll.some(i => Vault.getValue(i, 'password') === password && (!username || userOf(i) === username))) return { kind: 'none' };
   if (!match && username) {
     const sharedLoose = shared.filter(i => userOf(i).toLowerCase() === username.toLowerCase());
     if (shared.some(i => userOf(i) === username) || sharedLoose.length === 1) return { kind: 'none' };

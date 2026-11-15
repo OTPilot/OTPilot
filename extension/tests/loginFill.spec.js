@@ -518,3 +518,31 @@ test('locked: the unlock frame opened by a click takes the keyboard (no autofocu
   await expect(frame.locator('#pw')).toHaveValue('test');
   expect(warnings).toEqual([]);
 });
+
+test('shared logins are offered before the popup opened this session: the background loads the shared keys itself', async ({ context, extensionId }) => {
+  const page = await vaultWith(context, extensionId, []);
+  const { cid, ck, rec } = await page.evaluate(async () => {
+    const cid = crypto.randomUUID();
+    const ck = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const item = Vault.newItem('login', { title: 'Shared admin', urls: ['localhost'] });
+    Vault.getField(item, 'username').value = 'ops@team.test';
+    Vault.getField(item, 'password').value = 'team-pass';
+    await chrome.storage.local.set({ [`cr:${cid}:${item.id}`]: await VaultCrypto.encryptItem(item, ck) });
+    await chrome.storage.session.remove(['collectionKeys', 'shareKeys']); // a browser restart: no keys yet
+    await chrome.storage.local.set({ userPlan: 'team_lite', cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800000 } });
+    return { cid, ck };
+  });
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent('serviceworker')];
+  await worker.evaluate(({ cid, ck }) => {
+    _sharedKeysAt = 0;
+    // What the server would give: the collection's key (wrapped to me), opened.
+    VaultCollections.list = async () => { await chrome.storage.session.set({ collectionKeys: { [cid]: ck } }); return []; };
+    VaultShares.refresh = async () => [];
+  }, { cid, ck });
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login.html`);
+  const choice = site.locator('#otpilot-login-fill .otpilot-login-choice');
+  await expect(choice).toContainText('Shared admin');
+  await choice.click();
+  await expect(site.locator('input[name="password"]')).toHaveValue('team-pass');
+});
