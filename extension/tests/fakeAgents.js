@@ -6,8 +6,11 @@
 export function installFakeAgents(page, { free = false } = {}) {
   return page.evaluate(async ({ free }) => {
     const S = window.fakeAgents = { agents: new Map(), requests: new Map(), uses: [], rev: 0, free, calls: [] };
+    // Settable from tests: `limits` / `usage` as GET /agents returns them
+    // (usage null on paid; delete S.usage to simulate a server without it).
+    S.limits = free ? { agents: 1, uses: 10 } : { agents: null, uses: null };
+    S.usage = free ? { used: 0, limit: 10, resets_at: '2026-12-01T00:00:00Z', trial_available: false } : null;
     const reply = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
-    const LIMITS = free ? { agents: 1, items: 3 } : { agents: null, items: null };
 
     S.addAgent = async ({ name = 'Claude Code', machine = 'mac', status = 'pending' } = {}) => {
       const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
@@ -65,7 +68,8 @@ export function installFakeAgents(page, { free = false } = {}) {
           agents: [...S.agents.values()].map(({ jwk, grants, ...a }) => ({ ...a, grants: grantsOf({ grants }) })),
           requests: [...S.requests.values()].filter(r => r.status === 'pending'),
           activity: S.uses,
-          limits: LIMITS,
+          limits: S.limits,
+          ...(S.usage === undefined ? {} : { usage: S.usage }),
         });
       }
       if (parts[1] === 'requests') {
@@ -103,8 +107,6 @@ export function installFakeAgents(page, { free = false } = {}) {
         const itemId = parts[3];
         if (method === 'DELETE') return reply(a.grants.delete(itemId) ? 200 : 404, { ok: true });
         if (a.status !== 'active') return reply(404, {});
-        const total = [...S.agents.values()].reduce((n, x) => n + x.grants.size, 0);
-        if (free && !body.move_from && !a.grants.has(itemId) && total >= 3) return reply(400, { error: 'free plan limit: three accounts for agents' });
         if (body.move_from) {
           const src = a.grants.get(body.move_from);
           if (!src || (body.base_revision != null && src.revision !== body.base_revision)) return reply(404, { error: 'not found' });

@@ -273,10 +273,6 @@ const VaultAccounts = (() => {
 
   // What save() would write: the items to store, the ids to delete, and the
   // item id of each account (null for an unreadable one, left alone).
-  async function planSave(accounts, key, knownIds) {
-    return planFrom(accounts, await readLogins(key), knownIds);
-  }
-
   function planFrom(accounts, { items, failed }, knownIds) {
     const existing = new Map(items.map(i => [i.id, i]));
     // Accounts from the v1 sync blob carry no _id, or another device's: pair
@@ -325,22 +321,6 @@ const VaultAccounts = (() => {
     return { changed, removed, ids };
   }
 
-  // Whether saving `accounts` from the editor would add items that count
-  // toward the Free plan past its limit. Over the limit (e.g. after leaving a
-  // team) existing items stay editable; only growing the count is refused.
-  // Sync merges don't ask: what other devices saved is never dropped.
-  // `others`: the editor's non-login changes saved along ({ put, remove }).
-  async function exceedsFreeLimit(accounts, key, knownIds, plan, others = { put: [], remove: [] }) {
-    if (Vault.PAID_PLANS.includes(plan)) return false;
-    const { changed, removed } = await planSave(accounts, key, knownIds);
-    const all = (await VaultStore.readAll(key)).items;
-    const after = new Map(all.map(i => [i.id, i]));
-    [...removed, ...others.remove].forEach(id => after.delete(id));
-    [...changed, ...others.put].forEach(i => after.set(i.id, i));
-    const count = Vault.countedItems([...after.values()]);
-    return count > Vault.FREE_ITEM_LIMIT && count > Vault.countedItems(all);
-  }
-
   // One account from a page ("Add to OTPilot"). Skips a secret already saved.
   // Returns the account's position in the list.
   async function add(acc, key) {
@@ -360,7 +340,7 @@ const VaultAccounts = (() => {
   // One new item of any type from a page (an API key). The read, the checks
   // and the write run under one vault lock, with `key` still the vault key
   // (else nothing is written and this throws). `check(items)` gets every
-  // decrypted item — logins and others, for the Free limit and duplicates —
+  // decrypted item — logins and others, for duplicates and the login to link —
   // and returns null to write `item`, or a reason not to.
   // → { ok: true, id } | { ok: false, reason }
   async function addItem(item, key, check = () => null) {
@@ -424,5 +404,5 @@ const VaultAccounts = (() => {
     return ok;
   }
 
-  return { customFieldsOf, withCustomFields, fillDesc, load, loadOthers, save, exceedsFreeLimit, add, addItem, changeItem, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
+  return { customFieldsOf, withCustomFields, fillDesc, load, loadOthers, save, add, addItem, changeItem, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
 })();

@@ -523,27 +523,21 @@ pub async fn send_trial_ended_email(
     api_key: Option<&str>,
     from: &str,
     to: &str,
-    counted_items: Option<i64>,
 ) -> bool {
-    send(enabled, api_key, from, to, trial_ended(counted_items)).await
+    send(enabled, api_key, from, to, trial_ended()).await
 }
 
-/// `counted_items` is None when unknown (see `trial_reminder`).
-fn trial_ended(counted_items: Option<i64>) -> Mail {
-    let limit = FREE_ITEM_LIMIT;
-    let mut paras = vec![
-        "Your trial ended. Everything is still on each device and your codes keep working; they just don't sync between browsers anymore.".to_string(),
+fn trial_ended() -> Mail {
+    let paras = vec![
+        "Your trial ended and your account is back on Free. Everything stays on each device, with no limit on items, and your codes keep working. They just don't sync between browsers anymore.".to_string(),
+        "On Free, AI agents get 1 agent and 10 uses a month.".to_string(),
+        "Personal is $3 a month or $30 a year, for sync across your browsers and unlimited agent uses.".to_string(),
     ];
-    if let Some(counted) = counted_items.filter(|&i| i > limit) {
-        paras.push(format!(
-            "Free holds {limit} items. You can keep editing the {counted} you have; adding more needs Personal."
-        ));
-    }
-    let mut details = vec![("Plan", "Free".to_string())];
-    if let Some(counted) = counted_items {
-        details.push(("Items", format!("{counted} of {limit} on Free")));
-    }
-    details.push(("Sync", "Paused".into()));
+    let details = vec![
+        ("Plan", "Free".to_string()),
+        ("Sync", "Paused".into()),
+        ("AI agents", "1 agent · 10 uses a month".into()),
+    ];
     Mail {
         subject: "Your OTPilot trial ended".into(),
         eyebrow: "Trial ended",
@@ -558,10 +552,6 @@ fn trial_ended(counted_items: Option<i64>) -> Mail {
         ..Default::default()
     }
 }
-
-/// `Vault.FREE_ITEM_LIMIT` in the extension (the server can't count items
-/// itself beyond `counts_for_limit`).
-const FREE_ITEM_LIMIT: i64 = 50;
 
 fn plural(n: i64, word: &str) -> String {
     if n == 1 {
@@ -732,13 +722,13 @@ mod tests {
     }
 
     #[test]
-    fn the_ended_email_mentions_the_free_limit_only_when_over_it() {
-        assert_eq!(trial_ended(Some(38)).paras.len(), 1);
-        let over = trial_ended(Some(72));
-        assert!(over.paras[1].contains("keep editing the 72"));
-        let unknown = trial_ended(None);
-        assert_eq!(unknown.paras.len(), 1);
-        assert!(!unknown.details.iter().any(|(k, _)| *k == "Items"));
+    fn the_ended_email_has_no_item_limit() {
+        let mail = trial_ended();
+        assert!(mail.paras[0].contains("no limit on items"));
+        assert!(mail.paras[1].contains("10 uses a month"));
+        assert!(mail.paras[2].contains("$3 a month or $30 a year"));
+        assert!(!mail.details.iter().any(|(k, _)| *k == "Items"));
+        assert!(!mail.paras.iter().any(|p| p.contains("50")));
     }
 
     #[test]

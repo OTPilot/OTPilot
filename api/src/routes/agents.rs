@@ -12,9 +12,20 @@
 //! agent's public key. Expiry, "ask every time" and revocation are enforced
 //! here: the copy is only handed out while the grant allows it.
 //!
-//! **Plans.** Free: one agent, three granted items (`FREE_AGENTS`,
-//! `FREE_AGENT_ITEMS`, mirrored in web/src/lib/agents.ts). Over the limit
-//! (after a downgrade) what exists keeps working; only adding is refused.
+//! **Plans.** Free: one agent (`FREE_AGENTS`; over it after a downgrade what
+//! exists keeps working, only adding is refused), any number of accounts, and
+//! `FREE_AGENT_USES` uses a UTC month (mirrored in web/src/lib/agents.ts). A
+//! use is one `browser_login` or `run` tool call, counted where the copies are
+//! handed out: `POST /agent/grants/open` (`agent_usage`, one row per user and
+//! month, so no rollover). On Free that is the only path that gives a copy
+//! (`GET /agent/grants` lists labels only). Paid plans and the trial are never
+//! counted. It's a meter, not a security boundary: an MCP could keep the
+//! copies it opened.
+//!
+//! **MCP version.** The MCP sends `x-otpilot-mcp: <version>` (`MCP_HEADER`);
+//! only its presence is checked. An MCP without it (≤ 0.2.0) still gets copies
+//! from `GET /agent/grants` on a paid plan (legacy; TODO: remove once old MCPs
+//! are gone), and on Free is told to update (426) when it asks for a use.
 
 use std::time::Duration;
 
@@ -25,7 +36,7 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Months, NaiveDate, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -41,7 +52,13 @@ use crate::{
 };
 
 pub const FREE_AGENTS: i64 = 1;
-pub const FREE_AGENT_ITEMS: i64 = 3;
+/// Agent uses (a `browser_login` or a `run`) a Free account gets per UTC month.
+pub const FREE_AGENT_USES: i32 = 10;
+/// Sent by the MCP (≥ 0.3.0) on every call, with its version.
+const MCP_HEADER: &str = "x-otpilot-mcp";
+/// How long a tool call's `use_id` may be replayed (a retried request).
+const REPLAY_MINUTES: i32 = 10;
+const MAX_OPEN_ITEMS: usize = 20;
 /// How long a pairing waits to be claimed, then approved.
 const PAIRING_MINUTES: i32 = 15;
 /// How long a request waits for the user's answer.
@@ -76,6 +93,7 @@ pub fn router() -> Router<AppState> {
         // The MCP server, with its token.
         .route("/agent/me", get(agent_me))
         .route("/agent/grants", get(agent_grants))
+        .route("/agent/grants/open", post(open_grants))
         .route("/agent/requests", post(agent_request))
         .route("/agent/requests/{id}", get(agent_request_status))
         .route("/agent/uses", post(agent_use))
@@ -126,6 +144,158 @@ fn limit_error(what: &str) -> ApiError {
     ))
 }
 
+/// Whether the call comes from an MCP that opens copies with
+/// `POST /agent/grants/open` (it sends `MCP_HEADER`).
+fn from_new_mcp(headers: &HeaderMap) -> bool {
+    headers
+        .get(MCP_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| !v.trim().is_empty())
+}
+
+/// An error body with a machine-readable `code` and more fields.
+fn coded(status: StatusCode, error: &str, code: &str, mut extra: Value) -> Response {
+    extra["error"] = json!(error);
+    extra["code"] = json!(code);
+    (status, Json(extra)).into_response()
+}
+
+const OUTDATED: &str = "This OTPilot MCP is out of date. Restart your AI agent so it runs the latest @otpilot/mcp (npx -y @otpilot/mcp@latest), then try again.";
+
+fn outdated() -> Response {
+    coded(
+        StatusCode::UPGRADE_REQUIRED,
+        OUTDATED,
+        "mcp_outdated",
+        json!({}),
+    )
+}
+
+/// A Free account's agent uses this month. `None` on a paid plan or the trial.
+struct FreeUsage {
+    used: i32,
+    /// The 1st of the month counted (UTC).
+    month: NaiveDate,
+    /// The Personal trial can still be started (with `trial_enabled`).
+    trial_available: bool,
+}
+
+impl FreeUsage {
+    /// The 1st of next month: when the uses renew.
+    fn renews(&self) -> NaiveDate {
+        self.month + Months::new(1)
+    }
+
+    fn resets_at(&self) -> String {
+        self.renews().format("%Y-%m-%dT00:00:00Z").to_string()
+    }
+
+    /// "Jul 1".
+    fn renews_on(&self) -> String {
+        self.renews().format("%b %-d").to_string()
+    }
+
+    fn left(&self) -> i32 {
+        (FREE_AGENT_USES - self.used).max(0)
+    }
+
+    /// What the agent gets (`GET /agent/grants`, `POST /agent/grants/open`):
+    /// `notice` is the line `list_accounts` shows.
+    fn for_agent(&self, state: &AppState) -> Value {
+        let notice = match self.left() {
+            0 => format!(
+                "Free plan: no uses left this month (renews {}). Upgrade: {}",
+                self.renews_on(),
+                upgrade_url(state)
+            ),
+            left => format!(
+                "Free plan: {left} of {FREE_AGENT_USES} uses left this month (renews {}).",
+                self.renews_on()
+            ),
+        };
+        json!({
+            "used": self.used, "limit": FREE_AGENT_USES,
+            "resets_at": self.resets_at(), "notice": notice,
+        })
+    }
+
+    /// What the user's extension gets (`GET /agents`).
+    fn for_user(&self, state: &AppState) -> Value {
+        json!({
+            "used": self.used, "limit": FREE_AGENT_USES, "resets_at": self.resets_at(),
+            "trial_available": state.trial_enabled && self.trial_available,
+        })
+    }
+
+    /// 402: this month's uses are all used.
+    fn exhausted(&self, state: &AppState) -> Response {
+        let url = upgrade_url(state);
+        let trial = state.trial_enabled && self.trial_available;
+        let mut error = format!(
+            "You've used your {FREE_AGENT_USES} free agent uses for this month. They renew on {}. \
+             Upgrade to Personal for unlimited uses ($3/month or $30/year) at {url}",
+            self.renews_on()
+        );
+        if trial {
+            error.push_str(&format!(
+                ", or start the free {}-day trial there, no card needed.",
+                crate::trial::TRIAL_DAYS
+            ));
+        } else {
+            error.push('.');
+        }
+        coded(
+            StatusCode::PAYMENT_REQUIRED,
+            &error,
+            "agent_uses_exhausted",
+            json!({
+                "used": self.used, "limit": FREE_AGENT_USES, "resets_at": self.resets_at(),
+                "upgrade_url": url, "trial_available": trial,
+                "trial_days": crate::trial::TRIAL_DAYS,
+            }),
+        )
+    }
+}
+
+fn upgrade_url(state: &AppState) -> String {
+    format!(
+        "{}/dashboard/billing",
+        state.app_base_url.trim_end_matches('/')
+    )
+}
+
+/// `user`'s uses this month when they're on Free (a missing users row reads
+/// as Free, like `is_free`), `None` on a paid plan or the trial. Call
+/// `trial::expire` first so a trial that just ended counts at once.
+async fn free_usage<'e, E: sqlx::PgExecutor<'e>>(db: E, user: Uuid) -> Result<Option<FreeUsage>> {
+    let (plan, trial_available, month, used): (String, bool, NaiveDate, i32) = sqlx::query_as(
+        "SELECT COALESCE(u.plan, 'free'),
+                COALESCE(u.trial_ends_at IS NULL AND NOT u.has_personal_cloud, false),
+                m.month, COALESCE(c.uses, 0)
+         FROM (SELECT date_trunc('month', NOW() AT TIME ZONE 'UTC')::date AS month) m
+         LEFT JOIN users u ON u.id = $1
+         LEFT JOIN agent_usage c ON c.user_id = $1 AND c.month = m.month",
+    )
+    .bind(user)
+    .fetch_one(db)
+    .await?;
+    Ok((plan == "free").then_some(FreeUsage {
+        used,
+        month,
+        trial_available,
+    }))
+}
+
+/// The user an (active, so claimed) agent belongs to.
+async fn agent_user(db: &sqlx::PgPool, agent: Uuid) -> Result<Uuid> {
+    sqlx::query_scalar::<_, Option<Uuid>>("SELECT user_id FROM agents WHERE id = $1")
+        .bind(agent)
+        .fetch_optional(db)
+        .await?
+        .flatten()
+        .ok_or(ApiError::Unauthorized)
+}
+
 /// Forgets pairings nobody claimed or approved in time, and requests nobody
 /// answered (they read as denied to the agent).
 async fn expire(db: &sqlx::PgPool) -> Result<()> {
@@ -150,6 +320,10 @@ async fn expire(db: &sqlx::PgPool) -> Result<()> {
     )
     .execute(db)
     .await?;
+    // A tool call's use_id is only replayed for minutes.
+    sqlx::query("DELETE FROM agent_use_tokens WHERE created_at < NOW() - INTERVAL '1 day'")
+        .execute(db)
+        .await?;
     Ok(())
 }
 
@@ -433,9 +607,10 @@ struct UseRow {
 
 /// Everything the extension's Agents view shows: agents (pending ones
 /// included), their grants (without ciphertext), pending requests, recent
-/// activity and the plan's limits.
+/// activity, the plan's limits and (Free) this month's agent uses.
 async fn list(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Value>> {
     expire(&state.db).await?;
+    crate::trial::expire(&state.db, Some(auth.id)).await?;
     let agents = sqlx::query_as::<_, AgentRow>(
         "SELECT id, name, machine, public_key, status, created_at, approved_at, last_used_at,
                 client, client_version
@@ -470,7 +645,7 @@ async fn list(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Valu
     .bind(auth.id)
     .fetch_all(&state.db)
     .await?;
-    let free = is_free(&state.db, auth.id).await?;
+    let usage = free_usage(&state.db, auth.id).await?;
     Ok(Json(json!({
         "agents": agents.iter().map(|a| json!({
             "id": a.id, "name": a.name, "machine": a.machine, "public_key": a.public_key,
@@ -492,11 +667,12 @@ async fn list(State(state): State<AppState>, auth: AuthUser) -> Result<Json<Valu
             "agent_id": u.agent_id, "item_id": u.item_id, "action": u.action,
             "detail": u.detail, "created_at": u.created_at,
         })).collect::<Vec<_>>(),
-        "limits": if free {
-            json!({ "agents": FREE_AGENTS, "items": FREE_AGENT_ITEMS })
+        "limits": if usage.is_some() {
+            json!({ "agents": FREE_AGENTS, "uses": FREE_AGENT_USES })
         } else {
-            json!({ "agents": null, "items": null })
+            json!({ "agents": null, "uses": null })
         },
+        "usage": usage.as_ref().map(|u| u.for_user(&state)),
     })))
 }
 
@@ -572,7 +748,7 @@ struct GrantRequest {
     base_revision: Option<i64>,
     /// Moving the grant of item `move_from` to this item (the vault gave the
     /// item a new id): in one step, only while that grant is still at
-    /// `base_revision`, and without taking another Free slot.
+    /// `base_revision`.
     #[serde(default)]
     move_from: Option<Uuid>,
 }
@@ -639,7 +815,7 @@ async fn put_grant(
         .bind(id)
         .bind(item)
     };
-    let exists = if let Some(from) = body.move_from {
+    if let Some(from) = body.move_from {
         // Both grant rows locked in (agent_id, item_id) order, as
         // `revoke_lost_agent_copies` does, so the two wait for each other
         // instead of deadlocking.
@@ -672,24 +848,10 @@ async fn put_grant(
         .bind(from)
         .execute(&mut *tx)
         .await?;
-        true // a replacement: no new slot
     } else {
         let current: Option<i64> = revision_of(item_id).fetch_optional(&mut *tx).await?;
         if body.base_revision.is_some() && body.base_revision != current {
             return Err(ApiError::NotFound);
-        }
-        current.is_some()
-    };
-    if !exists && is_free(&mut *tx, auth.id).await? {
-        let items: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM agent_grants g JOIN agents a ON a.id = g.agent_id
-             WHERE a.user_id = $1",
-        )
-        .bind(auth.id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if items >= FREE_AGENT_ITEMS {
-            return Err(limit_error("three accounts for agents"));
         }
     }
     let commands: Vec<String> = body.commands.iter().map(|c| c.trim().to_string()).collect();
@@ -857,39 +1019,208 @@ struct AgentGrantRow {
     ask_every_time: bool,
     commands: Vec<String>,
     revision: i64,
-    released: bool,
+    /// Not expired.
+    live: bool,
+    /// Its copy may be handed out now (`RELEASED`).
+    open: bool,
 }
 
-/// The agent's grants. An expired grant isn't listed; an "ask every time"
-/// grant is listed with its label (title, sites) but without its copy unless
-/// a one-time approval is live.
-async fn agent_grants(State(state): State<AppState>, agent: AgentAuth) -> Result<Json<Value>> {
-    let rows = sqlx::query_as::<_, AgentGrantRow>(
+impl AgentGrantRow {
+    fn json(&self, with_record: bool) -> Value {
+        json!({
+            "item_id": self.item_id, "scope": self.scope, "expires_at": self.expires_at,
+            "ask_every_time": self.ask_every_time, "commands": self.commands,
+            "revision": self.revision,
+            "record": if with_record { serde_json::from_str::<Value>(&self.encrypted_item).unwrap_or(Value::Null) } else { Value::Null },
+            "label": serde_json::from_str::<Value>(&self.label).unwrap_or(Value::Null),
+            "wrapped_key": self.wrapped_key,
+        })
+    }
+}
+
+/// Whether grant `g` is still in force (not expired). No input in it.
+const LIVE: &str = "(g.expires_at IS NULL OR g.expires_at > NOW())";
+
+/// Whether grant `g` (in force) hands out its copy now: it doesn't ask every
+/// time, or a one-time approval of it is still in its window (handing the
+/// copy out doesn't end the window). The one rule for `GET /agent/grants` and
+/// `POST /agent/grants/open`. No input in it.
+const RELEASED: &str = "(NOT g.ask_every_time OR EXISTS(SELECT 1 FROM agent_requests r
+                WHERE r.agent_id = g.agent_id AND r.item_id = g.item_id
+                  AND r.status = 'allowed' AND r.released_until > NOW()))";
+
+fn grant_rows_sql(filter: &str) -> String {
+    format!(
         "SELECT g.item_id, g.scope, g.encrypted_item, g.label, g.wrapped_key, g.expires_at,
-                g.ask_every_time, g.commands, g.revision,
-                EXISTS(SELECT 1 FROM agent_requests r
-                       WHERE r.agent_id = g.agent_id AND r.item_id = g.item_id
-                         AND r.status = 'allowed' AND r.released_until > NOW()) AS released
+                g.ask_every_time, g.commands, g.revision, {LIVE} AS live, {RELEASED} AS open
          FROM agent_grants g
-         WHERE g.agent_id = $1 AND (g.expires_at IS NULL OR g.expires_at > NOW())
-         ORDER BY g.created_at",
+         WHERE g.agent_id = $1 AND {filter}
+         ORDER BY g.created_at"
     )
-    .bind(agent.agent_id)
-    .fetch_all(&state.db)
-    .await?;
+}
+
+/// The agent's grants. An expired grant isn't listed. Each comes with its
+/// label (title, sites); its copy (`record`) only for an MCP without
+/// `MCP_HEADER` on a paid plan, while the grant releases it (legacy: newer
+/// MCPs open copies with `POST /agent/grants/open`, and Free only gets them
+/// there, where uses are counted). `usage`: this month's uses on Free.
+async fn agent_grants(
+    State(state): State<AppState>,
+    agent: AgentAuth,
+    headers: HeaderMap,
+) -> Result<Json<Value>> {
+    let user = agent_user(&state.db, agent.agent_id).await?;
+    crate::trial::expire(&state.db, Some(user)).await?;
+    let usage = free_usage(&state.db, user).await?;
+    // TODO: once MCPs ≤ 0.2.0 are gone, never hand out copies here.
+    let legacy = usage.is_none() && !from_new_mcp(&headers);
+    let rows = sqlx::query_as::<_, AgentGrantRow>(&grant_rows_sql(LIVE))
+        .bind(agent.agent_id)
+        .fetch_all(&state.db)
+        .await?;
     Ok(Json(json!({
-        "grants": rows.iter().map(|g| {
-            let open = !g.ask_every_time || g.released;
-            json!({
-                "item_id": g.item_id, "scope": g.scope, "expires_at": g.expires_at,
-                "ask_every_time": g.ask_every_time, "commands": g.commands,
-                "revision": g.revision,
-                "record": if open { serde_json::from_str::<Value>(&g.encrypted_item).unwrap_or(Value::Null) } else { Value::Null },
-                "label": serde_json::from_str::<Value>(&g.label).unwrap_or(Value::Null),
-                "wrapped_key": g.wrapped_key,
-            })
-        }).collect::<Vec<_>>(),
+        "grants": rows.iter().map(|g| g.json(legacy && g.open)).collect::<Vec<_>>(),
+        "usage": usage.as_ref().map(|u| u.for_agent(&state)),
     })))
+}
+
+/// Opens per agent per hour (a loop of calls can't grow the tables or the log).
+const OPEN_PER_HOUR: u32 = 300;
+
+#[derive(Deserialize)]
+struct OpenBody {
+    use_id: Uuid,
+    tool: String,
+    item_ids: Vec<Uuid>,
+}
+
+/// Hands out the copies one tool call uses (`browser_login`, or a `run` with
+/// one or more accounts), all or none, and on Free counts it as one use.
+/// `use_id` is the call's: a retry with the same id, tool and accounts within
+/// `REPLAY_MINUTES` gets them again without counting.
+async fn open_grants(
+    State(state): State<AppState>,
+    agent: AgentAuth,
+    body: std::result::Result<Json<OpenBody>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response> {
+    if !state.rate_limiter.check(
+        &format!("agent-open:{}", agent.agent_id),
+        OPEN_PER_HOUR,
+        Duration::from_secs(3600),
+    ) {
+        return Err(ApiError::TooManyRequests);
+    }
+    let Json(body) = body.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    if !matches!(body.tool.as_str(), "browser_login" | "run") {
+        return Err(ApiError::BadRequest(
+            "tool must be browser_login or run".into(),
+        ));
+    }
+    let mut ids = body.item_ids.clone();
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() || ids.len() > MAX_OPEN_ITEMS || ids.len() != body.item_ids.len() {
+        return Err(ApiError::BadRequest(format!(
+            "item_ids: 1-{MAX_OPEN_ITEMS} different ids"
+        )));
+    }
+    let user = agent_user(&state.db, agent.agent_id).await?;
+    crate::trial::expire(&state.db, Some(user)).await?;
+    let mut tx = state.db.begin().await?;
+    let rows = sqlx::query_as::<_, AgentGrantRow>(&grant_rows_sql("g.item_id = ANY($2)"))
+        .bind(agent.agent_id)
+        .bind(&ids)
+        .fetch_all(&mut *tx)
+        .await?;
+    let missing: Vec<Uuid> = ids
+        .iter()
+        .filter(|id| !rows.iter().any(|g| g.item_id == **id && g.live))
+        .copied()
+        .collect();
+    if !missing.is_empty() {
+        return Ok(coded(
+            StatusCode::NOT_FOUND,
+            "not allowed (any more): ask the user with request_access",
+            "not_granted",
+            json!({ "item_ids": missing }),
+        ));
+    }
+    let held: Vec<Uuid> = rows.iter().filter(|g| !g.open).map(|g| g.item_id).collect();
+    if !held.is_empty() {
+        return Ok(coded(
+            StatusCode::CONFLICT,
+            "this use needs the user's approval (it asks every time)",
+            "approval_needed",
+            json!({ "item_ids": held }),
+        ));
+    }
+    let mut usage = free_usage(&mut *tx, user).await?;
+    // Only a counted call (Free) needs a token for its retry; paid and trial
+    // calls just open again, so nothing is written for them.
+    let mut counted_new = false;
+    if usage.is_some() {
+        let new: Option<Uuid> = sqlx::query_scalar(
+            "INSERT INTO agent_use_tokens (id, agent_id, user_id, tool, item_ids)
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING RETURNING id",
+        )
+        .bind(body.use_id)
+        .bind(agent.agent_id)
+        .bind(user)
+        .bind(&body.tool)
+        .bind(&ids)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if new.is_none() {
+            // A retry of the same call, or an id used for something else.
+            let replay: bool = sqlx::query_scalar(&format!(
+                "SELECT EXISTS(SELECT 1 FROM agent_use_tokens
+                   WHERE id = $1 AND agent_id = $2 AND tool = $3 AND item_ids = $4
+                     AND created_at > NOW() - INTERVAL '{REPLAY_MINUTES} minutes')"
+            ))
+            .bind(body.use_id)
+            .bind(agent.agent_id)
+            .bind(&body.tool)
+            .bind(&ids)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !replay {
+                return Ok(coded(
+                    StatusCode::BAD_REQUEST,
+                    "use_id was already used for another call: send a new one",
+                    "use_id_reused",
+                    json!({}),
+                ));
+            }
+        }
+        counted_new = new.is_some();
+    }
+    if let (Some(u), true) = (usage.as_mut(), counted_new) {
+        // One at a time per user (the row's lock): at the last use left,
+        // only one of two calls gets it.
+        let counted: Option<i32> = sqlx::query_scalar(
+            "INSERT INTO agent_usage (user_id, month, uses) VALUES ($1, $2, 1)
+             ON CONFLICT (user_id, month) DO UPDATE SET uses = agent_usage.uses + 1
+               WHERE agent_usage.uses < $3
+             RETURNING uses",
+        )
+        .bind(user)
+        .bind(u.month)
+        .bind(FREE_AGENT_USES)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(used) = counted else {
+            // Rolled back, the token too: nothing was used.
+            u.used = FREE_AGENT_USES;
+            return Ok(u.exhausted(&state));
+        };
+        u.used = used;
+    }
+    tx.commit().await?;
+    Ok(Json(json!({
+        "grants": rows.iter().map(|g| g.json(true)).collect::<Vec<_>>(),
+        "usage": usage.as_ref().map(|u| u.for_agent(&state)),
+    }))
+    .into_response())
 }
 
 #[derive(Deserialize)]
@@ -905,12 +1236,16 @@ struct AgentRequestBody {
 }
 
 /// The agent asks for an account it doesn't have (free text), or for one use
-/// of an "ask every time" grant (`item_id`).
+/// of an "ask every time" grant (`item_id`). On Free, a use is only asked for
+/// by an MCP that counts it (426 otherwise) and while one is left (402: the
+/// user isn't asked to approve what `open_grants` would refuse; nothing is
+/// counted here).
 async fn agent_request(
     State(state): State<AppState>,
     agent: AgentAuth,
+    headers: HeaderMap,
     Json(body): Json<AgentRequestBody>,
-) -> Result<Json<Value>> {
+) -> Result<Response> {
     if !state.rate_limiter.check(
         &format!("agent-request:{}", agent.agent_id),
         60,
@@ -921,6 +1256,17 @@ async fn agent_request(
     let query = text(&body.query, 200);
     if body.item_id.is_none() && query.is_empty() {
         return Err(ApiError::BadRequest("query or item_id is required".into()));
+    }
+    let usage = match body.item_id {
+        Some(_) => {
+            let user = agent_user(&state.db, agent.agent_id).await?;
+            crate::trial::expire(&state.db, Some(user)).await?;
+            free_usage(&state.db, user).await?
+        }
+        None => None,
+    };
+    if usage.is_some() && !from_new_mcp(&headers) {
+        return Ok(outdated());
     }
     expire(&state.db).await?;
     let mut tx = state.db.begin().await?;
@@ -939,6 +1285,9 @@ async fn agent_request(
         .await?;
         if !granted {
             return Err(ApiError::NotFound);
+        }
+        if let Some(u) = usage.filter(|u| u.left() == 0) {
+            return Ok(u.exhausted(&state));
         }
     }
     let pending: i64 = sqlx::query_scalar(
@@ -964,7 +1313,7 @@ async fn agent_request(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(Json(json!({ "id": id, "status": "pending" })))
+    Ok(Json(json!({ "id": id, "status": "pending" })).into_response())
 }
 
 async fn agent_request_status(
@@ -1351,12 +1700,37 @@ mod tests {
         uri: &str,
         body: Option<Value>,
     ) -> (StatusCode, Value) {
+        send(app, bearer, false, method, uri, body).await
+    }
+
+    /// An agent-token call from a current MCP (it sends `MCP_HEADER`).
+    async fn mcp(
+        app: &Router,
+        token: &str,
+        method: Method,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        send(app, Some(token), true, method, uri, body).await
+    }
+
+    async fn send(
+        app: &Router,
+        bearer: Option<&str>,
+        new_mcp: bool,
+        method: Method,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
         let mut req = Request::builder()
             .method(method)
             .uri(uri)
             .header("content-type", "application/json");
         if let Some(b) = bearer {
             req = req.header("authorization", format!("Bearer {b}"));
+        }
+        if new_mcp {
+            req = req.header(MCP_HEADER, "0.3.0");
         }
         let res = app
             .clone()
@@ -1466,7 +1840,7 @@ mod tests {
             assert_eq!(s, StatusCode::OK);
             revs.push(b["revision"].as_i64().unwrap());
         }
-        // Free, three used: a move still goes through (no new slot).
+        // Free: a move goes through like any rewrite.
         let moved = Uuid::new_v4();
         let (s, _) = grant(
             &app,
@@ -1829,20 +2203,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn free_plan_limits_agents_and_accounts() {
+    async fn free_plan_has_one_agent_and_any_number_of_accounts() {
         let db = test_db().await;
         let app = app(db.pool.clone());
         let ana = create_user(&db.pool, "free").await;
         let (agent, _) = connect(&app, ana).await;
-        for _ in 0..FREE_AGENT_ITEMS {
-            assert_eq!(
-                grant(&app, ana, agent, Uuid::new_v4(), json!({})).await.0,
-                StatusCode::OK
-            );
+        for _ in 0..6 {
+            let (s, b) = grant(&app, ana, agent, Uuid::new_v4(), json!({})).await;
+            assert_eq!(s, StatusCode::OK, "{b}");
         }
-        let (s, b) = grant(&app, ana, agent, Uuid::new_v4(), json!({})).await;
-        assert_eq!(s, StatusCode::BAD_REQUEST);
-        assert!(b["error"].as_str().unwrap().contains("free plan"));
         // A second agent can't be claimed.
         let (_, p) = raw(
             &app,
@@ -1853,23 +2222,529 @@ mod tests {
         )
         .await;
         let id = p["id"].as_str().unwrap();
-        assert_eq!(
-            call(
-                &app,
-                ana,
-                Method::POST,
-                &format!("/agents/pair/{id}/claim"),
-                None
-            )
-            .await
-            .0,
-            StatusCode::BAD_REQUEST
-        );
+        let (s, b) = call(
+            &app,
+            ana,
+            Method::POST,
+            &format!("/agents/pair/{id}/claim"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert!(b["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("free plan limit: one connected agent"));
         let (_, list) = call(&app, ana, Method::GET, "/agents", None).await;
         assert_eq!(
             list["limits"],
-            json!({ "agents": FREE_AGENTS, "items": FREE_AGENT_ITEMS })
+            json!({ "agents": FREE_AGENTS, "uses": FREE_AGENT_USES })
         );
+        assert_eq!(
+            list["usage"],
+            json!({ "used": 0, "limit": 10, "resets_at": next_month(), "trial_available": false })
+        );
+    }
+
+    // ── Agent uses (Free: 10 a month) ──────────────────────────────────────
+
+    /// The app with the trial on and a real base URL (the 402's link).
+    fn uses_app(db: sqlx::PgPool, trial: bool) -> Router {
+        let mut state = test_state(db);
+        state.trial_enabled = trial;
+        state.app_base_url = "https://otpilot.app/".into();
+        router().with_state(state)
+    }
+
+    /// "2026-12-01T00:00:00Z": the 1st of next month, UTC.
+    fn next_month() -> String {
+        let now = Utc::now().date_naive();
+        (NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap() + Months::new(1))
+            .format("%Y-%m-%dT00:00:00Z")
+            .to_string()
+    }
+
+    /// "Jul 1": when the uses renew.
+    fn renews_on() -> String {
+        let next: NaiveDate = next_month()[..10].parse().unwrap();
+        next.format("%b %-d").to_string()
+    }
+
+    use chrono::Datelike;
+
+    async fn open(app: &Router, token: &str, tool: &str, items: &[Uuid]) -> (StatusCode, Value) {
+        open_as(app, token, Uuid::new_v4(), tool, items).await
+    }
+
+    async fn open_as(
+        app: &Router,
+        token: &str,
+        use_id: Uuid,
+        tool: &str,
+        items: &[Uuid],
+    ) -> (StatusCode, Value) {
+        mcp(
+            app,
+            token,
+            Method::POST,
+            "/agent/grants/open",
+            Some(json!({ "use_id": use_id, "tool": tool, "item_ids": items })),
+        )
+        .await
+    }
+
+    async fn uses(db: &sqlx::PgPool, user: Uuid) -> i32 {
+        sqlx::query_scalar("SELECT COALESCE(SUM(uses), 0)::int FROM agent_usage WHERE user_id = $1")
+            .bind(user)
+            .fetch_one(db)
+            .await
+            .unwrap()
+    }
+
+    async fn set_uses(db: &sqlx::PgPool, user: Uuid, month: &str, n: i32) {
+        sqlx::query(&format!(
+            "INSERT INTO agent_usage (user_id, month, uses) VALUES ($1, {month}, $2)
+             ON CONFLICT (user_id, month) DO UPDATE SET uses = EXCLUDED.uses"
+        ))
+        .bind(user)
+        .bind(n)
+        .execute(db)
+        .await
+        .unwrap();
+    }
+
+    const THIS_MONTH: &str = "date_trunc('month', NOW() AT TIME ZONE 'UTC')::date";
+
+    #[tokio::test]
+    async fn free_counts_each_tool_call_as_one_use_up_to_ten() {
+        let db = test_db().await;
+        let app = uses_app(db.pool.clone(), false);
+        let ana = create_user(&db.pool, "free").await;
+        let (agent, token) = connect(&app, ana).await;
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        give(&app, ana, agent, a).await;
+        give(&app, ana, agent, b).await;
+        // Listing gives labels only, and the uses left.
+        let (_, list) = mcp(&app, &token, Method::GET, "/agent/grants", None).await;
+        assert_eq!(list["grants"][0]["record"], Value::Null);
+        assert_eq!(list["grants"][0]["label"], label());
+        assert_eq!(
+            list["usage"]["notice"],
+            format!(
+                "Free plan: 10 of 10 uses left this month (renews {}).",
+                renews_on()
+            )
+        );
+        // A run with two accounts is one use; it gets exactly those copies.
+        let (s, r) = open(&app, &token, "run", &[a, b]).await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+        assert_eq!(r["grants"].as_array().unwrap().len(), 2);
+        assert_eq!(r["grants"][0]["record"], record());
+        assert_eq!(r["grants"][0]["wrapped_key"], "wk");
+        assert_eq!(r["usage"]["used"], 1);
+        assert_eq!(r["usage"]["limit"], 10);
+        assert_eq!(r["usage"]["resets_at"], next_month());
+        for n in 2..=9 {
+            let (s, r) = open(&app, &token, "browser_login", &[a]).await;
+            assert_eq!(s, StatusCode::OK, "{r}");
+            assert_eq!(r["usage"]["used"], n);
+            assert_eq!(r["grants"].as_array().unwrap().len(), 1);
+        }
+        let (_, list) = mcp(&app, &token, Method::GET, "/agent/grants", None).await;
+        assert_eq!(
+            list["usage"]["notice"],
+            format!(
+                "Free plan: 1 of 10 uses left this month (renews {}).",
+                renews_on()
+            )
+        );
+        let (s, r) = open(&app, &token, "run", &[b]).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(r["usage"]["used"], 10);
+        assert_eq!(
+            r["usage"]["notice"],
+            format!(
+                "Free plan: no uses left this month (renews {}). Upgrade: https://otpilot.app/dashboard/billing",
+                renews_on()
+            )
+        );
+        // The 11th is refused, and nothing is counted or kept.
+        let use_id = Uuid::new_v4();
+        let (s, r) = open_as(&app, &token, use_id, "run", &[a]).await;
+        assert_eq!(s, StatusCode::PAYMENT_REQUIRED, "{r}");
+        assert_eq!(
+            r,
+            json!({
+                "error": format!("You've used your 10 free agent uses for this month. They renew on {}. Upgrade to Personal for unlimited uses ($3/month or $30/year) at https://otpilot.app/dashboard/billing.", renews_on()),
+                "code": "agent_uses_exhausted", "used": 10, "limit": 10,
+                "resets_at": next_month(), "upgrade_url": "https://otpilot.app/dashboard/billing",
+                "trial_available": false, "trial_days": 30,
+            })
+        );
+        assert!(r.get("grants").is_none());
+        assert_eq!(uses(&db.pool, ana).await, 10);
+        let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_use_tokens WHERE id = $1")
+            .bind(use_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(kept, 0);
+        // Free calls stay free; GET /agents shows the count.
+        let (s, _) = mcp(&app, &token, Method::GET, "/agent/grants", None).await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, list) = call(&app, ana, Method::GET, "/agents", None).await;
+        assert_eq!(list["usage"]["used"], 10);
+    }
+
+    #[tokio::test]
+    async fn the_402_offers_the_trial_when_it_can_start() {
+        let db = test_db().await;
+        let app = uses_app(db.pool.clone(), true);
+        let ana = create_user(&db.pool, "free").await;
+        let (agent, token) = connect(&app, ana).await;
+        let a = Uuid::new_v4();
+        give(&app, ana, agent, a).await;
+        set_uses(&db.pool, ana, THIS_MONTH, 10).await;
+        let (s, r) = open(&app, &token, "run", &[a]).await;
+        assert_eq!(s, StatusCode::PAYMENT_REQUIRED);
+        assert_eq!(r["trial_available"], true);
+        assert_eq!(
+            r["error"],
+            format!("You've used your 10 free agent uses for this month. They renew on {}. Upgrade to Personal for unlimited uses ($3/month or $30/year) at https://otpilot.app/dashboard/billing, or start the free 30-day trial there, no card needed.", renews_on())
+        );
+        let (_, list) = call(&app, ana, Method::GET, "/agents", None).await;
+        assert_eq!(list["usage"]["trial_available"], true);
+        // Had one already: no offer.
+        sqlx::query("UPDATE users SET trial_ends_at = NOW() - INTERVAL '40 days' WHERE id = $1")
+            .bind(ana)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let (_, r) = open(&app, &token, "run", &[a]).await;
+        assert_eq!(r["trial_available"], false);
+        assert!(r["error"]
+            .as_str()
+            .unwrap()
+            .ends_with("/dashboard/billing."));
+        let (_, list) = call(&app, ana, Method::GET, "/agents", None).await;
+        assert_eq!(list["usage"]["trial_available"], false);
+    }
+
+    #[tokio::test]
+    async fn two_calls_at_the_last_use_get_one_between_them() {
+        let db = test_db().await;
+        let app = uses_app(db.pool.clone(), false);
+        let ana = create_user(&db.pool, "free").await;
+        let (agent, token) = connect(&app, ana).await;
+        let a = Uuid::new_v4();
+        give(&app, ana, agent, a).await;
+        set_uses(&db.pool, ana, THIS_MONTH, 9).await;
+        let calls: Vec<_> = (0..2)
+            .map(|_| {
+                let (app, token) = (app.clone(), token.clone());
+                tokio::spawn(async move { open(&app, &token, "run", &[a]).await.0 })
+            })
+            .collect();
+        let mut got = vec![];
+        for c in calls {
+            got.push(c.await.unwrap());
+        }
+        got.sort();
+        assert_eq!(got, vec![StatusCode::OK, StatusCode::PAYMENT_REQUIRED]);
+        assert_eq!(uses(&db.pool, ana).await, 10);
+    }
+
+    #[tokio::test]
+    async fn a_retried_call_is_counted_once_for_the_same_accounts_only() {
+        let db = test_db().await;
+        let app = uses_app(db.pool.clone(), false);
+        let ana = create_user(&db.pool, "free").await;
+        let (agent, token) = connect(&app, ana).await;
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        give(&app, ana, agent, a).await;
+        give(&app, ana, agent, b).await;
+        let use_id = Uuid::new_v4();
+        let (s, _) = open_as(&app, &token, use_id, "run", &[a, b]).await;
+        assert_eq!(s, StatusCode::OK);
+        // The same call again (ids in another order): the copies, not counted.
+        let (s, r) = open_as(&app, &token, use_id, "run", &[b, a]).await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+        assert_eq!(r["grants"].as_array().unwrap().len(), 2);
+        assert_eq!(r["usage"]["used"], 1);
+        // Even with the month used up meanwhile.
+        set_uses(&db.pool, ana, THIS_MONTH, 10).await;
+        let (s, _) = open_as(&app, &token, use_id, "run", &[a, b]).await;
+        assert_eq!(s, StatusCode::OK);
+        set_uses(&db.pool, ana, THIS_MONTH, 1).await;
+        // Other accounts, or another tool, with that id: refused.
+        for (tool, items) in [("run", vec![a]), ("browser_login", vec![a, b])] {
+            let (s, r) = open_as(&app, &token, use_id, tool, &items).await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{r}");
+            assert_eq!(r["code"], "use_id_reused");
+        }
+        // Too old to be a retry.
+        sqlx::query(
+            "UPDATE agent_use_tokens SET created_at = NOW() - INTERVAL '11 minutes' WHERE id = $1",
+        )
+        .bind(use_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let (s, r) = open_as(&app, &token, use_id, "run", &[a, b]).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(r["code"], "use_id_reused");
+        // Another agent can't replay it either (both Free: only counted calls keep a token).
+        let bob = create_user(&db.pool, "free").await;
+        let (bob_agent, bob_token) = connect(&app, bob).await;
+        give(&app, bob, bob_agent, a).await;
+        let fresh = Uuid::new_v4();
+        assert_eq!(
+            open_as(&app, &token, fresh, "run", &[a]).await.0,
+            StatusCode::OK
+        );
+        let (s, r) = open_as(&app, &bob_token, fresh, "run", &[a]).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{r}");
+        assert_eq!(uses(&db.pool, ana).await, 2);
+    }
+
+    #[tokio::test]
+    async fn opening_is_all_or_nothing_and_never_counts_a_refusal() {
+        let db = test_db().await;
+        let app = uses_app(db.pool.clone(), false);
+        let ana = create_user(&db.pool, "free").await;
+        let (agent, token) = connect(&app, ana).await;
+        let (a, ask, old, unknown) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        give(&app, ana, agent, a).await;
+        grant(&app, ana, agent, ask, json!({ "ask_every_time": true })).await;
+        grant(
+            &app,
+            ana,
+            agent,
+            old,
+            json!({ "expires_at": "2020-01-01T00:00:00Z" }),
+        )
+        .await;
+        let (s, r) = open(&app, &token, "run", &[a, old, unknown]).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{r}");
+        assert_eq!(r["code"], "not_granted");
+        let mut missing: Vec<Uuid> = serde_json::from_value(r["item_ids"].clone()).unwrap();
+        missing.sort();
+        assert_eq!(missing, sorted(vec![old, unknown]));
+        let (s, r) = open(&app, &token, "run", &[a, ask]).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{r}");
+        assert_eq!(r["code"], "approval_needed");
+        assert_eq!(r["item_ids"], json!([ask]));
+        assert_eq!(uses(&db.pool, ana).await, 0);
+        // Approved once: opened (and counted), and its window isn't spent by it.
+        let (s, req) = mcp(
+            &app,
+            &token,
+            Method::POST,
+            "/agent/requests",
+            Some(json!({ "item_id": ask, "tool": "run" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{req}");
+        ok(
+            &app,
+            ana,
+            Method::POST,
+            &format!("/agents/requests/{}", req["id"].as_str().unwrap()),
+            Some(json!({ "decision": "allow" })),
+        )
+        .await;
+        let (s, r) = open(&app, &token, "run", &[a, ask]).await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+        assert_eq!(r["grants"].as_array().unwrap().len(), 2);
+        let (_, list) = mcp(&app, &token, Method::GET, "/agent/grants", None).await;
+        assert!(list["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|g| g["record"].is_null()));
+        assert_eq!(uses(&db.pool, ana).await, 1);
+        // Malformed calls.
+        for body in [
+            json!({ "use_id": Uuid::new_v4(), "tool": "totp", "item_ids": [a] }),
+            json!({ "use_id": Uuid::new_v4(), "tool": "run", "item_ids": [] }),
+            json!({ "use_id": Uuid::new_v4(), "tool": "run", "item_ids": [a, a] }),
+            json!({ "use_id": Uuid::new_v4(), "tool": "run", "item_ids": (0..21).map(|_| Uuid::new_v4()).collect::<Vec<_>>() }),
+            json!({ "use_id": "nope", "tool": "run", "item_ids": [a] }),
+            json!({ "tool": "run", "item_ids": [a] }),
+        ] {
+            let (s, r) = mcp(&app, &token, Method::POST, "/agent/grants/open", Some(body)).await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{r}");
+            assert!(r["error"].is_string());
+        }
+        assert_eq!(uses(&db.pool, ana).await, 1);
+    }
+
+    #[tokio::test]
+    async fn paid_plans_and_the_trial_are_never_counted() {
+        let db = test_db().await;
+        let app = uses_app(db.pool.clone(), true);
+        let paid = create_user(&db.pool, "personal").await;
+        let trial = create_user(&db.pool, "free").await;
+        crate::trial::start(&db.pool, trial).await.unwrap();
+        for user in [paid, trial] {
+            let (agent, token) = connect(&app, user).await;
+            let a = Uuid::new_v4();
+            give(&app, user, agent, a).await;
+            for _ in 0..12 {
+                let (s, r) = open(&app, &token, "run", &[a]).await;
+                assert_eq!(s, StatusCode::OK, "{r}");
+                assert_eq!(r["usage"], Value::Null);
+            }
+            assert_eq!(uses(&db.pool, user).await, 0);
+            // Nothing counted, so no retry token is kept either.
+            let tokens: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM agent_use_tokens WHERE agent_id = $1")
+                    .bind(agent)
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(tokens, 0);
+            // A current MCP lists labels only; an old one still gets copies.
+            let (_, list) = mcp(&app, &token, Method::GET, "/agent/grants", None).await;
+            assert_eq!(list["grants"][0]["record"], Value::Null);
+            assert_eq!(list["usage"], Value::Null);
+            let (_, list) = raw(&app, Some(&token), Method::GET, "/agent/grants", None).await;
+            assert_eq!(list["grants"][0]["record"], record());
+            let (_, list) = call(&app, user, Method::GET, "/agents", None).await;
+            assert_eq!(list["limits"], json!({ "agents": null, "uses": null }));
+            assert_eq!(list["usage"], Value::Null);
+        }
+    }
+
+    #[tokio::test]
+    async fn opens_are_rate_limited_per_agent() {
+        let db = test_db().await;
+        let app = uses_app(db.pool.clone(), true);
+        let user = create_user(&db.pool, "personal").await;
+        let (agent, token) = connect(&app, user).await;
+        let a = Uuid::new_v4();
+        give(&app, user, agent, a).await;
+        for _ in 0..OPEN_PER_HOUR {
+            let (s, r) = open(&app, &token, "run", &[a]).await;
+            assert_eq!(s, StatusCode::OK, "{r}");
+        }
+        let (s, _) = open(&app, &token, "run", &[a]).await;
+        assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn uses_renew_each_month_and_an_ended_trial_counts_at_once() {
+        let db = test_db().await;
+        let app = uses_app(db.pool.clone(), true);
+        let ana = create_user(&db.pool, "free").await;
+        let (agent, token) = connect(&app, ana).await;
+        let a = Uuid::new_v4();
+        give(&app, ana, agent, a).await;
+        // Last month used up: this one starts at 0.
+        set_uses(
+            &db.pool,
+            ana,
+            &format!("({THIS_MONTH} - INTERVAL '1 month')::date"),
+            10,
+        )
+        .await;
+        let (s, r) = open(&app, &token, "run", &[a]).await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+        assert_eq!(r["usage"]["used"], 1);
+
+        // A trial that ended a minute ago (the hourly job hasn't run): Free
+        // at once, counted from 0, and an old MCP gets no copy.
+        let juan = create_user(&db.pool, "free").await;
+        crate::trial::start(&db.pool, juan).await.unwrap();
+        let (agent, token) = connect(&app, juan).await;
+        let a = Uuid::new_v4();
+        give(&app, juan, agent, a).await;
+        assert_eq!(
+            open(&app, &token, "run", &[a]).await.1["usage"],
+            Value::Null
+        );
+        sqlx::query("UPDATE users SET trial_ends_at = NOW() - INTERVAL '1 minute' WHERE id = $1")
+            .bind(juan)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let (_, list) = raw(&app, Some(&token), Method::GET, "/agent/grants", None).await;
+        assert_eq!(list["grants"][0]["record"], Value::Null);
+        assert_eq!(list["usage"]["used"], 0);
+        let (s, r) = open(&app, &token, "run", &[a]).await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+        assert_eq!(r["usage"]["used"], 1);
+        let (_, list) = call(&app, juan, Method::GET, "/agents", None).await;
+        assert_eq!(list["usage"]["trial_available"], false);
+    }
+
+    #[tokio::test]
+    async fn on_free_an_old_mcp_is_told_to_update_before_asking_for_a_use() {
+        let db = test_db().await;
+        let app = uses_app(db.pool.clone(), false);
+        let ana = create_user(&db.pool, "free").await;
+        let (agent, token) = connect(&app, ana).await;
+        let ask = Uuid::new_v4();
+        grant(&app, ana, agent, ask, json!({ "ask_every_time": true })).await;
+        let use_of = |item: Uuid| Some(json!({ "item_id": item, "tool": "run" }));
+        // No header: 426, before the grant is even looked up.
+        for item in [ask, Uuid::new_v4()] {
+            let (s, r) = raw(
+                &app,
+                Some(&token),
+                Method::POST,
+                "/agent/requests",
+                use_of(item),
+            )
+            .await;
+            assert_eq!(s, StatusCode::UPGRADE_REQUIRED, "{r}");
+            assert_eq!(r, json!({ "error": OUTDATED, "code": "mcp_outdated" }));
+        }
+        assert_eq!(
+            r#"This OTPilot MCP is out of date. Restart your AI agent so it runs the latest @otpilot/mcp (npx -y @otpilot/mcp@latest), then try again."#,
+            OUTDATED
+        );
+        // Asking for an account is always fine.
+        let (s, _) = raw(
+            &app,
+            Some(&token),
+            Method::POST,
+            "/agent/requests",
+            Some(json!({ "query": "github" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        // With the header: not granted 404, then used up 402 (nothing asked).
+        let (s, _) = mcp(
+            &app,
+            &token,
+            Method::POST,
+            "/agent/requests",
+            use_of(Uuid::new_v4()),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        set_uses(&db.pool, ana, THIS_MONTH, 10).await;
+        let (s, r) = mcp(&app, &token, Method::POST, "/agent/requests", use_of(ask)).await;
+        assert_eq!(s, StatusCode::PAYMENT_REQUIRED, "{r}");
+        assert_eq!(r["code"], "agent_uses_exhausted");
+        let asked: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_requests WHERE agent_id = $1 AND item_id IS NOT NULL",
+        )
+        .bind(agent)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(asked, 0);
+        set_uses(&db.pool, ana, THIS_MONTH, 9).await;
+        let (s, _) = mcp(&app, &token, Method::POST, "/agent/requests", use_of(ask)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(uses(&db.pool, ana).await, 9, "asking counts nothing");
     }
 
     #[tokio::test]

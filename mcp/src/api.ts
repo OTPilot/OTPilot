@@ -1,9 +1,22 @@
+import { createRequire } from 'node:module'
 // The OTPilot API, as an agent (bearer token) or before it has one (pairing).
 export const DEFAULT_API_URL = 'https://api.otpilot.app'
+
+// From package.json, so --version, the MCP handshake and the API header always match the release.
+export const VERSION: string = createRequire(import.meta.url)('../package.json').version
+
+/** Sent on every call: the API knows this MCP opens copies with POST /agent/grants/open. */
+export const MCP_HEADER = 'x-otpilot-mcp'
 
 export class ApiError extends Error {
   constructor(public status: number, public body: unknown) {
     super(typeof body === 'object' && body && 'error' in body ? String((body as { error: unknown }).error) : `HTTP ${status}`)
+  }
+
+  /** The API's machine-readable error code (agent_uses_exhausted, mcp_outdated, not_granted…), if any. */
+  get code(): string | undefined {
+    const b = this.body as { code?: unknown } | null
+    return typeof b?.code === 'string' ? b.code : undefined
   }
 }
 
@@ -17,6 +30,7 @@ export class Api {
       headers: {
         'content-type': 'application/json',
         'user-agent': 'otpilot-mcp',
+        [MCP_HEADER]: VERSION,
         ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),

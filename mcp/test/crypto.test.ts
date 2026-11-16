@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { agentCode } from '../src/code.js'
 import { generateKeyPair } from '../src/ecies.js'
-import { fieldValue, findGrant, loadGrants } from '../src/grants.js'
-import { FakeApi, grantRow, loginItem } from './helpers.js'
+import { fieldValue, findGrant, loadGrants, openGrants } from '../src/grants.js'
+import { FakeApi, grantRow, loginItem, openFrom } from './helpers.js'
 
 describe('verification code', () => {
   it('matches the shared vector (web/src/lib/agentCode.ts, extension/agents.js)', () => {
@@ -16,11 +16,12 @@ describe('grants', () => {
     const keys = await generateKeyPair()
     const item = loginItem()
     const row = await grantRow(item, keys.publicKey, { commands: ['psql'] })
-    const api = new FakeApi((m, p) => (p === '/agent/grants' ? { body: { grants: [row] } } : undefined))
+    const api = new FakeApi((m, p, b) => (p === '/agent/grants' ? { body: { grants: [row] } } : p === '/agent/grants/open' ? openFrom([row], b) : undefined))
     const [g] = await loadGrants(api, keys.privateJwk)
     expect(g.title).toBe('Staging')
     expect(g.commands).toEqual(['psql'])
-    expect(await fieldValue(g.item!, 'password')).toBe('hunter2-secret')
+    const { items } = await openGrants(api, keys.privateJwk, [g], 'run', '')
+    expect(await fieldValue(items.get(g.itemId)!, 'password')).toBe('hunter2-secret')
   })
 
   it('names an ask-every-time grant from its label while its values are held back', async () => {
@@ -28,7 +29,7 @@ describe('grants', () => {
     const row = await grantRow(loginItem({ title: 'Bank' }), keys.publicKey, { askEveryTime: true, withheld: true })
     const api = new FakeApi((m, p) => (p === '/agent/grants' ? { body: { grants: [row] } } : undefined))
     const [g] = await loadGrants(api, keys.privateJwk)
-    expect([g.title, g.item, g.askEveryTime]).toEqual(['Bank', null, true])
+    expect([g.title, g.askEveryTime]).toEqual(['Bank', true])
   })
 
   it('skips a grant wrapped to another key', async () => {
@@ -59,12 +60,13 @@ describe('grants', () => {
       ],
     })
     const row = await grantRow(wallet, keys.publicKey)
-    const api = new FakeApi((m, p) => (p === '/agent/grants' ? { body: { grants: [row] } } : undefined))
+    const api = new FakeApi((m, p, b) => (p === '/agent/grants' ? { body: { grants: [row] } } : p === '/agent/grants/open' ? openFrom([row], b) : undefined))
     const [g] = await loadGrants(api, keys.privateJwk)
-    expect(g.item!.fields.map(f => f.id)).toEqual(['wallet', 'addr-1'])
-    expect(await fieldValue(g.item!, 'Solana')).toBe('7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV')
-    await expect(fieldValue(g.item!, 'seed')).rejects.toThrow(/never available to agents/)
-    await expect(fieldValue(g.item!, 'Recovery phrase')).rejects.toThrow(/never available to agents/)
+    const opened = (await openGrants(api, keys.privateJwk, [g], 'run', '')).items.get(g.itemId)!
+    expect(opened.fields.map(f => f.id)).toEqual(['wallet', 'addr-1'])
+    expect(await fieldValue(opened, 'Solana')).toBe('7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV')
+    await expect(fieldValue(opened, 'seed')).rejects.toThrow(/never available to agents/)
+    await expect(fieldValue(opened, 'Recovery phrase')).rejects.toThrow(/never available to agents/)
     await expect(fieldValue(wallet, 'private key')).rejects.toThrow(/never available to agents/)
   })
 

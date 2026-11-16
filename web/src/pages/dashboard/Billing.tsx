@@ -86,7 +86,7 @@ export default function Billing() {
 
   const freePlanFeatures = [
     'Unlimited 2FA codes',
-    'Up to 50 passwords & notes',
+    'Unlimited passwords & notes',
     'Auto-fill on any site',
     'Auto-detect 2FA setup',
     'Email code auto-fill',
@@ -97,7 +97,7 @@ export default function Billing() {
 
   const personalFeatures = [
     'Everything in Free',
-    'Unlimited passwords & notes',
+    'Unlimited AI agent uses',
     'End-to-end encrypted sync',
     'Multi-device, multi-browser',
     'Cloud backup',
@@ -189,6 +189,8 @@ export default function Billing() {
         />
 
       </div>
+
+      <p className="text-xs text-zinc-500">Free includes 10 AI agent uses a month. Personal removes that limit.</p>
 
       {isOwner && (
         <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

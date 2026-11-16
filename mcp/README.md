@@ -60,11 +60,20 @@ With no keychain (a bare Linux box) the credentials go to `~/.config/otpilot/mcp
 
 No tool returns a password, a 2FA code or any other value.
 
+## Plans
+
+- **Free:** one connected agent, any number of accounts, and **10 uses a month** (UTC; they renew on the 1st, unused ones don't carry over). A use is one `browser_login` or one `run` call, however many accounts it uses. `list_accounts`, `request_access` and `check_request` never count; `list_accounts` says how many uses are left. When they run out, the tools answer with the date they renew and a link to upgrade, and the agent should tell you. A `run` with a wrong field name (a custom field's label that doesn't exist) still counts as a use, because the name can only be checked once the account is open: use the field names the user gave you.
+- **Personal, Team, and the 30-day Personal trial:** unlimited agents and uses.
+
+The limit is a meter, counted where OTPilot's server hands an account's encrypted copy to the MCP (`POST /agent/grants/open`, once per tool call; a retry of the same call isn't counted twice). It's not a security boundary: this MCP is open source, and a modified one could keep the copies it opened. What protects your accounts is what you allow each agent (above), not the count.
+
+The MCP sends its version on every call (`x-otpilot-mcp`). An older MCP (0.2.0 and before) on the Free plan is told to update: restart the agent so `npx -y @otpilot/mcp@latest` fetches the current one. (Releases: the API goes out first, then this package.)
+
 ## Security
 
 - **The agent's own key.** `connect` creates an ECDH P-256 keypair; the private key stays in your OS keychain. Each account you allow is a copy, holding only what you chose (just the 2FA code, the sign-in, or chosen fields), encrypted for that key in the extension. OTPilot's servers only see ciphertext.
 - **Two approvals.** Connecting an agent gives it nothing; each account is allowed per agent. The verification code is derived from the agent's public key on every side, so a swapped key shows a different code.
-- **Limits you set:** for a while or until revoked, "ask me every time", and "only with these commands": `run` then accepts only that program, called by name and resolved on the server's PATH (never from the working or temp directory), as a single command with no chaining or redirection — a guard against mistakes and simple tricks, not against an agent that can plant its own binary on your PATH.
+- **Limits you set:** for a while or until revoked, "ask me every time", and "only with these commands": `run` then accepts only that program, called by name and resolved on the server's PATH (never from the working or temp directory), as a single command with no chaining or redirection — a guard against mistakes and simple tricks, not against an agent that can plant its own binary on your PATH. One call can wait for at most 10 "ask me every time" approvals: a command using more is refused before anything is asked. One call can also use at most 20 accounts in all (the server's limit): a command using more is refused the same way.
 - **Only over HTTPS** (plain HTTP just for local hosts), and every secret is scrubbed from what comes back — before the output is cut, so none is left half-removed. A timeout kills the command and everything it started.
 - **Only on the right site.** `browser_login` fills only on pages the account's saved sites cover.
 - **Activity and revoke** in the extension's Agents view.

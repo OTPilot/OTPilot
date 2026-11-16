@@ -5,7 +5,7 @@ import Footer from '../components/Footer'
 import AgentTerminal from '../components/AgentTerminal'
 import AgentSetup from '../components/AgentSetup'
 import { CHROME_STORE_URL } from '../lib/browser'
-import { FREE_AGENTS, FREE_AGENT_ACCOUNTS } from '../lib/agents'
+import { FREE_AGENTS, FREE_AGENT_USES } from '../lib/agents'
 
 // The 2.1 feature page: OTPilot for AI agents. Every claim here must match
 // what the extension + the OTPilot MCP server do — check before adding one.
@@ -112,7 +112,7 @@ const faq = [
   },
   {
     q: 'What does it cost?',
-    a: `It's included in every plan. Free connects ${FREE_AGENTS} agent with up to ${FREE_AGENT_ACCOUNTS} accounts; Personal and Team have no limit on agents or accounts.`,
+    a: `It's included in every plan. Free connects ${FREE_AGENTS} agent with as many accounts as you like and ${FREE_AGENT_USES} uses a month (a use is one browser_login or one run); Personal and Team have no limit on uses.`,
   },
   {
     q: 'What if my agent is compromised?',
@@ -301,7 +301,8 @@ export default function AiAgents() {
               <p className="text-3xl font-bold text-white mb-5">$0</p>
               <ul className="space-y-2.5 text-sm text-zinc-300">
                 <li className="flex gap-2.5"><Check />{FREE_AGENTS} connected agent</li>
-                <li className="flex gap-2.5"><Check />Up to {FREE_AGENT_ACCOUNTS} accounts for it</li>
+                <li className="flex gap-2.5"><Check />As many accounts as you like</li>
+                <li className="flex gap-2.5"><Check />{FREE_AGENT_USES} uses a month</li>
                 <li className="flex gap-2.5"><Check />Passwords and 2FA codes</li>
                 <li className="flex gap-2.5"><Check />Activity log and revoke</li>
               </ul>

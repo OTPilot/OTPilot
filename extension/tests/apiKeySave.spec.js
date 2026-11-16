@@ -222,14 +222,12 @@ test('no logins, masked key, docs page: no link line / no offer', async ({ conte
   expect(await card.count('.otpilot-apikey-link')).toBe(0);
 });
 
-test('Never stores the host; Free limit disables Save; locked shows unlock frame', async ({ context, extensionId }) => {
-  const full = Array.from({ length: 50 }, (_, i) => ({ name: `S${i}`, email: '', secret: '', urls: `s${i}.example`, password: 'x' }));
-  const popup = await vaultWith(context, extensionId, full, { userPlan: 'free' });
+test('Never stores the host', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
   const s = await site(context, html(KEY));
   const card = cardOf(s);
   await s.click('#create');
-  await expect.poll(() => card.text('.otpilot-save-limit')).toContain('50 items');
-  expect(await card.prop('.otpilot-apikey-save', 'disabled')).toBe(true);
+  await expect.poll(() => card.count('.otpilot-apikey-never')).toBe(1);
   await card.click('.otpilot-apikey-never');
   await expect.poll(() => popup.evaluate(async () => (await chrome.storage.local.get('apiKeyNeverSave')).apiKeyNeverSave)).toEqual(['localhost']);
   const s2 = await site(context, html(KEY));
@@ -778,7 +776,7 @@ test('a site with an API credential: Save as new by default; "Replace the key in
   expect([api[0].id, api[0].title, fieldOf(api[0], 'apiKey'), api[0].passwordHistory?.[0]?.value]).toEqual([id, 'Prod key (secret name)', KEY, OLD]);
 });
 
-test('Save as new (the default) beside an existing credential adds a second one; a client-secret credential gets its secret replaced; Free limit never blocks a replace', async ({ context, extensionId }) => {
+test('Save as new (the default) beside an existing credential adds a second one; a client-secret credential gets its secret replaced, past 50 items on Free', async ({ context, extensionId }) => {
   const popup = await vaultWith(context, extensionId, []);
   await withApiItem(popup, { title: 'Other', apiKey: 'sk-proj-' + 'Zz9yXx8wWv7uUt6sSr5qQp4oOn3mMl2kKj1iIh0gGf9eEd8cCb7aZZ' });
   const s = await site(context, html(KEY));
@@ -788,7 +786,7 @@ test('Save as new (the default) beside an existing credential adds a second one;
   await card.click('.otpilot-apikey-save');
   await expect.poll(async () => (await apiItems(popup)).length).toBe(2);
 
-  // Free vault full: a replace still works (no new item).
+  // A Free vault past 50 items: a replace works (no new item).
   const popup2 = await vaultWith(context, extensionId, [], { userPlan: 'free' });
   await popup2.evaluate(async () => {
     const key = await VaultKeys.getKey();
@@ -798,8 +796,8 @@ test('Save as new (the default) beside an existing credential adds a second one;
   const s2 = await site(context, html(KEY));
   const c2 = cardOf(s2);
   await s2.click('#create');
-  await expect.poll(() => c2.count('.otpilot-save-limit')).toBe(1);
-  expect(await c2.prop('.otpilot-apikey-save', 'disabled')).toBe(true);
+  await expect.poll(() => c2.count('.otpilot-apikey-save')).toBe(1);
+  expect(await c2.count('.otpilot-save-limit')).toBe(0);
   await pickTarget(s2, c2);
   await expect.poll(() => c2.prop('.otpilot-apikey-save', 'disabled')).toBe(false);
   await c2.click('.otpilot-apikey-save');

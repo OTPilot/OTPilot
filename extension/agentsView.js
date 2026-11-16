@@ -48,7 +48,7 @@ function durationToIso(v) {
 // The agent's error, said plainly (the Free limit, mostly).
 function agentError(e) {
   const msg = e?.body?.error || e?.message || '';
-  if (/free plan limit/.test(msg)) return 'The free plan lets one agent use up to 3 accounts. Personal removes the limit.';
+  if (/free plan limit/.test(msg)) return 'The free plan allows one connected agent. Disconnect it first, or upgrade to Personal.';
   if (e?.status === 404) return 'This is no longer there. It may have expired, or been answered elsewhere.';
   if (/expired/.test(msg)) return 'This request has expired. Ask the agent to try again.';
   return msg || 'Could not reach OTPilot. Try again.';
@@ -155,17 +155,52 @@ async function renderAgentsPanel(fresh = null) {
   }
 }
 
+// Free plan: the monthly agent uses (usage is null / missing on paid, a trial
+// or signed out: nothing to show).
 function renderAgentsLimit() {
   const el = document.getElementById('agents-limit');
-  const lim = _agentsData.limits;
-  if (!lim?.items) { el.innerHTML = ''; return; }
-  const used = _agentsData.agents.reduce((n, a) => n + a.grants.length, 0);
-  el.innerHTML = `<div class="ag-limit">
-    <span><b>Free plan</b> · ${lim.agents} agent · ${lim.items} accounts</span>
-    <div class="ag-meter"><i style="width:${Math.min(100, Math.round((used / lim.items) * 100))}%"></i></div>
-    <span style="color:var(--ink-4)">${used} of ${lim.items} accounts used</span>
-    <a class="ag-btn sm primary" style="text-align:center;text-decoration:none" target="_blank" href="${esc(CONFIG.DASHBOARD_URL)}/dashboard/billing">Unlimited with Personal</a>
+  const u = _agentsData?.usage;
+  if (!u || !Number.isFinite(u.limit) || u.limit <= 0) { el.innerHTML = ''; return; }
+  const limit = u.limit;
+  const used = Math.max(0, Math.min(Number(u.used) || 0, limit));
+  const d = new Date(u.resets_at);
+  const renews = isNaN(d) ? 'next month' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const full = used >= limit;
+  const text = `${used} of ${limit} uses this month`;
+  const meter = `<div class="ag-meter${used >= 8 && !full ? ' warn' : ''}" role="meter" aria-valuemin="0" aria-valuemax="${limit}" aria-valuenow="${used}" aria-valuetext="${esc(text)}" aria-label="Agent uses this month"><i style="width:${Math.round((used / limit) * 100)}%"></i></div>`;
+  const billing = `${CONFIG.DASHBOARD_URL}/dashboard/billing`;
+  const upgrade = cls => `<a class="ag-btn sm${cls}" style="text-align:center;text-decoration:none" target="_blank" rel="noopener" href="${esc(billing)}">Upgrade to Personal</a>`;
+  if (!full) {
+    el.innerHTML = `<div class="ag-limit" role="group" aria-label="Agent uses">
+      <span><b>Free plan</b> · ${esc(text)}</span>${meter}
+      <span style="color:var(--ink-3, var(--ink-4))">Renews ${esc(renews)}</span>
+    </div>`;
+    return;
+  }
+  el.innerHTML = `<div class="ag-limit" role="group" aria-label="Agent uses">
+    <span><b>Free plan</b> · ${esc(text)}</span>${meter}
+    <span aria-live="polite" class="ag-limit-msg">Agents can still list accounts and ask for access, but can't sign in or run commands until ${esc(renews)}.</span>
+    ${u.trial_available ? '<button class="ag-btn sm primary" id="agents-trial" style="width:100%">Start free trial</button>' : upgrade(' primary')}
+    <span style="color:var(--ink-3, var(--ink-4))">Renews ${esc(renews)}</span>
   </div>`;
+  const btn = el.querySelector('#agents-trial');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Starting…';
+    try {
+      await CloudSync.startTrial();
+      _agentsData = await Agents.list();
+      renderAgentsLimit();
+    } catch {
+      btn.disabled = false;
+      btn.textContent = 'Start free trial';
+      const msg = el.querySelector('.ag-limit-msg');
+      if (msg && !el.querySelector('.ag-trial-err')) {
+        msg.insertAdjacentHTML('afterend', `<span class="ag-trial-err" role="alert" style="color:var(--danger, #c94f3f)">Could not start the trial. Try again, or upgrade to Personal.</span>${upgrade('')}`);
+      }
+    }
+  });
 }
 
 function renderAgentConnectHelp(detail) {
@@ -578,6 +613,8 @@ if (AGENTS_WINDOW) chrome.runtime.onMessage.addListener(msg => {
 const agentsShape = d => JSON.stringify([
   (d?.agents || []).map(a => [a.id, a.status, a.name, a.client, a.grants.map(g => [g.item_id, g.revision, g.expires_at, g.ask_every_time])]),
   (d?.requests || []).map(r => r.id),
+  d?.usage ? [d.usage.used, d.usage.limit, d.usage.trial_available, d.usage.resets_at] : null,
+  d?.limits ? [d.limits.agents, d.limits.uses] : null,
   (d?.activity || []).slice(0, 8).map(u => u.id ?? u.created_at),
 ]);
 const agentsBusy = panel => panel.querySelector('.ag-adding:not(:empty), .ag-grant:not(:empty), .ag-rename')

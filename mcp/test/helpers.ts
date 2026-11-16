@@ -36,6 +36,20 @@ export async function grantRow(item: VaultItem, agentPub: string, opts: { scope?
 
 type Handler = (method: string, path: string, body: any) => { status?: number; body: unknown } | undefined
 
+/**
+ * POST /agent/grants/open as the API answers it from `rows` (the grants with
+ * their copies; a withheld record = an "ask every time" grant not approved):
+ * exactly the ids asked, all or nothing.
+ */
+export function openFrom(rows: { item_id: string; record: unknown }[], body: { item_ids: string[] }, usage: unknown = null) {
+  const asked = rows.filter(r => body.item_ids.includes(r.item_id))
+  const missing = body.item_ids.filter(id => !rows.some(r => r.item_id === id))
+  if (missing.length) return { status: 404, body: { error: 'not allowed', code: 'not_granted', item_ids: missing } }
+  const held = asked.filter(r => !r.record)
+  if (held.length) return { status: 409, body: { error: 'needs approval', code: 'approval_needed', item_ids: held.map(r => r.item_id) } }
+  return { body: { grants: asked, usage } }
+}
+
 /** An Api answered by `handler` (no network); `calls` records what was asked. */
 export class FakeApi extends Api {
   calls: string[] = []

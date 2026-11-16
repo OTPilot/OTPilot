@@ -45,7 +45,7 @@ const features: { id?: string; icon: ReactNode; title: string; description: stri
       </svg>
     ),
     title: 'Works locally, always',
-    description: 'Free covers unlimited 2FA codes and 50 passwords or notes, works offline. Import from your old password manager in a click.',
+    description: 'Free covers unlimited 2FA codes, passwords and notes, works offline. Import from your old password manager in a click.',
     accent: 'from-violet-400/10 to-violet-400/5',
     border: 'border-violet-500/10',
     iconBg: 'bg-violet-500/10 text-violet-400',
