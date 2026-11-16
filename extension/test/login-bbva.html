@@ -18,8 +18,11 @@
        handler, with no submit event: counts its calls in window.__calls),
        ?btn=fetch (the same, but its handler only posts with fetch: no DOM
        change, no submit event; the page first fills its resource-timing buffer
-       with 260 requests, then sets window.__ready), &pinLabel= (?trap=pin's
-       label, default "PIN"). -->
+       with 260 requests, then sets window.__ready), ?btn=slow (the same, its
+       fetch to slow-signin answered late by the test: nothing shows it worked
+       for seconds), ?stale=number | username (that field's component puts a
+       stale value back after a change), &pinLabel= (?trap=pin's label,
+       default "PIN"). -->
   <h1>Acceso</h1>
   <form name="login">
     <x-select name="documentType" label="Tipo de documento">
@@ -90,6 +93,14 @@
           window.__calls++;
           document.getElementById('result').textContent = JSON.stringify(Object.fromEntries(new FormData(form)));
         });
+      } else if (params.get('btn') === 'slow') {
+        // A slow sign-in: the request takes seconds, nothing changes meanwhile.
+        window.__calls = 0;
+        this.addEventListener('click', () => {
+          window.__calls++;
+          window.__sent = Object.fromEntries(new FormData(form));
+          fetch(`slow-signin?n=${window.__calls}`, { cache: 'no-store' }).catch(() => null);
+        });
       } else if (params.get('btn') === 'fetch') {
         // Signs in with fetch only: nothing on the page changes.
         window.__calls = 0;
@@ -107,6 +118,14 @@
 
   if (params.get('clearOnType')) {
     form.elements.documentType.addEventListener('change', () => { form.elements.documentNumber.value = ''; });
+  }
+
+  // A controlled component whose state didn't take the fill: it puts its
+  // previous (stale, non-empty) value back.
+  const stale = { number: ['documentNumber', '11112222'], username: ['username', 'user-stale'] }[params.get('stale')];
+  if (stale) {
+    const el = form.elements[stale[0]];
+    el.addEventListener('change', () => setTimeout(() => { el.value = stale[1]; }, 50));
   }
 
   // Tricks a page could play against extra-field filling.

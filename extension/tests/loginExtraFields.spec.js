@@ -117,6 +117,20 @@ test('BBVA: a select component that puts its own value back is not signed in; th
   await expect(result(site)).toHaveText('');
 });
 
+for (const [stale, label] of [['number', 'Número de documento'], ['username', 'Usuario']]) {
+  test(`BBVA: a component that puts a stale ${stale} back is not signed in; the toast names the field, never a value`, async ({ context, extensionId }) => {
+    await vaultWith(context, extensionId, [bbva]);
+    const site = await context.newPage();
+    await site.goto(`${SITE}/login-bbva.html?stale=${stale}`);
+    await pick(site);
+    const toast = site.getByText(`Check ${label} before signing in`);
+    await expect(toast).toBeVisible();
+    for (const secret of ['12345678', 'user-77', 'clave-1', '11112222', 'user-stale']) expect(await toast.textContent()).not.toContain(secret);
+    await site.waitForTimeout(1500);
+    await expect(result(site)).toHaveText('');
+  });
+}
+
 test('BBVA: a page that clears the number when the type changes still gets the number', async ({ context, extensionId }) => {
   await vaultWith(context, extensionId, [bbva]);
   const site = await context.newPage();
@@ -181,6 +195,69 @@ test('the same sign-in with unchanged extras gets no offer; a changed number is 
   const [login] = await logins(popup);
   expect(login.password).toBe('clave-1');
   expect(login.fields[1].fill).toEqual(NUMBER_FILL);
+});
+
+test('a saved document type switched back to the default (DNI) is an update; without a saved one the default adds no field', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [bbva, {
+    name: 'Other', email: 'user-99', secret: '', urls: 'localhost', password: 'clave-9',
+    customFields: [{ label: 'Número de documento', value: '999', kind: 'hidden', fill: NUMBER_FILL }],
+  }]);
+  const site = await context.newPage();
+  const signIn = async (user, password, number) => {
+    await site.goto(`${SITE}/login-bbva.html?spa=1`);
+    await site.fill('input[name="documentNumber"]', number); // type left on DNI
+    await site.fill('input[name="username"]', user);
+    await site.fill('input[name="password"]', password);
+    await site.click('x-button');
+    await expect(site.locator('h1')).toHaveText('Panel');
+  };
+  await signIn('user-77', 'clave-1', '12345678');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update BBVA?');
+  await expect(offer.locator('.otpilot-save-extras')).toHaveText('Saves: Tipo de documento');
+  await offer.getByRole('button', { name: 'Update' }).click();
+  const fieldsOf = async name => (await logins(popup)).find(l => l.username === name)?.fields;
+  await expect.poll(() => fieldsOf('user-77')).toEqual([
+    { label: 'Tipo de documento', value: 'DNI', kind: 'text', fill: SELECT_FILL },
+    { label: 'Número de documento', value: '12345678', kind: 'hidden', fill: NUMBER_FILL },
+  ]);
+
+  // A login that never saved a document type: DNI adds nothing, no offer.
+  await signIn('user-99', 'clave-9', '999');
+  await site.waitForTimeout(1500);
+  await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
+  expect(await fieldsOf('user-99')).toEqual([{ label: 'Número de documento', value: '999', kind: 'hidden', fill: NUMBER_FILL }]);
+});
+
+test('an extras update keeps a field a sync added between the offer and the write', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [bbva]);
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker');
+  // A sync lands right before the background writes: after it planned the
+  // update from the item it read.
+  await worker.evaluate(() => {
+    const update = VaultAccounts.update;
+    VaultAccounts.update = async (id, expected, patch, key) => {
+      const item = await VaultStore.get(id, key);
+      item.fields.push({ id: 'c-synced', label: 'Synced note', value: 'from another device', kind: 'text', custom: true });
+      item.updatedAt = new Date().toISOString();
+      await VaultStore.save([item], key);
+      return update(id, expected, patch, key);
+    };
+  });
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-bbva.html?spa=1`);
+  await site.selectOption('select[name="documentType"]', { label: 'LE' }, { force: true });
+  await site.fill('input[name="documentNumber"]', '87654321');
+  await site.fill('input[name="username"]', 'user-77');
+  await site.fill('input[name="password"]', 'clave-1');
+  await site.click('x-button');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update BBVA?');
+  await offer.getByRole('button', { name: 'Update' }).click();
+  await expect.poll(async () => (await logins(popup))[0].fields.map(f => [f.label, f.value])).toEqual([
+    ['Tipo de documento', 'LE'], ['Número de documento', '87654321'], ['Synced note', 'from another device'],
+  ]);
 });
 
 // ── Plain bank form, two-step ────────────────────────────────────────────────
@@ -444,6 +521,23 @@ test('BBVA: a button whose handler only posts with fetch, on a page whose resour
     documentType: '02', documentNumber: '12345678', username: 'user-77', password: 'clave-1',
   });
   await site.waitForTimeout(2000);
+  expect(await site.evaluate(() => window.__calls)).toBe(1);
+});
+
+test('BBVA: a slow sign-in (its request answers after 2 s, nothing changes meanwhile) is clicked once', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [bbva]);
+  const site = await context.newPage();
+  await site.route('**/slow-signin*', async route => {
+    await new Promise(r => setTimeout(r, 2000));
+    await route.fulfill({ status: 200, body: 'ok' });
+  });
+  await site.goto(`${SITE}/login-bbva.html?btn=slow`);
+  await pick(site);
+  await expect.poll(() => site.evaluate(() => window.__calls), { timeout: 5000 }).toBe(1);
+  expect(await site.evaluate(() => window.__sent)).toEqual({
+    documentType: '02', documentNumber: '12345678', username: 'user-77', password: 'clave-1',
+  });
+  await site.waitForTimeout(3000);
   expect(await site.evaluate(() => window.__calls)).toBe(1);
 });
 

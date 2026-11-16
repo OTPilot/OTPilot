@@ -404,6 +404,9 @@ const VaultAccounts = (() => {
 
   // Updates one account if it still matches `expected` (the v1 fields the
   // caller saw). Returns false if it changed or disappeared meanwhile.
+  // `patch` may be a function of the stored item, called under the lock: a
+  // patch built from the item as it is now (a sync may have changed it since
+  // the caller read it).
   async function update(id, expected, patch, key) {
     const ok = await locked(key, async (tx, { items }) => {
       const item = items.find(i => i.id === id);
@@ -411,7 +414,8 @@ const VaultAccounts = (() => {
       const current = toAccount(item);
       const same = ['name', 'secret', 'urls', 'email'].every(k => (current[k] ?? '') === (expected[k] ?? ''));
       if (!same) return false;
-      const next = applyAccount(item, { ...current, ...patch }, item.position ?? 0);
+      const changes = typeof patch === 'function' ? patch(item) : patch;
+      const next = applyAccount(item, { ...current, ...changes }, item.position ?? 0);
       next.updatedAt = new Date().toISOString();
       await putItems(tx, [next], key);
       return true;

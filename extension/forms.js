@@ -279,7 +279,7 @@
     let done;
     try {
       done = await fillExtras(targets, res.extras);
-      if (fields.username && res.username) { fillInputValue(fields.username, res.username); done.push(filledCheck(fields.username, 'the username')); }
+      if (fields.username && res.username) { fillInputValue(fields.username, res.username); done.push(filledCheck(fields.username, res.username, 'your username', { username: true })); }
       // No password saved: the field is emptied (never another account's
       // password beside this username) and focused for the user to type it
       // — OTPilot offers to add it to this login afterwards. Still filling:
@@ -291,7 +291,7 @@
         fields.password.focus();
         return;
       }
-      if (fields.password) { fillInputValue(fields.password, res.password); done.push(filledCheck(fields.password, 'the password')); }
+      if (fields.password) { fillInputValue(fields.password, res.password); done.push(filledCheck(fields.password, res.password, 'your password')); }
     } finally { _filling = false; }
     if (autoLogin !== false) {
       if (fields.password) submitAfterFill(fields.password, passwordButtonFor, done);
@@ -415,9 +415,7 @@
       || masked[masked.length - 1] || before[before.length - 1];
     const fields = { username: usernameEl?.value || '', password: password.value };
     if (!isNewPassword(password)) {
-      const extras = extraFields(password, usernameEl, { filled: true }).map(({ el, desc, label }) => ({
-        label, value: controlValue(el), kind: desc.tag === 'select' ? 'text' : 'hidden', fill: desc,
-      }));
+      const extras = extraFields(password, usernameEl, { filled: true }).map(extraOf);
       if (extras.length) fields.extras = extras;
     }
     return fields;
@@ -509,10 +507,11 @@
   }
 
   // The extra controls around a sign-in's `anchor` (its password field, or a
-  // username step's field): `filled` — the ones the user filled, to save (a
-  // select only off its default) —, else the empty ones, to fill (≤ 20).
-  // More than 8 filled is no sign-in (a checkout, a profile form): none is
-  // saved. Never the username or a password, a hidden field, a checkbox, a
+  // username step's field): `filled` — the ones the user filled, to save; a
+  // select on its default option comes `atDefault` (the background only
+  // takes it to put a saved field back to the default) —, else the empty
+  // ones, to fill (≤ 20). More than 8 filled (defaults not counted) is no
+  // sign-in (a checkout, a profile form): none is saved. Never the username or a password, a hidden field, a checkbox, a
   // radio, a search box, a code / token / captcha, payment data or a
   // framework's own field; in a form, only that form's own controls. A
   // control slotted into a component is filled only while that component
@@ -522,6 +521,7 @@
     const scope = extrasScope(anchor, username);
     if (!scope) return [];
     const out = [];
+    let changed = 0;
     for (const el of scope.querySelectorAll('input, select')) {
       if (el === anchor || el === username) continue;
       if (anchor.form && el.form !== anchor.form) continue;
@@ -536,13 +536,20 @@
         || /security\s*code/i.test(label) || isPaymentControl(el, label)) continue;
       if (filled) {
         const value = controlValue(el);
-        if (!value || value.length > 256 || /[\r\n]/.test(value) || (select && atDefault(el))) continue;
+        if (!value || value.length > 256 || /[\r\n]/.test(value)) continue;
       } else if (select ? !atDefault(el) : el.value !== '') continue;
-      out.push({ el, desc: descOf(el, label), label });
-      if (filled ? out.length > 8 : out.length >= 20) break;
+      const entry = { el, desc: descOf(el, label), label };
+      if (filled && select && atDefault(el)) entry.atDefault = true;
+      else changed++;
+      out.push(entry);
+      if ((filled && changed > 8) || out.length >= 20) break;
     }
-    return filled && out.length > 8 ? [] : out;
+    return filled && changed > 8 ? [] : out;
   }
+  // A captured extra, as the background takes it.
+  const extraOf = ({ el, desc, label, atDefault: def }) => ({
+    label, value: controlValue(el), kind: desc.tag === 'select' ? 'text' : 'hidden', fill: desc, ...(def ? { atDefault: true } : {}),
+  });
 
   // Picks the option reading `text` (its text, else its value). Never
   // fillInputValue on a select (an input's setter). → false: no such option.
@@ -584,12 +591,28 @@
     if (selects.length) await twoFrames();
     for (const { el, label, value } of list.filter(t => !(t.el instanceof HTMLSelectElement))) {
       fillInputValue(el, value);
-      done.push({ el, label, ok: () => el.isConnected && el.value !== '' });
+      done.push({ el, label, ok: () => el.isConnected && reads(el, value) });
     }
     return done;
   }
-  // A filled username / password field, for the same check.
-  const filledCheck = (el, label) => ({ el, label: controlLabel(el) || label, ok: () => el.isConnected && el.value !== '' });
+  // The control still holds exactly what OTPilot put there: a component
+  // that puts a stale value back fails it, not only one that empties it.
+  // (A number field compares trimmed.)
+  const reads = (el, value) => (el.type === 'number' ? el.value.trim() === String(value).trim() : el.value === value);
+  // A filled username / password field, for the same check: `value` is what
+  // was filled. A username compares trimmed (an email field drops the
+  // spaces), and `loose` in any case too (the site's own spelling of the
+  // same one may stay, putUsername). The toast names the field, never its
+  // value.
+  const filledCheck = (el, value, label, { username = false, loose = false } = {}) => ({
+    el, label: controlLabel(el) || label,
+    ok: () => {
+      if (!el.isConnected) return false;
+      if (!username) return el.value === value;
+      const norm = v => (loose ? String(v).trim().toLowerCase() : String(v).trim());
+      return norm(el.value) === norm(value);
+    },
+  });
 
   // Only duplicate events of one submission (click + submit + Enter) are
   // collapsed: the same credentials submitted again later are a new attempt.
@@ -634,7 +657,7 @@
     if (filled.some(f => f !== el && !extras.some(x => x.el === f))) return null;
     return {
       username: el.value.trim(),
-      extras: extras.map(({ el: x, desc, label }) => ({ label, value: controlValue(x), kind: desc.tag === 'select' ? 'text' : 'hidden', fill: desc })),
+      extras: extras.map(extraOf),
     };
   }
 
@@ -1207,8 +1230,9 @@
   // `findButton` runs when the click is due: the page may have replaced the
   // button while reacting to the fill.
   // `filled`: what this fill wrote ([{ el, label, ok() }]); re-read right
-  // before the click — one not filled, or that the page reverted, means the
-  // user checks it and signs in themselves.
+  // before the click — one not holding exactly what was filled (emptied, or
+  // a stale value the page put back) means the user checks it and signs in
+  // themselves.
   async function submitAfterFill(field, findButton, filled = []) {
     if (await isNoAutoSubmitHost(location.hostname.toLowerCase())) return;
     setTimeout(() => {
@@ -1216,74 +1240,27 @@
       const wrong = filled.find(f => !f.ok());
       if (wrong) { showToast(`Check ${wrong.label} before signing in`, false); return; }
       const button = field.isConnected ? findButton(field) : null;
-      if (button?.localName.includes('-')) clickComponentSubmit(button, filled);
+      if (button?.localName.includes('-')) componentSubmitTarget(button).click();
       else if (button) button.click();
       else if (field.form) field.form.requestSubmit?.();
     }, 300);
   }
 
-  // A web component's submit button (<bbva-button type=submit>): one click
-  // on it. A second sign-in must never follow, so the button in its (open)
-  // shadow root — its submit button, else its first — is clicked once more
-  // only when, a second later, nothing shows the first click did anything:
-  // no submit event, no page leaving (pagehide / beforeunload), no request
-  // the page completed (fetch / XHR resource entries, seen by a
-  // PerformanceObserver: the page's resource-timing buffer may be full,
-  // which drops new entries from getEntriesByType but not from observers;
-  // without PerformanceObserver there is no retry), no change to the
-  // page's light DOM outside our own UI, and the same form still there with
-  // what was filled still in it. At most one retry per fill: a newer fill
-  // drops a retry still waiting (`_componentClick`).
-  // Never requestSubmit() here: such a form may have no action and use GET,
-  // which would put the password in the URL.
-  let _componentClick = null;
-  const isOurNode = n => {
-    const el = n.nodeType === Node.ELEMENT_NODE ? n : n.parentElement;
-    return !!el && (el.id?.startsWith('otpilot-') || !!el.closest('[data-otpilot-ui]'));
-  };
-  const pageMutation = records => records.some(r => (r.type === 'childList'
-    ? [...r.addedNodes, ...r.removedNodes].some(n => !isOurNode(n))
-    : !isOurNode(r.target)));
-  function clickComponentSubmit(host, filled = []) {
-    const form = host.closest('form');
-    const attempt = { busy: false };
-    _componentClick = attempt;
-    const busy = () => { attempt.busy = true; };
-    const isRequest = e => e.initiatorType === 'fetch' || e.initiatorType === 'xmlhttprequest';
-    let requests = null;
-    try {
-      requests = new PerformanceObserver(list => { if (list.getEntries().some(isRequest)) busy(); });
-      requests.observe({ type: 'resource' });
-    } catch { requests = null; }
-    const watch = new MutationObserver(records => { if (pageMutation(records)) busy(); });
-    form?.addEventListener('submit', busy, true);
-    window.addEventListener('pagehide', busy, true);
-    window.addEventListener('beforeunload', busy, true);
-    const stop = () => {
-      watch.disconnect();
-      if (requests) {
-        if (requests.takeRecords().some(isRequest)) busy();
-        requests.disconnect();
-      }
-      form?.removeEventListener('submit', busy, true);
-      window.removeEventListener('pagehide', busy, true);
-      window.removeEventListener('beforeunload', busy, true);
-    };
-    watch.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
-    host.click();
-    if (!form) { stop(); return; }
-    setTimeout(() => {
-      if (pageMutation(watch.takeRecords())) busy();
-      stop();
-      if (_componentClick !== attempt) return; // a newer fill took over
-      _componentClick = null;
-      if (attempt.busy || !requests || !chrome.runtime?.id) return;
-      if (!form.isConnected || !host.isConnected || host.closest('form') !== form) return;
-      if (filled.some(f => !f.ok() || (!form.contains(f.el) && f.el.form !== form))) return;
-      const root = host.shadowRoot;
-      const inner = root?.querySelector('button[type="submit"], button:not([type])') || root?.querySelector('button');
-      if (inner) inner.click();
-    }, 1000);
+  // A web component's submit button (<bbva-button type=submit>): clicked
+  // exactly once, never a second time (a slow sign-in would run twice).
+  // What the user clicks: the button in its open shadow root — its submit
+  // button, else its only untyped button, else its only button —, otherwise
+  // the component itself. Never requestSubmit() here: such a form may have
+  // no action and use GET, which would put the password in the URL.
+  function componentSubmitTarget(host) {
+    const root = host.shadowRoot; // null when closed
+    if (!root) return host;
+    const submit = root.querySelector('button[type="submit"]');
+    if (submit) return submit;
+    const untyped = root.querySelectorAll('button:not([type])');
+    if (untyped.length === 1) return untyped[0];
+    const all = root.querySelectorAll('button');
+    return all.length === 1 ? all[0] : host;
   }
 
   async function continueLaunch() {
@@ -1301,9 +1278,9 @@
       let done;
       try {
         done = await fillExtras(targets, res.extras);
-        if (login.username && res.username) { putUsername(login.username, res.username); done.push(filledCheck(login.username, 'the username')); }
+        if (login.username && res.username) { putUsername(login.username, res.username); done.push(filledCheck(login.username, res.username, 'your username', { username: true, loose: true })); }
         fillInputValue(login.password, res.password);
-        done.push(filledCheck(login.password, 'the password'));
+        done.push(filledCheck(login.password, res.password, 'your password'));
       } finally { _filling = false; }
       submitAfterFill(login.password, passwordButtonFor, done);
       return;
@@ -1320,7 +1297,7 @@
       try {
         done = await fillExtras(targets, res.extras);
         putUsername(userField, res.username);
-        done.push(filledCheck(userField, 'the username'));
+        done.push(filledCheck(userField, res.username, 'your username', { username: true, loose: true }));
       } finally { _filling = false; }
       submitAfterFill(userField, signInButtonFor, done);
     }

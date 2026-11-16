@@ -297,11 +297,15 @@ const isPaymentExtra = (label, fill) => /(^|\s)cc-/.test(fill.ac || '')
   || PAYMENT_WORD.test(`${fill.name || ''} ${fill.id || ''} ${fill.label || ''} ${label}`);
 const controlKey = d => `${d.tag}\u0000${d.name ? `n:${d.name}` : d.id ? `i:${d.id}` : d.ac ? `a:${d.ac}` : `l:${normLabel(d.label)}`}`;
 
-// A page's extras, checked: an invalid list (too long, not a list) is none;
-// an invalid entry is dropped; one per control. The kind follows the
-// control: a typed value is hidden, a picked option (its text) is text.
+// A page's extras, checked: an invalid list (not a list, more than 20, or
+// more than 8 the user changed) is none; an invalid entry is dropped; one
+// per control. The kind follows the control: a typed value is hidden, a
+// picked option (its text) is text. `atDefault`: a select left on its
+// default option — never a new field, only a saved one's value (it goes
+// back to the default, applyExtras).
+const changedExtras = list => list.filter(e => !e?.atDefault);
 function cleanExtras(list, ...exclude) {
-  if (!Array.isArray(list) || list.length > EXTRAS_MAX) return [];
+  if (!Array.isArray(list) || list.length > FILL_FIELDS_MAX || changedExtras(list).length > EXTRAS_MAX) return [];
   const out = [], seen = new Set();
   for (const e of list) {
     if (!e || typeof e !== 'object') continue;
@@ -313,18 +317,22 @@ function cleanExtras(list, ...exclude) {
     const key = controlKey(fill);
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ label, value, kind: fill.tag === 'select' ? 'text' : 'hidden', fill });
+    const atDefault = e.atDefault === true && fill.tag === 'select';
+    out.push({ label, value, kind: fill.tag === 'select' ? 'text' : 'hidden', fill, ...(atDefault ? { atDefault } : {}) });
   }
   return out;
 }
 
 // `older` (a username step's) with `newer` (the password page's) over it,
-// field by field.
+// field by field. At most 8 changed ones (and 20 in all) are kept.
 function mergeExtras(older = [], newer = []) {
   const byKey = new Map(older.map(e => [controlKey(e.fill), e]));
   for (const e of newer) byKey.set(controlKey(e.fill), e);
   const keys = [...new Set([...newer.map(e => controlKey(e.fill)), ...older.map(e => controlKey(e.fill))])];
-  return keys.map(k => byKey.get(k)).slice(0, EXTRAS_MAX);
+  let changed = 0;
+  return keys.map(k => byKey.get(k))
+    .filter(e => e.atDefault || ++changed <= EXTRAS_MAX)
+    .slice(0, FILL_FIELDS_MAX);
 }
 
 // What saving `extras` onto a login does: its custom fields after (for
@@ -335,7 +343,10 @@ function mergeExtras(older = [], newer = []) {
 //   dropped it) is never overwritten: one with the same label and the same
 //   value gets the `fill` (it fills from then on — a change, so the offer
 //   asks); otherwise the extra is a new field beside it;
-// - the ones the page didn't send stay.
+// - the ones the page didn't send stay;
+// - a select on its default option (`atDefault`) only updates the field
+//   saved from that control (the user switched back to the default); it
+//   never adds a field or touches a hand-made one.
 // `changed` holds the page's own labels, in every case: the offer (page DOM)
 // must read the same whether a value the page sent equals a hand-added
 // field's or not, so a page can't guess a stored value from it.
@@ -346,6 +357,7 @@ function applyExtras(item, extras = []) {
   for (const e of extras) {
     const free = stored.filter(f => !used.has(f.id));
     const saved = free.find(f => { const d = VaultAccounts.fillDesc(f.fill); return d && sameControl(d, e.fill); });
+    if (e.atDefault && !saved) continue;
     const same = !saved && free.find(f => !VaultAccounts.fillDesc(f.fill) && EXTRA_FILL_KINDS.includes(f.kind || 'text')
       && normLabel(f.label) && normLabel(f.label) === normLabel(e.label) && f.value === e.value);
     if (saved) {
@@ -709,7 +721,7 @@ async function pendingLoginOffer(sender) {
   }
   // The extra fields it saves: their labels only, never a value.
   const extras = (pending.extras || []).length
-    ? (plan.kind === 'update' ? applyExtras(plan.item, pending.extras).changed : pending.extras.map(e => e.label))
+    ? (plan.kind === 'update' ? applyExtras(plan.item, pending.extras).changed : changedExtras(pending.extras).map(e => e.label))
     : [];
   return {
     ...offer, kind: plan.kind, name: plan.item?.title || '', limit: !!plan.limit, newLimit: !!plan.newLimit,
@@ -757,7 +769,8 @@ async function resolvePendingLogin(sender, id, choice, target) {
       await VaultAccounts.add({
         name: pending.host.replace(/^www\./, ''), email: pending.username, secret: '',
         urls: urls.join('\n'), password: pending.password,
-        ...((pending.extras || []).length ? { customFields: pending.extras.map(({ label, value, kind, fill }) => ({ label, value, kind, fill })) } : {}),
+        ...(changedExtras(pending.extras || []).length
+          ? { customFields: changedExtras(pending.extras).map(({ label, value, kind, fill }) => ({ label, value, kind, fill })) } : {}),
       }, vk);
       kind = 'new';
     } else {
@@ -769,9 +782,12 @@ async function resolvePendingLogin(sender, id, choice, target) {
       // A login saved without a username gets the one signed in with.
       const patch = { password: pending.password, ...(!current.email && pending.username ? { email: pending.username } : {}) };
       // Its extra fields: matching ones take the new value, new ones are
-      // added, the others stay. (No history for them.)
-      if ((pending.extras || []).length) patch.customFields = applyExtras(chosen.item, pending.extras).customFields;
-      if (!(await VaultAccounts.update(chosen.item.id, current, patch, vk))) return { ok: false };
+      // added, the others stay. (No history for them.) Applied to the item
+      // as stored when it's written, under the vault lock: a field a sync
+      // added since the offer was planned stays.
+      const extras = pending.extras || [];
+      const withExtras = extras.length ? item => ({ ...patch, customFields: applyExtras(item, extras).customFields }) : patch;
+      if (!(await VaultAccounts.update(chosen.item.id, current, withExtras, vk))) return { ok: false };
       kind = 'update';
     }
     await dropPendingLogin(key, id);
