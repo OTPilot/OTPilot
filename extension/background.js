@@ -631,13 +631,15 @@ async function readPendingLogin(sender) {
 // - `update` a saved login of this site: the one with that username; or,
 //   signing in with a username, one saved without a username (e.g. from a
 //   change-password form that had no username field) — it gets the username
-//   too; or, with no username captured, one of the site's logins (the user
-//   picks among `candidates`, the most recently changed first);
+//   too; or, with no username captured and no saved login holding this
+//   password, one of the site's logins (the user picks among `candidates`,
+//   the most recently changed first);
 // - a `new` login otherwise;
 // - nothing when it's already saved as is.
 // `limit` / `newLimit`: the Free plan refuses that update / a new login.
 // `extras` (extra fields captured): a saved login with the same password
-// whose fields differ is an update too, `extrasOnly`.
+// whose fields differ is an update too, `extrasOnly` (without a username,
+// only the logins holding that password are its candidates).
 async function planPendingLogin({ host, username, password, extras = [] }) {
   const key = await VaultKeys.getKey();
   const { items } = await VaultStore.readAll(key);
@@ -667,6 +669,16 @@ async function planPendingLogin({ host, username, password, extras = [] }) {
     return { kind: 'update', extrasOnly: true, item: candidates[0].item, limit: candidates[0].limit, candidates, newLimit };
   };
   if (match && Vault.getValue(match, 'password') === password) return extrasChanged(match) ? extrasOnly([match]) : { kind: 'none' };
+  // No username captured: a saved login holding this password is the one
+  // signed in with. Only it (or they) may get an extras-only update; never
+  // offer to change another login's password to it.
+  if (!username) {
+    const same = covering.filter(i => Vault.getValue(i, 'password') === password);
+    if (same.length) {
+      const changed = same.filter(extrasChanged).sort(newest);
+      return changed.length ? extrasOnly(changed) : { kind: 'none' };
+    }
+  }
 
   // A team collection already has this login: never offer a personal copy.
   // (A changed password there is updated from the popup, which writes to the
@@ -689,13 +701,8 @@ async function planPendingLogin({ host, username, password, extras = [] }) {
   else if (username) candidates = covering.filter(i => !userOf(i)).sort(newest);
   else candidates = covering.filter(i => Vault.getValue(i, 'password') !== password).sort(newest);
   if (!candidates.length) {
-    // No username and nothing personal to update: already saved on one of
-    // the site's logins (unless its extra fields changed), or the site's
-    // login is a shared one.
-    if (!username) {
-      const changed = covering.filter(i => Vault.getValue(i, 'password') === password && extrasChanged(i)).sort(newest);
-      if (changed.length) return extrasOnly(changed);
-    }
+    // No username and no personal login for the site: the site's login may
+    // be a shared one.
     if (!username && (covering.length || shared.length)) return { kind: 'none' };
     return { kind: 'new', limit: newLimit, newLimit };
   }

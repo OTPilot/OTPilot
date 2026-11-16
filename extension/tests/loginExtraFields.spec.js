@@ -260,6 +260,48 @@ test('an extras update keeps a field a sync added between the offer and the writ
   ]);
 });
 
+test('no username captured: the login holding the password gets the extras update, never another login\'s password', async ({ context, extensionId }) => {
+  const DOCTYPE_FILL = { tag: 'select', type: 'select-one', name: 'doctype', label: 'Document type' };
+  const popup = await vaultWith(context, extensionId, [
+    { name: 'Bank A', email: '', secret: '', urls: 'localhost', password: 'bank-pw',
+      customFields: [{ label: 'Document type', value: 'NIE', kind: 'text', fill: DOCTYPE_FILL }] },
+    { name: 'Bank B', email: '', secret: '', urls: 'localhost', password: 'other-pw' },
+  ]);
+  const site = await context.newPage();
+  // Only the document type and the password: no username is captured.
+  const signIn = async type => {
+    await site.goto(`${SITE}/login-bank-extra.html`);
+    await site.selectOption('select[name="doctype"]', { label: type });
+    await site.fill('input[name="password"]', 'bank-pw');
+    // Enter: the site's logins are offered in the corner, over the button.
+    await site.press('input[name="password"]', 'Enter');
+    await expect(site).toHaveURL(/welcome\.html/);
+  };
+  const state = async () => (await logins(popup))
+    .map(l => [l.title, l.password, l.fields.map(f => [f.label, f.value])]).sort();
+
+  await signIn('Pasaporte');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update Bank A?');
+  await expect(offer.locator('.otpilot-save-extras')).toHaveText('Saves: Document type');
+  await expect(offer).not.toContainText('Bank B');
+  await expect(offer.locator('.otpilot-save-target')).toHaveCount(0);
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(state).toEqual([
+    ['Bank A', 'bank-pw', [['Document type', 'Pasaporte']]],
+    ['Bank B', 'other-pw', []],
+  ]);
+
+  // The same sign-in again: it matches Bank A as saved, no offer.
+  await signIn('Pasaporte');
+  await site.waitForTimeout(1500);
+  await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
+  expect(await state()).toEqual([
+    ['Bank A', 'bank-pw', [['Document type', 'Pasaporte']]],
+    ['Bank B', 'other-pw', []],
+  ]);
+});
+
 // ── Plain bank form, two-step ────────────────────────────────────────────────
 
 test('a plain bank form saves its select and number, and fills them', async ({ context, extensionId }) => {
