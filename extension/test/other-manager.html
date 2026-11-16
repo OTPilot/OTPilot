@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in</title>
+<style>
+  .wrap { position: relative; width: 320px; margin: 20px; }
+  .wrap input { width: 100%; height: 44px; box-sizing: border-box; padding: 18px 8px 4px; }
+  /* A floating label drawn over the whole field (X, Material). */
+  .wrap .float { position: absolute; inset: 0; pointer-events: none; font-size: 11px; padding: 4px 8px; }
+</style></head>
+<!-- Another password manager draws its icon at each field's right edge
+     (like LastPass's root element, appended to <body>, max z-index). -->
+<body>
+  <form action="/test/welcome.html" onsubmit="return false">
+    <div class="wrap"><input type="email" name="email" autocomplete="username"><div class="float">Username</div></div>
+    <div class="wrap"><input type="password" name="password" autocomplete="current-password"><div class="float">Password</div></div>
+    <button type="submit">Sign in</button>
+  </form>
+  <script>
+    setTimeout(() => {
+      // The username: a manager's 20px icon 8px from the edge. The password:
+      // the site's 16px eye 2px from the edge (only under the badge's right part).
+      const [user, pass] = document.querySelectorAll('input');
+      const put = (f, size, gap) => {
+        const r = f.getBoundingClientRect();
+        const icon = document.createElement('div');
+        icon.className = 'other-manager-icon';
+        icon.style.cssText = `position:fixed;z-index:2147483647;width:${size}px;height:${size}px;background:#d22;left:${r.right - size - gap}px;top:${r.top + (r.height - size) / 2}px`;
+        document.body.appendChild(icon);
+      };
+      put(user, 20, 8);
+      put(pass, 16, 2);
+    }, 300);
+  </script>
+</body></html>

@@ -229,11 +229,15 @@ async function loginsForPage(sender) {
   if (!host || state === 'setup') return { state, logins: [] };
   if (state === 'unlocked') {
     const { items } = await VaultStore.readAll(await VaultKeys.getKey());
+    // With a password, or a username alone (a 2FA-only login: its username
+    // is filled, the code then by the OTP auto-fill).
     const logins = [...items, ...(await sharedLogins())]
-      .filter(i => i.type === 'login' && Vault.getValue(i, 'password') && Vault.loginCoversHost(i.urls, host))
+      .filter(i => i.type === 'login' && (Vault.getValue(i, 'password') || Vault.getValue(i, 'username').trim())
+        && Vault.loginCoversHost(i.urls, host))
       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
       .map(i => ({
         id: i.id, name: i.title || host, username: Vault.getValue(i, 'username'),
+        hasPassword: !!Vault.getValue(i, 'password'),
         autofill: i.autofill !== false, autoLogin: i.autoLogin !== false,
       }));
     return { state, logins };
@@ -254,12 +258,14 @@ async function fillLogin(sender, id, usernameOnly = false, fields = undefined) {
   const item = (await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null))
     || (await sharedLogin(id));
   const password = item && Vault.getValue(item, 'password');
-  if (!item || item.type !== 'login' || !password || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
+  const username = item && Vault.getValue(item, 'username');
+  // A login without a password fills its username alone.
+  if (!item || item.type !== 'login' || !(password || username.trim()) || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
   await VaultLock.touch();
   const extras = matchExtras(item, fields);
   const withExtras = extras.length ? { extras } : {};
-  if (usernameOnly) return { ok: true, username: Vault.getValue(item, 'username'), ...withExtras };
-  return { ok: true, username: Vault.getValue(item, 'username'), password, ...withExtras };
+  if (usernameOnly || !password) return { ok: true, username, ...(password ? {} : { noPassword: true }), ...withExtras };
+  return { ok: true, username, password, ...withExtras };
 }
 
 // ── Extra sign-in fields ──────────────────────────────────────────────────────────
