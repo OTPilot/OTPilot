@@ -128,6 +128,15 @@ const forget = (itemId: string, w: Waiting) => {
 /** One "ask every time" account of a call: its request, claimed (busy) by the call; `ready` once allowed. */
 type Claim = { grant: Grant; w: Waiting; ready: boolean }
 
+/**
+ * How many requests one agent may have waiting for the user at once: the
+ * server answers 429 beyond it (`MAX_PENDING_REQUESTS` in
+ * api/src/routes/agents.rs). Keep both equal.
+ */
+export const MAX_PENDING_REQUESTS = 10
+/** How long a request waits for the user's answer (`REQUEST_MINUTES` in api/src/routes/agents.rs). */
+const REQUEST_MINUTES = 10
+
 /** Delay between two checks of the requests a call waits for (tests shorten it). */
 export const pollEvery = { ms: 2000 }
 
@@ -179,6 +188,11 @@ async function ask(api: Api, grant: Grant, tool: string, reason: string): Promis
     req = await api.post<{ id: string }>('/agent/requests', { item_id: grant.itemId, tool, reason })
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) throw new Error(`"${grant.title}" is no longer allowed.`)
+    // The agent's waiting requests are at the server's cap (this call's own
+    // ones so far stay, released, for a retry to reuse).
+    if (e instanceof ApiError && e.status === 429) {
+      throw new Error(`Too many approval requests from this agent are already waiting for the user (at most ${MAX_PENDING_REQUESTS} at a time). Ask the user to answer them in the OTPilot extension (Agents), or wait ${REQUEST_MINUTES} minutes for them to expire, then try again.`)
+    }
     throw e
   }
   const w: Waiting = { id: req.id, tool, reason, busy: true }
@@ -242,7 +256,8 @@ async function postOpen(api: Api, body: { use_id: string; tool: string; item_ids
  * /agent/grants/open for all of them: on the Free plan, one use. When an
  * approval ran out before the open (409), only those accounts are asked
  * again, once, and the open retried with the same use_id (a 409 counts
- * nothing). A 402 (no uses left) or 426 (out of date) goes up as an
+ * nothing). More "ask every time" accounts waiting than the server allows
+ * (MAX_PENDING_REQUESTS) fail before any request. A 402 (no uses left) or 426 (out of date) goes up as an
  * ApiError with the server's message.
  */
 export async function openGrants(
@@ -257,8 +272,21 @@ export async function openGrants(
   const approveAll = async (gs: Grant[]) => {
     try {
       // Every request first, then one wait for all: an approval given early
-      // isn't left to run out while the next account is asked.
-      for (const g of gs) claims.push((await reuse(api, g, tool, reason)) ?? await ask(api, g, tool, reason))
+      // isn't left to run out while the next account is asked. Earlier
+      // requests are claimed first, so only the accounts left need a new one.
+      const toAsk: Grant[] = []
+      for (const g of gs) {
+        const c = await reuse(api, g, tool, reason)
+        if (c) claims.push(c)
+        else toAsk.push(g)
+      }
+      // More than the server lets wait at once: refused before asking anyone
+      // (no request, no open, nothing counted) rather than by a 429 halfway.
+      const needed = claims.filter(c => !c.ready).length + toAsk.length
+      if (needed > MAX_PENDING_REQUESTS) {
+        throw new Error(`This command needs approval for ${needed} "ask every time" accounts; the most one call can ask for is ${MAX_PENDING_REQUESTS}. Split it into smaller commands, or turn off "ask every time" for some of them in the OTPilot extension (Agents).`)
+      }
+      for (const g of toAsk) claims.push(await ask(api, g, tool, reason))
       await waitAll(api, claims, waitMs)
     } catch (e) { keep(); throw e }
   }

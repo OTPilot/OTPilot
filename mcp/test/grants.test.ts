@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { Api } from '../src/api.js'
 import { generateKeyPair } from '../src/ecies.js'
-import { loadGrants, openGrants, openRetry, PendingApproval, pollEvery, type Grant } from '../src/grants.js'
+import { loadGrants, MAX_PENDING_REQUESTS, openGrants, openRetry, PendingApproval, pollEvery, type Grant } from '../src/grants.js'
 import { FakeApi, grantRow, loginItem, openFrom } from './helpers.js'
 
 beforeAll(() => { openRetry.ms = 1; pollEvery.ms = 1 })
@@ -239,9 +239,10 @@ describe('ask every time, several accounts in one call', () => {
    * approval windows, and POST /agent/grants/open as the API answers it (409
    * before any use token; a use_id counted once).
    */
-  async function setup() {
+  async function setup(count = 3) {
     const keys = await generateKeyPair()
-    const items = [loginItem({ title: 'Bank' }), loginItem({ title: 'Broker' }), loginItem({ title: 'Payroll' })]
+    const titles = ['Bank', 'Broker', 'Payroll']
+    const items = Array.from({ length: count }, (_, i) => loginItem({ title: titles[i] ?? `Account ${i + 1}` }))
     const rows = await Promise.all(items.map(i => grantRow(i, keys.publicKey, { askEveryTime: true })))
     const s = {
       requests: new Map<string, { item: string; status: string; released: boolean; checks: number }>(),
@@ -253,10 +254,14 @@ describe('ask every time, several accounts in one call', () => {
       answerAfter: {} as Record<string, number>,
       /** Called on each open, before it's answered (an approval running out). */
       beforeOpen: (_n: number) => {},
+      /** Called on each POST /agent/requests (n from 1); a status answers it instead (the server's 429). */
+      onAsk: (_n: number): number | void => {},
     }
     const api = new FakeApi((m, p, b) => {
       if (p === '/agent/grants') return { body: { grants: rows.map(r => ({ ...r, record: null })) } }
       if (m === 'POST' && p === '/agent/requests') {
+        const refused = s.onAsk(s.asked.length + 1)
+        if (refused) return { status: refused, body: { error: 'Too many requests' } }
         s.asked.push(b.item_id)
         const id = `00000000-0000-4000-8000-${String(s.asked.length).padStart(12, '0')}`
         s.requests.set(id, { item: b.item_id, status: 'pending', released: false, checks: 0 })
@@ -351,5 +356,39 @@ describe('ask every time, several accounts in one call', () => {
     expect(r.items.size).toBe(3)
     expect(s.asked.filter(id => id === grants[1].itemId)).toHaveLength(2)
     expect(s.asked.filter(id => id !== grants[1].itemId)).toHaveLength(2)
+  })
+
+  it('more accounts than the server lets wait at once: refused before asking anyone or opening', async () => {
+    const { keys, api, grants, s } = await setup(MAX_PENDING_REQUESTS + 1)
+    api.calls.length = 0
+    await expect(openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-10', 5_000))
+      .rejects.toThrow(`This command needs approval for 11 "ask every time" accounts; the most one call can ask for is 10. Split it into smaller commands`)
+    expect(s.asked).toHaveLength(0)
+    expect(api.calls.filter(c => c === 'POST /agent/requests')).toHaveLength(0)
+    expect(s.opens).toHaveLength(0)
+    expect(s.uses).toBe(0)
+    // Exactly the cap is fine.
+    const r = await openGrants(api, keys.privateJwk, grants.slice(0, MAX_PENDING_REQUESTS), 'run', 'pay', 'u-11', 5_000)
+    expect(r.items.size).toBe(MAX_PENDING_REQUESTS)
+    expect(s.opens).toHaveLength(1)
+  })
+
+  it('a 429 while asking fails plainly, opens nothing, and the retry reuses the requests already made', async () => {
+    const { keys, api, grants, s } = await setup()
+    s.onAsk = n => (n === 3 ? 429 : undefined)
+    s.answerAfter = Object.fromEntries(grants.map(g => [g.itemId, Infinity]))
+    await expect(openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-12', 5_000))
+      .rejects.toThrow(/Too many approval requests from this agent are already waiting for the user \(at most 10 at a time\)/)
+    expect(s.asked).toEqual([grants[0].itemId, grants[1].itemId])
+    expect(s.opens).toHaveLength(0)
+    expect(s.uses).toBe(0)
+    // Released, not left busy: the retry claims the two waiting requests and asks only for the third.
+    s.onAsk = () => {}
+    s.answerAfter = {}
+    const r = await openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-13', 5_000)
+    expect(s.asked).toEqual(grants.map(g => g.itemId))
+    expect(r.items.size).toBe(3)
+    expect(s.opens).toHaveLength(1)
+    expect(s.uses).toBe(1)
   })
 })
