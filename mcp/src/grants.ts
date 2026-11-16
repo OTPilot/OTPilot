@@ -134,6 +134,11 @@ type Claim = { grant: Grant; w: Waiting; ready: boolean }
  * api/src/routes/agents.rs). Keep both equal.
  */
 export const MAX_PENDING_REQUESTS = 10
+/**
+ * How many accounts one POST /agent/grants/open may carry: the server rejects
+ * more (`item_ids` 1..20 in `open_grants`, api/src/routes/agents.rs). Keep both equal.
+ */
+export const MAX_OPEN_ITEMS = 20
 /** How long a request waits for the user's answer (`REQUEST_MINUTES` in api/src/routes/agents.rs). */
 const REQUEST_MINUTES = 10
 
@@ -265,6 +270,10 @@ export async function openGrants(
   useId: string = randomUUID(), waitMs = 90_000,
 ): Promise<{ items: Map<string, VaultItem>; usage: Usage | null }> {
   const unique = [...new Map(grants.map(g => [g.itemId, g])).values()]
+  // Before any approval is asked for: the server would refuse the open after the user answered.
+  if (unique.length > MAX_OPEN_ITEMS) {
+    throw new Error(`This command uses ${unique.length} accounts; one call can use at most ${MAX_OPEN_ITEMS}. Split it into smaller commands.`)
+  }
   // Approvals are spent only by a successful open; on any failure they're kept for a retry.
   let claims: Claim[] = []
   const keep = () => { for (const c of claims) c.w.busy = false }

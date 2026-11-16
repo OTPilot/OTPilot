@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { Api } from '../src/api.js'
 import { generateKeyPair } from '../src/ecies.js'
-import { loadGrants, MAX_PENDING_REQUESTS, openGrants, openRetry, PendingApproval, pollEvery, type Grant } from '../src/grants.js'
+import { loadGrants, MAX_OPEN_ITEMS, MAX_PENDING_REQUESTS, openGrants, openRetry, PendingApproval, pollEvery, type Grant } from '../src/grants.js'
 import { FakeApi, grantRow, loginItem, openFrom } from './helpers.js'
 
 beforeAll(() => { openRetry.ms = 1; pollEvery.ms = 1 })
@@ -239,11 +239,11 @@ describe('ask every time, several accounts in one call', () => {
    * approval windows, and POST /agent/grants/open as the API answers it (409
    * before any use token; a use_id counted once).
    */
-  async function setup(count = 3) {
+  async function setup(count = 3, onlyFirstAsks = false) {
     const keys = await generateKeyPair()
     const titles = ['Bank', 'Broker', 'Payroll']
     const items = Array.from({ length: count }, (_, i) => loginItem({ title: titles[i] ?? `Account ${i + 1}` }))
-    const rows = await Promise.all(items.map(i => grantRow(i, keys.publicKey, { askEveryTime: true })))
+    const rows = await Promise.all(items.map(i => grantRow(i, keys.publicKey, { askEveryTime: !onlyFirstAsks || i === items[0] })))
     const s = {
       requests: new Map<string, { item: string; status: string; released: boolean; checks: number }>(),
       asked: [] as string[],
@@ -276,7 +276,7 @@ describe('ask every time, several accounts in one call', () => {
       if (p === '/agent/grants/open') {
         s.opens.push(b)
         s.beforeOpen(s.opens.length)
-        const held = b.item_ids.filter((id: string) => ![...s.requests.values()].some(r => r.item === id && r.released))
+        const held = b.item_ids.filter((id: string) => rows.find(r => r.item_id === id)?.ask_every_time && ![...s.requests.values()].some(r => r.item === id && r.released))
         if (held.length) return { status: 409, body: { error: 'needs approval', code: 'approval_needed', item_ids: held } }
         if (!s.tokens.has(b.use_id)) { s.tokens.add(b.use_id); s.uses++ }
         return { body: { grants: rows.filter(r => b.item_ids.includes(r.item_id)), usage: null } }
@@ -370,6 +370,21 @@ describe('ask every time, several accounts in one call', () => {
     // Exactly the cap is fine.
     const r = await openGrants(api, keys.privateJwk, grants.slice(0, MAX_PENDING_REQUESTS), 'run', 'pay', 'u-11', 5_000)
     expect(r.items.size).toBe(MAX_PENDING_REQUESTS)
+    expect(s.opens).toHaveLength(1)
+  })
+
+  it('more accounts than one open may carry: refused before any approval is asked, exactly the cap opens', async () => {
+    const { keys, api, grants: all, s } = await setup(MAX_OPEN_ITEMS + 1, true)
+    const grants = all
+    api.calls.length = 0
+    await expect(openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-20', 5_000))
+      .rejects.toThrow('This command uses 21 accounts; one call can use at most 20. Split it into smaller commands.')
+    expect(api.calls.filter(c => c === 'POST /agent/requests')).toHaveLength(0)
+    expect(s.asked).toHaveLength(0)
+    expect(s.opens).toHaveLength(0)
+    expect(s.uses).toBe(0)
+    const r = await openGrants(api, keys.privateJwk, grants.slice(0, MAX_OPEN_ITEMS), 'run', 'pay', 'u-21', 5_000)
+    expect(r.items.size).toBe(MAX_OPEN_ITEMS)
     expect(s.opens).toHaveLength(1)
   })
 
