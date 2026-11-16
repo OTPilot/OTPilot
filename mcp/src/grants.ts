@@ -125,20 +125,24 @@ const forget = (itemId: string, w: Waiting) => {
   else waiting.delete(itemId)
 }
 
+/** One "ask every time" account of a call: its request, claimed (busy) by the call; `ready` once allowed. */
+type Claim = { grant: Grant; w: Waiting; ready: boolean }
+
+/** Delay between two checks of the requests a call waits for (tests shorten it). */
+export const pollEvery = { ms: 2000 }
+
+/** A definite refusal (revoked agent, unknown request) rather than a passing failure (network, 429, 5xx). */
+const definite = (e: unknown) => e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 429
+
 /**
- * The user's approval of this one use of an "ask every time" grant: claimed
- * (busy) until the copy is opened (then spent) or the call fails (then kept
- * for a retry).
+ * An earlier request for this use of `grant` (same tool and reason, the
+ * purpose the user saw), claimed: one whose approval still releases the copy
+ * (ready), else one still waiting (polled with the call's new ones), else
+ * null. Claimed before any wait, so two calls in parallel can't both spend
+ * one; one in use by another call (busy) is left to it.
  */
-async function approve(api: Api, grant: Grant, tool: string, reason: string, waitMs: number): Promise<Waiting> {
-  // "Ask every time" means every use: an approval is spent by one opening.
-  // A request that timed out earlier and the user answered since: its
-  // approval is used once, for this retry; one still waiting stays the one.
-  // Only for the same purpose the user saw (tool and reason), and claimed
-  // before any wait, so two calls in parallel can't both spend it.
-  // Every outstanding request is kept (two calls may each have one); one in
-  // use by another call is marked busy, so each is spent once.
-  let stillWaiting = false
+async function reuse(api: Api, grant: Grant, tool: string, reason: string): Promise<Claim | null> {
+  let pending: Waiting | null = null
   for (const earlier of [...(waiting.get(grant.itemId) || [])]) {
     if (earlier.busy || earlier.tool !== tool || earlier.reason !== reason) continue
     earlier.busy = true
@@ -148,26 +152,28 @@ async function approve(api: Api, grant: Grant, tool: string, reason: string, wai
     } catch (e) {
       // Gone (answered requests are forgotten after a day): ask anew.
       if (e instanceof ApiError && e.status === 404) { forget(grant.itemId, earlier); continue }
-      // A definite refusal (revoked agent) goes up; a passing failure (network,
-      // 429, 5xx) leaves it waiting, as the first wait treats one.
-      earlier.busy = false
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 429) throw e
-      stillWaiting = true
+      if (definite(e)) { earlier.busy = false; if (pending) pending.busy = false; throw e }
+      // A passing failure: still waiting, as the wait treats one.
+      r = { status: 'pending' }
+    }
+    if (r.status === 'pending') {
+      if (pending) earlier.busy = false
+      else pending = earlier
       continue
     }
-    if (r.status === 'pending') { earlier.busy = false; stillWaiting = true; continue }
     // Only this request's own approval, still in its window: another
     // request's release must never stand in for an expired one.
-    if (r.status === 'allowed' && r.released) return earlier
+    if (r.status === 'allowed' && r.released) {
+      if (pending) pending.busy = false
+      return { grant, w: earlier, ready: true }
+    }
     forget(grant.itemId, earlier) // denied, or its approval expired
   }
-  // One still waits for the user: point at one that's still saved and free
-  // (another retry may have spent the one seen above meanwhile).
-  if (stillWaiting) {
-    const open = (waiting.get(grant.itemId) || []).find(w => !w.busy && w.tool === tool && w.reason === reason)
-    if (open) throw new PendingApproval(open.id, `use "${grant.title}" this time`)
-  }
-  // None left (denied, or an approval expired): ask anew.
+  return pending && { grant, w: pending, ready: false }
+}
+
+/** A new request for one use of `grant`, kept (claimed) at once: a retry finds it. */
+async function ask(api: Api, grant: Grant, tool: string, reason: string): Promise<Claim> {
   let req: { id: string }
   try {
     req = await api.post<{ id: string }>('/agent/requests', { item_id: grant.itemId, tool, reason })
@@ -175,12 +181,40 @@ async function approve(api: Api, grant: Grant, tool: string, reason: string, wai
     if (e instanceof ApiError && e.status === 404) throw new Error(`"${grant.title}" is no longer allowed.`)
     throw e
   }
-  const answer = await waitForAnswer(api, req.id, waitMs)
-  if (answer === 'denied') throw new Error(`The user denied using "${grant.title}" this time.`)
-  const w: Waiting = { id: req.id, tool, reason, busy: answer === 'allowed' }
+  const w: Waiting = { id: req.id, tool, reason, busy: true }
   waiting.set(grant.itemId, [...(waiting.get(grant.itemId) || []), w])
-  if (answer === 'pending') throw new PendingApproval(req.id, `use "${grant.title}" this time`)
-  return w
+  return { grant, w, ready: false }
+}
+
+/**
+ * Polls every claim not yet ready, together, until all are allowed or
+ * `waitMs` passes (PendingApproval). A denial ends the call at once; the
+ * other requests stay for a retry.
+ */
+async function waitAll(api: Api, claims: Claim[], waitMs: number): Promise<void> {
+  const until = Date.now() + waitMs
+  // Each one is asked at least once (a retry checks an earlier request even with no wait left).
+  for (let first = true; ; first = false) {
+    const open = claims.filter(c => !c.ready)
+    if (!open.length) return
+    const left = Math.max(until - Date.now(), first ? 5_000 : 0)
+    if (left <= 0) {
+      const what = open.map(c => `"${c.grant.title}"`).join(', ')
+      throw new PendingApproval(open[0].w.id, `use ${what} this time`)
+    }
+    // Each check gives up with the deadline, so a stalled reply can't hold the tool past it.
+    const answers = await Promise.all(open.map(c =>
+      api.get<{ status: 'pending' | 'allowed' | 'denied' }>(`/agent/requests/${c.w.id}`, Math.min(left, 15_000))
+        .catch(e => { if (definite(e)) throw e; return { status: 'pending' as const } })))
+    open.forEach((c, i) => { if (answers[i].status === 'allowed') c.ready = true })
+    const denied = open.find((c, i) => answers[i].status === 'denied')
+    if (denied) {
+      forget(denied.grant.itemId, denied.w)
+      throw new Error(`The user denied using "${denied.grant.title}" this time.`)
+    }
+    if (open.every(c => c.ready)) return
+    await sleep(Math.min(pollEvery.ms, Math.max(0, until - Date.now())))
+  }
 }
 
 type OpenResult = { grants: GrantRow[]; usage?: Usage | null }
@@ -203,41 +237,64 @@ async function postOpen(api: Api, body: { use_id: string; tool: string; item_ids
 
 /**
  * The values of the accounts one tool call uses (`tool`: browser_login or
- * run), by item id: the approvals of "ask every time" ones first, then one
- * POST /agent/grants/open for all of them — on the Free plan, one use. A
- * 402 (no uses left) or 426 (out of date) goes up as an ApiError with the
- * server's message.
+ * run), by item id: the approvals of "ask every time" ones first — every
+ * request made at once, then waited for together —, then one POST
+ * /agent/grants/open for all of them: on the Free plan, one use. When an
+ * approval ran out before the open (409), only those accounts are asked
+ * again, once, and the open retried with the same use_id (a 409 counts
+ * nothing). A 402 (no uses left) or 426 (out of date) goes up as an
+ * ApiError with the server's message.
  */
 export async function openGrants(
   api: Api, privateJwk: JsonWebKey, grants: Grant[], tool: 'browser_login' | 'run', reason: string,
   useId: string = randomUUID(), waitMs = 90_000,
 ): Promise<{ items: Map<string, VaultItem>; usage: Usage | null }> {
   const unique = [...new Map(grants.map(g => [g.itemId, g])).values()]
-  const claims: { itemId: string; w: Waiting }[] = []
+  // Approvals are spent only by a successful open; on any failure they're kept for a retry.
+  let claims: Claim[] = []
   const keep = () => { for (const c of claims) c.w.busy = false }
-  const spend = () => { for (const c of claims) forget(c.itemId, c.w) }
-  try {
-    for (const g of unique) if (g.askEveryTime) claims.push({ itemId: g.itemId, w: await approve(api, g, tool, reason, waitMs) })
-  } catch (e) { keep(); throw e }
-  const titles = (ids: unknown) => unique.filter(g => Array.isArray(ids) && ids.includes(g.itemId)).map(g => `"${g.title}"`).join(', ')
-  let res: OpenResult
-  try {
-    res = await postOpen(api, { use_id: useId, tool, item_ids: unique.map(g => g.itemId) })
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 409) {
-      spend()
-      const which = titles((e.body as { item_ids?: unknown })?.item_ids) || 'this account'
-      throw new Error(`The user's approval to use ${which} expired before it was used. Try again.`)
-    }
-    keep()
-    if (e instanceof ApiError && e.status === 404) {
-      if (e.code === 'not_granted') {
-        const which = titles((e.body as { item_ids?: unknown })?.item_ids) || 'This account'
-        throw new Error(`${which} is no longer allowed. Call list_accounts, or request_access to ask the user again.`)
+  const spend = () => { for (const c of claims) forget(c.grant.itemId, c.w) }
+  const approveAll = async (gs: Grant[]) => {
+    try {
+      // Every request first, then one wait for all: an approval given early
+      // isn't left to run out while the next account is asked.
+      for (const g of gs) claims.push((await reuse(api, g, tool, reason)) ?? await ask(api, g, tool, reason))
+      await waitAll(api, claims, waitMs)
+    } catch (e) { keep(); throw e }
+  }
+  await approveAll(unique.filter(g => g.askEveryTime))
+  const titles = (gs: Grant[]) => gs.map(g => `"${g.title}"`).join(', ')
+  const named = (e: ApiError) => {
+    const ids = (e.body as { item_ids?: unknown })?.item_ids
+    return unique.filter(g => Array.isArray(ids) && ids.includes(g.itemId))
+  }
+  let res: OpenResult | undefined
+  for (let asked = false; !res;) {
+    try {
+      res = await postOpen(api, { use_id: useId, tool, item_ids: unique.map(g => g.itemId) })
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // Those approvals ran out: gone. The others still release their copies: kept.
+        const held = named(e)
+        for (const c of claims) if (held.includes(c.grant)) forget(c.grant.itemId, c.w)
+        claims = claims.filter(c => !held.includes(c.grant))
+        if (!asked && held.length) {
+          asked = true
+          await approveAll(held)
+          continue
+        }
+        keep()
+        throw new Error(`The user's approval to use ${titles(held) || 'this account'} expired before it was used. Try again.`)
       }
-      throw new Error('The OTPilot server doesn\'t support this version of the MCP yet. Try again in a few minutes.')
+      keep()
+      if (e instanceof ApiError && e.status === 404) {
+        if (e.code === 'not_granted') {
+          throw new Error(`${titles(named(e)) || 'This account'} is no longer allowed. Call list_accounts, or request_access to ask the user again.`)
+        }
+        throw new Error('The OTPilot server doesn\'t support this version of the MCP yet. Try again in a few minutes.')
+      }
+      throw e
     }
-    throw e
   }
   spend()
   const items = new Map<string, VaultItem>()

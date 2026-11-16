@@ -613,7 +613,7 @@ if (AGENTS_WINDOW) chrome.runtime.onMessage.addListener(msg => {
 const agentsShape = d => JSON.stringify([
   (d?.agents || []).map(a => [a.id, a.status, a.name, a.client, a.grants.map(g => [g.item_id, g.revision, g.expires_at, g.ask_every_time])]),
   (d?.requests || []).map(r => r.id),
-  d?.usage ? [d.usage.used, d.usage.limit, d.usage.trial_available] : null,
+  d?.usage ? [d.usage.used, d.usage.limit, d.usage.trial_available, d.usage.resets_at] : null,
   d?.limits ? [d.limits.agents, d.limits.uses] : null,
   (d?.activity || []).slice(0, 8).map(u => u.id ?? u.created_at),
 ]);

@@ -290,6 +290,21 @@ test('free plan: agentsShape changes with usage', async ({ context, extensionId 
   expect(same).toBe(false);
 });
 
+test('free plan: a new renewal date alone changes agentsShape and redraws the card', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, { free: true });
+  await setUsage(page, usage(0));
+  await page.click('#nav-agents');
+  await expect(page.locator('#agents-limit')).toContainText('Renews Jul 1');
+  const same = await page.evaluate(() => {
+    const d = { agents: [], usage: { used: 0, limit: 10, trial_available: false, resets_at: '2026-07-01T00:00:00Z' } };
+    return agentsShape(d) === agentsShape({ ...d, usage: { ...d.usage, resets_at: '2026-08-01T00:00:00Z' } });
+  });
+  expect(same).toBe(false);
+  await setUsage(page, usage(0, { resets_at: '2026-08-01T00:00:00Z' }));
+  await page.evaluate(async () => renderAgentsPanel(await Agents.list()));
+  await expect(page.locator('#agents-limit')).toContainText('Renews Aug 1');
+});
+
 test('free plan: 10 of 10 offers the trial, starting it hides the card', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, { free: true });
   await setUsage(page, usage(10, { trial_available: true }));

@@ -1,10 +1,10 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { Api } from '../src/api.js'
 import { generateKeyPair } from '../src/ecies.js'
-import { loadGrants, openGrants, openRetry, PendingApproval, type Grant } from '../src/grants.js'
+import { loadGrants, openGrants, openRetry, PendingApproval, pollEvery, type Grant } from '../src/grants.js'
 import { FakeApi, grantRow, loginItem, openFrom } from './helpers.js'
 
-beforeAll(() => { openRetry.ms = 1 })
+beforeAll(() => { openRetry.ms = 1; pollEvery.ms = 1 })
 
 /** One account's values for one tool call (what browser_login does). */
 const openItem = (api: Api, jwk: JsonWebKey, grant: Grant, tool: 'run' | 'browser_login', reason: string, waitMs: number) =>
@@ -203,14 +203,12 @@ describe('opening copies', () => {
     const { keys, api, grants, opens, answer } = await setup()
     answer(b => ({ status: 404, body: { error: 'not allowed', code: 'not_granted', item_ids: [b.item_ids[1]] } }))
     await expect(openGrants(api, keys.privateJwk, grants, 'run', '')).rejects.toThrow(/^"Prod" is no longer allowed/)
-    answer(b => ({ status: 409, body: { error: 'x', code: 'approval_needed', item_ids: [b.item_ids[0]] } }))
-    await expect(openGrants(api, keys.privateJwk, grants, 'run', '')).rejects.toThrow(/approval to use "Staging" expired before it was used\. Try again\./)
     // An API without the endpoint yet.
     answer(() => ({ status: 404, body: { error: 'not found' } }))
     await expect(openGrants(api, keys.privateJwk, grants, 'run', '')).rejects.toThrow(/doesn't support this version of the MCP yet/)
     answer(() => ({ status: 402, body: { error: 'used up', code: 'agent_uses_exhausted' } }))
     await expect(openGrants(api, keys.privateJwk, grants, 'run', '')).rejects.toMatchObject({ status: 402, code: 'agent_uses_exhausted' })
-    expect(opens).toHaveLength(4)
+    expect(opens).toHaveLength(3)
   })
 
   it('several ask-every-time accounts: one approval each, then one request', async () => {
@@ -232,5 +230,126 @@ describe('opening copies', () => {
     expect(asked).toEqual(grants.map(g => g.itemId))
     expect(opens).toHaveLength(1)
     expect(r.items.size).toBe(2)
+  })
+})
+
+describe('ask every time, several accounts in one call', () => {
+  /**
+   * A server for three "ask every time" accounts: requests with their own
+   * approval windows, and POST /agent/grants/open as the API answers it (409
+   * before any use token; a use_id counted once).
+   */
+  async function setup() {
+    const keys = await generateKeyPair()
+    const items = [loginItem({ title: 'Bank' }), loginItem({ title: 'Broker' }), loginItem({ title: 'Payroll' })]
+    const rows = await Promise.all(items.map(i => grantRow(i, keys.publicKey, { askEveryTime: true })))
+    const s = {
+      requests: new Map<string, { item: string; status: string; released: boolean; checks: number }>(),
+      asked: [] as string[],
+      opens: [] as any[],
+      tokens: new Set<string>(),
+      uses: 0,
+      /** Checks after which each item's request is answered (the user approves at different times). */
+      answerAfter: {} as Record<string, number>,
+      /** Called on each open, before it's answered (an approval running out). */
+      beforeOpen: (_n: number) => {},
+    }
+    const api = new FakeApi((m, p, b) => {
+      if (p === '/agent/grants') return { body: { grants: rows.map(r => ({ ...r, record: null })) } }
+      if (m === 'POST' && p === '/agent/requests') {
+        s.asked.push(b.item_id)
+        const id = `00000000-0000-4000-8000-${String(s.asked.length).padStart(12, '0')}`
+        s.requests.set(id, { item: b.item_id, status: 'pending', released: false, checks: 0 })
+        return { body: { id } }
+      }
+      if (p.startsWith('/agent/requests/')) {
+        const r = s.requests.get(p.split('/').pop()!)!
+        r.checks++
+        if (r.status === 'pending' && r.checks >= (s.answerAfter[r.item] ?? 1)) { r.status = 'allowed'; r.released = true }
+        return { body: { status: r.status, released: r.released } }
+      }
+      if (p === '/agent/grants/open') {
+        s.opens.push(b)
+        s.beforeOpen(s.opens.length)
+        const held = b.item_ids.filter((id: string) => ![...s.requests.values()].some(r => r.item === id && r.released))
+        if (held.length) return { status: 409, body: { error: 'needs approval', code: 'approval_needed', item_ids: held } }
+        if (!s.tokens.has(b.use_id)) { s.tokens.add(b.use_id); s.uses++ }
+        return { body: { grants: rows.filter(r => b.item_ids.includes(r.item_id)), usage: null } }
+      }
+      return undefined
+    })
+    const grants = await loadGrants(api, keys.privateJwk)
+    const expire = (item: string) => { for (const r of s.requests.values()) if (r.item === item) r.released = false }
+    return { keys, api, grants, s, expire }
+  }
+
+  it('asks for every account at once, waits for all together, then opens once', async () => {
+    const { keys, api, grants, s } = await setup()
+    s.answerAfter = { [grants[0].itemId]: 1, [grants[1].itemId]: 3, [grants[2].itemId]: 5 }
+    api.calls.length = 0
+    const r = await openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-1', 5_000)
+    // The three requests before any check of one.
+    expect(api.calls.slice(0, 3)).toEqual(Array(3).fill('POST /agent/requests'))
+    expect(api.calls.slice(3).every(c => c !== 'POST /agent/requests')).toBe(true)
+    expect(s.asked).toEqual(grants.map(g => g.itemId))
+    expect(s.opens).toHaveLength(1)
+    expect(s.uses).toBe(1)
+    expect(r.items.size).toBe(3)
+  })
+
+  it('an approval that ran out before the open: only that one is asked again, the others kept, one use', async () => {
+    const { keys, api, grants, s, expire } = await setup()
+    s.beforeOpen = n => { if (n === 1) expire(grants[0].itemId) }
+    const r = await openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-2', 5_000)
+    expect(s.asked).toEqual([...grants.map(g => g.itemId), grants[0].itemId])
+    expect(s.opens).toHaveLength(2)
+    expect(s.opens.every(o => o.use_id === 'u-2')).toBe(true)
+    expect(s.uses).toBe(1)
+    expect(r.items.size).toBe(3)
+    // Spent: the next call asks for all three again.
+    s.beforeOpen = () => {}
+    await openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-3', 5_000)
+    expect(s.asked).toHaveLength(7)
+    expect(s.uses).toBe(2)
+  })
+
+  it('runs out again: fails, keeps the valid approvals, and the retry asks only for the expired one', async () => {
+    const { keys, api, grants, s, expire } = await setup()
+    s.beforeOpen = n => { if (n <= 2) expire(grants[0].itemId) }
+    await expect(openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-4', 5_000))
+      .rejects.toThrow(/approval to use "Bank" expired before it was used\. Try again\./)
+    expect(s.asked).toEqual([...grants.map(g => g.itemId), grants[0].itemId])
+    expect(s.uses).toBe(0)
+    const r = await openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-5', 5_000)
+    expect(s.asked).toEqual([...grants.map(g => g.itemId), grants[0].itemId, grants[0].itemId])
+    expect(r.items.size).toBe(3)
+    expect(s.uses).toBe(1)
+  })
+
+  it('nothing answered in time: PendingApproval, and the retry finishes the same requests', async () => {
+    const { keys, api, grants, s } = await setup()
+    s.answerAfter = Object.fromEntries(grants.map(g => [g.itemId, Infinity]))
+    await expect(openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-6', 30)).rejects.toBeInstanceOf(PendingApproval)
+    expect(s.asked).toHaveLength(3)
+    for (const r of s.requests.values()) { r.status = 'allowed'; r.released = true }
+    const r = await openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-7', 30)
+    expect(r.items.size).toBe(3)
+    expect(s.asked).toHaveLength(3)
+    expect(s.opens).toHaveLength(1)
+  })
+
+  it('a denial ends the call; the other approvals stay for a retry', async () => {
+    const { keys, api, grants, s } = await setup()
+    s.answerAfter = { [grants[1].itemId]: Infinity }
+    const broker = () => [...s.requests.values()].find(r => r.item === grants[1].itemId && r.status === 'pending')!
+    const run = openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-8', 5_000)
+    await new Promise(r => setTimeout(r, 20))
+    broker().status = 'denied'
+    await expect(run).rejects.toThrow(/denied using "Broker"/)
+    s.answerAfter = {}
+    const r = await openGrants(api, keys.privateJwk, grants, 'run', 'pay', 'u-9', 5_000)
+    expect(r.items.size).toBe(3)
+    expect(s.asked.filter(id => id === grants[1].itemId)).toHaveLength(2)
+    expect(s.asked.filter(id => id !== grants[1].itemId)).toHaveLength(2)
   })
 })
