@@ -283,11 +283,23 @@ const EXTRA_VALUE_MAX = 256;
 const EXTRA_FILL_KINDS = ['text', 'hidden', 'password', 'email', 'phone'];
 const normLabel = s => String(s || '').trim().replace(/\s+/g, ' ').replace(/[\s:*]+$/, '').toLowerCase();
 
+// An id a framework made up, new on every load (kept equal to forms.js
+// generatedId): it never identifies a control. A login saved before forms.js
+// knew one (BBVA's "_iimft4p9kg") still carries it: matched by its label.
+// "_" + a digit followed by a letter: _username1 / _password2 stay ids.
+const generatedId = id => /^:|:$|^(mui|react|radix|headlessui|ember|input|field|id)[-_:]?\d+$|[0-9a-f]{8,}|\d{4,}/i.test(id)
+  || (/^[a-z0-9]{8,}$/i.test(id) && /\d.*\d/.test(id) && /[a-z]/i.test(id))
+  || (/^_[a-z0-9]{8,}$/i.test(id) && /\d[a-z]/i.test(id));
+// What identifies a descriptor's control: name, else a stable id, else
+// autocomplete (undefined: none of them, the label decides).
+const controlKeyOf = d => ['name', 'id', 'ac'].find(k => d[k] && !(k === 'id' && generatedId(d.id)));
+
 // The same page control: by name, else id, else autocomplete, else (a
 // descriptor with none of them) label.
 function sameControl(a, b) {
   if (a.tag !== b.tag) return false;
-  for (const k of ['name', 'id', 'ac']) if (a[k] || b[k]) return a[k] === b[k];
+  const ka = controlKeyOf(a), kb = controlKeyOf(b);
+  if (ka || kb) return ka === kb && a[ka] === b[kb];
   return !!normLabel(a.label) && normLabel(a.label) === normLabel(b.label);
 }
 // Payment data is never an extra sign-in field (a login form inside a
@@ -295,7 +307,10 @@ function sameControl(a, b) {
 const PAYMENT_WORD = /card|cvv|cvc|csc|iban|expir/i;
 const isPaymentExtra = (label, fill) => /(^|\s)cc-/.test(fill.ac || '')
   || PAYMENT_WORD.test(`${fill.name || ''} ${fill.id || ''} ${fill.label || ''} ${label}`);
-const controlKey = d => `${d.tag}\u0000${d.name ? `n:${d.name}` : d.id ? `i:${d.id}` : d.ac ? `a:${d.ac}` : `l:${normLabel(d.label)}`}`;
+const controlKey = d => {
+  const k = controlKeyOf(d);
+  return `${d.tag}\u0000${k ? `${k}:${d[k]}` : `l:${normLabel(d.label)}`}`;
+};
 
 // A page's extras, checked: an invalid list (not a list, more than 20, or
 // more than 8 the user changed) is none; an invalid entry is dropped; one
@@ -384,7 +399,8 @@ function applyExtras(item, extras = []) {
 // Matched by the saved control's name, else id, else autocomplete — the
 // first of them it has decides —, and by its saved label only when it has
 // none of them. Same tag; one field per control; an ambiguous match is
-// skipped. → [{ index, value }]
+// skipped. A saved control with none of them and no label (only a made-up
+// id) identifies nothing: it never matches. → [{ index, value }]
 function matchExtras(item, rawFields) {
   if (!Array.isArray(rawFields) || !rawFields.length || rawFields.length > FILL_FIELDS_MAX) return [];
   const descs = rawFields.map(d => VaultAccounts.fillDesc(d));
@@ -396,7 +412,8 @@ function matchExtras(item, rawFields) {
     const value = typeof f.value === 'string' ? f.value : '';
     if (!value || value.length > EXTRA_VALUE_MAX || /[\r\n]/.test(value)) continue;
     const open = descs.map((d, i) => (d && d.tag === fill.tag ? i : -1)).filter(i => i >= 0);
-    const key = ['name', 'id', 'ac'].find(k => fill[k]);
+    const key = controlKeyOf(fill);
+    if (!key && !normLabel(fill.label)) continue;
     const m = key
       ? open.filter(i => descs[i][key] === fill[key])
       : open.filter(i => normLabel(descs[i].label) === normLabel(fill.label));

@@ -81,9 +81,21 @@
     const hints = `${el.name} ${el.id} ${el.getAttribute('aria-label') || ''} ${el.labels?.[0]?.textContent || ''} ${el.placeholder || ''}`;
     return (ac.split(/\s+/).includes('username') || USERNAME_HINT.test(hints)) && !PASSWORD_WORD.test(hints) && !PIN_CAMEL.test(hints);
   };
+  // BBVA renders both its password-type fields read-only for a moment
+  // (an anti-autofill trick, lifted ~1 s later): a read-only field still
+  // empty when first seen counts here — otherwise "Usuario" is taken for a
+  // read-only sign-in password in that window, and a pick or a launch then
+  // puts the password into it. One holding a value at first sight is the
+  // page's display, as for isReadonlySignInPassword.
+  const isSignInShown = el => {
+    if (isVisible(el)) return true;
+    if (!el.readOnly || !isShown(el)) return false;
+    noteReadonly(el);
+    return !(el.value && _readonlyPrefilled.has(el));
+  };
   const isMaskedUsername = el => {
-    if (!(el instanceof HTMLInputElement) || el.type !== 'password' || !isVisible(el) || !readsLikeUsername(el)) return false;
-    const passwords = root => [...root.querySelectorAll('input[type="password"]')].filter(isVisible);
+    if (!(el instanceof HTMLInputElement) || el.type !== 'password' || !isSignInShown(el) || !readsLikeUsername(el)) return false;
+    const passwords = root => [...root.querySelectorAll('input[type="password"]')].filter(isSignInShown);
     let scope = el.form;
     for (let node = el.parentElement, i = 0; !scope && node && i < 5; i++, node = node.parentElement) {
       if (passwords(node).length >= 2) scope = node;
@@ -430,8 +442,13 @@
   const NOT_EXTRA = /otp|code|token|2fa|mfa|captcha|csrf|xsrf|nonce/i;
   // Ids a framework made up (React's :r3:, mui-12, Math.random()'s base 36):
   // they change on every load, so they don't identify the control.
+  // BBVA's components: "_" + Math.random() in base 36 (_iimft4p9kg,
+  // _2poajcna2x, new on every load): a digit followed by a letter, so a
+  // word with a trailing number (_username1, _password2) stays an id.
+  // Kept equal to background.js generatedId.
   const generatedId = id => /^:|:$|^(mui|react|radix|headlessui|ember|input|field|id)[-_:]?\d+$|[0-9a-f]{8,}|\d{4,}/i.test(id)
-    || (/^[a-z0-9]{8,}$/i.test(id) && /\d.*\d/.test(id) && /[a-z]/i.test(id));
+    || (/^[a-z0-9]{8,}$/i.test(id) && /\d.*\d/.test(id) && /[a-z]/i.test(id))
+    || (/^_[a-z0-9]{8,}$/i.test(id) && /\d[a-z]/i.test(id));
 
   // A native control a web component shows its own way (BBVA's Lit fields):
   // in the light DOM under the component, slotted, the component carrying
@@ -440,13 +457,73 @@
   // has no customElements registry to ask.)
   const slottedHost = el => {
     const control = el instanceof HTMLSelectElement || (el instanceof HTMLInputElement && EXTRA_INPUT_TYPES.includes(el.type));
-    if (!control || !el.getAttribute('slot') || el.disabled || !el.name) return null;
-    const host = el.parentElement;
-    if (!host || !host.localName.includes('-') || !host.matches(':defined')) return null;
+    if (!control || el.disabled || !el.name) return null;
+    const host = slotParent(el);
+    if (!host || !host.matches(':defined')) return null;
     return host.getAttribute('name') === el.name && isShown(host) ? host : null;
   };
-  // The custom element a control is slotted into (or null).
-  const slotParent = el => (el.getAttribute('slot') && el.parentElement?.localName.includes('-') ? el.parentElement : null);
+  // The custom element a control (with a `slot` attribute) belongs to, or
+  // null: the one it's slotted into, or — a form-associated component moves
+  // its native control out of its shadow root to just before itself (BBVA's
+  // bbva-form-select-sph: `<select slot="_select" name=…>` then the
+  // component) — the next sibling carrying the same name.
+  const slotParent = el => {
+    if (!el.getAttribute('slot')) return null;
+    if (el.parentElement?.localName.includes('-')) return el.parentElement;
+    const next = el.nextElementSibling;
+    return next?.localName.includes('-') && el.name && next.getAttribute('name') === el.name ? next : null;
+  };
+
+  // A select component that keeps its list in an `items` attribute (JSON:
+  // BBVA's [{ key, value, text, description, selected }]) and gives the
+  // form only a placeholder select holding the chosen key ("0", "2"): the
+  // key ↔ label map, read from the attribute (never a page property: this
+  // is the isolated world). Used only when the select can't tell the
+  // labels itself (≤ 1 option, or fewer options than the list) and holds
+  // one of the keys. Key: `value` (what the component's select gets), else
+  // `key` / `id`; label: `text`, else `label` / `name` / `description` —
+  // each present on every item and unique. Default: the item marked
+  // `selected` / `default`, else the first. → { entries: [{ key, label }],
+  // def, host } or null.
+  const ITEM_KEYS = ['value', 'key', 'id'];
+  const ITEM_LABELS = ['text', 'label', 'name', 'description'];
+  function itemsList(sel) {
+    if (!(sel instanceof HTMLSelectElement)) return null;
+    const host = slottedHost(sel);
+    const raw = host?.getAttribute('items');
+    if (!raw || raw.length > 20000) return null;
+    const list = parsedItems(raw);
+    if (!list) return null;
+    const { entries, def } = list;
+    if (sel.options.length > 1 && entries.length <= sel.options.length) return null;
+    if (!entries.some(e => e.key === sel.value)) return null;
+    return { entries, def, host };
+  }
+  // The attribute's list, parsed and checked once per attribute value (a
+  // few recent ones: it's read on every capture, fill and check).
+  const _itemsCache = new Map();
+  function parsedItems(raw) {
+    if (_itemsCache.has(raw)) return _itemsCache.get(raw);
+    const list = parseItems(raw);
+    if (_itemsCache.size >= 8) _itemsCache.delete(_itemsCache.keys().next().value);
+    _itemsCache.set(raw, list);
+    return list;
+  }
+  function parseItems(raw) {
+    let items;
+    try { items = JSON.parse(raw); } catch { return null; }
+    if (!Array.isArray(items) || !items.length || items.length > 100
+    || !items.every(i => i && typeof i === 'object' && !Array.isArray(i))) return null;
+    const unique = vals => new Set(vals).size === vals.length;
+    const keyOk = v => (typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v))) && String(v) !== '' && String(v).length <= 100;
+    const keyField = ITEM_KEYS.find(k => items.every(i => keyOk(i[k])) && unique(items.map(i => String(i[k]))));
+    const labelOk = v => typeof v === 'string' && !!v.trim() && v.length <= 256 && !/[\r\n]/.test(v);
+    const labelField = ITEM_LABELS.find(k => items.every(i => labelOk(i[k])) && unique(items.map(i => normText(i[k]))));
+    if (!keyField || !labelField) return null;
+    const entries = items.map(i => Object.freeze({ key: String(i[keyField]), label: i[labelField].trim().replace(/\s+/g, ' ') }));
+    const marked = items.findIndex(i => i.selected === true || i.default === true);
+    return Object.freeze({ entries: Object.freeze(entries), def: entries[marked >= 0 ? marked : 0] });
+  }
   // Big enough to be seen (≥ 16×16) and on screen: filling a slotted
   // control asks this of its component — a 2×2 one is no visible field.
   const seenOnScreen = el => {
@@ -471,13 +548,20 @@
     return '';
   }
 
-  // A select's chosen option (its text), an input's value.
+  // A select's chosen option (its text; an `items` component's: the label
+  // of the key it holds), an input's value.
   const normText = s => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
-  const controlValue = el => (el instanceof HTMLSelectElement
-    ? (el.selectedOptions[0]?.textContent || '').trim()
-    : el.value.trim());
-  // A select still on its default option (the one marked selected, else the first).
+  const controlValue = el => {
+    if (!(el instanceof HTMLSelectElement)) return el.value.trim();
+    const list = itemsList(el);
+    if (list) return list.entries.find(e => e.key === el.value)?.label || '';
+    return (el.selectedOptions[0]?.textContent || '').trim();
+  };
+  // A select still on its default option (the one marked selected, else the
+  // first; an `items` component's: its default item's key).
   const atDefault = sel => {
+    const list = itemsList(sel);
+    if (list) return sel.value === list.def.key;
     const def = [...sel.options].find(o => o.defaultSelected) || sel.options[0];
     return !sel.selectedOptions[0] || sel.selectedOptions[0] === def;
   };
@@ -486,7 +570,9 @@
     const select = el instanceof HTMLSelectElement;
     const desc = { tag: select ? 'select' : 'input', type: select ? 'select-one' : el.type };
     if (el.name && el.name.length <= 100) desc.name = el.name;
-    else if (!el.name && el.id && el.id.length <= 100 && !generatedId(el.id)) desc.id = el.id;
+    // A control slotted into a component gets its id from that component
+    // (made up on each render): only its own name, or its label, identify it.
+    else if (!el.name && el.id && el.id.length <= 100 && !generatedId(el.id) && !slotParent(el)) desc.id = el.id;
     const ac = autocompleteOf(el).trim();
     if (ac && ac !== 'on' && ac !== 'off' && ac.length <= 60) desc.ac = ac;
     if (label) desc.label = label;
@@ -532,7 +618,9 @@
       if (!select && (isSearchField(el) || autocompleteOf(el).includes('one-time-code'))) continue;
       const host = slottedHost(el);
       const label = controlLabel(el, host);
-      if (!label || /^__/.test(el.name || '') || NOT_EXTRA.test(`${el.name} ${el.id} ${label} ${autocompleteOf(el)}`)
+      // (A made-up id is random letters: "_x2fa…" says nothing.)
+      const ownId = generatedId(el.id) ? '' : el.id;
+      if (!label || /^__/.test(el.name || '') || NOT_EXTRA.test(`${el.name} ${ownId} ${label} ${autocompleteOf(el)}`)
         || /security\s*code/i.test(label) || isPaymentControl(el, label)) continue;
       if (filled) {
         const value = controlValue(el);
@@ -563,6 +651,35 @@
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   }
+  // An `items` component (itemsList): the saved label (else a key) is
+  // picked the way the user picks it — a click on its open shadow root's
+  // combobox, then on the option reading that label —, so the component
+  // shows it and puts the key into its select itself. (Setting the native
+  // select is not enough: BBVA's ignores it and keeps showing the default.)
+  // The options may render a moment after the click: waited for up to
+  // 500 ms; none reading the label, the list is closed again only when the
+  // combobox says it's open (aria-expanded) — a second click on one that
+  // didn't open would open it. DOM events only, from this world. → the key
+  // the select must then hold (the pre-submit check), or null: no such label.
+  async function pickInComponent(el, { entries, host }, text) {
+    const entry = entries.find(e => normText(e.label) === normText(text)) || entries.find(e => e.key === text);
+    if (!entry) return null;
+    if (el.value === entry.key) return entry.key;
+    const root = host.shadowRoot; // null when closed: nothing to click
+    const trigger = root?.querySelector('[role="combobox"], [aria-haspopup="listbox"]');
+    if (!trigger) return entry.key;
+    trigger.click();
+    const find = () => [...root.querySelectorAll('[role="option"]')].find(o => normText(o.textContent) === normText(entry.label));
+    let option = find();
+    for (const end = Date.now() + 500; !option && Date.now() < end;) {
+      await new Promise(res => setTimeout(res, 25));
+      option = find();
+    }
+    if (option) option.click();
+    else if (trigger.getAttribute('aria-expanded') === 'true') trigger.click(); // the check catches it
+    await twoFrames();
+    return entry.key;
+  }
   const selectReads = (el, text) => {
     const opt = el.selectedOptions[0];
     return !!opt && (normText(opt.textContent) === normText(text) || opt.value === text);
@@ -585,6 +702,12 @@
       .map(x => ({ ...targets[x.index], value: x.value }));
     const selects = list.filter(t => t.el instanceof HTMLSelectElement);
     for (const { el, label, value } of selects) {
+      const items = itemsList(el);
+      if (items) {
+        const key = await pickInComponent(el, items, value);
+        done.push({ el, label, ok: () => key !== null && el.isConnected && el.value === key });
+        continue;
+      }
       const filled = fillSelect(el, value);
       done.push({ el, label, ok: () => filled && el.isConnected && selectReads(el, value) });
     }

@@ -18,6 +18,14 @@
        pin          a sign-in with two password fields and no label: the first
                     named &field= (account_pin | accountPin | shipping_user),
                     then "password"
+       ro-user      an email (autocomplete=username), then a read-only, empty
+                    password-type field named "username" (Usuario); &pair=1
+                    adds the real password after it
+       ro-filled    a read-only password-type "username" (Usuario) already
+                    holding "••••" at first sight, then the password
+       ids          username, password, then a text field without a name whose
+                    id is &field= and label &label= (default "Customer number");
+                    its value is sent as "customer"
        Every form stays on the page: a submit replaces it with "Done". -->
   <h1>Edge</h1>
   <div id="app"></div>
@@ -57,13 +65,25 @@
       + '<button type="submit">Change password</button>',
     pin: `<input type="password" name="${field}"><input type="password" name="password">`
       + '<button type="submit">Sign in</button>',
+    'ro-user': '<label>Email <input type="email" name="email" autocomplete="username"></label>'
+      + pw('username', 'Usuario', 'readonly') + (params.get('pair') ? pw('password', 'Clave') : '')
+      + '<button type="submit">Sign in</button>',
+    'ro-filled': pw('username', 'Usuario', 'readonly value="••••"') + pw('password', 'Clave')
+      + '<button type="submit">Sign in</button>',
+    ids: text('user', 'User', 'autocomplete="username"') + pw('password', 'Password', 'autocomplete="current-password"')
+      + `<label>${params.get('label') || 'Customer number'} <input type="text" data-cust></label>`
+      + '<button type="submit">Sign in</button>',
   };
 
   app.innerHTML = `<form id="f">${forms[mode] || ''}</form>`;
   const form = document.getElementById('f');
+  // Set as a property: the id comes from the URL.
+  if (mode === 'ids') form.querySelector('[data-cust]').id = field;
   form.addEventListener('submit', e => {
     e.preventDefault(); // nothing leaves the page
-    document.getElementById('result').textContent = JSON.stringify(Object.fromEntries(new FormData(form)));
+    const sent = Object.fromEntries(new FormData(form));
+    if (mode === 'ids') sent.customer = form.querySelector('[data-cust]').value;
+    document.getElementById('result').textContent = JSON.stringify(sent);
     form.remove();
     document.querySelector('h1').textContent = 'Done';
     if (mode === 'settings') {

@@ -131,6 +131,244 @@ for (const [stale, label] of [['number', 'Número de documento'], ['username', '
   });
 }
 
+// ── BBVA as online.bbva.com.ar renders it (login-bbva.html?live=1) ───────────
+// The number field has no name and a new random id on each load; Usuario
+// and Clave are read-only for a moment after load.
+
+const docNumber = site => site.locator('input[data-doc]');
+const isReadOnly = (site, name) => site.locator(`input[name="${name}"]`).evaluate(el => el.readOnly);
+// Saved by #192 from the live page: keyed by that load's random id.
+const STALE_ID_FILL = { tag: 'input', type: 'number', id: '_iimft4p9kg', label: 'Número de documento' };
+const bbvaLive = {
+  ...bbva,
+  customFields: [{ label: 'Número de documento', value: '12345678', kind: 'hidden', fill: STALE_ID_FILL }],
+};
+
+test('BBVA live: picked while Usuario and Clave are still read-only, the username and password go to their own fields', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ ...bbvaLive, autoLogin: false }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=6000`);
+  // A badge in both, not only in Usuario.
+  await expect(site.locator('.otpilot-field-badge')).toHaveCount(2);
+  expect(await isReadOnly(site, 'password')).toBe(true);
+  await pick(site);
+  await expect(site.locator('input[name="username"]')).toHaveValue('user-77');
+  await expect(site.locator('input[name="password"]')).toHaveValue('clave-1');
+  // The number saved with an id of an earlier load: filled by its label.
+  await expect(docNumber(site)).toHaveValue('12345678');
+  expect(await isReadOnly(site, 'username')).toBe(true); // still in the read-only window
+});
+
+test('BBVA live: Open & sign in while the fields are read-only fills each one and signs in', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ ...bbvaLive, urls: `${SITE.replace('http://', '')}/login-bbva.html?live=1&ro=6000` }]);
+  await popup.reload();
+  await waitForVault(popup);
+  const item = popup.locator('#home-list .lc-item', { hasText: 'BBVA' });
+  await item.locator('.lc-row').focus();
+  const opened = context.waitForEvent('page');
+  await item.locator('.lc-launch').click();
+  const site = await opened;
+  await expect(result(site)).toHaveText(/clave-1/);
+  expect(JSON.parse(await result(site).textContent())).toEqual({ documentType: '0', username: 'user-77', password: 'clave-1' });
+  await expect(docNumber(site)).toHaveValue('12345678');
+  expect(site.url()).not.toContain('clave-1');
+});
+
+test('BBVA live: the number field is saved by its label (never its random id) and fills on the next load', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200&spa=1`);
+  await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+  await docNumber(site).fill('12345678');
+  await site.fill('input[name="username"]', 'user-77');
+  await site.fill('input[name="password"]', 'clave-1');
+  await site.click('x-button');
+  await expect(site.locator('h1')).toHaveText('Panel');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer.locator('.otpilot-save-extras')).toHaveText('Also saves: Número de documento');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup)).map(l => [l.username, l.password, l.fields])).toEqual([
+    ['user-77', 'clave-1', [{ label: 'Número de documento', value: '12345678', kind: 'hidden', fill: { tag: 'input', type: 'number', label: 'Número de documento' } }]],
+  ]);
+
+  // A new load: new ids. Filled and signed in.
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200`);
+  await pick(site);
+  await expect(result(site)).toHaveText(/clave-1/);
+  await expect(docNumber(site)).toHaveValue('12345678');
+});
+
+test('BBVA live: a login saved with the random id is updated in place, not given a second number field', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [bbvaLive]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200&spa=1`);
+  await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+  await docNumber(site).fill('87654321');
+  await site.fill('input[name="username"]', 'user-77');
+  await site.fill('input[name="password"]', 'clave-1');
+  await site.click('x-button');
+  await expect(site.locator('h1')).toHaveText('Panel');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup))[0].fields).toEqual([
+    { label: 'Número de documento', value: '87654321', kind: 'hidden', fill: { tag: 'input', type: 'number', label: 'Número de documento' } },
+  ]);
+});
+
+// The document type as the live page has it: <x-select-items> keeps the
+// list (DNI, LC, LE, PASAPORTE) in its `items` attribute, and a one-option
+// placeholder <select name=documentType> before it holds the chosen key.
+
+const docType = site => site.locator('select[name="documentType"]');
+const docTypeShown = site => site.locator('x-select-items .content-text');
+const pickDocType = async (site, label) => {
+  await site.locator('x-select-items #button').click();
+  await site.locator('x-select-items [role="option"]', { hasText: label }).click();
+  await expect(docTypeShown(site)).toHaveText(label);
+};
+const ITEMS_FILL = { tag: 'select', type: 'select-one', name: 'documentType', label: 'Tipo de documento' };
+const signInLive = async (site, { type, number = '12345678', user = 'user-77', password = 'clave-1' } = {}) => {
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200&spa=1`);
+  await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+  if (type) await pickDocType(site, type);
+  await docNumber(site).fill(number);
+  await site.fill('input[name="username"]', user);
+  await site.fill('input[name="password"]', password);
+  await site.click('x-button');
+  await expect(site.locator('h1')).toHaveText('Panel');
+};
+
+test('BBVA live: a document type from the component\'s items list is saved by its label (LE, not its key)', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await signInLive(site, { type: 'LE' });
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer.locator('.otpilot-save-extras')).toHaveText('Also saves: Tipo de documento, Número de documento');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup))[0]?.fields).toEqual([
+    { label: 'Tipo de documento', value: 'LE', kind: 'text', fill: ITEMS_FILL },
+    { label: 'Número de documento', value: '12345678', kind: 'hidden', fill: { tag: 'input', type: 'number', label: 'Número de documento' } },
+  ]);
+});
+
+test('BBVA live: a saved LE is picked in the component (it shows LE, its select holds LE\'s key) and signed in', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ ...bbvaLive, customFields: [{ label: 'Tipo de documento', value: 'LE', kind: 'text', fill: ITEMS_FILL }, ...bbvaLive.customFields] }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200`);
+  await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+  await expect(docTypeShown(site)).toHaveText('DNI');
+  await pick(site);
+  await expect(docTypeShown(site)).toHaveText('LE');
+  await expect(docType(site)).toHaveValue('2');
+  await expect(result(site)).toHaveText(/clave-1/);
+  expect(JSON.parse(await result(site).textContent())).toEqual({ documentType: '2', username: 'user-77', password: 'clave-1' });
+  await expect(docNumber(site)).toHaveValue('12345678');
+  // The list closed again.
+  await expect(site.locator('x-select-items #list')).not.toHaveClass(/opened/);
+});
+
+test('BBVA live: the default document type (DNI) is never captured on its own', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await signInLive(site, { type: 'DNI' });
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer.locator('.otpilot-save-extras')).toHaveText('Also saves: Número de documento');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup))[0]?.fields.map(f => f.label)).toEqual(['Número de documento']);
+});
+
+test('BBVA live: a saved LE switched back to DNI in the component is an update to DNI', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ ...bbvaLive, customFields: [
+    { label: 'Tipo de documento', value: 'LE', kind: 'text', fill: ITEMS_FILL },
+    { label: 'Número de documento', value: '12345678', kind: 'hidden', fill: { tag: 'input', type: 'number', label: 'Número de documento' } },
+  ] }]);
+  const site = await context.newPage();
+  await signInLive(site); // left on DNI
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update BBVA?');
+  await expect(offer.locator('.otpilot-save-extras')).toHaveText('Saves: Tipo de documento');
+  await offer.getByRole('button', { name: 'Update' }).click();
+  await expect.poll(async () => (await logins(popup))[0].fields.map(f => [f.label, f.value])).toEqual([
+    ['Tipo de documento', 'DNI'], ['Número de documento', '12345678'],
+  ]);
+});
+
+test('BBVA live: a saved document type the component doesn\'t list is not signed in; the toast names the field', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ ...bbvaLive, customFields: [{ label: 'Tipo de documento', value: 'RENAPER', kind: 'text', fill: ITEMS_FILL }, ...bbvaLive.customFields] }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200`);
+  await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+  await pick(site);
+  await expect(site.getByText('Check Tipo de documento before signing in')).toBeVisible();
+  await expect(site.locator('input[name="password"]')).toHaveValue('clave-1');
+  await site.waitForTimeout(1500);
+  await expect(result(site)).toHaveText('');
+  await expect(docTypeShown(site)).toHaveText('DNI');
+  await expect(docType(site)).toHaveValue('0');
+});
+
+const bbvaLE = { ...bbvaLive, customFields: [{ label: 'Tipo de documento', value: 'LE', kind: 'text', fill: ITEMS_FILL }, ...bbvaLive.customFields] };
+const listOpen = site => site.locator('x-select-items #button').getAttribute('aria-expanded');
+const compClicks = site => site.evaluate(() => window.__compClicks);
+// Not signed in: the toast names the field; the component still shows DNI.
+const notSignedIn = async site => {
+  await expect(site.getByText('Check Tipo de documento before signing in')).toBeVisible();
+  await expect(site.locator('input[name="password"]')).toHaveValue('clave-1');
+  await site.waitForTimeout(1500);
+  await expect(result(site)).toHaveText('');
+  await expect(docType(site)).toHaveValue('0');
+};
+
+test('BBVA live: options the component renders 300 ms after the list opens are waited for: LE is picked and signed in', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [bbvaLE]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200&late=300`);
+  await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+  await pick(site);
+  await expect(result(site)).toHaveText(/clave-1/);
+  expect(JSON.parse(await result(site).textContent())).toEqual({ documentType: '2', username: 'user-77', password: 'clave-1' });
+  await expect(docTypeShown(site)).toHaveText('LE');
+  expect(await listOpen(site)).toBe('false');
+});
+
+test('BBVA live: options that never render: the list is closed again, not signed in, the toast names the field', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [bbvaLE]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200&late=never`);
+  await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+  await pick(site);
+  await notSignedIn(site);
+  await expect(docTypeShown(site)).toHaveText('DNI');
+  expect(await listOpen(site)).toBe('false');
+  await expect(site.locator('x-select-items #list')).not.toHaveClass(/opened/);
+});
+
+test('BBVA live: a component with a closed shadow root is never clicked; not signed in, the toast names the field', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [bbvaLE]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200&shadow=closed`);
+  await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+  await pick(site);
+  await notSignedIn(site);
+  expect(await compClicks(site)).toBe(0);
+});
+
+// A broken `items` attribute is no key ↔ label map: the plain select path
+// (its one option "0" isn't LE), never a click in the component.
+for (const items of ['malformed', 'dup', 'many', 'big']) {
+  test(`BBVA live: an \`items\` attribute that is ${items} falls back to the plain select: no click, not signed in, toast`, async ({ context, extensionId }) => {
+    await vaultWith(context, extensionId, [bbvaLE]);
+    const site = await context.newPage();
+    await site.goto(`${SITE}/login-bbva.html?live=1&ro=200&items=${items}`);
+    await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+    await pick(site);
+    await notSignedIn(site);
+    await expect(docTypeShown(site)).toHaveText('DNI');
+    expect(await compClicks(site)).toBe(0);
+  });
+}
+
 test('BBVA: a page that clears the number when the type changes still gets the number', async ({ context, extensionId }) => {
   await vaultWith(context, extensionId, [bbva]);
   const site = await context.newPage();
@@ -389,7 +627,27 @@ test('an extra control the login does not have is left empty', async ({ context,
   await expect(site.locator('input[name="branchCode"]')).toHaveValue('');
 });
 
-for (const trap of ['hidden', 'host']) {
+// before-other: slotted, before a component with another name; before-plain:
+// slotted, before an element that is no component. Neither is an extra.
+for (const trap of ['host', 'before-other', 'before-plain']) {
+  test(`a hidden slotted select the page adds (${trap}) is never captured`, async ({ context, extensionId }) => {
+    const popup = await vaultWith(context, extensionId, []);
+    const site = await context.newPage();
+    await site.goto(`${SITE}/login-bbva.html?spa=1&trap=${trap}`);
+    await site.selectOption('select[name="trapSelect"]', 'b', { force: true });
+    await site.fill('input[name="documentNumber"]', '12345678');
+    await site.fill('input[name="username"]', 'user-77');
+    await site.fill('input[name="password"]', 'clave-1');
+    await site.click('x-button');
+    await expect(site.locator('h1')).toHaveText('Panel');
+    const offer = site.locator('#otpilot-login-save');
+    await expect(offer.locator('.otpilot-save-extras')).toHaveText('Also saves: Número de documento');
+    await offer.locator('.otpilot-save-confirm').click();
+    await expect.poll(async () => (await logins(popup))[0]?.fields.map(f => f.label)).toEqual(['Número de documento']);
+  });
+}
+
+for (const trap of ['hidden', 'host', 'before-other', 'before-plain']) {
   test(`a hidden select the page adds (${trap}) is never filled, even when a saved field names it`, async ({ context, extensionId }) => {
     await vaultWith(context, extensionId, [{
       ...bbva,
