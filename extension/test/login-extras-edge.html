@@ -1,0 +1,80 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign-in edge cases</title>
+<style> label { display: block; margin: 6px 0; } input { width: 220px; } </style>
+</head>
+<body>
+  <!-- Edge cases around extra sign-in fields, read-only passwords and masked
+       usernames. ?mode=
+       settings     a sign-in whose page then shows a settings form with a
+                    read-only "••••" already filled and a Save button
+       many         a sign-in form with 10 filled text fields beside the password
+       signup       a sign-up (password + confirmation) with extra text fields
+       checkout     a sign-in inside a checkout (card number, CVV, expiry, IBAN)
+                    and one real extra (customer number)
+       signup-mask  a sign-up whose first password field is named after the
+                    account (&field=accountPassword | login), then a confirmation
+       change-mask  a change-password form whose current password is named
+                    after the login (&field=loginPassword | login), new, confirm
+       pin          a sign-in with two password fields and no label: the first
+                    named &field= (account_pin | accountPin | shipping_user),
+                    then "password"
+       Every form stays on the page: a submit replaces it with "Done". -->
+  <h1>Edge</h1>
+  <div id="app"></div>
+  <pre id="result"></pre>
+<script>
+  const params = new URLSearchParams(location.search);
+  const mode = params.get('mode');
+  const field = params.get('field');
+  const app = document.getElementById('app');
+  const text = (name, label, attrs = '') => `<label>${label} <input type="text" name="${name}" ${attrs}></label>`;
+  const pw = (name, label, attrs = '') => `<label>${label} <input type="password" name="${name}" ${attrs}></label>`;
+
+  const forms = {
+    settings: text('user', 'User', 'autocomplete="username"') + pw('password', 'Password', 'autocomplete="current-password"')
+      + '<button type="submit">Sign in</button>',
+    many: text('user', 'User', 'autocomplete="username"')
+      + Array.from({ length: 10 }, (_, i) => text(`f${i + 1}`, `Field ${i + 1}`)).join('')
+      + pw('password', 'Password', 'autocomplete="current-password"') + '<button type="submit">Sign in</button>',
+    signup: text('firstName', 'First name') + text('company', 'Company')
+      + '<label>Email <input type="email" name="email" autocomplete="email"></label>'
+      + pw('password', 'Password') + pw('confirm_password', 'Confirm password')
+      + '<button type="submit">Create account</button>',
+    checkout: '<label>Email <input type="email" name="email" autocomplete="username"></label>'
+      + pw('password', 'Password', 'autocomplete="current-password"')
+      + text('customer', 'Customer number')
+      + text('ccnum', 'Card number', 'autocomplete="cc-number"')
+      + text('sec', 'CVV')
+      + text('exp', 'Expiry date')
+      + text('bankacct', 'IBAN')
+      + text('holder', 'Name', 'autocomplete="cc-name"')
+      + '<button type="submit">Sign in and pay</button>',
+    'signup-mask': '<label>Email <input type="email" name="email" autocomplete="email"></label>'
+      + (field === 'login' ? pw('login', 'Login') : pw('accountPassword', 'Account password'))
+      + pw('confirm', 'Confirm password') + '<button type="submit">Create account</button>',
+    'change-mask': (field === 'login' ? pw('login', 'Login') : pw('loginPassword', 'Login password'))
+      + pw('newPassword', 'New password') + pw('confirmPassword', 'Confirm password')
+      + '<button type="submit">Change password</button>',
+    pin: `<input type="password" name="${field}"><input type="password" name="password">`
+      + '<button type="submit">Sign in</button>',
+  };
+
+  app.innerHTML = `<form id="f">${forms[mode] || ''}</form>`;
+  const form = document.getElementById('f');
+  form.addEventListener('submit', e => {
+    e.preventDefault(); // nothing leaves the page
+    document.getElementById('result').textContent = JSON.stringify(Object.fromEntries(new FormData(form)));
+    form.remove();
+    document.querySelector('h1').textContent = 'Done';
+    if (mode === 'settings') {
+      // The account page: a stored PIN shown read-only, and a Save button.
+      app.innerHTML = '<form id="settings"><label>Card PIN <input type="password" name="pin" value="••••" readonly></label>'
+        + '<button type="submit">Save</button></form>';
+      document.getElementById('settings').addEventListener('submit', ev => {
+        ev.preventDefault();
+        window.__settingsSaved = (window.__settingsSaved || 0) + 1;
+      });
+    }
+  });
+</script>
+</body></html>

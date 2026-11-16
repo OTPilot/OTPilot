@@ -24,15 +24,83 @@
   let _checkedFor = null;   // the last password field asked about (one ask per field)
   let _checking = false;
 
-  const isVisible = el => {
-    if (!el.isConnected || el.disabled || el.readOnly) return false;
+  // On screen: connected, enabled, with a size, not hidden.
+  const isShown = el => {
+    if (!el.isConnected || el.disabled) return false;
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) return false;
     const st = getComputedStyle(el);
     return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
   };
+  // On screen and editable (a read-only field is the page's display).
+  const isVisible = el => isShown(el) && !el.readOnly;
 
   const autocompleteOf = el => (el.getAttribute('autocomplete') || '').toLowerCase();
+
+  // A read-only password field that is the sign-in's password all the same:
+  // a bank's PIN typed on its own on-screen keypad (ABANCA). Only in a form
+  // that has a submit / sign-in button, never a new password; a read-only
+  // "••••" display elsewhere is not one. Filled with the native setter
+  // (fillInputValue), the attribute left as it is. Offered only while empty
+  // (findLoginFields); a capture reads its value.
+  // Only one empty now, or empty when this script first saw it (its value
+  // came later: the keypad, our fill): one that already held a value then
+  // is the page showing a stored secret (a settings form's "••••"), never
+  // a password to capture, nor one that holds back a save offer.
+  const _readonlySeen = new WeakSet();
+  const _readonlyPrefilled = new WeakSet();
+  const noteReadonly = el => {
+    if (_readonlySeen.has(el)) return;
+    _readonlySeen.add(el);
+    if (el.value) _readonlyPrefilled.add(el);
+  };
+  const noteReadonlyPasswords = () => {
+    for (const el of document.querySelectorAll('input[type="password"]')) if (el.readOnly) noteReadonly(el);
+  };
+  const isReadonlySignInPassword = el => {
+    if (!(el instanceof HTMLInputElement) || el.type !== 'password' || !el.readOnly) return false;
+    noteReadonly(el);
+    if (el.value && _readonlyPrefilled.has(el)) return false;
+    return isShown(el) && !autocompleteOf(el).includes('new-password') && !!el.form
+      && !!(findSubmitButton(el.form) || formButton(el.form, signsInToSubmit)) && !isNewPassword(el);
+  };
+  // A password field that a sign-in can use: editable, or read-only as above.
+  const isPasswordShown = el => isVisible(el) || isReadonlySignInPassword(el);
+
+  // A masked username: a password-type field that asks for the username
+  // (BBVA's "Usuario"), followed by the real password field. Only by its
+  // own hints: autocomplete="username" or a username-like name / label, and
+  // nothing that reads like a password or PIN.
+  // "pin" as a word between non-letters (account_pin, login-pin, PIN:, not
+  // spinner / shipping), or a camelCase part (accountPin).
+  const PASSWORD_WORD = /pass|pwd|clave|contrase|senha|passwort|mot\s*de\s*passe|(?:^|[^a-z])pin(?:[^a-z]|$)|secret/i;
+  const PIN_CAMEL = /[a-z](?:Pin|PIN)(?![a-z])/;
+  const readsLikeUsername = el => {
+    const ac = autocompleteOf(el);
+    if (ac.includes('new-password') || ac.includes('current-password')) return false;
+    const hints = `${el.name} ${el.id} ${el.getAttribute('aria-label') || ''} ${el.labels?.[0]?.textContent || ''} ${el.placeholder || ''}`;
+    return (ac.split(/\s+/).includes('username') || USERNAME_HINT.test(hints)) && !PASSWORD_WORD.test(hints) && !PIN_CAMEL.test(hints);
+  };
+  const isMaskedUsername = el => {
+    if (!(el instanceof HTMLInputElement) || el.type !== 'password' || !isVisible(el) || !readsLikeUsername(el)) return false;
+    const passwords = root => [...root.querySelectorAll('input[type="password"]')].filter(isVisible);
+    let scope = el.form;
+    for (let node = el.parentElement, i = 0; !scope && node && i < 5; i++, node = node.parentElement) {
+      if (passwords(node).length >= 2) scope = node;
+    }
+    if (!scope) return false;
+    // Exactly one other password field (a sign-in's), after it, that isn't
+    // one too — never on a sign-up / reset / change-password page, nor beside
+    // a field that reads like a new password: there a password field named
+    // "account" / "login" is the account's password.
+    if (NEW_PW_PAGE.test(location.pathname) || CHANGE_PW_PAGE.test(location.pathname)) return false;
+    const others = passwords(scope).filter(p => p !== el && !readsLikeUsername(p));
+    if (others.length !== 1) return false;
+    const [p] = others;
+    const hints = `${p.name} ${p.id} ${p.placeholder} ${p.getAttribute('aria-label') || ''} ${p.labels?.[0]?.textContent || ''}`;
+    if (autocompleteOf(p).includes('new-password') || NEW_PW_HINT.test(hints)) return false;
+    return !!(el.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING);
+  };
 
   // A field for a new password: autocomplete="new-password", or — on the
   // many pages that don't say so — a field named / labelled like one (new,
@@ -48,7 +116,7 @@
   // the nearest container (up to a few levels) that holds more than one — two
   // sign-in panels elsewhere on the page aren't one group.
   const passwordGroup = el => {
-    const visible = root => [...root.querySelectorAll('input[type="password"]')].filter(isVisible);
+    const visible = root => [...root.querySelectorAll('input[type="password"]')].filter(f => isVisible(f) && !isMaskedUsername(f));
     if (el.form) return visible(el.form);
     let node = el.parentElement;
     for (let i = 0; node && i < 5; i++, node = node.parentElement) {
@@ -71,6 +139,7 @@
   };
   const isNewPassword = el => {
     if (!(el instanceof HTMLInputElement) || el.type !== 'password') return false;
+    if (isMaskedUsername(el)) return false;
     const ac = autocompleteOf(el);
     if (ac.includes('new-password')) return true;
     if (ac.includes('current-password')) return false;
@@ -136,19 +205,24 @@
   };
 
   // The sign-in password field and its username field (or null).
+  // A read-only one only while empty (see isReadonlySignInPassword). The
+  // username: autocomplete username / email, else a masked username before
+  // the password, else the last text field before it.
   function findLoginFields() {
     const password = [...document.querySelectorAll('input[type="password"]')]
-      .find(el => isVisible(el) && !isNewPassword(el));
+      .find(el => (isVisible(el) || (!el.value && isReadonlySignInPassword(el))) && !isNewPassword(el) && !isMaskedUsername(el));
     if (!password) return null;
     const scope = password.form || document;
+    const precedes = el => el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING;
     const before = [...scope.querySelectorAll('input')].filter(el =>
       el !== password
       && ['text', 'email', 'tel'].includes(el.type)
       && isVisible(el)
       && !autocompleteOf(el).includes('one-time-code')
-      && (el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING));
+      && precedes(el));
+    const masked = [...scope.querySelectorAll('input[type="password"]')].filter(el => el !== password && precedes(el) && isMaskedUsername(el));
     const username = before.find(el => /\b(username|email)\b/.test(autocompleteOf(el)))
-      || before[before.length - 1] || null;
+      || masked[masked.length - 1] || before[before.length - 1] || null;
     return { username, password };
   }
 
@@ -180,25 +254,33 @@
   // automatically" on, the form (or the username step) is submitted after
   // the fill — the user's pick is the gesture; not where the site rejects
   // a synthetic click (isNoAutoSubmitHost).
+  // The page's empty extra controls go along (descriptors only): the
+  // background answers the values of the login's fields matching them.
   async function fill({ id, autoLogin }) {
     const fields = findFillFields();
     // A username step gets the username only: the password waits for its page.
     const usernameOnly = !!fields && !fields.password;
+    const targets = fields ? extraFields(fields.password || fields.username, fields.username, { filled: false }) : [];
     let res;
-    try { res = await chrome.runtime.sendMessage({ action: 'vaultFillLogin', id, usernameOnly }); } catch { res = null; }
+    try {
+      res = await chrome.runtime.sendMessage({ action: 'vaultFillLogin', id, usernameOnly, ...(targets.length ? { fields: targets.map(t => t.desc) } : {}) });
+    } catch { res = null; }
     if (!fields || !res?.ok || (usernameOnly && !res.username)) {
       showToast(usernameOnly && res?.ok ? 'This login has no username saved' : 'OTPilot could not fill this login', false);
       return;
     }
     // Filling focuses the fields: that mustn't reopen the dropdown.
+    // Selects, then typed extra fields, then username and password.
     _filling = true;
+    let done;
     try {
-      if (fields.username && res.username) fillInputValue(fields.username, res.username);
-      if (fields.password) fillInputValue(fields.password, res.password);
+      done = await fillExtras(targets, res.extras);
+      if (fields.username && res.username) { fillInputValue(fields.username, res.username); done.push(filledCheck(fields.username, 'the username')); }
+      if (fields.password) { fillInputValue(fields.password, res.password); done.push(filledCheck(fields.password, 'the password')); }
     } finally { _filling = false; }
     if (autoLogin !== false) {
-      if (fields.password) submitAfterFill(fields.password, passwordButtonFor);
-      else submitAfterFill(fields.username, signInButtonFor);
+      if (fields.password) submitAfterFill(fields.password, passwordButtonFor, done);
+      else submitAfterFill(fields.username, signInButtonFor, done);
     }
     closeOverlay();
     closeDropdown();
@@ -297,18 +379,199 @@
 
   // The filled password field (a new password over the current one on a
   // change-password form) and its username field.
+  // A masked username is the username, never the password. A sign-in (not
+  // a new password) also sends its extra fields (`extras`, see extraFields).
   function findSubmittedFields(root = document) {
-    const filled = [...root.querySelectorAll('input[type="password"]')].filter(el => el.value && isVisible(el));
+    const all = [...root.querySelectorAll('input[type="password"]')].filter(el => el.value && isPasswordShown(el));
+    const filled = all.filter(el => !isMaskedUsername(el));
     if (!filled.length) return null;
     const password = filled.find(isNewPassword) || filled[0];
     const scope = password.form || document;
+    const precedes = el => el.compareDocumentPosition(filled[0]) & Node.DOCUMENT_POSITION_FOLLOWING;
     const before = [...scope.querySelectorAll('input')].filter(el =>
       ['text', 'email', 'tel'].includes(el.type) && el.value
       && !autocompleteOf(el).includes('one-time-code')
-      && (el.compareDocumentPosition(filled[0]) & Node.DOCUMENT_POSITION_FOLLOWING));
-    const username = before.find(el => /\b(username|email)\b/.test(autocompleteOf(el))) || before[before.length - 1];
-    return { username: username?.value || '', password: password.value };
+      && precedes(el));
+    const masked = all.filter(el => isMaskedUsername(el) && precedes(el));
+    const usernameEl = before.find(el => /\b(username|email)\b/.test(autocompleteOf(el)))
+      || masked[masked.length - 1] || before[before.length - 1];
+    const fields = { username: usernameEl?.value || '', password: password.value };
+    if (!isNewPassword(password)) {
+      const extras = extraFields(password, usernameEl, { filled: true }).map(({ el, desc, label }) => ({
+        label, value: controlValue(el), kind: desc.tag === 'select' ? 'text' : 'hidden', fill: desc,
+      }));
+      if (extras.length) fields.extras = extras;
+    }
+    return fields;
   }
+
+  // ── Extra sign-in fields ──────────────────────────────────────────────────────
+  // What a sign-in asks besides the username and password (a document type,
+  // a customer number): saved with the login, filled with it. Each is
+  // described to the background by `desc` ({ tag, type, name?, id?, ac?,
+  // label? }) — never its value when filling: the background matches.
+  const EXTRA_INPUT_TYPES = ['text', 'email', 'tel', 'number'];
+  const NOT_EXTRA = /otp|code|token|2fa|mfa|captcha|csrf|xsrf|nonce/i;
+  // Ids a framework made up (React's :r3:, mui-12, Math.random()'s base 36):
+  // they change on every load, so they don't identify the control.
+  const generatedId = id => /^:|:$|^(mui|react|radix|headlessui|ember|input|field|id)[-_:]?\d+$|[0-9a-f]{8,}|\d{4,}/i.test(id)
+    || (/^[a-z0-9]{8,}$/i.test(id) && /\d.*\d/.test(id) && /[a-z]/i.test(id));
+
+  // A native control a web component shows its own way (BBVA's Lit fields):
+  // in the light DOM under the component, slotted, the component carrying
+  // the same name. The control itself may be invisible (opacity 0): the
+  // component is what's on screen. (`:defined`: the content script's world
+  // has no customElements registry to ask.)
+  const slottedHost = el => {
+    const control = el instanceof HTMLSelectElement || (el instanceof HTMLInputElement && EXTRA_INPUT_TYPES.includes(el.type));
+    if (!control || !el.getAttribute('slot') || el.disabled || !el.name) return null;
+    const host = el.parentElement;
+    if (!host || !host.localName.includes('-') || !host.matches(':defined')) return null;
+    return host.getAttribute('name') === el.name && isShown(host) ? host : null;
+  };
+  // The custom element a control is slotted into (or null).
+  const slotParent = el => (el.getAttribute('slot') && el.parentElement?.localName.includes('-') ? el.parentElement : null);
+  // Big enough to be seen (≥ 16×16) and on screen: filling a slotted
+  // control asks this of its component — a 2×2 one is no visible field.
+  const seenOnScreen = el => {
+    const r = el.getBoundingClientRect();
+    return r.width >= 16 && r.height >= 16
+      && r.right > 0 && r.bottom > 0 && r.left < window.innerWidth && r.top < window.innerHeight;
+  };
+  // Payment data is never an extra sign-in field (a login inside a checkout).
+  const PAYMENT_WORD = /card|cvv|cvc|csc|iban|expir/i;
+  const isPaymentControl = (el, label) => autocompleteOf(el).split(/\s+/).some(t => t.startsWith('cc-'))
+    || PAYMENT_WORD.test(`${el.name || ''} ${el.id || ''} ${label}`);
+
+  const cleanLabel = s => String(s || '').replace(/\s+/g, ' ').trim().replace(/[\s:*]+$/, '').slice(0, 60).trim();
+  const readableName = s => (s && !generatedId(s) && /[a-z]{2}/i.test(s)
+    ? s.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[-_.]+/g, ' ') : '');
+  function controlLabel(el, host) {
+    const labelledBy = (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+      .map(id => document.getElementById(id)?.textContent || '').join(' ');
+    const chain = [host?.getAttribute('label'), host?.getAttribute('aria-label'), el.labels?.[0]?.textContent,
+      el.getAttribute('aria-label'), labelledBy, el.getAttribute('placeholder'), readableName(el.name), readableName(el.id)];
+    for (const s of chain) { const label = cleanLabel(s); if (label) return label; }
+    return '';
+  }
+
+  // A select's chosen option (its text), an input's value.
+  const normText = s => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const controlValue = el => (el instanceof HTMLSelectElement
+    ? (el.selectedOptions[0]?.textContent || '').trim()
+    : el.value.trim());
+  // A select still on its default option (the one marked selected, else the first).
+  const atDefault = sel => {
+    const def = [...sel.options].find(o => o.defaultSelected) || sel.options[0];
+    return !sel.selectedOptions[0] || sel.selectedOptions[0] === def;
+  };
+
+  function descOf(el, label) {
+    const select = el instanceof HTMLSelectElement;
+    const desc = { tag: select ? 'select' : 'input', type: select ? 'select-one' : el.type };
+    if (el.name && el.name.length <= 100) desc.name = el.name;
+    else if (!el.name && el.id && el.id.length <= 100 && !generatedId(el.id)) desc.id = el.id;
+    const ac = autocompleteOf(el).trim();
+    if (ac && ac !== 'on' && ac !== 'off' && ac.length <= 60) desc.ac = ac;
+    if (label) desc.label = label;
+    return desc;
+  }
+
+  // Where a sign-in's extra fields are: the password's form, else (no form)
+  // the nearest container (up to 5 levels) holding the username field and
+  // no search box.
+  function extrasScope(anchor, username) {
+    if (anchor.form) return anchor.form;
+    if (!username) return null;
+    for (let node = anchor.parentElement, i = 0; node && i < 5; i++, node = node.parentElement) {
+      if (!node.contains(username)) continue;
+      return [...node.querySelectorAll('input')].some(isSearchField) ? null : node;
+    }
+    return null;
+  }
+
+  // The extra controls around a sign-in's `anchor` (its password field, or a
+  // username step's field): `filled` — the ones the user filled, to save (a
+  // select only off its default) —, else the empty ones, to fill (≤ 20).
+  // More than 8 filled is no sign-in (a checkout, a profile form): none is
+  // saved. Never the username or a password, a hidden field, a checkbox, a
+  // radio, a search box, a code / token / captcha, payment data or a
+  // framework's own field; in a form, only that form's own controls. A
+  // control slotted into a component is filled only while that component
+  // is big enough to see and on screen.
+  // → [{ el, desc, label }]
+  function extraFields(anchor, username, { filled }) {
+    const scope = extrasScope(anchor, username);
+    if (!scope) return [];
+    const out = [];
+    for (const el of scope.querySelectorAll('input, select')) {
+      if (el === anchor || el === username) continue;
+      if (anchor.form && el.form !== anchor.form) continue;
+      const select = el instanceof HTMLSelectElement;
+      if (select ? el.multiple : !EXTRA_INPUT_TYPES.includes(el.type)) continue;
+      if (el.readOnly || !(isVisible(el) || slottedHost(el))) continue;
+      if (!filled && slotParent(el) && !seenOnScreen(slotParent(el))) continue;
+      if (!select && (isSearchField(el) || autocompleteOf(el).includes('one-time-code'))) continue;
+      const host = slottedHost(el);
+      const label = controlLabel(el, host);
+      if (!label || /^__/.test(el.name || '') || NOT_EXTRA.test(`${el.name} ${el.id} ${label} ${autocompleteOf(el)}`)
+        || /security\s*code/i.test(label) || isPaymentControl(el, label)) continue;
+      if (filled) {
+        const value = controlValue(el);
+        if (!value || value.length > 256 || /[\r\n]/.test(value) || (select && atDefault(el))) continue;
+      } else if (select ? !atDefault(el) : el.value !== '') continue;
+      out.push({ el, desc: descOf(el, label), label });
+      if (filled ? out.length > 8 : out.length >= 20) break;
+    }
+    return filled && out.length > 8 ? [] : out;
+  }
+
+  // Picks the option reading `text` (its text, else its value). Never
+  // fillInputValue on a select (an input's setter). → false: no such option.
+  function fillSelect(el, text) {
+    const opts = [...el.options];
+    const opt = opts.find(o => normText(o.textContent) === normText(text)) || opts.find(o => o.value === text);
+    if (!opt) return false;
+    if (opt.selected) return true;
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(el, opt.value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+  const selectReads = (el, text) => {
+    const opt = el.selectedOptions[0];
+    return !!opt && (normText(opt.textContent) === normText(text) || opt.value === text);
+  };
+
+  // Two frames for a component to take a picked option before the next
+  // field (at most 150 ms: a background tab draws no frames).
+  const twoFrames = () => new Promise(res => {
+    const t = setTimeout(res, 150);
+    requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); res(); }));
+  });
+
+  // Fills the background's `extras` ([{ index, value }] into `targets`):
+  // selects first, then typed fields. → what was filled, for the pre-submit
+  // check: [{ el, label, ok() }] (ok() false: not filled, or reverted).
+  async function fillExtras(targets, extras) {
+    const done = [];
+    const list = (Array.isArray(extras) ? extras : [])
+      .filter(x => Number.isInteger(x?.index) && targets[x.index] && typeof x.value === 'string' && x.value)
+      .map(x => ({ ...targets[x.index], value: x.value }));
+    const selects = list.filter(t => t.el instanceof HTMLSelectElement);
+    for (const { el, label, value } of selects) {
+      const filled = fillSelect(el, value);
+      done.push({ el, label, ok: () => filled && el.isConnected && selectReads(el, value) });
+    }
+    if (selects.length) await twoFrames();
+    for (const { el, label, value } of list.filter(t => !(t.el instanceof HTMLSelectElement))) {
+      fillInputValue(el, value);
+      done.push({ el, label, ok: () => el.isConnected && el.value !== '' });
+    }
+    return done;
+  }
+  // A filled username / password field, for the same check.
+  const filledCheck = (el, label) => ({ el, label: controlLabel(el) || label, ok: () => el.isConnected && el.value !== '' });
 
   // Only duplicate events of one submission (click + submit + Enter) are
   // collapsed: the same credentials submitted again later are a new attempt.
@@ -333,24 +596,35 @@
   const USERNAME_HINT = /user|e-?mail|login|identifier|account|usuario|correo/i;
   // A visible password field: the form is past (or on) its password step.
   // A hidden one is a later step of the same form, still to come.
-  const hasVisiblePassword = root => [...root.querySelectorAll('input[type="password"]')].some(isVisible);
+  // (A read-only sign-in password or a masked username counts.)
+  const hasVisiblePassword = root => [...root.querySelectorAll('input[type="password"]')].some(isPasswordShown);
 
+  // The username step's value, and its extra fields: one filled field that
+  // looks like a username; any other filled one must be an extra field.
   function findUsernameStep(root = document) {
     if (hasVisiblePassword(root)) return null;
     const filled = [...root.querySelectorAll('input')].filter(el =>
       ['text', 'email', 'tel'].includes(el.type) && el.value.trim() && isVisible(el)
       && !autocompleteOf(el).includes('one-time-code'));
-    if (filled.length !== 1) return null;
-    const el = filled[0];
-    const looksLikeUsername = /\b(username|email)\b/.test(autocompleteOf(el)) || el.type === 'email'
+    const looksLikeUsername = el => /\b(username|email)\b/.test(autocompleteOf(el)) || el.type === 'email'
       || USERNAME_HINT.test(`${el.name} ${el.id}`);
-    return looksLikeUsername ? el.value.trim() : null;
+    if (filled.length === 1) {
+      if (!looksLikeUsername(filled[0])) return null;
+    } else if (filled.filter(looksLikeUsername).length !== 1) return null;
+    const el = filled.length === 1 ? filled[0] : filled.find(looksLikeUsername);
+    const extras = extraFields(el, el, { filled: true });
+    if (filled.some(f => f !== el && !extras.some(x => x.el === f))) return null;
+    return {
+      username: el.value.trim(),
+      extras: extras.map(({ el: x, desc, label }) => ({ label, value: controlValue(x), kind: desc.tag === 'select' ? 'text' : 'hidden', fill: desc })),
+    };
   }
 
   function captureUsername(root) {
     if (!chrome.runtime?.id) return;
-    const username = findUsernameStep(root);
-    if (username) chrome.runtime.sendMessage({ action: 'vaultCaptureUsername', username }).catch(() => {});
+    const step = findUsernameStep(root);
+    if (!step) return;
+    chrome.runtime.sendMessage({ action: 'vaultCaptureUsername', username: step.username, ...(step.extras.length ? { extras: step.extras } : {}) }).catch(() => {});
   }
 
   // A click counts as submitting a sign-in only on a submit button (a
@@ -363,6 +637,8 @@
     const text = [btn.textContent, btn.value, btn.getAttribute('aria-label'), btn.title].filter(Boolean).join(' ');
     if (NOT_SUBMIT.test(text)) return false;
     if (btn.form && btn.type === 'submit') return true;
+    // A web component's submit button (<bbva-button type=submit>) in a form.
+    if (btn.localName.includes('-') && btn.getAttribute('type') === 'submit' && btn.closest('form')) return true;
     return LOOKS_SUBMIT.test(text);
   }
 
@@ -372,7 +648,7 @@
   }, true);
   document.addEventListener('click', e => {
     if (e.target.closest?.(`#${OVERLAY_ID}, #${SAVE_ID}, #${DROP_ID}, #otpilot-password-suggest, .${BADGE_CLASS}`)) return; // our own UI
-    const btn = e.target.closest?.('button, input[type="submit"], input[type="button"], [role="button"]');
+    const btn = e.target.closest?.('button, input[type="submit"], input[type="button"], [role="button"], [type="submit"]');
     if (!btn || !isSubmitControl(btn)) return;
     const scope = btn.form || btn.closest('form') || document;
     if (hasVisiblePassword(scope)) capture(scope); else captureUsername(scope);
@@ -383,7 +659,7 @@
     else if (['text', 'email', 'tel'].includes(e.target.type)) captureUsername(e.target.form || document);
   }, true);
 
-  const passwordFormShowing = () => [...document.querySelectorAll('input[type="password"]')].some(isVisible);
+  const passwordFormShowing = () => [...document.querySelectorAll('input[type="password"]')].some(isPasswordShown);
 
   async function offerSave() {
     if (!chrome.runtime?.id || document.getElementById(SAVE_ID) || passwordFormShowing()) return;
@@ -417,6 +693,7 @@
     const body = el.querySelector('.otpilot-save-body');
     const first = (offer.candidates || [])[0];
     const title = offer.kind !== 'update' ? `Save this login for <b>${esc(offer.host)}</b>?`
+      : offer.extrasOnly ? `Update <b>${esc(offer.name || offer.host)}</b>?`
       : (offer.candidates || []).length > 1 ? `Update a login for <b>${esc(offer.host)}</b>?`
       : first && !first.username && offer.username ? `Add this username and password to <b>${esc(offer.name || offer.host)}</b>?`
       : `Update the password for <b>${esc(offer.name || offer.host)}</b>?`;
@@ -435,6 +712,15 @@
 
     body.innerHTML = `<div class="otpilot-save-title" style="margin-bottom:4px;">${title}</div>`
       + (offer.username ? `<div style="color:var(--ink-3, #94a3b8);font-size:12px;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(offer.username)}</div>` : '<div style="height:6px"></div>');
+    // The extra fields it saves (labels only; the page's text, so textContent).
+    const extraLabels = (Array.isArray(offer.extras) ? offer.extras : []).filter(l => typeof l === 'string' && l);
+    if (extraLabels.length) {
+      const also = document.createElement('div');
+      also.className = 'otpilot-save-extras';
+      Object.assign(also.style, { color: 'var(--ink-3, #94a3b8)', fontSize: '12px', margin: '-4px 0 10px' });
+      also.textContent = `${offer.extrasOnly ? 'Saves' : 'Also saves'}: ${extraLabels.join(', ')}`;
+      body.appendChild(also);
+    }
 
     // An update can apply to several of the site's logins (no username was
     // captured): the user picks which.
@@ -680,7 +966,7 @@
   function placeBadge(b, field) {
     const r = field.getBoundingClientRect();
     const size = Math.min(BADGE + 4, Math.floor(r.height - 2));
-    const show = size >= 14 && r.width > size * 4 && isVisible(field);
+    const show = size >= 14 && r.width > size * 4 && isPasswordShown(field);
     b.style.display = show ? '' : 'none';
     if (!show) return;
     Object.assign(b.style, {
@@ -781,7 +1067,9 @@
   // background releases the password once, so a rejected one never loops.
   let _launch = null; // null: not asked yet; false: no launch; true: on
   let _launchStep = ''; // the step already filled on this page
-  const launchFill = step => chrome.runtime.sendMessage({ action: 'vaultLaunchFill', step }).catch(() => null);
+  const launchFill = (step, targets = []) => chrome.runtime.sendMessage({
+    action: 'vaultLaunchFill', step, ...(targets.length ? { fields: targets.map(t => t.desc) } : {}),
+  }).catch(() => null);
 
   // The username field of a page asking only for it (no password yet), and
   // the button that submits it — only with evidence it's a sign-in step,
@@ -865,13 +1153,84 @@
 
   // `findButton` runs when the click is due: the page may have replaced the
   // button while reacting to the fill.
-  async function submitAfterFill(field, findButton) {
+  // `filled`: what this fill wrote ([{ el, label, ok() }]); re-read right
+  // before the click — one not filled, or that the page reverted, means the
+  // user checks it and signs in themselves.
+  async function submitAfterFill(field, findButton, filled = []) {
     if (await isNoAutoSubmitHost(location.hostname.toLowerCase())) return;
     setTimeout(() => {
+      if (!chrome.runtime?.id) return;
+      const wrong = filled.find(f => !f.ok());
+      if (wrong) { showToast(`Check ${wrong.label} before signing in`, false); return; }
       const button = field.isConnected ? findButton(field) : null;
-      if (button) button.click();
+      if (button?.localName.includes('-')) clickComponentSubmit(button, filled);
+      else if (button) button.click();
       else if (field.form) field.form.requestSubmit?.();
     }, 300);
+  }
+
+  // A web component's submit button (<bbva-button type=submit>): one click
+  // on it. A second sign-in must never follow, so the button in its (open)
+  // shadow root — its submit button, else its first — is clicked once more
+  // only when, a second later, nothing shows the first click did anything:
+  // no submit event, no page leaving (pagehide / beforeunload), no request
+  // the page completed (fetch / XHR resource entries, seen by a
+  // PerformanceObserver: the page's resource-timing buffer may be full,
+  // which drops new entries from getEntriesByType but not from observers;
+  // without PerformanceObserver there is no retry), no change to the
+  // page's light DOM outside our own UI, and the same form still there with
+  // what was filled still in it. At most one retry per fill: a newer fill
+  // drops a retry still waiting (`_componentClick`).
+  // Never requestSubmit() here: such a form may have no action and use GET,
+  // which would put the password in the URL.
+  let _componentClick = null;
+  const isOurNode = n => {
+    const el = n.nodeType === Node.ELEMENT_NODE ? n : n.parentElement;
+    return !!el && (el.id?.startsWith('otpilot-') || !!el.closest('[data-otpilot-ui]'));
+  };
+  const pageMutation = records => records.some(r => (r.type === 'childList'
+    ? [...r.addedNodes, ...r.removedNodes].some(n => !isOurNode(n))
+    : !isOurNode(r.target)));
+  function clickComponentSubmit(host, filled = []) {
+    const form = host.closest('form');
+    const attempt = { busy: false };
+    _componentClick = attempt;
+    const busy = () => { attempt.busy = true; };
+    const isRequest = e => e.initiatorType === 'fetch' || e.initiatorType === 'xmlhttprequest';
+    let requests = null;
+    try {
+      requests = new PerformanceObserver(list => { if (list.getEntries().some(isRequest)) busy(); });
+      requests.observe({ type: 'resource' });
+    } catch { requests = null; }
+    const watch = new MutationObserver(records => { if (pageMutation(records)) busy(); });
+    form?.addEventListener('submit', busy, true);
+    window.addEventListener('pagehide', busy, true);
+    window.addEventListener('beforeunload', busy, true);
+    const stop = () => {
+      watch.disconnect();
+      if (requests) {
+        if (requests.takeRecords().some(isRequest)) busy();
+        requests.disconnect();
+      }
+      form?.removeEventListener('submit', busy, true);
+      window.removeEventListener('pagehide', busy, true);
+      window.removeEventListener('beforeunload', busy, true);
+    };
+    watch.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+    host.click();
+    if (!form) { stop(); return; }
+    setTimeout(() => {
+      if (pageMutation(watch.takeRecords())) busy();
+      stop();
+      if (_componentClick !== attempt) return; // a newer fill took over
+      _componentClick = null;
+      if (attempt.busy || !requests || !chrome.runtime?.id) return;
+      if (!form.isConnected || !host.isConnected || host.closest('form') !== form) return;
+      if (filled.some(f => !f.ok() || (!form.contains(f.el) && f.el.form !== form))) return;
+      const root = host.shadowRoot;
+      const inner = root?.querySelector('button[type="submit"], button:not([type])') || root?.querySelector('button');
+      if (inner) inner.click();
+    }, 1000);
   }
 
   async function continueLaunch() {
@@ -881,32 +1240,51 @@
     const login = findLoginFields();
     if (login && _launchStep !== 'password') {
       _launchStep = 'password';
-      const res = await launchFill('password');
+      const targets = extraFields(login.password, login.username, { filled: false });
+      const res = await launchFill('password', targets);
       if (!res?.ok) { _launch = false; return; }
-      _filling = true;
-      try {
-        if (login.username && res.username) putUsername(login.username, res.username);
-        fillInputValue(login.password, res.password);
-      } finally { _filling = false; }
       _launch = false; // the launch ends with the password
-      submitAfterFill(login.password, passwordButtonFor);
+      _filling = true;
+      let done;
+      try {
+        done = await fillExtras(targets, res.extras);
+        if (login.username && res.username) { putUsername(login.username, res.username); done.push(filledCheck(login.username, 'the username')); }
+        fillInputValue(login.password, res.password);
+        done.push(filledCheck(login.password, 'the password'));
+      } finally { _filling = false; }
+      submitAfterFill(login.password, passwordButtonFor, done);
       return;
     }
     const step = !login && _launchStep === '' && findUsernameOnlyField();
     if (step) {
       const { field: userField } = step;
       _launchStep = 'username';
-      const res = await launchFill('username');
+      const targets = extraFields(userField, userField, { filled: false });
+      const res = await launchFill('username', targets);
       if (!res?.ok) return;
       _filling = true;
-      try { putUsername(userField, res.username); } finally { _filling = false; }
-      submitAfterFill(userField, signInButtonFor);
+      let done;
+      try {
+        done = await fillExtras(targets, res.extras);
+        putUsername(userField, res.username);
+        done.push(filledCheck(userField, 'the username'));
+      } finally { _filling = false; }
+      submitAfterFill(userField, signInButtonFor, done);
     }
   }
 
   // Sign-in forms often appear after load (SPAs, modals).
   let timer;
-  const observer = new MutationObserver(() => {
+  const observer = new MutationObserver(records => {
+    // A read-only password field's value when it first shows (see
+    // isReadonlySignInPassword): right away, before the page can fill it.
+    for (const r of records) {
+      for (const n of r.addedNodes) {
+        if (n.nodeType !== Node.ELEMENT_NODE) continue;
+        if (n.matches('input[type="password"]')) { if (n.readOnly) noteReadonly(n); }
+        else if (n.firstElementChild) for (const el of n.querySelectorAll('input[type="password"]')) if (el.readOnly) noteReadonly(el);
+      }
+    }
     clearTimeout(timer);
     timer = setTimeout(() => {
       if (!chrome.runtime?.id) { observer.disconnect(); return; } // extension reloaded
@@ -918,6 +1296,7 @@
     }, 400);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
+  noteReadonlyPasswords();
   check();
   offerSave();
   continueLaunch();
