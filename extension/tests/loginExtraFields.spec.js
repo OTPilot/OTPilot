@@ -214,9 +214,11 @@ test('BBVA live: a number saved under an id that does not look generated still f
   await site.fill('input[name="password"]', 'clave-1');
   await site.click('x-button');
   await expect(site.locator('h1')).toHaveText('Panel');
-  await site.locator('#otpilot-login-save .otpilot-save-confirm').click();
-  await expect.poll(async () => (await logins(popup))[0].fields.length).toBe(1);
-  expect((await logins(popup))[0].fields[0].value).toBe('87654321');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Update');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup))[0].fields[0]?.value).toBe('87654321');
+  expect((await logins(popup))[0].fields).toHaveLength(1);
   expect((await logins(popup))[0].fields[0].fill.id).toBeUndefined();
 });
 
