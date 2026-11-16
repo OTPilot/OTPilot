@@ -293,11 +293,17 @@ const generatedId = id => /^:|:$|^(mui|react|radix|headlessui|ember|input|field|
 // What identifies a descriptor's control: name, else a stable id, else
 // autocomplete (undefined: none of them, the label decides).
 const controlKeyOf = d => ['name', 'id', 'ac'].find(k => d[k] && !(k === 'id' && generatedId(d.id)));
+// A slotted control no longer sends the id its component made up. A field
+// saved under that id (stable-looking or not) is the same control when the
+// labels match and neither side has a name.
+const idOnlyByLabel = (a, b) => !a.name && !b.name && !!normLabel(a.label) && normLabel(a.label) === normLabel(b.label)
+  && ((controlKeyOf(a) === 'id' && !b.id) || (controlKeyOf(b) === 'id' && !a.id));
 
 // The same page control: by name, else id, else autocomplete, else (a
-// descriptor with none of them) label.
+// descriptor with none of them, or an id the page no longer sends) label.
 function sameControl(a, b) {
   if (a.tag !== b.tag) return false;
+  if (idOnlyByLabel(a, b)) return true;
   const ka = controlKeyOf(a), kb = controlKeyOf(b);
   if (ka || kb) return ka === kb && a[ka] === b[kb];
   return !!normLabel(a.label) && normLabel(a.label) === normLabel(b.label);
@@ -415,7 +421,7 @@ function matchExtras(item, rawFields) {
     const key = controlKeyOf(fill);
     if (!key && !normLabel(fill.label)) continue;
     const m = key
-      ? open.filter(i => descs[i][key] === fill[key])
+      ? open.filter(i => descs[i][key] === fill[key] || (key === 'id' && idOnlyByLabel(fill, descs[i])))
       : open.filter(i => normLabel(descs[i].label) === normLabel(fill.label));
     if (m.length === 1) claims.set(m[0], [...(claims.get(m[0]) || []), value]);
   }

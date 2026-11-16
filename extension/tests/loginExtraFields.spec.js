@@ -198,6 +198,28 @@ test('BBVA live: the number field is saved by its label (never its random id) an
   await expect(docNumber(site)).toHaveValue('12345678');
 });
 
+test('BBVA live: a number saved under an id that does not look generated still fills, and a new save updates it in place', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ ...bbvaLive, customFields: [
+    { label: 'Número de documento', value: '12345678', kind: 'hidden', fill: { tag: 'input', type: 'number', id: '_ghijklmnop', label: 'Número de documento' } },
+  ] }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200`);
+  await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+  await pick(site);
+  await expect(docNumber(site)).toHaveValue('12345678');
+  await site.goto(`${SITE}/login-bbva.html?live=1&ro=200&spa=1`);
+  await expect.poll(() => isReadOnly(site, 'password')).toBe(false);
+  await docNumber(site).fill('87654321');
+  await site.fill('input[name="username"]', 'user-77');
+  await site.fill('input[name="password"]', 'clave-1');
+  await site.click('x-button');
+  await expect(site.locator('h1')).toHaveText('Panel');
+  await site.locator('#otpilot-login-save .otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup))[0].fields.length).toBe(1);
+  expect((await logins(popup))[0].fields[0].value).toBe('87654321');
+  expect((await logins(popup))[0].fields[0].fill.id).toBeUndefined();
+});
+
 test('BBVA live: a login saved with the random id is updated in place, not given a second number field', async ({ context, extensionId }) => {
   const popup = await vaultWith(context, extensionId, [bbvaLive]);
   const site = await context.newPage();
