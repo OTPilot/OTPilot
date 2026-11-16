@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Bank sign-in — step 1</title></head>
+<body>
+  <!-- Two-step bank sign-in: document type, number and user here, the password
+       on the next page. -->
+  <form action="login-bank-extra-step2.html" method="get">
+    <label for="doctype">Document type</label>
+    <select id="doctype" name="doctype">
+      <option value="1" selected>DNI</option>
+      <option value="2">NIE</option>
+      <option value="3">Pasaporte</option>
+    </select>
+    <label for="docnumber">Document number</label>
+    <input id="docnumber" name="docnumber" type="text">
+    <label for="user">User</label>
+    <input id="user" name="user" type="text" autocomplete="username">
+    <button>Next</button>
+  </form>
+</body></html>

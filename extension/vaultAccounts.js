@@ -58,14 +58,52 @@ const VaultAccounts = (() => {
   // Replaces an item's custom fields (template fields untouched). Empty rows
   // (no label and no value) are dropped. `section` groups fields under a
   // heading in the editor (none = the default "Custom fields" group).
+  // A field keeps what the caller doesn't know about it (the editor sends
+  // id, label, value, kind, section): the stored field with the same id
+  // gives its other properties — e.g. `fill`, the page control a sign-in's
+  // extra field was saved from. A caller may set `fill` (checked, fillDesc).
   function withCustomFields(item, list) {
+    const stored = new Map((item.fields || []).filter(f => f.custom && f.id).map(f => [f.id, f]));
     const custom = (list || [])
       .map(f => {
         const section = String(f.section || '').trim().slice(0, 60);
-        return { id: f.id || `c-${crypto.randomUUID()}`, label: String(f.label || '').trim(), value: String(f.value ?? ''), kind: f.kind || 'text', custom: true, ...(section ? { section } : {}) };
+        const kept = { ...((f.id && stored.get(f.id)) || {}) };
+        for (const k of ['id', 'label', 'value', 'kind', 'custom', 'section']) delete kept[k];
+        const fill = f.fill !== undefined ? fillDesc(f.fill) : null;
+        if (fill) kept.fill = fill;
+        else if (kept.fill !== undefined && !fillDesc(kept.fill)) delete kept.fill;
+        return { ...kept, id: f.id || `c-${crypto.randomUUID()}`, label: String(f.label || '').trim(), value: String(f.value ?? ''), kind: f.kind || 'text', custom: true, ...(section ? { section } : {}) };
       })
       .filter(f => f.label || f.value);
     return { ...item, fields: [...(item.fields || []).filter(f => !f.custom), ...custom] };
+  }
+
+  // The page control a sign-in's extra field fills (a document type, a
+  // customer number…), as forms.js describes it: { tag, type, name?, id?,
+  // ac?, label? }. Only that shape, within its limits — anything else
+  // (a page's or another version's data) is null. Never a password field.
+  // `id` only for a control without a name.
+  const FILL_TYPES = { input: ['text', 'email', 'tel', 'number'], select: ['select-one'] };
+  function fillDesc(d) {
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+    if (!Object.prototype.hasOwnProperty.call(FILL_TYPES, d.tag)) return null;
+    if (typeof d.type !== 'string' || !FILL_TYPES[d.tag].includes(d.type)) return null;
+    const out = { tag: d.tag, type: d.type };
+    for (const [k, max] of [['name', 100], ['id', 100], ['ac', 60], ['label', 60]]) {
+      if (d[k] === undefined || d[k] === '') continue;
+      if (typeof d[k] !== 'string' || d[k].length > max) return null;
+      out[k] = d[k];
+    }
+    if (out.name) delete out.id;
+    if (out.ac !== undefined) {
+      out.ac = out.ac.trim().toLowerCase();
+      if (!out.ac || out.ac === 'on' || out.ac === 'off' || /password/.test(out.ac)) delete out.ac;
+    }
+    if (out.label !== undefined) {
+      out.label = out.label.trim();
+      if (!out.label) delete out.label;
+    }
+    return out.name || out.id || out.ac || out.label ? out : null;
   }
 
   // Applies the v1 fields of `acc` onto `item` (a copy), keeping the rest.
@@ -346,6 +384,9 @@ const VaultAccounts = (() => {
 
   // Updates one account if it still matches `expected` (the v1 fields the
   // caller saw). Returns false if it changed or disappeared meanwhile.
+  // `patch` may be a function of the stored item, called under the lock: a
+  // patch built from the item as it is now (a sync may have changed it since
+  // the caller read it).
   async function update(id, expected, patch, key) {
     const ok = await locked(key, async (tx, { items }) => {
       const item = items.find(i => i.id === id);
@@ -353,7 +394,8 @@ const VaultAccounts = (() => {
       const current = toAccount(item);
       const same = ['name', 'secret', 'urls', 'email'].every(k => (current[k] ?? '') === (expected[k] ?? ''));
       if (!same) return false;
-      const next = applyAccount(item, { ...current, ...patch }, item.position ?? 0);
+      const changes = typeof patch === 'function' ? patch(item) : patch;
+      const next = applyAccount(item, { ...current, ...changes }, item.position ?? 0);
       next.updatedAt = new Date().toISOString();
       await putItems(tx, [next], key);
       return true;
@@ -362,5 +404,5 @@ const VaultAccounts = (() => {
     return ok;
   }
 
-  return { customFieldsOf, withCustomFields, load, loadOthers, save, add, addItem, changeItem, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
+  return { customFieldsOf, withCustomFields, fillDesc, load, loadOthers, save, add, addItem, changeItem, update, writeIndex, rebuildIndex, indexIsStale, readIndex, toAccount, normalizeTags };
 })();

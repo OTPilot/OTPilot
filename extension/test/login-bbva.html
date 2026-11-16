@@ -1,0 +1,167 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Acceso — bank with web components</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  .row { margin: 10px 0; width: 300px; }
+</style>
+</head>
+<body>
+  <!-- A bank sign-in built from custom elements (BBVA-like): the chrome is in
+       each component's open shadow root, the native controls stay in the light
+       DOM, slotted. The document type is a hidden native <select>; the user
+       types the username into a password-type field ("Usuario").
+       Flags: ?btn=inner (only the button inside the shadow root listens),
+       ?controlled=1 (the select component ignores the native change and puts
+       its own value back), ?clearOnType=1 (changing the type clears the number),
+       ?trap=hidden | host | extra | pin | slot-tiny | slot-full (page tricks), ?spa=1 (the form
+       goes after a submit), ?btn=handler (the button signs in from its own click
+       handler, with no submit event: counts its calls in window.__calls),
+       ?btn=fetch (the same, but its handler only posts with fetch: no DOM
+       change, no submit event; the page first fills its resource-timing buffer
+       with 260 requests, then sets window.__ready), ?btn=slow (the same, its
+       fetch to slow-signin answered late by the test: nothing shows it worked
+       for seconds), ?stale=number | username (that field's component puts a
+       stale value back after a change), &pinLabel= (?trap=pin's label,
+       default "PIN"). -->
+  <h1>Acceso</h1>
+  <form name="login">
+    <x-select name="documentType" label="Tipo de documento">
+      <select slot="_select" name="documentType" tabindex="-1" aria-hidden="true"
+              style="position:absolute;opacity:0;pointer-events:none;z-index:-1">
+        <option value="01" selected>DNI</option>
+        <option value="02">LE</option>
+        <option value="03">PAS</option>
+      </select>
+    </x-select>
+
+    <div class="row"><x-input><input slot="_input" type="number" name="documentNumber" aria-label="Número de documento"></x-input></div>
+    <div class="row"><x-input><input slot="_input" type="password" name="username" aria-label="Usuario" autocomplete="off"></x-input></div>
+    <div class="row"><x-input><input slot="_input" type="password" name="password" aria-label="Clave" autocomplete="off"></x-input></div>
+
+    <fieldset style="display:none"><input type="radio" name="gender" value="F"><input type="radio" name="gender" value="M"></fieldset>
+    <label class="row"><input type="checkbox" name="remember"> Recordar</label>
+
+    <x-button type="submit">Ingresar</x-button>
+    <div id="trap"></div>
+  </form>
+  <pre id="result"></pre>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const form = document.forms.login;
+
+  class XSelect extends HTMLElement {
+    connectedCallback() {
+      if (this.shadowRoot) return;
+      const root = this.attachShadow({ mode: 'open' });
+      root.innerHTML = '<style>:host{display:block;width:300px;min-height:36px;border:1px solid #888}</style>'
+        + '<div class="label"></div><div class="shown"></div><slot name="_select"></slot>';
+      root.querySelector('.label').textContent = this.getAttribute('label') || '';
+      this.select = this.querySelector('select');
+      this.select.addEventListener('change', () => {
+        if (params.get('controlled')) {
+          // Ignores the native change: its own state wins on the next render.
+          setTimeout(() => { this.select.value = this.select.options[0].value; this.render(); }, 50);
+        } else {
+          this.render();
+        }
+      });
+      this.render();
+    }
+    render() {
+      this.shadowRoot.querySelector('.shown').textContent = this.select.selectedOptions[0].textContent;
+    }
+  }
+  class XInput extends HTMLElement {
+    connectedCallback() {
+      if (this.shadowRoot) return;
+      this.attachShadow({ mode: 'open' }).innerHTML = '<style>:host{display:block}</style><slot name="_input"></slot>';
+    }
+  }
+  class XButton extends HTMLElement {
+    connectedCallback() {
+      if (this.shadowRoot) return;
+      const root = this.attachShadow({ mode: 'open' });
+      root.innerHTML = '<style>:host{display:inline-block}button{padding:8px 24px}</style><button type="button"><slot></slot></button>';
+      const go = () => form.requestSubmit();
+      if (params.get('btn') === 'inner') root.querySelector('button').addEventListener('click', go);
+      else if (params.get('btn') === 'handler') {
+        // Signs in from the click itself (an app posting with fetch): no
+        // submit event. A click on the shadow button bubbles here too.
+        window.__calls = 0;
+        this.addEventListener('click', () => {
+          window.__calls++;
+          document.getElementById('result').textContent = JSON.stringify(Object.fromEntries(new FormData(form)));
+        });
+      } else if (params.get('btn') === 'slow') {
+        // A slow sign-in: the request takes seconds, nothing changes meanwhile.
+        window.__calls = 0;
+        this.addEventListener('click', () => {
+          window.__calls++;
+          window.__sent = Object.fromEntries(new FormData(form));
+          fetch(`slow-signin?n=${window.__calls}`, { cache: 'no-store' }).catch(() => null);
+        });
+      } else if (params.get('btn') === 'fetch') {
+        // Signs in with fetch only: nothing on the page changes.
+        window.__calls = 0;
+        this.addEventListener('click', () => {
+          window.__calls++;
+          window.__sent = Object.fromEntries(new FormData(form));
+          fetch(`login-bbva.html?signin=${window.__calls}`, { cache: 'no-store' });
+        });
+      } else this.addEventListener('click', go);
+    }
+  }
+  customElements.define('x-select', XSelect);
+  customElements.define('x-input', XInput);
+  customElements.define('x-button', XButton);
+
+  if (params.get('clearOnType')) {
+    form.elements.documentType.addEventListener('change', () => { form.elements.documentNumber.value = ''; });
+  }
+
+  // A controlled component whose state didn't take the fill: it puts its
+  // previous (stale, non-empty) value back.
+  const stale = { number: ['documentNumber', '11112222'], username: ['username', 'user-stale'] }[params.get('stale')];
+  if (stale) {
+    const el = form.elements[stale[0]];
+    el.addEventListener('change', () => setTimeout(() => { el.value = stale[1]; }, 50));
+  }
+
+  // Tricks a page could play against extra-field filling.
+  const trap = document.getElementById('trap');
+  if (params.get('trap') === 'hidden') {
+    // A select nobody sees, not slotted under a component.
+    trap.innerHTML = '<select name="trapSelect" style="opacity:0"><option value="a" selected>A</option><option value="b">Secret</option></select>';
+  } else if (params.get('trap') === 'host') {
+    // Slotted, but its component carries another name.
+    trap.innerHTML = '<x-select name="other" label="Other"><select slot="_select" name="trapSelect" style="position:absolute;opacity:0"><option value="a" selected>A</option><option value="b">Secret</option></select></x-select>';
+  } else if (params.get('trap') === 'extra') {
+    trap.innerHTML = '<div class="row"><input type="text" name="branchCode" aria-label="Sucursal"></div>';
+  } else if (params.get('trap') === 'pin') {
+    // A visible field labelled like something the user may keep by hand.
+    trap.innerHTML = '<div class="row"><input type="text" name="pin"></div>';
+    trap.querySelector('input').setAttribute('aria-label', params.get('pinLabel') || 'PIN');
+  } else if (params.get('trap') === 'slot-tiny' || params.get('trap') === 'slot-full') {
+    // An invisible input slotted into a component carrying its name: 2x2 px
+    // (nothing the user can see), or a normal-size field.
+    const size = params.get('trap') === 'slot-tiny' ? 'width:2px;height:2px;overflow:hidden' : 'width:300px;height:36px';
+    trap.innerHTML = `<x-input name="pin" style="display:block;${size}"><input slot="_input" type="text" name="pin" aria-label="PIN" style="opacity:0"></x-input>`;
+  }
+
+  if (params.get('btn') === 'fetch') {
+    // A heavy app: the resource-timing buffer (250 entries) is full, so a
+    // new request no longer shows in performance.getEntriesByType().
+    Promise.all(Array.from({ length: 260 }, (_, i) =>
+      fetch(`login-bbva.html?r=${i}`, { cache: 'no-store' }).then(r => r.text()).catch(() => null)))
+      .then(() => { window.__ready = true; });
+  }
+
+  form.addEventListener('submit', e => {
+    e.preventDefault(); // no action: nothing leaves the page, nothing in the URL
+    document.getElementById('result').textContent = JSON.stringify(Object.fromEntries(new FormData(form)));
+    // ?spa=1: signing in replaces the form, like an app that doesn't navigate.
+    if (params.get('spa')) { form.remove(); document.querySelector('h1').textContent = 'Panel'; }
+  });
+</script>
+</body></html>

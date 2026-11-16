@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Bank sign-in — document type + number</title></head>
+<body>
+  <!-- A plain bank sign-in: a document type, a document number, the username
+       and the password. -->
+  <form action="welcome.html" method="get">
+    <label for="doctype">Document type</label>
+    <select id="doctype" name="doctype">
+      <option value="1" selected>DNI</option>
+      <option value="2">NIE</option>
+      <option value="3">Pasaporte</option>
+    </select>
+    <label for="docnumber">Document number</label>
+    <input id="docnumber" name="docnumber" type="text">
+    <label for="user">User</label>
+    <input id="user" name="user" type="text" autocomplete="username">
+    <label for="pw">Password</label>
+    <input id="pw" name="password" type="password" autocomplete="current-password">
+    <label><input type="checkbox" name="remember"> Remember me</label>
+    <button>Sign in</button>
+  </form>
+</body></html>

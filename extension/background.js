@@ -229,11 +229,15 @@ async function loginsForPage(sender) {
   if (!host || state === 'setup') return { state, logins: [] };
   if (state === 'unlocked') {
     const { items } = await VaultStore.readAll(await VaultKeys.getKey());
+    // With a password, or a username alone (a 2FA-only login: its username
+    // is filled, the code then by the OTP auto-fill).
     const logins = [...items, ...(await sharedLogins())]
-      .filter(i => i.type === 'login' && Vault.getValue(i, 'password') && Vault.loginCoversHost(i.urls, host))
+      .filter(i => i.type === 'login' && (Vault.getValue(i, 'password') || Vault.getValue(i, 'username').trim())
+        && Vault.loginCoversHost(i.urls, host))
       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
       .map(i => ({
         id: i.id, name: i.title || host, username: Vault.getValue(i, 'username'),
+        hasPassword: !!Vault.getValue(i, 'password'),
         autofill: i.autofill !== false, autoLogin: i.autoLogin !== false,
       }));
     return { state, logins };
@@ -246,16 +250,159 @@ async function loginsForPage(sender) {
 
 // `usernameOnly`: the first page of a two-step sign-in, which asks for the
 // username alone — the password stays here until its own page asks.
-async function fillLogin(sender, id, usernameOnly = false) {
+// `fields`: the page's empty extra controls (see matchExtras); the reply's
+// `extras` are the values of the login's extra fields that match them.
+async function fillLogin(sender, id, usernameOnly = false, fields = undefined) {
   const host = senderHost(sender);
   if (!host || typeof id !== 'string' || (await VaultLock.state()) !== 'unlocked') return { ok: false };
   const item = (await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null))
     || (await sharedLogin(id));
   const password = item && Vault.getValue(item, 'password');
-  if (!item || item.type !== 'login' || !password || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
+  const username = item && Vault.getValue(item, 'username');
+  // A login without a password fills its username alone.
+  if (!item || item.type !== 'login' || !(password || username.trim()) || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
   await VaultLock.touch();
-  if (usernameOnly) return { ok: true, username: Vault.getValue(item, 'username') };
-  return { ok: true, username: Vault.getValue(item, 'username'), password };
+  const extras = matchExtras(item, fields);
+  const withExtras = extras.length ? { extras } : {};
+  if (usernameOnly || !password) return { ok: true, username, ...(password ? {} : { noPassword: true }), ...withExtras };
+  return { ok: true, username, password, ...withExtras };
+}
+
+// ── Extra sign-in fields ──────────────────────────────────────────────────────────
+// Some sign-ins ask for more than a username and a password: a document
+// type, a customer number. A sign-in capture carries them (forms.js:
+// `extras`, { label, value, kind, fill } — `fill` the control, see
+// VaultAccounts.fillDesc) and they're saved as the login's custom fields,
+// with their `fill`. Filling, the page describes its empty controls
+// (`fields`, descriptors only) and gets the values of the login's fields
+// that match one, by index — the matching stays here.
+const EXTRAS_MAX = 8;
+const FILL_FIELDS_MAX = 20;
+const EXTRA_VALUE_MAX = 256;
+// Custom field kinds a page control can take (never a file, a note, a date).
+const EXTRA_FILL_KINDS = ['text', 'hidden', 'password', 'email', 'phone'];
+const normLabel = s => String(s || '').trim().replace(/\s+/g, ' ').replace(/[\s:*]+$/, '').toLowerCase();
+
+// The same page control: by name, else id, else autocomplete, else (a
+// descriptor with none of them) label.
+function sameControl(a, b) {
+  if (a.tag !== b.tag) return false;
+  for (const k of ['name', 'id', 'ac']) if (a[k] || b[k]) return a[k] === b[k];
+  return !!normLabel(a.label) && normLabel(a.label) === normLabel(b.label);
+}
+// Payment data is never an extra sign-in field (a login form inside a
+// checkout): forms.js skips it, and so does this, whatever a page sends.
+const PAYMENT_WORD = /card|cvv|cvc|csc|iban|expir/i;
+const isPaymentExtra = (label, fill) => /(^|\s)cc-/.test(fill.ac || '')
+  || PAYMENT_WORD.test(`${fill.name || ''} ${fill.id || ''} ${fill.label || ''} ${label}`);
+const controlKey = d => `${d.tag}\u0000${d.name ? `n:${d.name}` : d.id ? `i:${d.id}` : d.ac ? `a:${d.ac}` : `l:${normLabel(d.label)}`}`;
+
+// A page's extras, checked: an invalid list (not a list, more than 20, or
+// more than 8 the user changed) is none; an invalid entry is dropped; one
+// per control. The kind follows the control: a typed value is hidden, a
+// picked option (its text) is text. `atDefault`: a select left on its
+// default option — never a new field, only a saved one's value (it goes
+// back to the default, applyExtras).
+const changedExtras = list => list.filter(e => !e?.atDefault);
+function cleanExtras(list, ...exclude) {
+  if (!Array.isArray(list) || list.length > FILL_FIELDS_MAX || changedExtras(list).length > EXTRAS_MAX) return [];
+  const out = [], seen = new Set();
+  for (const e of list) {
+    if (!e || typeof e !== 'object') continue;
+    const fill = VaultAccounts.fillDesc(e.fill);
+    const label = typeof e.label === 'string' ? e.label.trim() : '';
+    const value = typeof e.value === 'string' ? e.value.trim() : '';
+    if (!fill || !label || label.length > 60 || !value || value.length > EXTRA_VALUE_MAX || /[\r\n]/.test(value)) continue;
+    if (exclude.includes(value) || isPaymentExtra(label, fill)) continue;
+    const key = controlKey(fill);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const atDefault = e.atDefault === true && fill.tag === 'select';
+    out.push({ label, value, kind: fill.tag === 'select' ? 'text' : 'hidden', fill, ...(atDefault ? { atDefault } : {}) });
+  }
+  return out;
+}
+
+// `older` (a username step's) with `newer` (the password page's) over it,
+// field by field. At most 8 changed ones (and 20 in all) are kept.
+function mergeExtras(older = [], newer = []) {
+  const byKey = new Map(older.map(e => [controlKey(e.fill), e]));
+  for (const e of newer) byKey.set(controlKey(e.fill), e);
+  const keys = [...new Set([...newer.map(e => controlKey(e.fill)), ...older.map(e => controlKey(e.fill))])];
+  let changed = 0;
+  return keys.map(k => byKey.get(k))
+    .filter(e => e.atDefault || ++changed <= EXTRAS_MAX)
+    .slice(0, FILL_FIELDS_MAX);
+}
+
+// What saving `extras` onto a login does: its custom fields after (for
+// VaultAccounts' customFields) and the labels changed.
+// - a field saved from that control (its `fill`, sameControl) keeps its id
+//   and kind and takes the new value;
+// - a field without `fill` (added by hand, or saved by a version that
+//   dropped it) is never overwritten: one with the same label and the same
+//   value gets the `fill` (it fills from then on — a change, so the offer
+//   asks); otherwise the extra is a new field beside it;
+// - the ones the page didn't send stay;
+// - a select on its default option (`atDefault`) only updates the field
+//   saved from that control (the user switched back to the default); it
+//   never adds a field or touches a hand-made one.
+// `changed` holds the page's own labels, in every case: the offer (page DOM)
+// must read the same whether a value the page sent equals a hand-added
+// field's or not, so a page can't guess a stored value from it.
+function applyExtras(item, extras = []) {
+  const stored = (item.fields || []).filter(f => f.custom);
+  const fields = VaultAccounts.customFieldsOf(item);
+  const used = new Set(), changed = [];
+  for (const e of extras) {
+    const free = stored.filter(f => !used.has(f.id));
+    const saved = free.find(f => { const d = VaultAccounts.fillDesc(f.fill); return d && sameControl(d, e.fill); });
+    if (e.atDefault && !saved) continue;
+    const same = !saved && free.find(f => !VaultAccounts.fillDesc(f.fill) && EXTRA_FILL_KINDS.includes(f.kind || 'text')
+      && normLabel(f.label) && normLabel(f.label) === normLabel(e.label) && f.value === e.value);
+    if (saved) {
+      used.add(saved.id);
+      const f = fields.find(x => x.id === saved.id);
+      if (f.value !== e.value) { f.value = e.value; changed.push(e.label); }
+      f.fill = e.fill;
+    } else if (same) {
+      used.add(same.id);
+      fields.find(x => x.id === same.id).fill = e.fill;
+      changed.push(e.label);
+    } else {
+      fields.push({ label: e.label, value: e.value, kind: e.kind, fill: e.fill });
+      changed.push(e.label);
+    }
+  }
+  return { customFields: fields, changed };
+}
+
+// The login's extra fields that fill the page's controls `rawFields` (its
+// descriptors, by index; invalid ones never match). Only a field saved from
+// a sign-in's control (a valid `fill`) is ever released: one without (added
+// by hand: a PIN, a recovery code) never goes to a page, whatever its label.
+// Matched by the saved control's name, else id, else autocomplete — the
+// first of them it has decides —, and by its saved label only when it has
+// none of them. Same tag; one field per control; an ambiguous match is
+// skipped. → [{ index, value }]
+function matchExtras(item, rawFields) {
+  if (!Array.isArray(rawFields) || !rawFields.length || rawFields.length > FILL_FIELDS_MAX) return [];
+  const descs = rawFields.map(d => VaultAccounts.fillDesc(d));
+  const claims = new Map(); // index -> fields claiming it
+  for (const f of item.fields || []) {
+    if (!f.custom || !EXTRA_FILL_KINDS.includes(f.kind || 'text')) continue;
+    const fill = VaultAccounts.fillDesc(f.fill);
+    if (!fill) continue;
+    const value = typeof f.value === 'string' ? f.value : '';
+    if (!value || value.length > EXTRA_VALUE_MAX || /[\r\n]/.test(value)) continue;
+    const open = descs.map((d, i) => (d && d.tag === fill.tag ? i : -1)).filter(i => i >= 0);
+    const key = ['name', 'id', 'ac'].find(k => fill[k]);
+    const m = key
+      ? open.filter(i => descs[i][key] === fill[key])
+      : open.filter(i => normLabel(descs[i].label) === normLabel(fill.label));
+    if (m.length === 1) claims.set(m[0], [...(claims.get(m[0]) || []), value]);
+  }
+  return [...claims].filter(([, values]) => values.length === 1).map(([index, [value]]) => ({ index, value }));
 }
 
 // ── Launch: open a login's site and sign in ─────────────────────────────────
@@ -319,7 +466,7 @@ async function launchLogin(sender, id) {
 // What a page in a launched tab may fill: `step` 'username' (a page asking
 // only for the username) or 'password' (the sign-in form: username +
 // password, which ends the launch). `probe` just says whether one is on.
-async function launchFill(sender, step) {
+async function launchFill(sender, step, fields = undefined) {
   const host = senderHost(sender);
   if (!host) return { ok: false };
   // Never into a plain-http page of a public site (a redirect can land there).
@@ -333,12 +480,14 @@ async function launchFill(sender, step) {
   const item = (await VaultStore.get(launch.id, await VaultKeys.getKey()).catch(() => null)) || (await sharedLogin(launch.id));
   if (!item || item.type !== 'login' || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
   const username = Vault.getValue(item, 'username');
-  if (step === 'username') return username ? { ok: true, username } : { ok: false };
+  const extras = matchExtras(item, fields);
+  const withExtras = extras.length ? { extras } : {};
+  if (step === 'username') return username ? { ok: true, username, ...withExtras } : { ok: false };
   const password = Vault.getValue(item, 'password');
   if (step !== 'password' || !password) return { ok: false };
   await chrome.storage.session.remove(key);
   await VaultLock.touch();
-  return { ok: true, username, password };
+  return { ok: true, username, password, ...withExtras };
 }
 
 // ── Saving sign-ins ──────────────────────────────────────────────────────────
@@ -404,16 +553,25 @@ async function storeCapture(sender, msg) {
   // or hidden copy of it) is still that sign-in: it keeps its start.
   let step = null;
   let url = signInUrlOf(sender.url);
+  // Extra fields (forms.js `extras`): the username step's too, for the same
+  // sign-in, the password page's winning field by field.
+  let extras = cleanExtras(msg.extras, password);
   const pending = await pendingUsernameFor(sender.tab.id, host);
   if (username) {
-    if (pending?.url && pending.username.toLowerCase() === username.toLowerCase()) url = pending.url;
+    if (pending && pending.username.toLowerCase() === username.toLowerCase()) {
+      if (pending.url) url = pending.url;
+      extras = mergeExtras(cleanExtras(pending.extras, password), extras);
+    }
     await chrome.storage.session.remove(pendingUsernameKey(sender.tab.id));
   } else if (pending) {
     ({ username, id: step } = pending);
     if (pending.url) url = pending.url;
+    extras = mergeExtras(cleanExtras(pending.extras, password), extras);
   }
   const id = crypto.randomUUID(); // offers and choices name the capture they're about
-  await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: { id, host, username, password, at: Date.now(), ...(url ? { url } : {}), ...(step ? { step } : {}) } });
+  await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: {
+    id, host, username, password, at: Date.now(), ...(url ? { url } : {}), ...(step ? { step } : {}), ...(extras.length ? { extras } : {}),
+  } });
 }
 
 // Two-step sign-ins (username page, then password page): the username step's
@@ -426,7 +584,10 @@ async function captureUsername(sender, msg) {
   const username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
   if (!host || !username || sender.tab?.id === undefined) return;
   const url = signInUrlOf(sender.url);
-  await chrome.storage.session.set({ [pendingUsernameKey(sender.tab.id)]: { id: crypto.randomUUID(), host, username, at: Date.now(), ...(url ? { url } : {}) } });
+  const extras = cleanExtras(msg.extras, username);
+  await chrome.storage.session.set({ [pendingUsernameKey(sender.tab.id)]: {
+    id: crypto.randomUUID(), host, username, at: Date.now(), ...(url ? { url } : {}), ...(extras.length ? { extras } : {}),
+  } });
 }
 
 // Kept until it expires, a new username step or a form with its own username
@@ -470,11 +631,15 @@ async function readPendingLogin(sender) {
 // - `update` a saved login of this site: the one with that username; or,
 //   signing in with a username, one saved without a username (e.g. from a
 //   change-password form that had no username field) — it gets the username
-//   too; or, with no username captured, one of the site's logins (the user
-//   picks among `candidates`, the most recently changed first);
+//   too; or, with no username captured and no saved login holding this
+//   password, one of the site's logins (the user picks among `candidates`,
+//   the most recently changed first);
 // - a `new` login otherwise;
 // - nothing when it's already saved as is.
-async function planPendingLogin({ host, username, password }) {
+// `extras` (extra fields captured): a saved login with the same password
+// whose fields differ is an update too, `extrasOnly` (without a username,
+// only the logins holding that password are its candidates).
+async function planPendingLogin({ host, username, password, extras = [] }) {
   const key = await VaultKeys.getKey();
   const { items } = await VaultStore.readAll(key);
   const covering = items.filter(i => i.type === 'login' && Vault.loginCoversHost(i.urls, host));
@@ -487,7 +652,19 @@ async function planPendingLogin({ host, username, password }) {
   // are all candidates (below).
   const loose = username ? covering.filter(i => userOf(i).toLowerCase() === username.toLowerCase()) : [];
   const match = username ? (covering.find(i => userOf(i) === username) || (loose.length === 1 ? loose[0] : null)) : null;
-  if (match && Vault.getValue(match, 'password') === password) return { kind: 'none' };
+  const extrasChanged = item => applyExtras(item, extras).changed.length > 0;
+  const extrasOnly = list => ({ kind: 'update', extrasOnly: true, item: list[0], candidates: list.map(item => ({ item })) });
+  if (match && Vault.getValue(match, 'password') === password) return extrasChanged(match) ? extrasOnly([match]) : { kind: 'none' };
+  // No username captured: a saved login holding this password is the one
+  // signed in with. Only it (or they) may get an extras-only update; never
+  // offer to change another login's password to it.
+  if (!username) {
+    const same = covering.filter(i => Vault.getValue(i, 'password') === password);
+    if (same.length) {
+      const changed = same.filter(extrasChanged).sort(newest);
+      return changed.length ? extrasOnly(changed) : { kind: 'none' };
+    }
+  }
 
   // A team collection already has this login: never offer a personal copy.
   // (A changed password there is updated from the popup, which writes to the
@@ -510,8 +687,8 @@ async function planPendingLogin({ host, username, password }) {
   else if (username) candidates = covering.filter(i => !userOf(i)).sort(newest);
   else candidates = covering.filter(i => Vault.getValue(i, 'password') !== password).sort(newest);
   if (!candidates.length) {
-    // No username and nothing personal to update: already saved on one of
-    // the site's logins, or the site's login is a shared one.
+    // No username and no personal login for the site: the site's login may
+    // be a shared one.
     if (!username && (covering.length || shared.length)) return { kind: 'none' };
     return { kind: 'new' };
   }
@@ -533,8 +710,13 @@ async function pendingLoginOffer(sender) {
     await endUsernameStep(sender.tab.id, pending);
     return null;
   }
+  // The extra fields it saves: their labels only, never a value.
+  const extras = (pending.extras || []).length
+    ? (plan.kind === 'update' ? applyExtras(plan.item, pending.extras).changed : changedExtras(pending.extras).map(e => e.label))
+    : [];
   return {
     ...offer, kind: plan.kind, name: plan.item?.title || '',
+    extras, ...(plan.extrasOnly ? { extrasOnly: true } : {}),
     // What an update could apply to (names and usernames only), so the page
     // can let the user pick, or save a new login instead.
     candidates: (plan.candidates || []).map(c => ({
@@ -578,6 +760,8 @@ async function resolvePendingLogin(sender, id, choice, target) {
       await VaultAccounts.add({
         name: pending.host.replace(/^www\./, ''), email: pending.username, secret: '',
         urls: urls.join('\n'), password: pending.password,
+        ...(changedExtras(pending.extras || []).length
+          ? { customFields: changedExtras(pending.extras).map(({ label, value, kind, fill }) => ({ label, value, kind, fill })) } : {}),
       }, vk);
       kind = 'new';
     } else {
@@ -587,7 +771,13 @@ async function resolvePendingLogin(sender, id, choice, target) {
       const current = VaultAccounts.toAccount(chosen.item);
       // A login saved without a username gets the one signed in with.
       const patch = { password: pending.password, ...(!current.email && pending.username ? { email: pending.username } : {}) };
-      if (!(await VaultAccounts.update(chosen.item.id, current, patch, vk))) return { ok: false };
+      // Its extra fields: matching ones take the new value, new ones are
+      // added, the others stay. (No history for them.) Applied to the item
+      // as stored when it's written, under the vault lock: a field a sync
+      // added since the offer was planned stays.
+      const extras = pending.extras || [];
+      const withExtras = extras.length ? item => ({ ...patch, customFields: applyExtras(item, extras).customFields }) : patch;
+      if (!(await VaultAccounts.update(chosen.item.id, current, withExtras, vk))) return { ok: false };
       kind = 'update';
     }
     await dropPendingLogin(key, id);
@@ -1092,12 +1282,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.action === 'vaultLaunchFill') {
-    launchFill(_sender, msg.step).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    launchFill(_sender, msg.step, msg.fields).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 
   if (msg.action === 'vaultFillLogin') {
-    fillLogin(_sender, msg.id, msg.usernameOnly === true).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    fillLogin(_sender, msg.id, msg.usernameOnly === true, msg.fields).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 
