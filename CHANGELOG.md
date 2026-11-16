@@ -1,6 +1,31 @@
 # Changelog
 
 
+## v2.1.10
+
+### Extension
+
+- **Save API keys from the page that shows them**: when a site shows a key you just created (OpenAI, Anthropic, Stripe, GitHub, Google Cloud, AWS…, or one listed in a credentials table), a card offers to save it as an API credential, linked to the site's login. No copy-paste: the key never goes to the clipboard. The card shows the key masked and stays above the site's side panels and dialogs. It also finds a key revealed by "Show" and saves a Client ID with its secret. A key already saved isn't offered again, and a site that already has credentials can **replace the key** in one of them (a rotated key; the old one goes to its history) or save it as new. "Never" per site.
+- Search, on Home and in the vault, finds every item type (API credentials, notes, SSH keys…) by title, tags, websites and non-secret fields. Home lists them under "Vault items" while you search.
+- **Daylight is the default theme** (popup and in-page overlays). If you picked Original, you keep it.
+- A generated password is suggested on more sign-up pages: a lone password field whose button creates an account, a "Join" form loaded into the login page, Django-style forms (`password1`).
+- An AI agent waiting for you (to be approved, or asking for an account) opens the Agents view in its own window, once per agent or request. It closes itself once nothing waits.
+- Logins shared with you (team collections, shared items) fill on pages right after a browser restart or an unlock from a page, without opening the popup first. Signing in with one no longer offers to save a personal copy.
+- The in-page unlock frame no longer logs a "Blocked autofocusing" error.
+
+### API
+
+- Revoking access to a shared item (share or grant removed, collection or member removed, leaving the team…) also deletes the AI agents' copies of it, in the same step.
+
+### MCP
+
+- The OTPilot skill sets itself up in any agent (Codex, Cursor…), not only in the Claude Code plugin.
+
+### Web
+
+- Home redesign: a security section (what stays on your device and what the server sees), team 2FA sharing, AI agents in the hero, a Solutions menu. Fixes a rendering error on browsers other than Chrome.
+
+
 ## v2.1.9
 
 ### Extension
