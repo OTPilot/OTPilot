@@ -2,10 +2,10 @@
 // sitemap and the footer). Every claim here must match what the extension
 // does today: check before adding one. Claims about other products are dated
 // (AS_OF): re-check them before changing that date.
-import { FREE_AGENTS, FREE_AGENT_ACCOUNTS } from '../../lib/agents'
+import { FREE_AGENTS, FREE_AGENT_USES } from '../../lib/agents'
 
 const AS_OF = 'October 2026'
-const COST = 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.'
+const COST = 'Free for unlimited passwords, 2FA codes and items on one browser. Sync across devices is $3/month or $30/year.'
 
 export type Guide = {
   path: string
@@ -87,7 +87,7 @@ export const GUIDES: Guide[] = [
       { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices.' },
       { q: 'Can I keep using Google Authenticator?', a: 'Yes. Both apps generate the same codes from the same secret, so you can use both at the same time.' },
       { q: 'Is there a phone app?', a: 'No. OTPilot runs in your browser: Chrome, Edge and other Chromium browsers. Keep your phone app for signing in on your phone.' },
-      { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
+      { q: 'How much does it cost?', a: 'Free for unlimited passwords, 2FA codes and items on one browser. Sync across devices is $3/month or $30/year.' },
     ],
   },
   {
@@ -140,7 +140,7 @@ export const GUIDES: Guide[] = [
     faq: [
       { q: 'Can OTPilot import my Authy accounts?', a: 'Not directly: Authy does not export secrets. Re-add each account from the site\'s 2FA settings; OTPilot detects the setup QR code and saves it in one click.' },
       { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices.' },
-      { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
+      { q: 'How much does it cost?', a: 'Free for unlimited passwords, 2FA codes and items on one browser. Sync across devices is $3/month or $30/year.' },
     ],
   },
   {
@@ -182,7 +182,7 @@ export const GUIDES: Guide[] = [
     faq: [
       { q: 'Does autofilling 2FA codes make 2FA useless?', a: 'It keeps your second factor in the same vault as your password, which is a trade-off. You still get what most people need 2FA for: a leaked password alone does not get anyone in, and codes are only filled on the sites they belong to.' },
       { q: 'Which sites does it work with?', a: 'Sites that use standard authenticator-app codes: six digits, changing every 30 seconds (TOTP with SHA-1), which is what almost every site uses. Plus email codes from the supported webmails.' },
-      { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
+      { q: 'How much does it cost?', a: 'Free for unlimited passwords, 2FA codes and items on one browser. Sync across devices is $3/month or $30/year.' },
     ],
   },
   {
@@ -220,7 +220,7 @@ export const GUIDES: Guide[] = [
     faq: [
       { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices.' },
       { q: 'Does OTPilot work in Edge?', a: 'Yes. OTPilot is available for Chrome and Edge, and works in other Chromium browsers.' },
-      { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
+      { q: 'How much does it cost?', a: 'Free for unlimited passwords, 2FA codes and items on one browser. Sync across devices is $3/month or $30/year.' },
     ],
   },
   {
@@ -258,7 +258,7 @@ export const GUIDES: Guide[] = [
     ],
     faq: [
       { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices.' },
-      { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
+      { q: 'How much does it cost?', a: 'Free for unlimited passwords, 2FA codes and items on one browser. Sync across devices is $3/month or $30/year.' },
     ],
   },
   {
@@ -285,7 +285,7 @@ export const GUIDES: Guide[] = [
     faq: [
       { q: 'Can I bring my codes from another authenticator?', a: 'From Google Authenticator, yes: screenshot its "Transfer accounts" QR codes and select them. From apps with a CSV export, use Settings → From a password manager. Otherwise, re-add each account from the site\'s 2FA settings.' },
       { q: 'Do I need an account?', a: 'No. OTPilot works without an account, fully on your device. An account is only needed to sync across devices.' },
-      { q: 'How much does it cost?', a: 'Free for unlimited 2FA codes and up to 50 passwords, notes and other items. Sync across devices is $3/month or $30/year.' },
+      { q: 'How much does it cost?', a: 'Free for unlimited passwords, 2FA codes and items on one browser. Sync across devices is $3/month or $30/year.' },
     ],
   },
   {
@@ -307,7 +307,7 @@ export const GUIDES: Guide[] = [
             ['Approve each agent and each account', 'Yes, per agent and per account', 'You approve each request (1Password for Claude)', 'No: the agent reaches the whole vault', 'No'],
             ['Terminal agents (Claude Code, Codex, Cursor)', 'Yes, through MCP', 'Environments MCP server and CLI', 'Yes, through MCP', 'Yes'],
             ['Sign in to websites for the agent', 'Yes, the agent\'s browser gets the session', '1Password for Claude (Mac)', 'No', 'No'],
-            ['Free plan', `Yes: ${FREE_AGENTS} agent, ${FREE_AGENT_ACCOUNTS} accounts`, 'No (14-day trial)', 'The server is free; 2FA codes need Premium', 'Free, and risky'],
+            ['Free plan', `Yes: ${FREE_AGENTS} agent, ${FREE_AGENT_USES} uses a month`, 'No (14-day trial)', 'The server is free; 2FA codes need Premium', 'Free, and risky'],
           ],
         },
         after: [`Compared as of ${AS_OF}, from each product's public documentation.`],
@@ -339,7 +339,7 @@ export const GUIDES: Guide[] = [
     faq: [
       { q: 'Which agents does it work with?', a: 'Any agent that supports the Model Context Protocol (MCP): Claude Code, Codex, Cursor, Claude Desktop and others.' },
       { q: 'Does the agent use the browser extension?', a: 'No. You manage agents and accounts in the extension; the agent only talks to the OTPilot MCP server on your computer.' },
-      { q: 'How much does it cost?', a: `Agents are in every plan: Free connects ${FREE_AGENTS} agent with up to ${FREE_AGENT_ACCOUNTS} accounts, Personal ($3/month) and Team have no limit.` },
+      { q: 'How much does it cost?', a: `Agents are in every plan: Free connects ${FREE_AGENTS} agent with as many accounts as you like and ${FREE_AGENT_USES} uses a month, Personal ($3/month) and Team have no limit on uses.` },
     ],
   },
   {
@@ -357,10 +357,10 @@ export const GUIDES: Guide[] = [
         table: {
           head: ['', '1Password', 'OTPilot'],
           rows: [
-            ['Free plan', 'No (14-day trial)', 'Yes: unlimited 2FA codes, 50 other items'],
+            ['Free plan', 'No (14-day trial)', 'Yes: unlimited 2FA codes and items'],
             ['Built-in 2FA codes', 'Yes', 'Yes, filled after the password'],
             ['Email codes from your webmail', 'No', 'Yes'],
-            ['AI agents', 'Yes', `Yes, also on the free plan (${FREE_AGENTS} agent, ${FREE_AGENT_ACCOUNTS} accounts)`],
+            ['AI agents', 'Yes', `Yes, also on the free plan (${FREE_AGENTS} agent, ${FREE_AGENT_USES} uses a month)`],
             ['Open source', 'No', 'Yes'],
             ['Platforms', 'Desktop, mobile and browser apps', 'Chrome, Edge and other Chromium browsers'],
           ],

@@ -60,6 +60,15 @@ With no keychain (a bare Linux box) the credentials go to `~/.config/otpilot/mcp
 
 No tool returns a password, a 2FA code or any other value.
 
+## Plans
+
+- **Free:** one connected agent, any number of accounts, and **10 uses a month** (UTC; they renew on the 1st, unused ones don't carry over). A use is one `browser_login` or one `run` call, however many accounts it uses. `list_accounts`, `request_access` and `check_request` never count; `list_accounts` says how many uses are left. When they run out, the tools answer with the date they renew and a link to upgrade, and the agent should tell you. A `run` with a wrong field name (a custom field's label that doesn't exist) still counts as a use, because the name can only be checked once the account is open: use the field names the user gave you.
+- **Personal, Team, and the 30-day Personal trial:** unlimited agents and uses.
+
+The limit is a meter, counted where OTPilot's server hands an account's encrypted copy to the MCP (`POST /agent/grants/open`, once per tool call; a retry of the same call isn't counted twice). It's not a security boundary: this MCP is open source, and a modified one could keep the copies it opened. What protects your accounts is what you allow each agent (above), not the count.
+
+The MCP sends its version on every call (`x-otpilot-mcp`). An older MCP (0.2.0 and before) on the Free plan is told to update: restart the agent so `npx -y @otpilot/mcp@latest` fetches the current one. (Releases: the API goes out first, then this package.)
+
 ## Security
 
 - **The agent's own key.** `connect` creates an ECDH P-256 keypair; the private key stays in your OS keychain. Each account you allow is a copy, holding only what you chose (just the 2FA code, the sign-in, or chosen fields), encrypted for that key in the extension. OTPilot's servers only see ciphertext.

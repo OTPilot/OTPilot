@@ -76,7 +76,7 @@ test('items without a 2FA secret never reach the transition blob', async ({ cont
   expect(result).toEqual([null, null]);
 });
 
-test('free limit: only 2FA-only logins are exempt', async ({ context, extensionId }) => {
+test('counts_for_limit (legacy wire field): false only for 2FA-only logins', async ({ context, extensionId }) => {
   const page = await vaultPage(context, extensionId);
   const result = await page.evaluate(acc => {
     const twoFaOnly = Vault.fromV1Account(acc);
@@ -101,42 +101,11 @@ test('free limit: only 2FA-only logins are exempt', async ({ context, extensionI
   expect(result).toEqual({ twoFaOnly: false, withPassword: true, withCustom: true, withNotes: true, withHistory: true, usernameOnly: true, emptyNote: true });
 });
 
-test('free users can save up to 50 counted items; 2FA-only logins are never blocked', async ({ context, extensionId }) => {
+test('the Free item limit is gone: no limit exports, only the counts_for_limit producer', async ({ context, extensionId }) => {
   const page = await vaultPage(context, extensionId);
-  const result = await page.evaluate(acc => {
-    const notes = n => Array.from({ length: n }, () => Vault.newItem('note'));
-    const twoFa = () => Vault.fromV1Account(acc);
-    const full = notes(50);
-    return {
-      at49: Vault.canSaveItem(notes(49), 'free', Vault.newItem('note')),
-      at50: Vault.canSaveItem(full, 'free', Vault.newItem('note')),
-      at50PlusManyTwoFa: Vault.canSaveItem([...notes(49), ...Array.from({ length: 80 }, twoFa)], 'free', Vault.newItem('note')),
-      twoFaAtCap: Vault.canSaveItem(full, 'free', twoFa()),
-      paid: Vault.canSaveItem(notes(500), 'personal', Vault.newItem('note')),
-      noPlan: Vault.canSaveItem(full, undefined, Vault.newItem('note')),
-      unknownPlan: Vault.canSaveItem(full, 'enterprise', Vault.newItem('note')),
-      counted: Vault.countedItems([...notes(3), twoFa()]),
-    };
-  }, V1);
-  expect(result).toEqual({
-    at49: true, at50: false, at50PlusManyTwoFa: true, twoFaAtCap: true,
-    paid: true, noPlan: false, unknownPlan: false, counted: 3,
-  });
-});
-
-test('over the free limit, counted items stay editable but 2FA-only logins cannot gain a password', async ({ context, extensionId }) => {
-  const page = await vaultPage(context, extensionId);
-  const result = await page.evaluate(acc => {
-    const items = Array.from({ length: 60 }, () => Vault.newItem('note'));
-    const twoFa = Vault.fromV1Account(acc);
-    items.push(twoFa);
-    const editedNote = { ...items[0], title: 'renamed' };
-    const upgraded = structuredClone(twoFa);
-    upgraded.fields.find(f => f.id === 'password').value = 'hunter2';
-    return {
-      editCounted: Vault.canSaveItem(items, 'free', editedNote),
-      addPassword: Vault.canSaveItem(items, 'free', upgraded),
-    };
-  }, V1);
-  expect(result).toEqual({ editCounted: true, addPassword: false });
+  expect(await page.evaluate(() => ({
+    FREE_ITEM_LIMIT: 'FREE_ITEM_LIMIT' in Vault, PAID_PLANS: 'PAID_PLANS' in Vault,
+    countedItems: 'countedItems' in Vault, canSaveItem: 'canSaveItem' in Vault,
+    countsForLimit: typeof Vault.countsForLimit,
+  }))).toEqual({ FREE_ITEM_LIMIT: false, PAID_PLANS: false, countedItems: false, canSaveItem: false, countsForLimit: 'function' });
 });

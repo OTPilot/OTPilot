@@ -456,17 +456,6 @@
       body.appendChild(picker);
     }
     const chosen = () => candidates.find(c => c.id === picker?.value) || candidates[0];
-    const updateLimited = () => offer.kind === 'update' ? !!chosen()?.limit : !!offer.limit;
-
-    const limitNote = document.createElement('div');
-    limitNote.className = 'otpilot-save-limit';
-    limitNote.textContent = 'The Free plan holds 50 items. Upgrade to save more.';
-    Object.assign(limitNote.style, { color: 'var(--warning, #fbbf24)', fontSize: '12px', margin: '0 0 8px' });
-    // Nothing this offer could do fits the Free plan: just say why.
-    if (offer.limit && (offer.kind === 'new' || offer.newLimit) && !picker) {
-      body.appendChild(limitNote);
-      return;
-    }
 
     const done = async (choice, target) => {
       const res = await resolve(offer, choice, target);
@@ -487,8 +476,6 @@
     if (offer.kind === 'update') {
       const asNew = saveButton('Save as new');
       asNew.className = 'otpilot-save-new';
-      asNew.disabled = !!offer.newLimit;
-      if (offer.newLimit) asNew.title = 'The Free plan holds 50 items';
       asNew.addEventListener('click', trusted(() => { asNew.disabled = true; done('new'); }));
       row.append(asNew);
     }
@@ -503,13 +490,7 @@
       never.addEventListener('click', trusted(() => { resolve(offer, 'never'); closeSave(); }));
       row.append(never);
     }
-    const syncLimit = () => {
-      save.disabled = updateLimited();
-      if (updateLimited()) body.insertBefore(limitNote, row); else limitNote.remove();
-    };
-    picker?.addEventListener('change', syncLimit);
     body.appendChild(row);
-    syncLimit();
   }
 
   // ── Suggesting a password ──────────────────────────────────────────────

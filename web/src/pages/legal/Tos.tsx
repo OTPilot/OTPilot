@@ -14,7 +14,7 @@ export default function Tos() {
           ← Back to home
         </Link>
         <h1 className="text-3xl font-bold text-white mb-2">Terms of Service</h1>
-        <p className="text-zinc-500 text-sm mb-10">Last updated: October 2026</p>
+        <p className="text-zinc-500 text-sm mb-10">Last updated: November 2026</p>
 
         <div className="prose prose-sm prose-invert max-w-none space-y-8 text-zinc-400 leading-relaxed">
           <section>
@@ -52,7 +52,7 @@ export default function Tos() {
 
           <section>
             <h2 className="text-white font-semibold text-lg mb-3">6. Plans, subscriptions and billing</h2>
-            <p>The free plan includes unlimited 2FA codes and up to <strong className="text-zinc-300">50 other vault items</strong> (passwords, secure notes, servers, API credentials and similar); a login that only holds a 2FA code and its username does not count toward that limit. Paid plans (Personal, Team Lite and extra seats) are <strong className="text-zinc-300">subscriptions billed monthly or yearly in advance</strong> through Stripe, and renew automatically until cancelled. You can cancel at any time from the dashboard's Billing page; cancellation stops future renewals and the plan remains active until the end of the paid period. Refunds follow our <Link to="/refunds" className="text-teal-400 hover:text-teal-300 underline">Refund Policy</Link>. We may change prices for future billing periods with at least <strong className="text-zinc-300">30 days prior notice</strong> by email. When a paid plan ends, your account moves to the free plan: your data is not deleted, and if you are over the free limit you keep every item but cannot add new ones. We may discontinue the Cloud Service with <strong className="text-zinc-300">90 days prior written notice</strong>, after which renewals stop.</p>
+            <p>The free plan includes unlimited passwords, 2FA codes and other vault items on one browser, and AI agents with <strong className="text-zinc-300">1 connected agent and 10 uses a month</strong>. Paid plans (Personal, Team Lite and extra seats) are <strong className="text-zinc-300">subscriptions billed monthly or yearly in advance</strong> through Stripe, and renew automatically until cancelled. You can cancel at any time from the dashboard's Billing page; cancellation stops future renewals and the plan remains active until the end of the paid period. Refunds follow our <Link to="/refunds" className="text-teal-400 hover:text-teal-300 underline">Refund Policy</Link>. We may change prices for future billing periods with at least <strong className="text-zinc-300">30 days prior notice</strong> by email. When a paid plan ends, your account moves to the free plan: your data is not deleted. We may discontinue the Cloud Service with <strong className="text-zinc-300">90 days prior written notice</strong>, after which renewals stop.</p>
           </section>
 
           <section>

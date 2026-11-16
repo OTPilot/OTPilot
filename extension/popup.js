@@ -3425,9 +3425,8 @@ document.getElementById('btn-save-all').addEventListener('click', async () => {
   // stops instead of saving a later editing session nobody clicked Save on.
   syncOpenAccToDraft();
   const intended = { session: _editSession, draft: JSON.stringify(draft) };
-  // Counting toward the Free limit and writing share one lock with every
-  // other user-initiated add (the page's Save login, CSV import), so two of
-  // them can't both take the last free slot.
+  // One lock serializes user-initiated adds (this Save, the page's Save
+  // login, the API key offer, imports), so each reads what the others wrote.
   try { await navigator.locks.request('otpilot-item-limit', () => saveAccounts(intended)); } finally { _savingAccounts = false; }
 });
 
@@ -3447,28 +3446,10 @@ async function saveAccounts(intended) {
     return;
   }
 
-  // Free plan: up to 50 items (2FA-only logins don't count). Checked before
-  // anything changes, so a refused save leaves the editor as it was. The
-  // check is async: an edit made meanwhile (Add clicked again, typing in the
-  // open form) stops the save instead of saving something unchecked or
-  // dropping the typing. The draft is merged only after the check, so the
-  // open row's index still matches it when the form is read again.
+  // The open form is read again: typing in it while this save waited for the
+  // lock stops the save instead of being dropped. The draft is merged only
+  // after that, so the open row's index still matches it when the form is read.
   const edited = JSON.stringify(draft);
-  let overLimit;
-  try {
-    const key = await VaultKeys.getKey();
-    const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
-    const merged = mergeDraftWithCurrent();
-    overLimit = !!key && await VaultAccounts.exceedsFreeLimit(
-      merged.filter(isLoginEntry), key, _loadedIds, userPlan, planOtherItems(merged));
-  } catch {
-    setStatus('Could not check the Free plan limit — try again', false);
-    return;
-  }
-  if (overLimit) {
-    setStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items (2FA-only logins don't count). Upgrade to add more.`, false);
-    return;
-  }
   syncOpenAccToDraft();
   if (JSON.stringify(draft) !== edited) {
     setStatus('The list changed while saving — save again', false);
@@ -4119,15 +4100,14 @@ function planBackupItems(items, current) {
   });
 }
 
-// Writes the chosen backup items (new and updated), Free limit permitting —
-// under the shared item-limit lock, like every user-initiated add, and with
-// the read, the plan, the limit check and the write in one vault
-// transaction: a sync can't save a newer copy in between and be overwritten.
+// Writes the chosen backup items (new and updated) under the lock that
+// serializes user-initiated adds, with the read, the plan and the write in
+// one vault transaction: a sync can't save a newer copy in between and be
+// overwritten.
 async function applyBackupItems(chosen) {
   return navigator.locks.request('otpilot-item-limit', async () => {
     const key = await VaultKeys.getKey();
     if (!key) throw new Error('vault is locked');
-    const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
     const res = await VaultStore.transaction(async tx => {
       if ((await VaultKeys.getKey()) !== key) throw new Error('the vault key changed');
       const current = [];
@@ -4136,18 +4116,11 @@ async function applyBackupItems(chosen) {
       }
       const plans = planBackupItems(chosen, current);
       const writes = chosen.filter((_, i) => plans[i] !== 'exists');
-      if (!Vault.PAID_PLANS.includes(userPlan)) {
-        const after = new Map(current.map(i => [i.id, i]));
-        writes.forEach(i => after.set(i.id, i));
-        const count = Vault.countedItems([...after.values()]);
-        if (count > Vault.FREE_ITEM_LIMIT && count > Vault.countedItems(current)) return { limit: true };
-      }
       const records = [];
       for (const item of writes) records.push([item.id, await VaultCrypto.encryptItem(item, key)]);
       if (records.length) await tx.putMany(records); // one write: all or nothing
       return { added: plans.filter(p => p === 'new').length, updated: plans.filter(p => p === 'update').length, skipped: plans.filter(p => p === 'exists').length };
     });
-    if (res.limit) return res;
     await VaultAccounts.rebuildIndex(key);
     return { ...res, key };
   });
@@ -4291,7 +4264,6 @@ document.getElementById('import-picker-confirm').addEventListener('click', async
     if (!chosen.length) { setStatus('Select at least one item', false); return; }
     let res;
     try { res = await applyBackupItems(chosen); } catch { setStatus('Import failed', false); return; }
-    if (res.limit) { setStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items — upgrade to import them all`, false); return; }
     hideImportPicker();
     await reloadFromVault(res.key);
     if (res.added || res.updated) { await stampLocalChange(); silentPullSync(); }
@@ -4409,8 +4381,8 @@ document.getElementById('csv-import-confirm').addEventListener('click', async ()
   const btn = document.getElementById('csv-import-confirm');
   btn.disabled = true;
   try {
-    // The Free-limit lock shared by every user-initiated add (editor Save,
-    // the page's Save login), then the vault lock inside: same order everywhere.
+    // The lock that serializes user-initiated adds (editor Save, the page's
+    // Save login), then the vault lock inside: same order everywhere.
     await navigator.locks.request('otpilot-item-limit', () => importCsvEntries(chosen));
   } catch (e) {
     csvImportStatus(`Import failed — nothing was changed${e?.message ? ` (${e.message})` : ''}.`, false);
@@ -4423,8 +4395,7 @@ document.getElementById('csv-import-confirm').addEventListener('click', async ()
 async function importCsvEntries(chosen) {
   const key = await VaultKeys.getKey();
   if (!key) { csvImportStatus('Unlock OTPilot first.', false); return; }
-  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
-  // Read, plan, check the Free limit and write as one step under the vault
+  // Read, plan and write as one step under the vault
   // lock: a sync or another writer can't change a merge target (or delete
   // it) in between. Planned with only the chosen rows (an unchecked row
   // must not take a merge target).
@@ -4434,23 +4405,11 @@ async function importCsvEntries(chosen) {
       try { items.push(await VaultCrypto.decryptItem(rec, key)); } catch { /* unreadable: never a merge target */ }
     }
     const toSave = Importers.toItems(chosen, Importers.plan(chosen, items), items);
-    if (!Vault.PAID_PLANS.includes(userPlan)) {
-      const after = new Map(items.map(i => [i.id, i]));
-      toSave.forEach(i => after.set(i.id, i));
-      const count = Vault.countedItems([...after.values()]);
-      const before = Vault.countedItems(items);
-      if (count > Vault.FREE_ITEM_LIMIT && count > before) return { room: Math.max(Vault.FREE_ITEM_LIMIT - before, 0) };
-    }
     const records = [];
     for (const item of toSave) records.push([item.id, await VaultCrypto.encryptItem(item, key)]);
     if (records.length) await tx.putMany(records); // one write: all or nothing
     return { items, toSave };
   });
-  if (result.room !== undefined) {
-    const { room } = result;
-    csvImportStatus(`The Free plan holds ${Vault.FREE_ITEM_LIMIT} items: ${room ? `select at most ${room} more` : 'there is no room for more'}, or upgrade.`, false);
-    return;
-  }
   const { items, toSave } = result;
   if (toSave.length) {
     await reloadFromVault(key);
@@ -4992,8 +4951,7 @@ async function lockPopup() {
   _homeCredsKey = null;
   clearRevealedKey();
   hideCsvExport();
-  // userPlan stays: locking isn't signing out, and the item limit reads it
-  // right after unlocking.
+  // userPlan stays: locking isn't signing out.
   showLockOverlay('login');
   await waitForUnlock();
   // Unlocked: a new lock from here on must be handled again, even while the
@@ -5201,8 +5159,6 @@ async function renderHomeBanner() {
   if (!b) { el.hidden = true; el.replaceChildren(); return; }
 
   const items = accounts.length + otherItems.length;
-  // What the Free limit counts (2FA-only logins don't).
-  const counted = b.kind === 'ended' ? Vault.countedItems([...accounts.map(a => Vault.fromV1Account(a)), ...otherItems]) : 0;
   const copy = {
     nudge: {
       tone: '', title: `Your ${b.codes} codes live only in this browser`,
@@ -5217,9 +5173,7 @@ async function renderHomeBanner() {
     },
     ended: {
       tone: 'calm', title: 'Your trial ended. Sync is paused.',
-      sub: counted > Vault.FREE_ITEM_LIMIT
-        ? `Your ${items} items are safe on this device; you can keep editing them. Adding more needs Personal.`
-        : `Your ${items} ${items === 1 ? 'item is' : 'items are'} safe on this device. Subscribe to sync again.`,
+      sub: `Your ${items} ${items === 1 ? 'item is' : 'items are'} safe on this device. Subscribe to sync again.`,
       go: 'Subscribe', x: 'Dismiss',
     },
   }[b.kind];

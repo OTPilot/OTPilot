@@ -60,8 +60,8 @@ The bytes travel inside the item like any other field value:
   silent truncation (mockup 8).
 - **Local quota**: add the `unlimitedStorage` permission (no install warning);
   `chrome.storage.local` is otherwise 10 MB for the whole vault.
-- Free plan: an SSH key / secure file is an item and counts toward the 50
-  (`countsForLimit` unchanged). No separate file quota in phase 1.
+- Free plan: an SSH key / secure file is an item like any other (Free has no item limit).
+  No separate file quota in phase 1.
 
 ### Phase 2 (later, only if asked for): large attachments
 
@@ -164,6 +164,6 @@ otpilot.run(command: "git push deploy main",
 | | |
 |---|---|
 | Size cap | 64 KB of files per item (all of an item's file fields together) |
-| Free plan | SSH keys and secure files are items like any other: they count toward the 50, no extra file quota |
+| Free plan | SSH keys and secure files are items like any other: Free has no item limit, no extra file quota |
 | `.env` | "Split into fields" is in phase 1 |
 | SSH keys | Generation (Ed25519 + RSA 4096) is in phase 1, not only import |

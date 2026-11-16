@@ -173,18 +173,6 @@ test('the offer does not follow the user to another site', async ({ context, ext
   await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
 });
 
-test('Free plan at 50 items: a new login is not saved, the offer says why', async ({ context, extensionId }) => {
-  const full = Array.from({ length: 50 }, (_, i) => ({ name: `Site ${i}`, email: '', secret: '', urls: `site${i}.example`, password: 'x' }));
-  const popup = await vaultWith(context, extensionId, full, { userPlan: 'free' });
-  const site = await context.newPage();
-  await signIn(site, 'one@example.com', 'too-many');
-  const offer = site.locator('#otpilot-login-save');
-  await expect(offer.locator('.otpilot-save-limit')).toContainText('50 items');
-  await expect(offer.locator('.otpilot-save-confirm')).toHaveCount(0);
-  // Even asked directly, the background refuses.
-  expect((await logins(popup)).length).toBe(50);
-});
-
 // ── Review hardening ─────────────────────────────────────────────────────────
 
 test('a page script cannot click the overlays to fill or save credentials', async ({ context, extensionId }) => {
@@ -277,18 +265,6 @@ test('Update picks the login with the exact username when several differ only by
   await expect(offer).toContainText('Update the password for Lower?');
   await offer.locator('.otpilot-save-confirm').click();
   await expect.poll(async () => (await logins(popup)).map(l => [l.title, l.password]).sort()).toEqual([['Lower', 'changed'], ['Upper', 'a1']]);
-});
-
-test('Free plan at 50 items: a 2FA-only login does not gain a password through Update', async ({ context, extensionId }) => {
-  const full = Array.from({ length: 50 }, (_, i) => ({ name: `Site ${i}`, email: '', secret: '', urls: `site${i}.example`, password: 'x' }));
-  const popup = await vaultWith(context, extensionId, [...full, { name: 'Local', email: 'me@example.com', secret: TEST_SECRET, urls: 'localhost' }], { userPlan: 'free' });
-  const site = await context.newPage();
-  await signIn(site, 'me@example.com', 'would-count');
-  const offer = site.locator('#otpilot-login-save');
-  await expect(offer).toContainText('Update the password for Local?');
-  await expect(offer.locator('.otpilot-save-limit')).toBeVisible();
-  await expect(offer.locator('.otpilot-save-confirm')).toHaveCount(0);
-  expect((await logins(popup)).find(l => l.title === 'Local').password).toBe('');
 });
 
 test('an index from before hasPassword is rebuilt on unlock, so a locked vault offers to fill again', async ({ context, extensionId }) => {

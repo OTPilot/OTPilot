@@ -23,7 +23,7 @@ OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) code
 - Crypto wallets: keep a wallet's recovery phrase (checked against the BIP39 word list and checksum), passphrase, unlock password, private keys and addresses (network detected, QR code to receive); the phrase and keys show only after the master password and are never given to AI agents
 - Recovery phrase phishing warning: when a recovery phrase is typed or pasted into a website (one field or a grid of word boxes), OTPilot warns that no real site asks for it — checked on the device, nothing is sent
 - End-to-end encrypted: the vault is encrypted on your device under a master password
-- Sync across devices (Personal plan, free for 30 days); import from Chrome, 1Password, Bitwarden, LastPass and more
+- Free has no item limit; sync across devices is Personal (free for 30 days, no card); import from Chrome, 1Password, Bitwarden, LastPass and more
 - Sign in with Google or by email (a link on the website, a code in the extension)
 - Team sharing: share a whole item or chosen fields end-to-end encrypted, or share live 2FA codes without the secret
 - AI agents (new in 2.1): Claude Code, Codex, Cursor or any MCP agent can sign in and run commands with the accounts you allow, no tool returns a secret to the model
@@ -52,6 +52,7 @@ The user manages everything in the extension; the agent only talks to the OTPilo
 - Two approvals: an agent connects with a verification code checked in the extension and gets no accounts; each account is then allowed per agent, with a scope (2FA code only, whole sign-in, chosen fields) and a duration, or "ask every time"
 - Team plans: accounts teammates share with the user (directly or through a collection) can be allowed too; the agent's copy follows the shared item and goes when the user loses access to it
 - Each allowed account is encrypted for that agent's own key (kept in the OS keychain); the server stores ciphertext plus grant metadata (agent name, scopes, expiry, allowed commands, and the sites and programs each use touched); revoking an agent cuts its access
+- Limits: Free has 1 connected agent, as many accounts as you like and 10 uses per month (a use = one browser_login or one run; listing accounts and asking for access are free; renews on the 1st, UTC, no rollover); Personal, Team and the trial have unlimited uses
 - Activity log of every use; requests show on the extension's badge
 - Connect an agent: `npx -y @otpilot/mcp@latest connect` (prints a verification code; approve it in the extension's Agents view)
 - Claude Code plugin (the MCP server plus a skill): `/plugin install otpilot --marketplace OTPilot/OTPilot`; the same skill installs in Codex, Cursor and other agents with `npx skills add OTPilot/OTPilot`
@@ -61,9 +62,9 @@ The user manages everything in the extension; the agent only talks to the OTPilo
 
 ## Plans
 
-- Free: unlimited 2FA codes, up to 50 passwords, notes and other items, on one device; AI agents: 1 agent, up to 3 accounts
-- Personal ($3/month or $30/year): unlimited items, end-to-end encrypted sync across devices, unlimited AI agents; 30-day free trial for new accounts, no card (back to Free afterwards, nothing deleted)
-- Team ($8/workspace/month or $80/year, 5 seats included, +$2 per extra seat/month): sharing with teammates and collections
+- Free: unlimited passwords, 2FA codes and items on one browser; AI agents: 1 agent, 10 uses per month (a use = one browser_login or run).
+- Personal ($3/month or $30/year): sync across devices, unlimited AI agent uses; 30-day free trial, no card.
+- Team ($8/workspace/month or $80/year, 5 seats, +$2 per extra seat/month): Personal features for the whole team, unlimited agent uses, sharing with teammates and collections.
 
 ## Links
 

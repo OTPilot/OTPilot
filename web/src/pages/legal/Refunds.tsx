@@ -96,7 +96,7 @@ export default function Refunds() {
 
           <section>
             <h2 className="text-white font-semibold text-lg mb-3">Cancelling</h2>
-            <p>Cancel from the dashboard's Billing page (Billing portal). Cancelling stops renewal; it does not refund the current period, which you keep until it ends. Your vault stays on your devices and moves to the free plan: nothing is deleted, and if you have more than 50 items you keep them all (you just can't add new ones). Cancelling a team subscription dissolves the team and removes access to its shared collections and codes; each member's own vault is not affected.</p>
+            <p>Cancel from the dashboard's Billing page (Billing portal). Cancelling stops renewal; it does not refund the current period, which you keep until it ends. Your vault stays on your devices and moves to the free plan: nothing is deleted (you only lose sync). Cancelling a team subscription dissolves the team and removes access to its shared collections and codes; each member's own vault is not affected.</p>
           </section>
 
           <section>

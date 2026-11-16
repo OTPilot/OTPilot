@@ -252,20 +252,115 @@ test('a grant follows its item to the new id sync gave it (Free, all slots used)
   expect(await page.evaluate(async id => !!(await VaultStore.get(id, await VaultKeys.getKey())), gh[0])).toBe(true);
 });
 
-test('free plan: the limit shows and a fourth account is refused', async ({ context, extensionId }) => {
+const setUsage = (page, usage) => page.evaluate(u => { fakeAgents.usage = u; }, usage);
+const usage = (used, extra = {}) => ({ used, limit: 10, resets_at: '2026-07-01T00:00:00Z', trial_available: false, ...extra });
+
+test('free plan: the monthly uses card shows even at 0 of 10', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, { free: true });
+  await setUsage(page, usage(0));
+  await page.click('#nav-agents');
+  const card = page.locator('#agents-limit .ag-limit');
+  await expect(card).toContainText('Free plan · 0 of 10 uses this month');
+  await expect(card).toContainText('Renews Jul 1');
+  const meter = card.locator('.ag-meter');
+  await expect(meter).toHaveAttribute('role', 'meter');
+  await expect(meter).toHaveAttribute('aria-valuenow', '0');
+  await expect(meter).toHaveAttribute('aria-valuetext', '0 of 10 uses this month');
+  await expect(page.locator('#agents-limit button')).toHaveCount(0);
+});
+
+test('free plan: 7 of 10 has no warning, 9 of 10 does, and the 10 s refresh redraws it', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, { free: true });
+  await setUsage(page, usage(7));
+  await page.click('#nav-agents');
+  await expect(page.locator('#agents-limit')).toContainText('7 of 10 uses this month');
+  await expect(page.locator('#agents-limit .ag-meter.warn')).toHaveCount(0);
+  await setUsage(page, usage(9));
+  await page.evaluate(async () => renderAgentsPanel(await Agents.list()));
+  await expect(page.locator('#agents-limit .ag-meter.warn')).toHaveCount(1);
+  await expect(page.locator('#agents-limit')).toContainText('9 of 10 uses this month');
+});
+
+test('free plan: agentsShape changes with usage', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, { free: true });
+  const same = await page.evaluate(() => {
+    const d = { agents: [], usage: { used: 1, limit: 10, trial_available: false } };
+    return agentsShape(d) === agentsShape({ ...d, usage: { ...d.usage, used: 2 } });
+  });
+  expect(same).toBe(false);
+});
+
+test('free plan: 10 of 10 offers the trial, starting it hides the card', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, { free: true });
+  await setUsage(page, usage(10, { trial_available: true }));
+  await page.evaluate(() => {
+    window.__trial = 0;
+    CloudSync.startTrial = async () => { window.__trial++; fakeAgents.usage = null; };
+  });
+  await page.click('#nav-agents');
+  const card = page.locator('#agents-limit .ag-limit');
+  await expect(card.locator('[aria-live="polite"]')).toContainText("can't sign in or run commands until Jul 1");
+  await expect(card.locator('.ag-meter')).toHaveAttribute('aria-valuenow', '10');
+  await card.getByRole('button', { name: 'Start free trial' }).click();
+  await expect(page.locator('#agents-limit')).toBeEmpty();
+  expect(await page.evaluate(() => window.__trial)).toBe(1);
+});
+
+test('free plan: a failed trial start says so and offers the upgrade', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, { free: true });
+  await setUsage(page, usage(10, { trial_available: true }));
+  await page.evaluate(() => { CloudSync.startTrial = async () => { throw new Error('nope'); }; });
+  await page.click('#nav-agents');
+  await page.getByRole('button', { name: 'Start free trial' }).click();
+  await expect(page.locator('#agents-limit')).toContainText('Could not start the trial. Try again, or upgrade to Personal.');
+  await expect(page.getByRole('button', { name: 'Start free trial' })).toBeEnabled();
+  await expect(page.locator('#agents-limit a', { hasText: 'Upgrade to Personal' })).toHaveAttribute('href', /\/dashboard\/billing$/);
+});
+
+test('free plan: 10 of 10 without a trial links to Personal', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, { free: true });
+  await setUsage(page, usage(10));
+  await page.click('#nav-agents');
+  const link = page.locator('#agents-limit a', { hasText: 'Upgrade to Personal' });
+  await expect(link).toHaveAttribute('href', /\/dashboard\/billing$/);
+  await expect(page.locator('#agents-limit')).toContainText('Renews Jul 1');
+  await expect(page.locator('#agents-limit button')).toHaveCount(0);
+});
+
+test('paid plan or no usage: the card is hidden', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.click('#nav-agents');
+  await expect(page.locator('#agents-list')).toBeVisible();
+  await expect(page.locator('#agents-limit')).toBeEmpty();
+  await setUsage(page, undefined);
+  await page.evaluate(async () => renderAgentsPanel(await Agents.list()));
+  await expect(page.locator('#agents-limit')).toBeEmpty();
+});
+
+test('free plan: a server without usage hides the card', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, { free: true });
+  await setUsage(page, undefined);
+  await page.click('#nav-agents');
+  await expect(page.locator('#agents-list')).toBeVisible();
+  await expect(page.locator('#agents-limit')).toBeEmpty();
+});
+
+test('free plan: the second-agent error and a fourth grant', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId, { free: true });
+  expect(await page.evaluate(() => agentError({ body: { error: 'free plan limit: one agent' } })))
+    .toBe('The free plan allows one connected agent. Disconnect it first, or upgrade to Personal.');
   await page.evaluate(async () => {
     const a = await fakeAgents.addAgent({ status: 'active' });
     await Agents.pin(a);
     for (let i = 0; i < 3; i++) a.grants.set(crypto.randomUUID(), { scope: { kind: '2fa' }, commands: [] });
   });
   await page.click('#nav-agents');
-  await expect(page.locator('#agents-limit')).toContainText('3 of 3 accounts used');
   const detail = page.locator('#agents-detail');
   await detail.getByRole('button', { name: '+ Add account' }).click();
   await detail.locator('.ag-pick button', { hasText: 'GitHub' }).click();
   await detail.getByRole('button', { name: 'Allow' }).click();
-  await expect(detail.locator('.ag-err')).toContainText('one agent use up to 3 accounts');
+  await expect(detail.locator('.ag-err')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => [...fakeAgents.agents.values()][0].grants.size)).toBe(4);
 });
 
 test('the editor lists the agents that can use a login and allows one', async ({ context, extensionId }) => {

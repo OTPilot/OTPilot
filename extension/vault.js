@@ -11,10 +11,6 @@
 // version doesn't know is kept as-is (never dropped or rewritten), so an older
 // extension can't destroy data written by a newer one.
 const Vault = (() => {
-  const FREE_ITEM_LIMIT = 50;
-  // Anything else (free, missing, unknown) gets the Free limit.
-  const PAID_PLANS = ['personal', 'team_lite', 'team_pro'];
-
   const FIELD_KINDS = ['text', 'password', 'hidden', 'email', 'url', 'date', 'phone', 'multiline', 'file'];
   // Kinds whose value is masked by default and offered by the generator.
   const SECRET_KINDS = ['password', 'hidden'];
@@ -157,29 +153,15 @@ const Vault = (() => {
     return list.some(u => urlCoversHost(u, hostname));
   }
 
-  // Free plan counts every item except logins that hold a 2FA secret and
-  // nothing else besides a username (no other field, notes or password
-  // history) — 2FA stays unlimited on Free.
+  // The `counts_for_limit` value sent with each item (/vault/items, convert):
+  // a legacy wire field no limit reads any more (the Free plan has no item
+  // limit). True for every item except logins that hold a 2FA secret and
+  // nothing else besides a username (no other field, notes or password history).
   function countsForLimit(item) {
     if (item.type !== 'login' || !item.totp?.secret) return true;
     if (String(item.notes ?? '').trim() !== '') return true;
     if ((item.passwordHistory || []).length) return true;
     return (item.fields || []).some(f => f.id !== 'username' && String(f.value ?? '').trim() !== '');
-  }
-
-  function countedItems(items) {
-    return items.filter(countsForLimit).length;
-  }
-
-  // Whether saving `candidate` (new or edited) is allowed. Over the limit, items
-  // that already counted stay editable; only adding a counted item is blocked —
-  // a new one, or a 2FA-only login that gains a password.
-  function canSaveItem(items, plan, candidate) {
-    if (PAID_PLANS.includes(plan)) return true;
-    if (!countsForLimit(candidate)) return true;
-    const existing = items.find(i => i.id === candidate.id);
-    if (existing && countsForLimit(existing)) return true;
-    return countedItems(items.filter(i => i.id !== candidate.id)) < FREE_ITEM_LIMIT;
   }
 
   // ── Files ───────────────────────────────────────────────────────────────
@@ -314,9 +296,9 @@ const Vault = (() => {
   }
 
   return {
-    FREE_ITEM_LIMIT, PAID_PLANS, FIELD_KINDS, SECRET_KINDS, FILE_BYTES_LIMIT, TYPES, UPCOMING_TYPES,
+    FIELD_KINDS, SECRET_KINDS, FILE_BYTES_LIMIT, TYPES, UPCOMING_TYPES,
     isKnownType, newItem, getField, getValue,
-    countsForLimit, countedItems, canSaveItem,
+    countsForLimit,
     fromV1Account, toV1Account,
     loginCoversHost,
     fileValue, fileOf, fileText, fileBytes, bytesToB64, b64ToBytes,

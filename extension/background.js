@@ -474,17 +474,12 @@ async function readPendingLogin(sender) {
 //   picks among `candidates`, the most recently changed first);
 // - a `new` login otherwise;
 // - nothing when it's already saved as is.
-// `limit` / `newLimit`: the Free plan refuses that update / a new login.
 async function planPendingLogin({ host, username, password }) {
   const key = await VaultKeys.getKey();
   const { items } = await VaultStore.readAll(key);
   const covering = items.filter(i => i.type === 'login' && Vault.loginCoversHost(i.urls, host));
   const userOf = i => Vault.getValue(i, 'username').trim();
   const newest = (x, y) => (y.updatedAt || '').localeCompare(x.updatedAt || '');
-  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
-  const candidate = Vault.newItem('login', { urls: [host] });
-  Vault.getField(candidate, 'password').value = password;
-  const newLimit = !Vault.canSaveItem(items, userPlan, candidate);
 
   // The exact username first. Usernames can be case-sensitive: a match
   // ignoring case is used only when it is the only one.
@@ -518,15 +513,9 @@ async function planPendingLogin({ host, username, password }) {
     // No username and nothing personal to update: already saved on one of
     // the site's logins, or the site's login is a shared one.
     if (!username && (covering.length || shared.length)) return { kind: 'none' };
-    return { kind: 'new', limit: newLimit, newLimit };
+    return { kind: 'new' };
   }
-  const withLimit = candidates.map(item => {
-    // A 2FA-only login that gains a password starts counting toward the limit.
-    const updated = structuredClone(item);
-    Vault.getField(updated, 'password').value = password;
-    return { item, limit: !Vault.canSaveItem(items, userPlan, updated) };
-  });
-  return { kind: 'update', item: withLimit[0].item, limit: withLimit[0].limit, candidates: withLimit, newLimit };
+  return { kind: 'update', item: candidates[0], candidates: candidates.map(item => ({ item })) };
 }
 
 async function pendingLoginOffer(sender) {
@@ -545,11 +534,11 @@ async function pendingLoginOffer(sender) {
     return null;
   }
   return {
-    ...offer, kind: plan.kind, name: plan.item?.title || '', limit: !!plan.limit, newLimit: !!plan.newLimit,
+    ...offer, kind: plan.kind, name: plan.item?.title || '',
     // What an update could apply to (names and usernames only), so the page
     // can let the user pick, or save a new login instead.
     candidates: (plan.candidates || []).map(c => ({
-      id: c.item.id, name: c.item.title || '', username: Vault.getValue(c.item, 'username'), limit: c.limit,
+      id: c.item.id, name: c.item.title || '', username: Vault.getValue(c.item, 'username'),
     })),
   };
 }
@@ -558,8 +547,9 @@ async function pendingLoginOffer(sender) {
 // `choice`: 'save' (what the offer proposed: the update of `target`, one of
 // its candidates, or a new login), 'new' (a new login even where an update
 // was offered), 'never', or anything else to dismiss.
-// Counting toward the Free limit and writing happen under one lock, so two
-// tabs saving at once can't both pass the check.
+// The re-plan and the write happen under the lock that serializes
+// user-initiated adds, so two tabs saving at once can't both write the same
+// login or overwrite each other's password.
 async function resolvePendingLogin(sender, id, choice, target) {
   const found = await readPendingLogin(sender);
   if (!found || typeof id !== 'string' || found.pending.id !== id) return { ok: false };
@@ -580,7 +570,6 @@ async function resolvePendingLogin(sender, id, choice, target) {
     const vk = await VaultKeys.getKey();
     let kind;
     if (choice === 'new' || plan.kind === 'new') {
-      if (plan.newLimit) return { ok: false, limit: true };
       // The sign-in's start, plus the password page's host when the start
       // doesn't cover it (login.site.com, then site.com): the login must
       // still be offered where its password is typed.
@@ -595,7 +584,6 @@ async function resolvePendingLogin(sender, id, choice, target) {
       // Only one of the offer's candidates, re-checked now.
       const chosen = plan.candidates.find(c => c.item.id === (target ?? plan.item.id));
       if (!chosen) return { ok: false };
-      if (chosen.limit) return { ok: false, limit: true };
       const current = VaultAccounts.toAccount(chosen.item);
       // A login saved without a username gets the one signed in with.
       const patch = { password: pending.password, ...(!current.email && pending.username ? { email: pending.username } : {}) };
@@ -612,9 +600,9 @@ chrome.tabs.onRemoved.addListener(tabId => { chrome.storage.session.remove([pend
 
 // ── Saving an API key a page shows (apiKeyOffer.js) ───────────────────────────
 // The key comes from an untrusted page, once, on the user's click. The host
-// is the sender's (top frame), never the message's; the lock, the Free limit
-// (over every item, not just logins), duplicates and the login to link are
-// re-checked under the item-limit lock. The key is never sent back.
+// is the sender's (top frame), never the message's; the lock, duplicates and
+// the login to link are re-checked under the lock that serializes
+// user-initiated adds. The key is never sent back.
 // "Never" is its own per-host list: refusing keys never silences login offers.
 const API_KEY_NEVER = 'apiKeyNeverSave';
 
@@ -644,15 +632,14 @@ function apiKeyReplaceCandidates(items, host) {
 
 async function apiKeyContext(sender, hash) {
   const host = senderHost(sender);
-  if (!host) return { state: 'setup', never: true, limit: false, logins: [] };
+  if (!host) return { state: 'setup', never: true, logins: [] };
   const never = ((await chrome.storage.local.get(API_KEY_NEVER))[API_KEY_NEVER] || []).includes(host);
   const state = await VaultLock.state();
-  if (never || state !== 'unlocked') return { state, never, limit: false, logins: [] };
+  if (never || state !== 'unlocked') return { state, never, logins: [] };
   const { items } = await VaultStore.readAll(await VaultKeys.getKey());
-  const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
-  if (await apiKeySavedFor(items, host, hash)) return { state, never, exists: true, limit: false, logins: [] };
+  if (await apiKeySavedFor(items, host, hash)) return { state, never, exists: true, logins: [] };
   return {
-    state, never, limit: !Vault.canSaveItem(items, userPlan, Vault.newItem('api')), logins: apiKeyLinkCandidates(items, host),
+    state, never, logins: apiKeyLinkCandidates(items, host),
     // This site's API credentials: the new key can replace one's (a rotated key).
     apiItems: apiKeyReplaceCandidates(items, host),
   };
@@ -695,7 +682,7 @@ function apiKeyRequest(msg) {
   return { key, keyId, name: name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim(), environment, linkTo, replace };
 }
 
-// → { ok: true, id, linked } | { ok: false, exists: true } | { ok: false, limit: true }
+// → { ok: true, id, linked } | { ok: false, exists: true }
 //   | { ok: false, link: true } (the login to link is gone or no longer covers
 //   the site: the card asks for the logins again) | { ok: false }
 async function addApiKey(sender, msg) {
@@ -706,7 +693,6 @@ async function addApiKey(sender, msg) {
     const vk = await VaultKeys.getKey();
     if (!vk) return { ok: false };
     if (req.replace) return replaceApiKey(req, host, vk);
-    const { userPlan = 'free' } = await chrome.storage.local.get('userPlan');
     const item = Vault.newItem('api', { title: req.name || host.replace(/^www\./, ''), urls: [host] });
     const put = (id, value) => { const f = Vault.getField(item, id); if (f) f.value = value; };
     // AWS: the access key ID and its secret; anything else is one API key.
@@ -717,11 +703,10 @@ async function addApiKey(sender, msg) {
     const res = await VaultAccounts.addItem(item, vk, items => {
       const same = i => i.type === 'api' && (Vault.getValue(i, 'apiKey') === req.key || Vault.getValue(i, 'clientSecret') === req.key);
       if (items.some(same)) return 'exists';
-      if (!Vault.canSaveItem(items, userPlan, item)) return 'limit';
       if (req.linkTo && !apiKeyLinkCandidates(items, host).some(l => l.id === req.linkTo)) return 'link';
       return null;
     });
-    if (!res.ok) return ['exists', 'limit', 'link'].includes(res.reason) ? { ok: false, [res.reason]: true } : { ok: false };
+    if (!res.ok) return ['exists', 'link'].includes(res.reason) ? { ok: false, [res.reason]: true } : { ok: false };
     await VaultLock.touch().catch(() => {});
     vaultChangedByPage();
     return { ok: true, id: res.id, linked: !!req.linkTo };
@@ -730,7 +715,7 @@ async function addApiKey(sender, msg) {
 
 // A rotated key: it replaces the key of one of this site's API credentials
 // (re-checked here: an api item for a related host). The old value goes to
-// the item's history; the name and links stay. Never the limit: no new item.
+// the item's history; the name and links stay.
 // → { ok: true, id, replaced: true } | { ok: false, exists: true }
 //   | { ok: false, replace: true } (gone or no longer this site's) | { ok: false }
 async function replaceApiKey(req, host, vk) {

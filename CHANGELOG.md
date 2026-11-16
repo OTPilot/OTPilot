@@ -1,6 +1,27 @@
 # Changelog
 
 
+## Unreleased
+
+### Extension
+
+- Free keeps unlimited items: the 50-item limit is gone (a CSV import of any size works). The Agents view shows the monthly uses card for Free (N of 10, the renew date) and offers **Start free trial** / **Upgrade to Personal** when they run out.
+
+### API
+
+- AI agents on Free: 1 agent with any number of accounts and 10 uses a UTC month (a use = one `browser_login` or `run`; listing accounts and asking for access are free). New `POST /agent/grants/open` opens the copies for a tool call in one transaction and counts the use (retries with the same `use_id` aren't counted twice); at 10 it answers 402 `agent_uses_exhausted` with the upgrade link and whether a trial is available. `GET /agent/grants` returns labels and `usage`; `GET /agents` returns `usage`. Personal, Team and the trial are unlimited.
+- Deploy the API before publishing the MCP.
+
+### MCP (`@otpilot/mcp` 0.3.0)
+
+- Sends an `x-otpilot-mcp` header; `browser_login` and `run` open their accounts with one call (a `run` with several accounts is one use), and the server's limit and "update the MCP" messages are shown as they are. `list_accounts` ends with the monthly usage when on Free.
+
+### Web
+
+- Pricing, FAQ and the AI agents page describe the Free agent limits (1 agent, 10 uses a month) and no item limit.
+
+
+
 ## v2.1.9
 
 ### Extension

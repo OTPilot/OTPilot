@@ -1,7 +1,9 @@
-// What this agent may use: its grants, opened with its private key. A grant
-// always comes with its label (title, sites); its copy (the values) only
-// while it may be used — an "ask every time" grant waits for the user's
-// one-time approval, asked for here.
+// What this agent may use: its grants, opened with its private key. Listing
+// them gives labels only (title, sites, what each allows); the values come
+// from POST /agent/grants/open, once per tool call (browser_login, run) — on
+// the Free plan that call is one of the month's uses. An "ask every time"
+// grant first waits for the user's one-time approval, asked for here.
+import { randomUUID } from 'node:crypto'
 import { Api, ApiError } from './api.js'
 import { unwrap } from './ecies.js'
 import { VaultCrypto, Vault, generateTOTP, type EncryptedRecord, type VaultFile, type VaultItem } from './extension.js'
@@ -16,8 +18,10 @@ export type Grant = {
   expiresAt: string | null
   askEveryTime: boolean
   commands: string[]
-  item: VaultItem | null
 }
+
+/** The Free plan's agent uses this month (null on a paid plan); `notice` is the server's line for the user. */
+export type Usage = { used: number; limit: number; resets_at: string; notice: string }
 
 type GrantRow = {
   item_id: string
@@ -37,30 +41,33 @@ export class PendingApproval extends Error {
   }
 }
 
-export async function loadGrants(api: Api, privateJwk: JsonWebKey): Promise<Grant[]> {
-  const { grants } = await api.get<{ grants: GrantRow[] }>('/agent/grants')
+/** The grants (labels only: a listed copy is never opened) and the Free plan's uses. */
+export async function listGrants(api: Api, privateJwk: JsonWebKey): Promise<{ grants: Grant[]; usage: Usage | null }> {
+  const { grants, usage } = await api.get<{ grants: GrantRow[]; usage?: Usage | null }>('/agent/grants')
   const out: Grant[] = []
   for (const g of grants) {
     try {
       const sk = VaultCrypto.b64e(await unwrap(g.wrapped_key, privateJwk))
       const label = g.label ? await VaultCrypto.decryptItem(g.label, sk) : null
-      const item = g.record ? withoutWalletSecrets(await VaultCrypto.decryptItem(g.record, sk)) : null
       out.push({
         itemId: g.item_id,
-        title: item?.title || label?.title || 'Untitled',
-        urls: item?.urls || label?.urls || [],
-        type: item?.type || label?.type || 'login',
+        title: label?.title || 'Untitled',
+        urls: label?.urls || [],
+        type: label?.type || 'login',
         scope: g.scope,
         expiresAt: g.expires_at,
         askEveryTime: g.ask_every_time,
         commands: g.commands || [],
-        item,
       })
     } catch {
       // Not for this key (re-keyed elsewhere): skipped, the user sees it in the extension.
     }
   }
-  return out
+  return { grants: out, usage: usage ?? null }
+}
+
+export async function loadGrants(api: Api, privateJwk: JsonWebKey): Promise<Grant[]> {
+  return (await listGrants(api, privateJwk)).grants
 }
 
 /**
@@ -118,11 +125,13 @@ const forget = (itemId: string, w: Waiting) => {
   else waiting.delete(itemId)
 }
 
-/** The grant's values, asking the user for this one use when it asks every time. */
-export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, tool: string, reason: string, waitMs: number): Promise<VaultItem> {
-  // "Ask every time" means every use: a copy still released by an earlier
-  // approval (the API keeps it for a couple of minutes) is never reused.
-  if (grant.item && !grant.askEveryTime) return grant.item
+/**
+ * The user's approval of this one use of an "ask every time" grant: claimed
+ * (busy) until the copy is opened (then spent) or the call fails (then kept
+ * for a retry).
+ */
+async function approve(api: Api, grant: Grant, tool: string, reason: string, waitMs: number): Promise<Waiting> {
+  // "Ask every time" means every use: an approval is spent by one opening.
   // A request that timed out earlier and the user answered since: its
   // approval is used once, for this retry; one still waiting stays the one.
   // Only for the same purpose the user saw (tool and reason), and claimed
@@ -149,14 +158,7 @@ export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, t
     if (r.status === 'pending') { earlier.busy = false; stillWaiting = true; continue }
     // Only this request's own approval, still in its window: another
     // request's release must never stand in for an expired one.
-    if (r.status === 'allowed' && r.released) {
-      let again: Grant | undefined
-      // A failed fetch keeps the approval for the next retry.
-      try { again = (await loadGrants(api, privateJwk)).find(g => g.itemId === grant.itemId) } catch (e) { earlier.busy = false; throw e }
-      forget(grant.itemId, earlier)
-      if (again?.item) return again.item
-      continue
-    }
+    if (r.status === 'allowed' && r.released) return earlier
     forget(grant.itemId, earlier) // denied, or its approval expired
   }
   // One still waits for the user: point at one that's still saved and free
@@ -175,13 +177,83 @@ export async function openItem(api: Api, privateJwk: JsonWebKey, grant: Grant, t
   }
   const answer = await waitForAnswer(api, req.id, waitMs)
   if (answer === 'denied') throw new Error(`The user denied using "${grant.title}" this time.`)
-  if (answer === 'pending') {
-    waiting.set(grant.itemId, [...(waiting.get(grant.itemId) || []), { id: req.id, tool, reason, busy: false }])
-    throw new PendingApproval(req.id, `use "${grant.title}" this time`)
+  const w: Waiting = { id: req.id, tool, reason, busy: answer === 'allowed' }
+  waiting.set(grant.itemId, [...(waiting.get(grant.itemId) || []), w])
+  if (answer === 'pending') throw new PendingApproval(req.id, `use "${grant.title}" this time`)
+  return w
+}
+
+type OpenResult = { grants: GrantRow[]; usage?: Usage | null }
+
+/** Delay before retrying a failed POST /agent/grants/open (tests shorten it). */
+export const openRetry = { ms: 500 }
+
+/** POST /agent/grants/open; a network or server failure is retried with the same use_id (never counted twice). */
+async function postOpen(api: Api, body: { use_id: string; tool: string; item_ids: string[] }): Promise<OpenResult> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await api.post<OpenResult>('/agent/grants/open', body)
+    } catch (e) {
+      const passing = !(e instanceof ApiError) || e.status >= 500 || e.status === 429
+      if (!passing || attempt >= 2) throw e
+      await sleep(openRetry.ms * (attempt + 1))
+    }
   }
-  const again = (await loadGrants(api, privateJwk)).find(g => g.itemId === grant.itemId)
-  if (!again?.item) throw new Error(`"${grant.title}" was approved but its approval expired. Try again.`)
-  return again.item
+}
+
+/**
+ * The values of the accounts one tool call uses (`tool`: browser_login or
+ * run), by item id: the approvals of "ask every time" ones first, then one
+ * POST /agent/grants/open for all of them — on the Free plan, one use. A
+ * 402 (no uses left) or 426 (out of date) goes up as an ApiError with the
+ * server's message.
+ */
+export async function openGrants(
+  api: Api, privateJwk: JsonWebKey, grants: Grant[], tool: 'browser_login' | 'run', reason: string,
+  useId: string = randomUUID(), waitMs = 90_000,
+): Promise<{ items: Map<string, VaultItem>; usage: Usage | null }> {
+  const unique = [...new Map(grants.map(g => [g.itemId, g])).values()]
+  const claims: { itemId: string; w: Waiting }[] = []
+  const keep = () => { for (const c of claims) c.w.busy = false }
+  const spend = () => { for (const c of claims) forget(c.itemId, c.w) }
+  try {
+    for (const g of unique) if (g.askEveryTime) claims.push({ itemId: g.itemId, w: await approve(api, g, tool, reason, waitMs) })
+  } catch (e) { keep(); throw e }
+  const titles = (ids: unknown) => unique.filter(g => Array.isArray(ids) && ids.includes(g.itemId)).map(g => `"${g.title}"`).join(', ')
+  let res: OpenResult
+  try {
+    res = await postOpen(api, { use_id: useId, tool, item_ids: unique.map(g => g.itemId) })
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) {
+      spend()
+      const which = titles((e.body as { item_ids?: unknown })?.item_ids) || 'this account'
+      throw new Error(`The user's approval to use ${which} expired before it was used. Try again.`)
+    }
+    keep()
+    if (e instanceof ApiError && e.status === 404) {
+      if (e.code === 'not_granted') {
+        const which = titles((e.body as { item_ids?: unknown })?.item_ids) || 'This account'
+        throw new Error(`${which} is no longer allowed. Call list_accounts, or request_access to ask the user again.`)
+      }
+      throw new Error('The OTPilot server doesn\'t support this version of the MCP yet. Try again in a few minutes.')
+    }
+    throw e
+  }
+  spend()
+  const items = new Map<string, VaultItem>()
+  for (const row of res.grants) {
+    const grant = unique.find(g => g.itemId === row.item_id)
+    if (!grant) continue
+    try {
+      if (!row.record) throw new Error('no copy')
+      const sk = VaultCrypto.b64e(await unwrap(row.wrapped_key, privateJwk))
+      items.set(row.item_id, withoutWalletSecrets(await VaultCrypto.decryptItem(row.record, sk)))
+    } catch {
+      throw new Error(`"${grant.title}" can't be opened by this agent. Ask the user to allow it again in the OTPilot extension (Agents).`)
+    }
+  }
+  for (const g of unique) if (!items.has(g.itemId)) throw new Error(`"${g.title}" can't be opened by this agent. Ask the user to allow it again in the OTPilot extension (Agents).`)
+  return { items, usage: res.usage ?? null }
 }
 
 /**

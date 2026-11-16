@@ -61,6 +61,10 @@ Recipes:
 
 When a tool answers **"Waiting for approval"**, tell the user plainly: *"I need access to X — approve it in the OTPilot extension (Agents)."* Then call the tool again, or `check_request` with the request id. If the user denies, don't ask again for the same thing.
 
+On the Free plan each `browser_login` or `run` call is one of 10 uses a month; when a tool says they're used up, give the user its message as is, with the link, and don't call those tools again before the date it names.
+
+A `run` with a wrong field name still counts as a use (it can only be checked once the account is open), so use the field names the user gave you.
+
 ## Never
 
 - Never print, echo, encode, write to a file or send a secret anywhere: the user trusted you with access, not with the values. (OTPilot scrubs what it returns, but don't try to get around it.)

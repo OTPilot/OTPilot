@@ -81,20 +81,19 @@ struct Due {
     id: Uuid,
     email: String,
     trial_ends_at: DateTime<Utc>,
-    /// Synced items (reminder) / items the Free limit counts (ended). None
-    /// when only a 1.x client synced (its `accounts` blob can't be counted).
+    /// Synced items (reminder only; NULL for the ended email). None when only
+    /// a 1.x client synced (its `accounts` blob can't be counted).
     items: Option<i64>,
     devices: i64,
 }
 
 /// The item count of `Due`, NULL for a vault synced only through `/accounts`.
-fn items_sql(filter: &str) -> String {
-    format!(
-        "CASE WHEN EXISTS (SELECT 1 FROM vault_items v WHERE v.owner_id = users.id)
+fn items_sql() -> String {
+    "CASE WHEN EXISTS (SELECT 1 FROM vault_items v WHERE v.owner_id = users.id)
                 OR NOT EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = users.id)
          THEN (SELECT COUNT(*) FROM vault_items v
-               WHERE v.owner_id = users.id AND v.deleted_at IS NULL{filter}) END AS items"
-    )
+               WHERE v.owner_id = users.id AND v.deleted_at IS NULL) END AS items"
+        .to_string()
 }
 
 /// Un-claims emails the queue dropped, so the next run sends them.
@@ -128,7 +127,7 @@ pub async fn tick(state: &AppState) -> Result<()> {
            AND trial_reminder_sent_at IS NULL AND email IS NOT NULL AND deletion_started_at IS NULL
          RETURNING id, email, trial_ends_at, {},
            (SELECT COUNT(*) FROM devices d WHERE d.user_id = users.id) AS devices",
-        items_sql("")
+        items_sql()
     ))
     .bind(REMINDER_DAYS)
     .fetch_all(&state.db)
@@ -151,14 +150,13 @@ pub async fn tick(state: &AppState) -> Result<()> {
     }
     release(&state.db, "trial_reminder_sent_at", &dropped).await?;
 
-    let ended = sqlx::query_as::<_, Due>(&format!(
+    let ended = sqlx::query_as::<_, Due>(
         "UPDATE users SET trial_ended_sent_at = NOW()
          WHERE plan = 'free' AND NOT has_personal_cloud
            AND trial_ends_at <= NOW() AND trial_ends_at > NOW() - make_interval(days => $1)
            AND trial_ended_sent_at IS NULL AND email IS NOT NULL AND deletion_started_at IS NULL
-         RETURNING id, email, trial_ends_at, {}, 0::bigint AS devices",
-        items_sql(" AND v.counts_for_limit")
-    ))
+         RETURNING id, email, trial_ends_at, NULL::bigint AS items, 0::bigint AS devices",
+    )
     .bind(ENDED_EMAIL_DAYS)
     .fetch_all(&state.db)
     .await?;
@@ -169,7 +167,6 @@ pub async fn tick(state: &AppState) -> Result<()> {
             state.resend_api_key.as_deref(),
             &state.from_email,
             &due.email,
-            due.items,
         )
         .await;
         if !queued {
@@ -321,7 +318,7 @@ mod tests {
         let count = |pool: PgPool| async move {
             sqlx::query_scalar::<_, Option<i64>>(&format!(
                 "SELECT {} FROM users WHERE id = $1",
-                items_sql("")
+                items_sql()
             ))
             .bind(user)
             .fetch_one(&pool)

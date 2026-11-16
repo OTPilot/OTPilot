@@ -11,7 +11,7 @@
 // on a real click on Save (vaultAddApiKey), and never stored (not even in
 // session storage), copied, or written into the card: the card shows it
 // masked. The background takes the host from the sender, re-checks the lock,
-// the Free limit, duplicates and the login to link, and never sends the key
+// duplicates and the login to link, and never sends the key
 // back. Dismissals are remembered for the page by a fingerprint of the value.
 // Before a click only the key's SHA-256 goes to the background, which answers
 // whether this site's API credentials already hold it (then no card).
@@ -516,11 +516,6 @@
         linkTo = () => select.value;
       }
 
-      const limitNote = document.createElement('div');
-      limitNote.className = 'otpilot-save-limit';
-      limitNote.textContent = 'The Free plan holds 50 items. Upgrade to save more.';
-      Object.assign(limitNote.style, { color: 'var(--warning, #fbbf24)', fontSize: '12px', margin: '0 0 8px' });
-
       const row = document.createElement('div');
       Object.assign(row.style, { display: 'flex', gap: '6px', flexWrap: 'wrap' });
       const save = button('Save', true);
@@ -533,19 +528,13 @@
       row.append(save, later, never);
       body.appendChild(row);
 
-      const showLimit = () => { save.disabled = true; body.insertBefore(limitNote, row); };
-      // Replacing a key: no new item (no name, no link, never the limit).
+      // Replacing a key: no new item (no name, no link).
       const applyTarget = () => {
         const replacing = !!replaceTarget();
         name.style.display = replacing ? 'none' : '';
         body.querySelectorAll('.otpilot-apikey-link').forEach(e => { e.style.display = replacing ? 'none' : ''; });
         save.textContent = replacing ? 'Update' : 'Save';
-        if (c.limit) {
-          save.disabled = !replacing;
-          if (replacing) limitNote.remove(); else body.insertBefore(limitNote, row);
-        }
       };
-      if (c.limit) showLimit();
       targetSelect?.addEventListener('change', trusted(applyTarget));
 
       save.addEventListener('click', trusted(async () => {
@@ -570,8 +559,6 @@
         } else if (res?.exists) {
           dismissed.add(fp);
           renderExists();
-        } else if (res?.limit) {
-          showLimit();
         } else if (res?.replace) {
           // The credential picked was deleted or moved to another site.
           cand.name = name.value;

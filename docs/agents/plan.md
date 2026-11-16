@@ -14,7 +14,7 @@ a secret. Mockups: [`mockups.html`](mockups.html). Launch creatives:
 | Language | TypeScript on Node ≥ 20. Reuses `vaultCrypto.js` / `keys.js` as-is (same WebCrypto), Playwright is native, npx is free |
 | Distribution | npm `@otpilot/mcp` (`npx -y @otpilot/mcp`), published from CI on a `mcp-v*` tag; listed in the MCP Registry; a Claude Code **plugin** bundling the MCP + a **skill**; snippets for Codex (`config.toml`, `AGENTS.md`) and Cursor (`mcp.json`, install link) |
 | Guidance | The essentials live in the server's MCP `instructions` and tool descriptions (work in every client); the skill adds longer recipes |
-| Plans | Free: 1 agent, 3 accounts (`web/src/lib/agents.ts`). Personal / Team: unlimited. Free users can create an account (needed: allowed accounts travel through the server, encrypted) |
+| Plans | Free: 1 agent, any number of accounts, 10 uses a UTC month (a use = one `browser_login` or `run`, counted by `POST /agent/grants/open`) (`web/src/lib/agents.ts`). Personal / Team: unlimited. Free users can create an account (needed: allowed accounts travel through the server, encrypted) |
 
 ## Security model
 

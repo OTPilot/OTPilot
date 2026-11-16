@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Head } from 'vite-react-ssg'
-import { FREE_AGENTS, FREE_AGENT_ACCOUNTS } from '../lib/agents'
+import { FREE_AGENTS, FREE_AGENT_USES } from '../lib/agents'
 
 const faqs = [
   {
@@ -13,11 +13,11 @@ const faqs = [
   },
   {
     q: 'What does the free plan include?',
-    a: 'Unlimited 2FA codes, plus up to 50 other items (passwords, secure notes, servers, API credentials) on one browser, with auto-fill, the password generator and imports from other password managers. A login that only holds a 2FA code (and its username) never counts toward the 50. Personal removes the limit and syncs everything across your devices.',
+    a: 'Yes. Free keeps unlimited passwords, 2FA codes and items on one browser. It doesn\'t sync across devices. Personal adds sync, at $3/month or $30/year, with a free 30-day trial.',
   },
   {
     q: 'Can my AI agent use my passwords and 2FA codes?',
-    a: `Yes, without ever seeing them. Connect Claude Code, Codex, Cursor or any MCP agent, approve it in the extension, and allow it the accounts it may use, one by one. The agent asks OTPilot to sign in or run a command; OTPilot uses the password and 2FA code itself and returns only the result. Free covers ${FREE_AGENTS} agent with up to ${FREE_AGENT_ACCOUNTS} accounts; Personal and Team are unlimited.`,
+    a: `Yes, without ever seeing them. Connect Claude Code, Codex, Cursor or any MCP agent, approve it in the extension, and allow it the accounts it may use, one by one. The agent asks OTPilot to sign in or run a command; OTPilot uses the password and 2FA code itself and returns only the result. Free: ${FREE_AGENTS === 1 ? 'one connected agent' : `${FREE_AGENTS} connected agents`}, with as many accounts as you like, and ${FREE_AGENT_USES} uses a month. A use is one browser_login or one run. Listing accounts and asking for access cost nothing. Uses renew on the 1st of each month (UTC) and don't roll over. Personal, Team and the trial have no limit.`,
   },
   {
     q: 'Can I try Personal before paying?',
@@ -25,7 +25,7 @@ const faqs = [
   },
   {
     q: 'How does billing work? Can I cancel?',
-    a: 'Personal is $3/month or $30/year; Team Lite is $8/month or $80/year per workspace. Plans renew automatically and you can cancel anytime from the billing page; you keep the plan until the end of the period you paid for. After that your vault stays on your devices, on the free plan: if you have more than 50 items you keep all of them, you just can\'t add new ones until you\'re back under the limit or upgrade again.',
+    a: 'Personal is $3/month or $30/year; Team Lite is $8/month or $80/year per workspace. Plans renew automatically and you can cancel anytime from the billing page; you keep the plan until the end of the period you paid for. After that your vault stays on your devices, on the free plan: nothing is deleted, you just lose sync.',
   },
   {
     q: 'Can I import from another password manager?',

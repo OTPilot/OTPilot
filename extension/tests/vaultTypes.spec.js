@@ -139,15 +139,15 @@ test('editing one item rewrites only that item; deleting one removes it', async 
   expect(await page.evaluate(async () => Object.keys(await VaultStore.listTombstones()).length)).toBe(1);
 });
 
-test('Free plan: a secure note counts toward the 50 items', async ({ context, extensionId }) => {
+test('Free plan: a secure note past 50 items is saved', async ({ context, extensionId }) => {
   const full = Array.from({ length: 50 }, (_, i) => ({ name: `Site ${String(i).padStart(2, '0')}`, email: '', secret: '', urls: '', password: 'x' }));
   const page = await vault(context, extensionId, { accounts: full, plan: 'free' });
   await page.click('#btn-add');
   await page.click('[data-add-type="note"]');
-  await page.fill('#acc-detail .item-title', 'One too many');
+  await page.fill('#acc-detail .item-title', 'Fifty-first');
   await page.click('#btn-save-all');
-  await expect(page.locator('#status-msg')).toContainText('Free plan holds 50 items');
-  expect((await stored(page)).length).toBe(50);
+  await expect.poll(async () => (await stored(page)).length).toBe(51);
+  await expect(page.locator('#status-msg')).not.toContainText('Free plan holds');
 });
 
 test('logins get more tags too, and the category bar offers them', async ({ context, extensionId }) => {

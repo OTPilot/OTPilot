@@ -1,19 +1,18 @@
-import { createRequire } from 'node:module'
 // The MCP server: the only way an agent reaches OTPilot. No tool returns a
 // password, a 2FA code or any other value: they use them and return results.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { Api, ApiError } from './api.js'
+import { randomUUID } from 'node:crypto'
+import { Api, ApiError, VERSION } from './api.js'
 import { browserLogin } from './browser.js'
-import { fieldValue, fileField, findGrant, loadGrants, openItem, PendingApproval, waitForAnswer, type Grant } from './grants.js'
+import { fieldValue, fileField, findGrant, listGrants, loadGrants, openGrants, PendingApproval, waitForAnswer, type Grant } from './grants.js'
 import { redact } from './redact.js'
 import { fileSecrets, resolveAllowed, runCommand, writeTempFiles } from './run.js'
-import { Vault } from './extension.js'
+import { Vault, type VaultItem } from './extension.js'
 import type { Credentials } from './store.js'
 
-// From package.json, so --version and the MCP handshake always match the release.
-export const VERSION: string = createRequire(import.meta.url)('../package.json').version
+export { VERSION }
 
 export const INSTRUCTIONS = `OTPilot lets you use the user's accounts (passwords, 2FA codes, other fields) without ever seeing them.
 - Never ask the user to paste a password, a 2FA code or a secret into the chat: use OTPilot instead.
@@ -22,6 +21,7 @@ export const INSTRUCTIONS = `OTPilot lets you use the user's accounts (passwords
 - To run a command that needs a secret, call run with env values written as "<account>/<field>" (fields: username, password, totp for a fresh 2FA code, notes, or a custom field's label). Secrets are removed from the output.
 - A file (an SSH key, an Apple .p8, a service-account key file) comes as a path: "<account>/@file" (or the file field's label) sets the variable to a private temporary file that exists only while the command runs, e.g. { "KEY": "Deploy key/@file" } with GIT_SSH_COMMAND='ssh -i "$KEY" -o IdentitiesOnly=yes' git push.
 - When a tool answers "Waiting for approval", tell the user to open the OTPilot extension (Agents) and approve, then call the tool again (or check_request).
+- On the Free plan, each browser_login or run call is one of 10 uses a month (a run with several accounts counts once); list_accounts, request_access and check_request are free. When a tool says the uses are used up, relay its message to the user as is, with the link, and don't call browser_login or run again before they renew.
 - Never try to print, encode or send a secret elsewhere: the user trusts you with access, not with the values.`
 
 /** How long a tool waits for the user's answer before returning "waiting". */
@@ -51,6 +51,9 @@ async function guard<T>(fn: () => Promise<T>) {
   } catch (e) {
     if (e instanceof PendingApproval) return fail(`${e.message} (request ${e.requestId})`)
     if (e instanceof ApiError && e.status === 401) return fail('This agent is no longer connected to OTPilot (revoked?). Ask the user to run: npx -y @otpilot/mcp@latest connect')
+    // The server writes these sentences (date, link): relayed as they are.
+    if (e instanceof ApiError && e.status === 402) return fail(`${e.message} Tell the user this message, with the link. Don't call browser_login or run again before it renews.`)
+    if (e instanceof ApiError && e.status === 426) return fail(`${e.message} Tell the user this message.`)
     return fail(e instanceof Error ? e.message : String(e))
   }
 }
@@ -66,17 +69,18 @@ export function buildServer(ctx: Ctx): McpServer {
 
   server.registerTool('list_accounts', {
     title: 'List allowed accounts',
-    description: 'The accounts the user allowed this agent to use, with what each allows. Names only, never values.',
+    description: 'The accounts the user allowed this agent to use, with what each allows. Names only, never values. Never counts as a use; on the Free plan it also says how many uses are left this month.',
     inputSchema: {},
   }, () => guard(async () => {
-    const grants = await loadGrants(ctx.api, ctx.creds.privateJwk)
-    if (!grants.length) return text('No accounts allowed yet. Call request_access to ask the user for one.')
-    return text(`Accounts ${ctx.creds.name} may use:\n${grants.map(describe).join('\n')}`)
+    const { grants, usage } = await listGrants(ctx.api, ctx.creds.privateJwk)
+    const notice = usage?.notice ? `\n${usage.notice}` : ''
+    if (!grants.length) return text(`No accounts allowed yet. Call request_access to ask the user for one.${notice}`)
+    return text(`Accounts ${ctx.creds.name} may use:\n${grants.map(describe).join('\n')}${notice}`)
   }))
 
   server.registerTool('request_access', {
     title: 'Ask the user for an account',
-    description: 'Ask the user to let this agent use an account it doesn\'t have yet (e.g. "github", "staging database"). The user picks it in the OTPilot extension. Waits up to 90 s for the answer.',
+    description: 'Ask the user to let this agent use an account it doesn\'t have yet (e.g. "github", "staging database"). The user picks it in the OTPilot extension. Waits up to 90 s for the answer. Never counts as a use.',
     inputSchema: {
       query: z.string().min(1).max(200).describe('What account you need, in a few words: the site or service name.'),
       reason: z.string().max(500).describe('Why you need it, shown to the user.'),
@@ -92,7 +96,7 @@ export function buildServer(ctx: Ctx): McpServer {
 
   server.registerTool('check_request', {
     title: 'Check a pending approval',
-    description: 'Whether the user answered a request that was still waiting (by its id).',
+    description: 'Whether the user answered a request that was still waiting (by its id). Never counts as a use.',
     inputSchema: { request_id: z.string().uuid() },
   }, ({ request_id }) => guard(async () => {
     const r = await ctx.api.get<{ status: string }>(`/agent/requests/${request_id}`)
@@ -101,7 +105,7 @@ export function buildServer(ctx: Ctx): McpServer {
 
   server.registerTool('browser_login', {
     title: 'Sign in to a website',
-    description: 'OTPilot signs in to the account\'s website itself (username, password and 2FA code, only on the account\'s own site) and returns the path of a Playwright storageState file with the signed-in session. Load it in your browser to continue signed in. You never get the credentials.',
+    description: 'OTPilot signs in to the account\'s website itself (username, password and 2FA code, only on the account\'s own site) and returns the path of a Playwright storageState file with the signed-in session. Load it in your browser to continue signed in. You never get the credentials. On the Free plan each call is one of 10 uses a month.',
     inputSchema: {
       account: z.string().min(1).describe('The account, as list_accounts names it.'),
       url: z.string().url().optional().describe('The page to start from (must be one of the account\'s sites). Defaults to its first saved site.'),
@@ -111,7 +115,8 @@ export function buildServer(ctx: Ctx): McpServer {
   }, ({ account, url, reason, show_browser }) => guard(async () => {
     const grant = findGrant(await loadGrants(ctx.api, ctx.creds.privateJwk), account)
     if (grant.scope.kind === '2fa') return fail(`"${grant.title}" only allows its 2FA code, not signing in. Use run with "${grant.title}/totp", or ask the user to allow its sign-in.`)
-    const item = await openItem(ctx.api, ctx.creds.privateJwk, grant, 'browser_login', reason || '', WAIT_MS)
+    const { items } = await openGrants(ctx.api, ctx.creds.privateJwk, [grant], 'browser_login', reason || '', randomUUID(), WAIT_MS)
+    const item = items.get(grant.itemId)!
     const result = await browserLogin(item, { url, outDir: `${process.cwd()}/.otpilot`, show: show_browser ?? 'auto' })
     // A sign-in that didn't finish is logged as a try (it still used the password).
     await report(ctx, grant.itemId, result.status === 'signed_in' ? 'browser_login' : 'login_attempt', new URL(result.url).hostname)
@@ -124,7 +129,7 @@ export function buildServer(ctx: Ctx): McpServer {
 
   server.registerTool('run', {
     title: 'Run a command with secrets',
-    description: 'Runs a shell command with secrets from allowed accounts in its environment, for that process only. env values are references "<account>/<field>" (username, password, totp = a fresh 2FA code, notes, or a custom field\'s label; "<account>/@file" or a file field\'s label = the path of a private temporary copy of that file, deleted when the command ends). Returns the exit code and the output with every secret removed.',
+    description: 'Runs a shell command with secrets from allowed accounts in its environment, for that process only. env values are references "<account>/<field>" (username, password, totp = a fresh 2FA code, notes, or a custom field\'s label; "<account>/@file" or a file field\'s label = the path of a private temporary copy of that file, deleted when the command ends). Returns the exit code and the output with every secret removed. On the Free plan each call is one of 10 uses a month, however many accounts it uses.',
     inputSchema: {
       command: z.string().min(1).max(4000).describe('The command, e.g. psql -h db.example.com -c "select 1"'),
       env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()).describe('Environment variables to set, as references: { "PGPASSWORD": "Staging DB/password" }'),
@@ -134,35 +139,39 @@ export function buildServer(ctx: Ctx): McpServer {
     },
   }, ({ command, env, cwd, timeout_seconds, reason }) => guard(async () => {
     const grants = await loadGrants(ctx.api, ctx.creds.privateJwk)
-    const values: Record<string, string> = {}
-    const secrets: string[] = []
-    const used = new Map<string, Grant>()
-    // Each account is opened once per command: one approval covers all its fields.
-    const opened = new Map<string, Awaited<ReturnType<typeof openItem>>>()
+    // Account, allowlist and reference shape are checked before opening; a wrong field name is
+    // only found after, and that call still counts as a use.
+    const refs: { name: string; grant: Grant; field: string }[] = []
     let program: { path: string; rest: string } | undefined
-    const files: { name: string; bytes: Uint8Array; env: string }[] = []
     for (const [name, ref] of Object.entries(env)) {
       const cut = ref.lastIndexOf('/')
       if (cut <= 0) return fail(`env ${name}: write it as "<account>/<field>", e.g. "Staging DB/password".`)
+      if (!ref.slice(cut + 1).trim()) return fail(`env ${name}: the field is empty. Write "<account>/<field>", e.g. "Staging DB/password".`)
       const grant = findGrant(grants, ref.slice(0, cut))
       const limit = resolveAllowed(command, grant.commands, cwd)
       if (limit && 'error' in limit) return fail(`${grant.title}: ${limit.error}`)
       if (limit) program = limit
-      let item = opened.get(grant.itemId)
-      if (!item) {
-        item = await openItem(ctx.api, ctx.creds.privateJwk, grant, 'run', reason || '', WAIT_MS)
-        opened.set(grant.itemId, item)
-      }
-      const file = fileField(item, ref.slice(cut + 1))
+      refs.push({ name, grant, field: ref.slice(cut + 1) })
+    }
+    // Every account opened at once: one approval each, and one use for the command.
+    const used = new Map(refs.map(r => [r.grant.itemId, r.grant]))
+    const { items } = used.size
+      ? await openGrants(ctx.api, ctx.creds.privateJwk, [...used.values()], 'run', reason || '', randomUUID(), WAIT_MS)
+      : { items: new Map<string, VaultItem>() }
+    const values: Record<string, string> = {}
+    const secrets: string[] = []
+    const files: { name: string; bytes: Uint8Array; env: string }[] = []
+    for (const { name, grant, field } of refs) {
+      const item = items.get(grant.itemId)!
+      const file = fileField(item, field)
       if (file) {
         files.push({ name: file.name, bytes: file.bytes, env: name })
         secrets.push(...fileSecrets(file.bytes, Vault.fileText(file)))
       } else {
-        values[name] = await fieldValue(item, ref.slice(cut + 1))
+        values[name] = await fieldValue(item, field)
         secrets.push(values[name])
       }
       secrets.push(...item.fields.map(f => f.value || ''), item.totp?.secret || '')
-      used.set(grant.itemId, grant)
     }
     const temp = writeTempFiles(files)
     files.forEach((f, i) => { values[f.env] = temp.paths[i] })

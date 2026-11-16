@@ -140,19 +140,6 @@ test('Settings import: review, then the logins land in the vault and the account
   await expect(page.locator('#csv-import-list .export-acc-row')).toContainText('already in vault');
 });
 
-test('Settings import respects the Free plan limit', async ({ context, extensionId }) => {
-  const full = Array.from({ length: 49 }, (_, i) => ({ name: `S${i}`, email: '', secret: '', urls: `s${i}.example`, password: 'x' }));
-  const page = await popupWith(context, extensionId, full, { userPlan: 'free' });
-  await page.setInputFiles('#csv-import-file', csvFile('name,url,username,password\nA,a.com,u,p\nB,b.com,u,p\n'));
-  await page.click('#csv-import-confirm');
-  await expect(page.locator('#csv-import-status')).toContainText('select at most 1 more');
-  expect(await page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items.length)).toBe(49);
-
-  await page.locator('#csv-import-list input').nth(1).uncheck();
-  await page.click('#csv-import-confirm');
-  await expect(page.locator('#csv-import-status')).toContainText('Imported 1 login');
-});
-
 // ── Review hardening ─────────────────────────────────────────────────────────
 
 test('a comma inside a URL never becomes another saved host; Bitwarden lists are split', async ({ context, extensionId }) => {
