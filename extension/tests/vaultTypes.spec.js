@@ -892,3 +892,59 @@ test('Home tag filter also filters the Vault items found by a search', async ({ 
   await expect(page.locator('#home-list .lc-row-item')).toHaveCount(1);
   await expect(page.locator('#home-count')).toHaveText('1 result');
 });
+
+// ── Extra sign-in fields keep the control they fill ──────────────────────────
+
+const FILL_NUMBER = { tag: 'input', type: 'number', name: 'documentNumber', label: 'Número de documento' };
+const FILL_SELECT = { tag: 'select', type: 'select-one', name: 'documentType', label: 'Tipo de documento' };
+
+const customOf = page => page.evaluate(async () => (await VaultStore.readAll(await VaultKeys.getKey())).items[0]
+  .fields.filter(f => f.custom).map(f => ({ label: f.label, value: f.value, kind: f.kind, fill: f.fill })));
+
+test('a popup Save keeps the page control (fill) of a sign-in\'s extra fields, whether or not they were edited', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{
+    name: 'BBVA', email: 'user-77', secret: '', urls: 'localhost', password: 'clave-1',
+    customFields: [
+      { label: 'Tipo de documento', value: 'LE', kind: 'text', fill: FILL_SELECT },
+      { label: 'Número de documento', value: '12345678', kind: 'hidden', fill: FILL_NUMBER },
+      { label: 'Plain note', value: 'x', kind: 'text' },
+    ],
+  }] });
+  expect(await customOf(page)).toEqual([
+    { label: 'Tipo de documento', value: 'LE', kind: 'text', fill: FILL_SELECT },
+    { label: 'Número de documento', value: '12345678', kind: 'hidden', fill: FILL_NUMBER },
+    { label: 'Plain note', value: 'x', kind: 'text', fill: undefined },
+  ]);
+
+  await page.locator('.acc-head', { hasText: 'BBVA' }).click();
+  const row = page.locator('#acc-detail .cf-row', { has: page.locator('.cf-label[value="Número de documento"]') });
+  await row.locator('.cf-value').fill('87654321');
+  await page.click('#btn-save-all');
+  await expect.poll(async () => (await customOf(page)).map(f => f.value)).toEqual(['LE', '87654321', 'x']);
+  expect(await customOf(page)).toEqual([
+    { label: 'Tipo de documento', value: 'LE', kind: 'text', fill: FILL_SELECT },
+    { label: 'Número de documento', value: '87654321', kind: 'hidden', fill: FILL_NUMBER },
+    { label: 'Plain note', value: 'x', kind: 'text', fill: undefined },
+  ]);
+});
+
+test('withCustomFields keeps a stored field\'s fill by id, takes only a valid new one, and the list for pages leaves it out', async ({ context, extensionId }) => {
+  const page = await vault(context, extensionId, { accounts: [{
+    name: 'BBVA', email: 'u', secret: '', urls: 'localhost', password: 'p',
+    customFields: [{ label: 'Número', value: '1', kind: 'hidden', fill: FILL_NUMBER }],
+  }] });
+  const r = await page.evaluate(async (fill) => {
+    const item = (await VaultStore.readAll(await VaultKeys.getKey())).items[0];
+    const listed = VaultAccounts.customFieldsOf(item);
+    const id = item.fields.find(f => f.custom).id;
+    const kept = VaultAccounts.withCustomFields(item, [{ id, label: 'Número', value: '2', kind: 'hidden' }]);
+    const bad = VaultAccounts.withCustomFields(item, [{ id, label: 'Número', value: '3', kind: 'hidden', fill: { tag: 'input', type: 'password', name: 'pw' } }]);
+    const fresh = VaultAccounts.withCustomFields(item, [{ label: 'Otro', value: 'v', kind: 'text', fill }]);
+    const pick = i => i.fields.find(f => f.custom);
+    return { listed, kept: pick(kept).fill, bad: pick(bad).fill, fresh: pick(fresh).fill };
+  }, FILL_SELECT);
+  expect(r.listed[0].fill).toBeUndefined(); // customFieldsOf leaves it out
+  expect(r.kept).toEqual(FILL_NUMBER);
+  expect(r.bad).toEqual(FILL_NUMBER); // an invalid one never replaces it
+  expect(r.fresh).toEqual(FILL_SELECT);
+});
