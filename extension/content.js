@@ -232,6 +232,33 @@ try {
   });
 } catch { /* extension context gone */ }
 
+// An OTPilot element above everything the page shows: a side panel or modal
+// drawn in the top layer (Google Cloud's "API key created" panel), or a
+// z-index the page also maxes out. A manual popover is in the top layer,
+// above what's there already. A modal <dialog> makes everything outside it
+// inert (and hidden under its backdrop): the element then goes inside the
+// active one (the one holding focus; document order isn't opening order).
+// `place` positions it once the popover UA style (inset: 0, margin: auto) is
+// reset. Used by the toasts and the API key card (apiKeyOffer.js).
+function activeModal() {
+  try {
+    const modals = [...document.querySelectorAll('dialog')].filter(d => d.matches(':modal'));
+    return modals.find(d => d.contains(document.activeElement)) || modals.pop() || null;
+  } catch { return null; }
+}
+function showOnTop(el, place = {}) {
+  const modal = activeModal();
+  const parent = modal || document.body || document.documentElement;
+  if (el.parentElement !== parent) {
+    if (el.matches?.(':popover-open')) try { el.hidePopover(); } catch {}
+    parent.appendChild(el);
+  }
+  if (typeof el.showPopover !== 'function') return;
+  el.setAttribute('popover', 'manual');
+  Object.assign(el.style, { inset: 'auto', margin: '0', ...place });
+  try { if (!el.matches(':popover-open')) el.showPopover(); } catch {}
+}
+
 function showToast(text, ok = true) {
   const el = document.createElement('div');
   Object.assign(el.style, {
@@ -264,7 +291,9 @@ function showToast(text, ok = true) {
   el.appendChild(icon);
   el.appendChild(msg);
   themeUi(el);
-  document.body.appendChild(el);
+  // Above a modal <dialog> or a top-layer panel too: on Google Cloud's "API
+  // key created" panel, "API key saved" was hidden until the panel closed.
+  showOnTop(el, { top: '20px', right: '20px', overflow: 'visible' });
 
   requestAnimationFrame(() => requestAnimationFrame(() => {
     el.style.transform = 'translateX(0)';

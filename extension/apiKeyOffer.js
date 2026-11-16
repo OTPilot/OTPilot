@@ -3,9 +3,9 @@
 // Offers to save an API key a page shows once (a "copy your key now" dialog)
 // or lists in a credentials table, as an API credential item. Detection rules: apiKeys.js. Loaded after
 // content.js (same isolated world): uses its overlay helpers (makeOverlay,
-// OVERLAY_HEADER, themeUi, mountUnlockFrame, showToast, requestSiteIcon,
-// guessIssuerFromPage). Top frame only: a key in a cross-origin iframe isn't
-// seen (accepted).
+// OVERLAY_HEADER, themeUi, mountUnlockFrame, showToast, activeModal,
+// showOnTop, requestSiteIcon, guessIssuerFromPage). Top frame only: a key in
+// a cross-origin iframe isn't seen (accepted).
 //
 // The key stays in this script's memory. It's sent to the background once,
 // on a real click on Save (vaultAddApiKey), and never stored (not even in
@@ -155,31 +155,10 @@
     };
   }
 
-  // The card above everything the page shows: the key is often in a side
-  // panel or modal drawn in the top layer (Google Cloud's "API key created"),
-  // or under a z-index the page also maxes out. A manual popover is in the
-  // top layer, above what's there already. A modal <dialog> makes everything
-  // outside it inert: the card then goes inside the active one (the one
-  // holding focus; document order isn't opening order).
-  function activeModal() {
-    try {
-      const modals = [...document.querySelectorAll('dialog')].filter(d => d.matches(':modal'));
-      return modals.find(d => d.contains(document.activeElement)) || modals.pop() || null;
-    } catch { return null; }
-  }
-  function showOnTop(el) {
-    const modal = activeModal();
-    if (el.parentElement !== (modal || document.body)) {
-      if (el.matches?.(':popover-open')) try { el.hidePopover(); } catch {}
-      (modal || document.body).appendChild(el);
-    }
-    if (typeof el.showPopover !== 'function') return;
-    el.setAttribute('popover', 'manual');
-    // The popover UA style (inset: 0, margin: auto, padding, border, colors)
-    // would move and restyle the card.
-    Object.assign(el.style, { inset: 'auto', top: '16px', right: '16px', margin: '0', padding: '0', overflow: 'hidden', color: 'inherit' });
-    try { if (!el.matches(':popover-open')) el.showPopover(); } catch {}
-  }
+  // The card above everything the page shows (showOnTop, content.js): the
+  // key is often in a top-layer panel or a modal <dialog>. The popover UA
+  // style (padding, border, colors) would restyle the card.
+  const CARD_PLACE = { top: '16px', right: '16px', padding: '0', overflow: 'hidden', color: 'inherit' };
 
   // A value labelled as the id that goes with the key ("Client ID", "App
   // ID", "Key ID"…) in the same container, or ''.
@@ -402,7 +381,7 @@
     const watchdog = setInterval(() => {
       if (!el.isConnected) { close(); return; }
       const parent = el.parentElement;
-      if (parent?.tagName === 'DIALOG' ? !parent.matches(':modal') : activeModal()) showOnTop(el);
+      if (parent?.tagName === 'DIALOG' ? !parent.matches(':modal') : activeModal()) showOnTop(el, CARD_PLACE);
     }, 500);
     const close = () => {
       clearInterval(watchdog);
@@ -418,7 +397,7 @@
     shadow.querySelector('.otpilot-overlay-close').addEventListener('click', trusted(dismiss));
     const body = shadow.querySelector('.otpilot-apikey-body');
     cardHost = el;
-    showOnTop(el);
+    showOnTop(el, CARD_PLACE);
 
     function renderLocked() {
       body.textContent = '';
