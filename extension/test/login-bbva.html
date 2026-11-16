@@ -13,7 +13,7 @@
        Flags: ?btn=inner (only the button inside the shadow root listens),
        ?controlled=1 (the select component ignores the native change and puts
        its own value back), ?clearOnType=1 (changing the type clears the number),
-       ?trap=hidden | host | extra | pin | slot-tiny | slot-full (page tricks), ?spa=1 (the form
+       ?trap=hidden | host | before-other | before-plain | extra | pin | slot-tiny | slot-full (page tricks), ?spa=1 (the form
        goes after a submit), ?btn=handler (the button signs in from its own click
        handler, with no submit event: counts its calls in window.__calls),
        ?btn=fetch (the same, but its handler only posts with fetch: no DOM
@@ -22,7 +22,19 @@
        fetch to slow-signin answered late by the test: nothing shows it worked
        for seconds), ?stale=number | username (that field's component puts a
        stale value back after a change), &pinLabel= (?trap=pin's label,
-       default "PIN"). -->
+       default "PIN"), ?live=1 (what the live page does: the number field
+       has no name — its component carries it — and every control a new
+       random "_xxxxxxxxxx" id on each load; Usuario and Clave are read-only
+       until &ro= ms after load, default 1500; the document type is an
+       <x-select-items> like bbva-form-select-sph: its list only in its
+       `items` attribute, and a placeholder <select> holding the chosen key,
+       put just before it, that it never reads back). With ?live=1:
+       &late=<ms> | never (the component renders its options that long after
+       the list opens, or never), &shadow=closed (its shadow root is closed),
+       &items=malformed | dup | many | big (its `items` attribute is broken
+       JSON, has duplicate keys and labels, 101 items, or over 20 kB; the
+       component still lists DNI, LC, LE, PASAPORTE). Clicks on the component
+       are counted in window.__compClicks. -->
   <h1>Acceso</h1>
   <form name="login">
     <x-select name="documentType" label="Tipo de documento">
@@ -50,6 +62,41 @@
   const params = new URLSearchParams(location.search);
   const form = document.forms.login;
 
+  if (params.get('live')) {
+    // Like the live ids (_iimft4p9kg): base 36 with a digit before a letter
+    // (Math.random() gives one ~95% of the time; forced here).
+    window.randomId = () => `_${Math.random().toString(36).slice(2, 6)}${Math.floor(Math.random() * 10)}k${Math.random().toString(36).slice(2, 6)}`;
+    for (const el of form.querySelectorAll('input, select')) el.id = randomId();
+    const number = form.elements.documentNumber;
+    number.parentElement.setAttribute('name', 'documentNumber');
+    number.removeAttribute('name');
+    number.dataset.doc = '1';
+    // The document type as the live page has it: the component keeps the
+    // list; it puts its own one-option select before itself.
+    const items = [
+      { key: '0', value: '0', selected: true, description: 'DNI, Documento Nacional de Identidad', text: 'DNI' },
+      { key: '1', value: '1', selected: false, description: 'LC, Libreta Cívica', text: 'LC' },
+      { key: '2', value: '2', selected: false, description: 'LE, Libreta de Enrolamiento', text: 'LE' },
+      { key: '4', value: '4', selected: false, description: 'PASAPORTE', text: 'PASAPORTE' },
+    ];
+    const comp = document.createElement('x-select-items');
+    comp.setAttribute('name', 'documentType');
+    comp.setAttribute('label', 'Tipo de documento');
+    const filler = n => Array.from({ length: n }, (_, i) => ({ key: `f${i}`, value: `f${i}`, text: `Otro ${i}` }));
+    const attr = {
+      malformed: '[{"key":"0","value":"0","text":"DNI"},',
+      dup: JSON.stringify([...items, { key: '2', value: '2', selected: false, description: 'LE', text: 'LE' }]),
+      many: JSON.stringify([...items, ...filler(97)]),
+      big: JSON.stringify([...items.slice(0, 3), { ...items[3], description: 'x'.repeat(20001) }]),
+    }[params.get('items')];
+    comp.list = items;
+    comp.setAttribute('items', attr || JSON.stringify(items));
+    form.querySelector('x-select').replaceWith(comp);
+    const masked = [form.elements.username, form.elements.password];
+    for (const el of masked) el.readOnly = true;
+    setTimeout(() => { for (const el of masked) el.readOnly = false; }, Number(params.get('ro') || 1500));
+  }
+
   class XSelect extends HTMLElement {
     connectedCallback() {
       if (this.shadowRoot) return;
@@ -70,6 +117,63 @@
     }
     render() {
       this.shadowRoot.querySelector('.shown').textContent = this.select.selectedOptions[0].textContent;
+    }
+  }
+  // bbva-form-select-sph: a combobox button and [role=option]s in its open
+  // shadow root, rendered from `items`; picking one (a click) shows it and
+  // writes its key into the native select. Changes made to that select are
+  // stopped and ignored (the component's own state wins).
+  class XSelectItems extends HTMLElement {
+    connectedCallback() {
+      if (this.shadowRoot) return;
+      if (this._root) return;
+      this.items = this.list || JSON.parse(this.getAttribute('items'));
+      this.chosen = this.items.find(i => i.selected) || this.items[0];
+      const root = this._root = this.attachShadow({ mode: params.get('shadow') === 'closed' ? 'closed' : 'open' });
+      root.innerHTML = '<style>:host{display:block;width:300px;min-height:36px;border:1px solid #888}#list{display:none}#list.opened{display:block}</style>'
+        + '<button id="button" type="button" role="combobox" aria-haspopup="listbox" aria-expanded="false"><span class="label"></span> <span class="content-text"></span></button>'
+        + '<div id="list" role="listbox"></div>';
+      root.querySelector('.label').textContent = this.getAttribute('label');
+      const list = root.getElementById('list');
+      const button = root.getElementById('button');
+      const setOpen = open => { list.classList.toggle('opened', open); button.setAttribute('aria-expanded', String(open)); };
+      const renderOptions = () => {
+        if (list.childElementCount) return;
+        for (const item of this.items) {
+          const opt = document.createElement('x-option');
+          opt.setAttribute('role', 'option');
+          opt.textContent = item.text;
+          opt.addEventListener('click', () => { this.chosen = item; setOpen(false); this.render(); });
+          list.append(opt);
+        }
+      };
+      const late = params.get('late');
+      if (!late) renderOptions();
+      window.__compClicks = 0;
+      this.addEventListener('click', () => { window.__compClicks++; });
+      button.addEventListener('click', () => {
+        const open = !list.classList.contains('opened');
+        setOpen(open);
+        if (open && late && late !== 'never') setTimeout(renderOptions, Number(late));
+      });
+      this.select = document.createElement('select');
+      this.select.setAttribute('slot', '_select');
+      this.select.name = this.getAttribute('name');
+      this.select.style.cssText = 'position:absolute;opacity:0;pointer-events:none;z-index:-1';
+      this.select.tabIndex = -1;
+      this.select.setAttribute('aria-hidden', 'true');
+      this.select.id = window.randomId ? window.randomId() : '';
+      for (const type of ['input', 'change']) this.select.addEventListener(type, e => e.stopPropagation());
+      this.select.append(document.createElement('option'));
+      this.parentNode.insertBefore(this.select, this);
+      this.render();
+    }
+    render() {
+      const opt = this.select.options[0];
+      opt.value = this.chosen.value;
+      opt.textContent = this.chosen.value;
+      this.select.value = this.chosen.value;
+      this._root.querySelector('.content-text').textContent = this.chosen.text;
     }
   }
   class XInput extends HTMLElement {
@@ -113,6 +217,7 @@
     }
   }
   customElements.define('x-select', XSelect);
+  customElements.define('x-select-items', XSelectItems);
   customElements.define('x-input', XInput);
   customElements.define('x-button', XButton);
 
@@ -136,6 +241,14 @@
   } else if (params.get('trap') === 'host') {
     // Slotted, but its component carries another name.
     trap.innerHTML = '<x-select name="other" label="Other"><select slot="_select" name="trapSelect" style="position:absolute;opacity:0"><option value="a" selected>A</option><option value="b">Secret</option></select></x-select>';
+  } else if (params.get('trap') === 'before-other') {
+    // Slotted, just before a component that carries another name.
+    trap.innerHTML = '<select slot="_select" name="trapSelect" style="position:absolute;opacity:0"><option value="a" selected>A</option><option value="b">Secret</option></select>'
+      + '<x-input name="other" style="display:block;width:300px;height:36px"></x-input>';
+  } else if (params.get('trap') === 'before-plain') {
+    // Slotted, just before an element carrying its name that is no component.
+    trap.innerHTML = '<select slot="_select" name="trapSelect" style="position:absolute;opacity:0"><option value="a" selected>A</option><option value="b">Secret</option></select>'
+      + '<div name="trapSelect" style="display:block;width:300px;height:36px"></div>';
   } else if (params.get('trap') === 'extra') {
     trap.innerHTML = '<div class="row"><input type="text" name="branchCode" aria-label="Sucursal"></div>';
   } else if (params.get('trap') === 'pin') {
