@@ -201,6 +201,9 @@ async function renderAgentsPanel(fresh = null) {
     _agentsSel = { kind: b.dataset.kind, id: b.dataset.id };
     renderAgentsPanel();
   }));
+  // Connect Agent button (re-attached on each render since button is recreated)
+  const connectBtn = document.getElementById('agents-connect');
+  if (connectBtn) connectBtn.onclick = () => { _agentsSel = { kind: 'connect' }; renderAgentsPanel(); };
 
   renderAgentsLimit();
   renderDetailPanel(detail);
@@ -699,10 +702,6 @@ setInterval(async () => {
   if (agentsShape(fresh) === agentsShape(_agentsData) || agentsBusy(panel) || panel.style.display === 'none') return;
   renderAgentsPanel(fresh);
 }, 10_000);
-document.getElementById('agents-connect').addEventListener('click', () => {
-  _agentsSel = { kind: 'connect' };
-  renderAgentsPanel();
-});
 
 // ── The editor's "AI agents" section (saved logins) ─────────────────────────
 // Which agents can use this item, and allowing a connected one (its default
