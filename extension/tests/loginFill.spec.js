@@ -248,7 +248,23 @@ test('the badge toggles the dropdown; Escape, typing or a click elsewhere closes
   const site = await context.newPage();
   await site.goto(`${SITE}/login.html`);
   const drop = site.locator('#otpilot-login-dropdown');
-  const badge = site.locator('.otpilot-field-badge[data-kind="login"]').nth(1); // the password field's
+  const badges = site.locator('.otpilot-field-badge[data-kind="login"]');
+  await expect(badges).toHaveCount(2);
+  const debug = await site.evaluate(() => {
+    const email = document.querySelector('input[name="email"]');
+    const pass = document.querySelector('input[name="password"]');
+    const newPass = document.querySelector('input[name="new_pw"]');
+    const box = el => el ? el.getBoundingClientRect() : null;
+    const badges = [...document.querySelectorAll('.otpilot-field-badge')].map(el => ({ d: el.style.display, r: el.getBoundingClientRect() }));
+    return { email: box(email), pass: box(pass), newPass: box(newPass), badges };
+  });
+  console.log('debug:', JSON.stringify(debug, null, 2));
+  const placed = await site.evaluate(() => {
+    const box = el => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, d: el.style.display }; };
+    return [...document.querySelectorAll('.otpilot-field-badge')].map(box);
+  });
+  console.log('badges at start:', JSON.stringify(placed));
+  const badge = badges.nth(1); // the password field's
   await expect(badge).toBeVisible();
   await badge.click();
   await expect(drop).toBeVisible();
@@ -626,6 +642,13 @@ test('another manager\'s icon at the field\'s edge: the OTPilot badge sits besid
   const badges = site.locator('.otpilot-field-badge[data-kind="login"]');
   await expect(badges).toHaveCount(2);
   await site.evaluate(() => window.dispatchEvent(new Event('resize')));
+  const placed = await site.evaluate(() => {
+    const box = el => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
+    const badges = [...document.querySelectorAll('.otpilot-field-badge')].map(box);
+    const icons = [...document.querySelectorAll('.other-manager-icon')].map(box);
+    return { badges, icons };
+  });
+  console.log('placed:', JSON.stringify(placed));
   await expect.poll(() => site.evaluate(() => {
     const icons = [...document.querySelectorAll('.other-manager-icon')].map(e => e.getBoundingClientRect());
     return [...document.querySelectorAll('.otpilot-field-badge')].every(b => {
@@ -638,4 +661,115 @@ test('another manager\'s icon at the field\'s edge: the OTPilot badge sits besid
   // Still inside its field, and clickable.
   await badges.first().click();
   await expect(site.locator('#otpilot-login-dropdown')).toBeVisible();
+});
+
+test('a dialog\'s show-password control: the badge sits left of it, not on top', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-dialog-eye.html`);
+  const badges = site.locator('.otpilot-field-badge');
+  await expect(badges).toHaveCount(3); // email, password, new-password
+  await expect.poll(() => site.evaluate(() => {
+    const box = el => el.getBoundingClientRect();
+    const overlap = (a, b) => a.right > b.left + 1 && a.left < b.right - 1 && a.bottom > b.top + 1 && a.top < b.bottom - 1;
+    const badgeFor = input => [...document.querySelectorAll('.otpilot-field-badge')].find(b => overlap(box(b), box(input)));
+    const email = document.querySelector('input[name="email"]');
+    const password = document.querySelector('input[name="password"]');
+    const created = document.querySelector('input[name="new_pw"]');
+    const eye = document.querySelector('.eye');
+    const clear = document.querySelector('.clear');
+    const emailBadge = badgeFor(email);
+    const passwordBadge = badgeFor(password);
+    const createdBadge = badgeFor(created);
+    if (!emailBadge || !passwordBadge || !createdBadge) return false;
+    const emailGap = box(email).right - box(emailBadge).right;
+    // No icon on the email: still against the field's right edge.
+    if (emailGap < 2 || emailGap > 12) return false;
+    // Left of the eye and of the clear button beside it, still inside the field.
+    const pb = box(passwordBadge), pr = box(password);
+    if (overlap(pb, box(eye)) || overlap(pb, box(clear))) return false;
+    if (pb.right > box(clear).left + 1) return false;
+    if (pb.left < pr.left || pb.right > pr.right) return false;
+    // The eye that is only a background (20px, 12px from the right).
+    const cb = box(createdBadge), cr = box(created);
+    if (cb.right > cr.right - 12 - 20) return false;
+    if (cb.left < cr.left || cb.right > cr.right) return false;
+    return true;
+  })).toBe(true);
+  // The badge is drawn on the page, not inside the <dialog>.
+  await site.locator('.otpilot-field-badge[data-kind="login"]').nth(1).click();
+  await expect(site.locator('#otpilot-login-dropdown')).toBeVisible();
+});
+
+test('a LastPass icon (closed shadow, 0×0 root): the badge sits beside it, not on it, and is as big', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-lastpass.html`);
+  const badges = site.locator('.otpilot-field-badge[data-kind="login"]');
+  await expect(badges).toHaveCount(2);
+  await expect.poll(() => site.evaluate(() => {
+    const box = el => el.getBoundingClientRect();
+    const overlap = (a, b) => a.right > b.left + 1 && a.left < b.right - 1 && a.bottom > b.top + 1 && a.top < b.bottom - 1;
+    const host = document.querySelector('#lp');
+    const icon = box(host);
+    // The painted square starts at the 0×0 root and is 22px (LastPass's size).
+    const painted = { left: icon.left, right: icon.left + 22, top: icon.top, bottom: icon.top + 22 };
+    const badge = [...document.querySelectorAll('.otpilot-field-badge')].find(b => overlap(box(b), box(document.querySelector('input[name="password"]'))));
+    if (!badge) return false;
+    const pb = box(badge);
+    if (overlap(pb, painted)) return false;
+    if (pb.right > painted.left + 1 && pb.left < painted.right) return false;
+    return pb.width >= 26;
+  })).toBe(true);
+});
+
+test('the badge uses the gap between another manager\'s icon and the eye, instead of sitting on the icon', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-badge-gap.html`);
+  await expect(site.locator('.otpilot-field-badge[data-kind="login"]')).toHaveCount(2);
+  await site.evaluate(() => window.dispatchEvent(new Event('resize')));
+  await expect.poll(() => site.evaluate(() => {
+    const box = el => el.getBoundingClientRect();
+    const overlap = (a, b) => a.right > b.left + 1 && a.left < b.right - 1 && a.bottom > b.top + 1 && a.top < b.bottom - 1;
+    const badgeFor = input => [...document.querySelectorAll('.otpilot-field-badge')].find(b => overlap(box(b), box(input)));
+    const email = document.querySelector('input[name="email"]');
+    const password = document.querySelector('input[name="password"]');
+    const emailBadge = badgeFor(email);
+    const passwordBadge = badgeFor(password);
+    if (!emailBadge || !passwordBadge) return 'missing';
+    const eb = box(emailBadge), er = box(email), lp = box(document.querySelector('#email-lp'));
+    if (overlap(eb, lp) || eb.left < lp.right) return 'email-on-icon';
+    if (eb.right > er.right || eb.left < er.left) return 'email-outside';
+    const pb = box(passwordBadge), pr = box(password);
+    const icon = box(document.querySelector('#pass-lp'));
+    const eye = box(document.querySelector('.eye'));
+    if (overlap(pb, icon) || overlap(pb, eye)) return 'password-overlap';
+    if (pb.left < icon.right - 1 || pb.right > eye.left + 1) return 'password-gap';
+    if (pb.left < pr.left || pb.right > pr.right) return 'password-outside';
+    return 'ok';
+  })).toBe('ok');
+});
+
+test('a site eye that appears late (after badge): badge repositions when syncBadges runs', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-late-icon.html`);
+  const badges = site.locator('.otpilot-field-badge[data-kind="login"]');
+  await expect(badges).toHaveCount(2);
+  // Wait for the delayed eye to appear and for the observer to re-sync.
+  await expect.poll(() => site.evaluate(() => {
+    const eye = document.querySelector('.eye');
+    return !!eye && eye.isConnected;
+  })).toBe(true);
+  await site.waitForTimeout(600); // observer debounce 400ms + some slack
+  await expect.poll(() => site.evaluate(() => {
+    const box = el => el.getBoundingClientRect();
+    const overlap = (a, b) => a.right > b.left + 1 && a.left < b.right - 1 && a.bottom > b.top + 1 && a.top < b.bottom - 1;
+    const pass = document.querySelector('input[name="password"]');
+    const eye = document.querySelector('.eye');
+    const badge = [...document.querySelectorAll('.otpilot-field-badge')].find(b => overlap(b.getBoundingClientRect(), box(pass)));
+    if (!badge || !eye) return false;
+    return !overlap(badge.getBoundingClientRect(), box(eye));
+  })).toBe(true);
 });
