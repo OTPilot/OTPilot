@@ -1422,7 +1422,8 @@
     for (const [field, [kind, open]] of targets) {
       let b = _badges.get(field);
       if (b && b.dataset.kind !== kind) { b.remove(); b = null; }
-      if (!b) { b = makeBadge(field, kind, open); _badges.set(field, b); document.body.appendChild(b); _obstacles.delete(field); }
+      if (!b) { b = makeBadge(field, kind, open); _badges.set(field, b); document.body.appendChild(b); }
+      _obstacles.delete(field); // late icons (LastPass, site eye) need fresh discovery
       placeBadge(b, field);
     }
     if (_anchor && !_anchor.field.isConnected) closeDropdown();

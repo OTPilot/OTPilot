@@ -750,3 +750,26 @@ test('the badge uses the gap between another manager\'s icon and the eye, instea
     return 'ok';
   })).toBe('ok');
 });
+
+test('a site eye that appears late (after badge): badge repositions when syncBadges runs', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [github]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-late-icon.html`);
+  const badges = site.locator('.otpilot-field-badge[data-kind="login"]');
+  await expect(badges).toHaveCount(2);
+  // Wait for the delayed eye to appear and for the observer to re-sync.
+  await expect.poll(() => site.evaluate(() => {
+    const eye = document.querySelector('.eye');
+    return !!eye && eye.isConnected;
+  })).toBe(true);
+  await site.waitForTimeout(600); // observer debounce 400ms + some slack
+  await expect.poll(() => site.evaluate(() => {
+    const box = el => el.getBoundingClientRect();
+    const overlap = (a, b) => a.right > b.left + 1 && a.left < b.right - 1 && a.bottom > b.top + 1 && a.top < b.bottom - 1;
+    const pass = document.querySelector('input[name="password"]');
+    const eye = document.querySelector('.eye');
+    const badge = [...document.querySelectorAll('.otpilot-field-badge')].find(b => overlap(b.getBoundingClientRect(), box(pass)));
+    if (!badge || !eye) return false;
+    return !overlap(badge.getBoundingClientRect(), box(eye));
+  })).toBe(true);
+});
