@@ -1,0 +1,510 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Agents Mockup 2: Card Dashboard</title>
+<style>
+  :root {
+    --bg: #0f172a; --surface: #1e293b; --surface-2: #334155;
+    --border: #1e3a5f; --ink-0: #f1f5f9; --ink-1: #e2e8f0;
+    --ink-2: #cbd5e1; --ink-3: #94a3b8; --ink-4: #64748b;
+    --accent: #0ea5e9; --accent-2: #38bdf8;
+    --success: #22c55e; --warn: #f59e0b; --danger: #ef4444;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--font-ui); background: var(--bg); color: var(--ink-0); min-height: 100vh; padding: 24px; }
+  .mockup { max-width: 1000px; margin: 0 auto; }
+  .mockup-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .mockup-title { font-size: 24px; font-weight: 700; }
+  .mockup-subtitle { font-size: 13px; color: var(--ink-3); margin-top: 4px; }
+  .btn { padding: 10px 18px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: all .15s; }
+  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-primary:hover { background: var(--accent-2); }
+  .btn-secondary { background: var(--surface-2); color: var(--ink-1); border: 1px solid var(--border); }
+  .btn-secondary:hover { background: var(--border); }
+  .btn-ghost { background: transparent; color: var(--ink-2); }
+  .btn-ghost:hover { color: var(--ink-0); }
+  .btn-sm { padding: 8px 12px; font-size: 12px; }
+  .btn-danger { background: var(--danger); color: white; }
+  .btn-danger:hover { background: #dc2626; }
+
+  /* Grid layout */
+  .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; margin-bottom: 24px; }
+
+  /* Section cards */
+  .section-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+  .section-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .section-title { font-size: 14px; font-weight: 700; color: var(--ink-0); display: flex; align-items: center; gap: 8px; }
+  .section-badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 10px; background: var(--surface-2); color: var(--ink-2); }
+  .section-badge.pending { background: rgba(245,158,11,.15); color: var(--warn); }
+  .section-badge.danger { background: rgba(239,68,68,.15); color: var(--danger); }
+  .section-content { padding: 16px 20px; }
+
+  /* Agent cards */
+  .agent-card { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 12px; transition: all .15s; position: relative; }
+  .agent-card:last-child { margin-bottom: 0; }
+  .agent-card:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .agent-card.pending { border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.05); }
+  .agent-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .agent-avatar { width: 44px; height: 44px; border-radius: 12px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .agent-avatar.pending { background: rgba(245,158,11,.15); }
+  .agent-avatar svg { width: 22px; height: 22px; }
+  .agent-info { flex: 1; min-width: 0; }
+  .agent-name-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
+  .agent-name { font-weight: 600; font-size: 15px; }
+  .agent-status { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; white-space: nowrap; }
+  .agent-status.pending { background: rgba(245,158,11,.15); color: var(--warn); }
+  .agent-status.active { background: rgba(34,197,94,.15); color: var(--success); }
+  .agent-status.new { background: rgba(239,68,68,.15); color: var(--danger); }
+  .agent-meta { font-size: 12px; color: var(--ink-3); display: flex; gap: 12px; flex-wrap: wrap; }
+  .agent-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .agent-actions .btn { flex: 1; text-align: center; }
+
+  /* Request cards */
+  .request-card { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+  .request-card:last-child { margin-bottom: 0; }
+  .request-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+  .request-agent { display: flex; align-items: center; gap: 10px; }
+  .request-title { font-weight: 600; font-size: 14px; }
+  .request-time { font-size: 11px; color: var(--ink-4); white-space: nowrap; }
+  .request-query { font-size: 13px; color: var(--ink-1); background: var(--surface-2); padding: 10px 12px; border-radius: 8px; font-family: monospace; margin-bottom: 10px; }
+  .request-reason { font-size: 12px; color: var(--ink-2); font-style: italic; padding: 10px 12px; background: var(--surface-2); border-radius: 8px; border-left: 3px solid var(--accent); margin-bottom: 12px; }
+  .request-permissions { margin-bottom: 12px; }
+  .permission-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .permission-label { font-size: 12px; color: var(--ink-3); min-width: 80px; }
+  .form-select, .form-input { padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--ink-0); font-size: 12px; font-family: inherit; }
+  .form-select:focus, .form-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(14,165,233,.2); }
+  .checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+  .checkbox-label input { width: 14px; height: 14px; accent-color: var(--accent); }
+  .request-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* Activity cards */
+  .activity-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; }
+  .activity-item:last-child { margin-bottom: 0; }
+  .activity-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .activity-info { flex: 1; min-width: 0; }
+  .activity-time { font-size: 11px; color: var(--ink-3); white-space: nowrap; margin-bottom: 4px; }
+  .activity-text { font-size: 13px; color: var(--ink-1); line-height: 1.5; }
+  .activity-action { font-weight: 600; color: var(--ink-0); }
+  .activity-detail { color: var(--ink-3); }
+
+  /* Setup cards */
+  .setup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .setup-card { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .setup-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .setup-name { font-weight: 600; font-size: 14px; }
+  .setup-desc { font-size: 11px; color: var(--ink-3); margin-bottom: 10px; }
+  .setup-code { font-family: monospace; font-size: 11px; background: var(--surface); padding: 10px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; color: var(--ink-1); }
+  .setup-copy { margin-top: 10px; width: 100%; }
+
+  /* Usage meter */
+  .usage-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; margin-top: 24px; }
+  .usage-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+  .usage-main { display: flex; align-items: baseline; gap: 12px; }
+  .usage-plan { font-size: 13px; color: var(--ink-2); }
+  .usage-plan b { color: var(--ink-0); }
+  .usage-count { font-size: 28px; font-weight: 700; color: var(--ink-0); }
+  .usage-count warn { color: var(--warn); }
+  .usage-count danger { color: var(--danger); }
+  .usage-limit { font-size: 14px; color: var(--ink-3); }
+  .usage-renew { font-size: 12px; color: var(--ink-3); }
+  .usage-bar { height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; margin-bottom: 16px; }
+  .usage-fill { height: 100%; border-radius: 4px; transition: width .3s ease; }
+  .usage-fill.ok { background: var(--success); }
+  .usage-fill.warn { background: var(--warn); }
+  .usage-fill.danger { background: var(--danger); }
+  .usage-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+  /* Empty state */
+  .empty-card { text-align: center; padding: 40px 20px; color: var(--ink-3); }
+  .empty-card svg { width: 48px; height: 48px; margin-bottom: 12px; opacity: .5; }
+  .empty-title { font-weight: 600; font-size: 15px; color: var(--ink-1); margin-bottom: 6px; }
+  .empty-desc { font-size: 13px; max-width: 300px; margin: 0 auto; }
+
+  /* Expandable sections */
+  .collapsible { border-top: 1px solid var(--border); margin-top: 16px; }
+  .collapsible summary { padding: 12px 0; cursor: pointer; font-weight: 600; color: var(--ink-1); display: flex; align-items: center; gap: 8px; user-select: none; }
+  .collapsible summary::before { content: ''; width: 16px; height: 16px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: rotate(45deg); transition: transform .15s; flex-shrink: 0; }
+  .collapsible[open] summary::before { transform: rotate(-135deg); }
+  .collapsible-content { padding-top: 8px; animation: slideDown .2s ease; }
+  @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Responsive */
+  @media (max-width: 700px) {
+    .dashboard-grid { grid-template-columns: 1fr; }
+    .mockup-header { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+<div class="mockup">
+  <header class="mockup-header">
+    <div>
+      <div class="mockup-title">AI Agents</div>
+      <div class="mockup-subtitle">MCP servers connected to OTPilot</div>
+    </div>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+      <button class="btn btn-secondary btn-sm">Import</button>
+      <button class="btn btn-primary" id="connectBtn">Connect Agent</button>
+    </div>
+  </header>
+
+  <!-- Pending Agents Section -->
+  <section class="section-card">
+    <header class="section-header">
+      <h2 class="section-title">Pending <span class="section-badge pending">2</span></h2>
+    </header>
+    <div class="section-content">
+      <article class="agent-card pending">
+        <div class="agent-card-header">
+          <div class="agent-avatar pending"><svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--warn)"/><circle cx="15" cy="14" r="1.2" fill="var(--warn)"/></svg></div>
+          <div class="agent-info">
+            <div class="agent-name-row"><span class="agent-name">Claude Code</span><span class="agent-status pending">Waiting</span></div>
+            <div class="agent-meta">MacBook Pro · 2 min ago</div>
+          </div>
+        </div>
+        <div style="padding: 12px; background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); border-radius: 8px; margin-bottom: 12px;">
+          <div style="font-size: 12px; color: var(--warn); font-weight: 600; margin-bottom: 4px;">Verification Code</div>
+          <div style="display: flex; align-items: center; gap: 12px; font-family: monospace; font-size: 24px; font-weight: 700; letter-spacing: 3px; color: var(--accent);">XXXX-XXXX</div>
+        </div>
+        <p style="font-size: 12px; color: var(--ink-2); margin-bottom: 12px;">Approve only if your terminal shows <b style="color: var(--ink-1)">this same code</b>. If it doesn't, deny.</p>
+        <div class="agent-actions">
+          <button class="btn btn-secondary">Deny</button>
+          <button class="btn btn-primary">Codes match · Connect</button>
+        </div>
+      </article>
+
+      <article class="agent-card pending">
+        <div class="agent-card-header">
+          <div class="agent-avatar pending"><svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--warn)"/><circle cx="15" cy="14" r="1.2" fill="var(--warn)"/></svg></div>
+          <div class="agent-info">
+            <div class="agent-name-row"><span class="agent-name">Cursor</span><span class="agent-status pending">Waiting</span></div>
+            <div class="agent-meta">Linux · 1 hour ago</div>
+          </div>
+        </div>
+        <div style="padding: 12px; background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); border-radius: 8px; margin-bottom: 12px;">
+          <div style="font-size: 12px; color: var(--warn); font-weight: 600; margin-bottom: 4px;">Verification Code</div>
+          <div style="display: flex; align-items: center; gap: 12px; font-family: monospace; font-size: 24px; font-weight: 700; letter-spacing: 3px; color: var(--accent);">YYYY-YYYY</div>
+        </div>
+        <p style="font-size: 12px; color: var(--ink-2); margin-bottom: 12px;">Approve only if your terminal shows <b style="color: var(--ink-1)">this same code</b>. If it doesn't, deny.</p>
+        <div class="agent-actions">
+          <button class="btn btn-secondary">Deny</button>
+          <button class="btn btn-primary">Codes match · Connect</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- Connected Agents Section -->
+  <section class="section-card">
+    <header class="section-header">
+      <h2 class="section-title">Connected <span class="section-badge">3</span></h2>
+      <button class="btn btn-secondary btn-sm">+ Add account</button>
+    </header>
+    <div class="section-content">
+      <article class="agent-card active">
+        <div class="agent-card-header">
+          <div class="agent-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div>
+          <div class="agent-info">
+            <div class="agent-name-row"><span class="agent-name">Claude Code</span><span class="agent-status active">Connected</span></div>
+            <div class="agent-meta">via Claude Code · MacBook Pro · 3 accounts · last used 2h ago</div>
+          </div>
+        </div>
+
+        <details class="collapsible">
+          <summary>Accounts it can use (3) <button class="btn btn-secondary btn-sm">+ Add</button></summary>
+          <div class="collapsible-content">
+            <article class="agent-card" style="margin: 8px 0; padding: 12px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div>
+                  <div style="font-weight: 600; font-size: 14px;">GitHub Production</div>
+                  <div style="font-size: 12px; color: var(--ink-3); display: flex; gap: 12px; flex-wrap: wrap;">
+                    <span class="agent-status" style="background: var(--surface-2); color: var(--ink-1);">Sign-in: username, password, 2FA</span>
+                    <span style="color: var(--warn);">1h left</span>
+                  </div>
+                </div>
+                <button class="btn btn-ghost btn-sm">✕</button>
+              </div>
+            </article>
+            <article class="agent-card" style="margin: 8px 0; padding: 12px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div>
+                  <div style="font-weight: 600; font-size: 14px;">AWS Console</div>
+                  <div style="font-size: 12px; color: var(--ink-3); display: flex; gap: 12px; flex-wrap: wrap;">
+                    <span class="agent-status" style="background: rgba(245,158,11,.15); color: var(--warn);">2FA code only</span>
+                    <span class="agent-status" style="background: rgba(239,68,68,.15); color: var(--danger);">asks every time</span>
+                  </div>
+                </div>
+                <button class="btn btn-ghost btn-sm">✕</button>
+              </div>
+            </article>
+            <article class="agent-card" style="margin: 8px 0; padding: 12px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div>
+                  <div style="font-weight: 600; font-size: 14px;">Database (prod)</div>
+                  <div style="font-size: 12px; color: var(--ink-3); display: flex; gap: 12px; flex-wrap: wrap;">
+                    <span class="agent-status" style="background: var(--surface-2); color: var(--ink-1);">Chosen fields: host, port, username</span>
+                    <span style="color: var(--accent); font-size: 11px;">only psql</span>
+                  </div>
+                </div>
+                <button class="btn btn-ghost btn-sm">✕</button>
+              </div>
+            </article>
+          </div>
+        </details>
+
+        <details class="collapsible" open>
+          <summary>Add it to your agent</summary>
+          <div class="collapsible-content">
+            <div class="setup-grid">
+              <div class="setup-card">
+                <div class="setup-header"><span class="setup-name">Claude Code</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div>
+                <div class="setup-desc">In a terminal</div>
+                <div class="setup-code">claude mcp add otpilot -- npx -y @otpilot/mcp@latest</div>
+              </div>
+              <div class="setup-card">
+                <div class="setup-header"><span class="setup-name">Codex</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div>
+                <div class="setup-desc">In ~/.codex/config.toml</div>
+                <div class="setup-code">[mcp_servers.otpilot]
+command = "npx"
+args = ["-y", "@otpilot/mcp@latest"]</div>
+              </div>
+              <div class="setup-card">
+                <div class="setup-header"><span class="setup-name">Cursor</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div>
+                <div class="setup-desc">In ~/.cursor/mcp.json</div>
+                <div class="setup-code">{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }</div>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="collapsible">
+          <summary>Activity (12 this week)</summary>
+          <div class="collapsible-content">
+            <div class="activity-item">
+              <div class="activity-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></svg></div>
+              <div class="activity-info">
+                <div class="activity-time">14:32</div>
+                <div class="activity-text"><span class="activity-action">signed in to</span> <span class="activity-detail">GitHub Production</span></div>
+              </div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><polyline points="4 17 10 11 16 17 22 11"/><line x1="10" y1="11" x2="10" y2="21"/></svg></div>
+              <div class="activity-info">
+                <div class="activity-time">13:45</div>
+                <div class="activity-text"><span class="activity-action">ran a command with</span> <span class="activity-detail">Database (prod) · psql</span></div>
+              </div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
+              <div class="activity-info">
+                <div class="activity-time">12:10</div>
+                <div class="activity-text"><span class="activity-action">got a 2FA code for</span> <span class="activity-detail">AWS Console</span></div>
+              </div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><polyline points="4 17 10 11 16 17 22 11"/><line x1="10" y1="11" x2="10" y2="21"/></svg></div>
+              <div class="activity-info">
+                <div class="activity-time">Yesterday</div>
+                <div class="activity-text"><span class="activity-action">ran a command with</span> <span class="activity-detail">Database (prod) · pg_dump</span></div>
+              </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" style="margin-top: 8px; width: 100%;">Show more</button>
+          </div>
+        </details>
+
+        <div class="agent-actions">
+          <button class="btn btn-ghost btn-sm">Rename</button>
+          <button class="btn btn-danger">Revoke agent</button>
+        </div>
+      </article>
+
+      <article class="agent-card active">
+        <div class="agent-card-header">
+          <div class="agent-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div>
+          <div class="agent-info">
+            <div class="agent-name-row"><span class="agent-name">Codex</span><span class="agent-status active">Connected</span></div>
+            <div class="agent-meta">via Codex · Ubuntu · 1 account · last used 4h ago</div>
+          </div>
+        </div>
+        <details class="collapsible">
+          <summary>Accounts it can use (1) <button class="btn btn-secondary btn-sm">+ Add</button></summary>
+          <div class="collapsible-content">
+            <article class="agent-card" style="margin: 8px 0; padding: 12px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div>
+                  <div style="font-weight: 600; font-size: 14px;">GitHub Personal</div>
+                  <div style="font-size: 12px; color: var(--ink-3); display: flex; gap: 12px; flex-wrap: wrap;">
+                    <span class="agent-status" style="background: var(--surface-2); color: var(--ink-1);">2FA code only</span>
+                  </div>
+                </div>
+                <button class="btn btn-ghost btn-sm">✕</button>
+              </div>
+            </article>
+          </div>
+        </details>
+        <div class="agent-actions">
+          <button class="btn btn-ghost btn-sm">Rename</button>
+          <button class="btn btn-danger">Revoke agent</button>
+        </div>
+      </article>
+
+      <article class="agent-card active">
+        <div class="agent-card-header">
+          <div class="agent-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div>
+          <div class="agent-info">
+            <div class="agent-name-row"><span class="agent-name">Cursor</span><span class="agent-status active">Connected</span></div>
+            <div class="agent-meta">via Cursor · Windows · 2 accounts · last used 1d ago</div>
+          </div>
+        </div>
+        <details class="collapsible">
+          <summary>Accounts it can use (2) <button class="btn btn-secondary btn-sm">+ Add</button></summary>
+          <div class="collapsible-content">
+            <article class="agent-card" style="margin: 8px 0; padding: 12px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div>
+                  <div style="font-weight: 600; font-size: 14px;">GitHub Work</div>
+                  <div style="font-size: 12px; color: var(--ink-3); display: flex; gap: 12px; flex-wrap: wrap;">
+                    <span class="agent-status" style="background: var(--surface-2); color: var(--ink-1);">Sign-in: username, password, 2FA</span>
+                  </div>
+                </div>
+                <button class="btn btn-ghost btn-sm">✕</button>
+              </div>
+            </article>
+            <article class="agent-card" style="margin: 8px 0; padding: 12px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div>
+                  <div style="font-weight: 600; font-size: 14px;">Docker Hub</div>
+                  <div style="font-size: 12px; color: var(--ink-3); display: flex; gap: 12px; flex-wrap: wrap;">
+                    <span class="agent-status" style="background: rgba(245,158,11,.15); color: var(--warn);">2FA code only</span>
+                  </div>
+                </div>
+                <button class="btn btn-ghost btn-sm">✕</button>
+              </div>
+            </article>
+          </div>
+        </details>
+        <div class="agent-actions">
+          <button class="btn btn-ghost btn-sm">Rename</button>
+          <button class="btn btn-danger">Revoke agent</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- Requests Section (inline in pending) -->
+  <section class="section-card" style="margin-top: -12px; border-top: none; border-radius: 0 0 16px 16px;">
+    <header class="section-header">
+      <h2 class="section-title">Requests <span class="section-badge danger">1</span></h2>
+    </header>
+    <div class="section-content">
+      <article class="request-card">
+        <div class="request-header">
+          <div class="request-agent">
+            <div class="agent-avatar" style="width: 36px; height: 36px;"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div>
+            <div>
+              <div class="request-title">Claude Code asks for an account</div>
+              <div class="request-time">for <b>browser_login</b> · 2 min ago</div>
+            </div>
+          </div>
+        </div>
+        <div class="request-query">github.com production deploy</div>
+        <div class="request-reason">Need to deploy the latest build to production environment</div>
+
+        <div class="request-permissions">
+          <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px;">Which account?</div>
+          <div style="display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow-y: auto;">
+            <label style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; cursor: pointer;">
+              <input type="radio" name="req-account" style="accent-color: var(--accent);">
+              <div style="flex: 1;">
+                <div style="font-weight: 500;">GitHub Production</div>
+                <div style="font-size: 11px; color: var(--ink-3);">github.com · Saved for github.com</div>
+              </div>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; cursor: pointer;">
+              <input type="radio" name="req-account" style="accent-color: var(--accent);">
+              <div style="flex: 1;">
+                <div style="font-weight: 500;">GitHub Personal</div>
+                <div style="font-size: 11px; color: var(--ink-3);">github.com · Saved for github.com</div>
+              </div>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; cursor: pointer;">
+              <input type="radio" name="req-account" style="accent-color: var(--accent);">
+              <div style="flex: 1;">
+                <div style="font-weight: 500;">GitHub Staging</div>
+                <div style="font-size: 11px; color: var(--ink-3);">github.com · Saved for github.com</div>
+              </div>
+            </label>
+          </div>
+
+          <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+            <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px;">Permissions</div>
+            <div class="permission-row">
+              <span class="permission-label">Can use</span>
+              <select class="form-select" style="flex: 1; max-width: 200px;">
+                <option value="login">Sign-in: username, password, 2FA</option>
+                <option value="2fa" selected>2FA code only</option>
+                <option value="fields">Chosen fields…</option>
+              </select>
+            </div>
+            <div class="permission-row">
+              <span class="permission-label">For</span>
+              <select class="form-select" style="flex: 1; max-width: 150px;">
+                <option value="1h">1 hour</option>
+                <option value="1d">1 day</option>
+                <option value="7d" selected>1 week</option>
+              </select>
+              <label class="checkbox-label"><input type="checkbox"> Ask me every time</label>
+            </div>
+            <div class="permission-row" style="flex-direction: column; gap: 6px;">
+              <span class="permission-label">Only commands</span>
+              <input type="text" class="form-input" placeholder="e.g. psql, curl" style="max-width: 300px;">
+            </div>
+          </div>
+        </div>
+
+        <div class="request-actions">
+          <button class="btn btn-secondary">Deny</button>
+          <button class="btn btn-primary">Allow</button>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- Free Plan Usage -->
+  <section class="usage-card">
+    <div class="usage-header">
+      <div class="usage-main">
+        <span class="usage-plan"><b>Free plan</b> · <span class="usage-count warn">7</span><span class="usage-limit"> of 10 uses this month</span></span>
+      </div>
+      <span class="usage-renew">Renews Apr 15</span>
+    </div>
+    <div class="usage-bar"><div class="usage-fill warn" style="width: 70%"></div></div>
+    <div class="usage-actions">
+      <button class="btn btn-primary">Start free trial</button>
+      <a href="#" class="btn btn-secondary" style="text-decoration: none;">Upgrade to Personal</a>
+    </div>
+  </section>
+</div>
+
+<script>
+  // Collapsible sections
+  document.querySelectorAll('.collapsible summary').forEach(summary => {
+    summary.addEventListener('click', (e) => {
+      e.preventDefault();
+      const collapsible = summary.parentElement;
+      collapsible.toggleAttribute('open');
+    });
+  });
+
+  // Copy buttons
+  document.querySelectorAll('.setup-copy').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const card = btn.closest('.setup-card');
+      const code = card.querySelector('.setup-code').textContent.trim();
+      await navigator.clipboard.writeText(code);
+      const original = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = original, 1500);
+    });
+  });
+</script>
+</body></html>

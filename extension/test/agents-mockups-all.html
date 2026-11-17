@@ -1,0 +1,933 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Agents Mockups - All 4 Variants</title>
+<style>
+  :root {
+    --bg: #0f172a; --surface: #1e293b; --surface-2: #334155;
+    --border: #1e3a5f; --ink-0: #f1f5f9; --ink-1: #e2e8f0;
+    --ink-2: #cbd5e1; --ink-3: #94a3b8; --ink-4: #64748b;
+    --accent: #0ea5e9; --accent-2: #38bdf8;
+    --success: #22c55e; --warn: #f59e0b; --danger: #ef4444;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--font-ui); background: #0a0f1a; color: var(--ink-0); min-height: 100vh; padding: 24px; }
+  
+  /* Extension frame - simulates actual popup size */
+  .ext-frame { 
+    width: 400px; 
+    background: var(--surface); 
+    border: 1px solid var(--border); 
+    border-radius: 12px; 
+    overflow: hidden; 
+    box-shadow: 0 8px 32px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.05);
+    margin-bottom: 32px;
+  }
+  .ext-frame-header { 
+    padding: 12px 14px; 
+    border-bottom: 1px solid var(--border); 
+    display: flex; 
+    align-items: center; 
+    justify-content: space-between; 
+    background: rgba(15,23,42,.8);
+    backdrop-filter: blur(8px);
+  }
+  .ext-title { font-size: 14px; font-weight: 700; }
+  .ext-subtitle { font-size: 11px; color: var(--ink-3); margin-top: 1px; }
+  .ext-content { max-height: 580px; overflow-y: auto; }
+  
+  /* Common */
+  .btn { padding: 8px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; border: none; transition: all .1s; white-space: nowrap; }
+  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-primary:hover { background: var(--accent-2); }
+  .btn-secondary { background: var(--surface-2); color: var(--ink-1); border: 1px solid var(--border); }
+  .btn-secondary:hover { background: var(--border); }
+  .btn-ghost { background: transparent; color: var(--ink-2); padding: 6px 10px; }
+  .btn-ghost:hover { color: var(--ink-0); }
+  .btn-sm { padding: 5px 8px; font-size: 10px; }
+  .btn-danger { background: var(--danger); color: white; }
+  .badge { font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 4px; white-space: nowrap; }
+  .badge.pending { background: rgba(245,158,11,.15); color: var(--warn); }
+  .badge.active { background: rgba(34,197,94,.15); color: var(--success); }
+  .badge.new { background: rgba(239,68,68,.15); color: var(--danger); }
+  .badge.muted { background: var(--surface-2); color: var(--ink-3); }
+  .code { font-family: monospace; font-size: 11px; background: var(--bg); padding: 2px 6px; border-radius: 4px; color: var(--ink-1); border: 1px solid var(--border); }
+  
+  /* Selector tabs */
+  .mockup-selector { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .mockup-tab { padding: 10px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--ink-2); cursor: pointer; transition: all .1s; }
+  .mockup-tab:hover { color: var(--ink-0); border-color: var(--accent); }
+  .mockup-tab.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  
+  .mockup-panel { display: none; }
+  .mockup-panel.active { display: block; animation: fadeIn .2s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  
+  /* ============================================================
+     MOCKUP 1: TABS (compact)
+     ============================================================ */
+  .m1-tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg); }
+  .m1-tab { padding: 8px 12px; font-size: 11px; font-weight: 600; color: var(--ink-3); background: transparent; border: none; cursor: pointer; position: relative; }
+  .m1-tab:hover { color: var(--ink-1); }
+  .m1-tab.active { color: var(--accent); }
+  .m1-tab.active::after { content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 2px; background: var(--accent); }
+  .m1-panel { display: none; padding: 12px 14px; }
+  .m1-panel.active { display: block; }
+  
+  .m1-agent { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; cursor: pointer; }
+  .m1-agent:last-child { margin-bottom: 0; }
+  .m1-agent:hover { border-color: var(--accent); }
+  .m1-agent.pending { border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.05); }
+  .m1-avatar { width: 32px; height: 32px; border-radius: 8px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .m1-avatar.pending { background: rgba(245,158,11,.15); }
+  .m1-avatar svg { width: 16px; height: 16px; }
+  .m1-info { flex: 1; min-width: 0; }
+  .m1-name { font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m1-meta { font-size: 10px; color: var(--ink-3); margin-top: 1px; }
+  .m1-status { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+  .m1-status.pending { background: rgba(245,158,11,.15); color: var(--warn); }
+  .m1-status.active { background: rgba(34,197,94,.15); color: var(--success); }
+  
+  .m1-detail { padding-top: 8px; }
+  .m1-code-box { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .m1-code-label { font-size: 10px; color: var(--warn); font-weight: 600; margin-bottom: 2px; display: block; }
+  .m1-code-value { font-family: monospace; font-size: 18px; font-weight: 700; letter-spacing: 2px; color: var(--accent); }
+  .m1-warn { font-size: 11px; color: var(--ink-2); margin-bottom: 8px; }
+  .m1-warn b { color: var(--ink-1); }
+  .m1-actions { display: flex; gap: 6px; }
+  .m1-actions .btn { flex: 1; text-align: center; font-size: 10px; }
+  
+  .m1-grant { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .m1-grant-info { flex: 1; min-width: 0; }
+  .m1-grant-title { font-weight: 600; font-size: 11px; margin-bottom: 3px; }
+  .m1-grant-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .m1-grant-badge { font-size: 9px; font-weight: 600; padding: 2px 5px; border-radius: 4px; }
+  .m1-grant-badge.scope { background: var(--surface-2); color: var(--ink-1); }
+  .m1-grant-badge.ask { background: rgba(245,158,11,.15); color: var(--warn); }
+  .m1-grant-badge.time { background: var(--surface-2); color: var(--ink-3); }
+  .m1-grant-badge.cmd { background: var(--surface-2); color: var(--ink-3); font-family: monospace; }
+  .m1-grant-remove { width: 24px; height: 24px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--ink-3); cursor: pointer; flex-shrink: 0; font-size: 12px; }
+  
+  .m1-setup { display: flex; flex-direction: column; gap: 8px; }
+  .m1-setup-item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 11px; }
+  .m1-setup-name { font-weight: 600; margin-bottom: 2px; }
+  .m1-setup-desc { color: var(--ink-3); font-size: 10px; margin-bottom: 6px; }
+  .m1-setup-code { font-family: monospace; font-size: 10px; background: var(--bg); padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; color: var(--ink-1); border: 1px solid var(--border); }
+  
+  .m1-activity { display: flex; flex-direction: column; gap: 5px; }
+  .m1-activity-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; }
+  .m1-activity-time { font-size: 10px; color: var(--ink-3); white-space: nowrap; min-width: 50px; }
+  .m1-activity-action { font-weight: 600; color: var(--ink-0); }
+  .m1-activity-detail { color: var(--ink-3); }
+  
+  .m1-request { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .m1-request-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .m1-request-title { font-weight: 600; font-size: 12px; }
+  .m1-request-time { font-size: 10px; color: var(--ink-4); white-space: nowrap; }
+  .m1-request-query { font-size: 11px; color: var(--ink-1); background: var(--bg); padding: 8px 10px; border-radius: 6px; font-family: monospace; margin-bottom: 8px; border: 1px solid var(--border); }
+  .m1-request-reason { font-size: 10px; color: var(--ink-2); font-style: italic; padding: 8px 10px; background: var(--bg); border-radius: 6px; border-left: 3px solid var(--accent); border: 1px solid var(--border); margin-bottom: 10px; }
+  .m1-account-opt { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; cursor: pointer; }
+  .m1-account-opt:hover { border-color: var(--accent); }
+  .m1-account-opt input { accent-color: var(--accent); }
+  .m1-account-name { font-weight: 500; font-size: 11px; margin-bottom: 1px; }
+  .m1-account-meta { font-size: 9px; color: var(--ink-3); }
+  
+  /* ============================================================
+     MOCKUP 2: CARD DASHBOARD (compact)
+     ============================================================ */
+  .m2-section { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+  .m2-section-header { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .m2-section-title { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .m2-content { padding: 10px 12px; }
+  
+  .m2-agent { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+  .m2-agent:last-child { margin-bottom: 0; }
+  .m2-agent.pending { border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.05); }
+  .m2-agent-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .m2-avatar { width: 36px; height: 36px; border-radius: 8px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .m2-avatar.pending { background: rgba(245,158,11,.15); }
+  .m2-avatar svg { width: 18px; height: 18px; }
+  .m2-agent-name { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .m2-agent-meta { font-size: 10px; color: var(--ink-3); }
+  .m2-agent-status { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+  .m2-agent-status.pending { background: rgba(245,158,11,.15); color: var(--warn); }
+  .m2-agent-status.active { background: rgba(34,197,94,.15); color: var(--success); }
+  .m2-agent-status.new { background: rgba(239,68,68,.15); color: var(--danger); }
+  .m2-agent-actions { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .m2-agent-actions .btn { flex: 1; text-align: center; font-size: 10px; }
+  
+  .m2-code-box { background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+  .m2-code-label { font-size: 10px; color: var(--warn); font-weight: 600; margin-bottom: 3px; display: block; }
+  .m2-code-value { font-family: monospace; font-size: 18px; font-weight: 700; letter-spacing: 2px; color: var(--accent); }
+  
+  .m2-grant { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .m2-grant-title { font-weight: 600; font-size: 11px; margin-bottom: 3px; }
+  .m2-grant-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .m2-grant-badge { font-size: 9px; font-weight: 600; padding: 2px 5px; border-radius: 4px; }
+  .m2-grant-badge.scope { background: var(--surface-2); color: var(--ink-1); }
+  .m2-grant-badge.ask { background: rgba(245,158,11,.15); color: var(--warn); }
+  .m2-grant-badge.time { background: var(--surface-2); color: var(--ink-3); }
+  .m2-grant-badge.cmd { background: var(--surface-2); color: var(--ink-3); font-family: monospace; }
+  .m2-grant-remove { width: 24px; height: 24px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--ink-3); cursor: pointer; flex-shrink: 0; font-size: 12px; }
+  
+  .m2-collapsible { border-top: 1px solid var(--border); margin-top: 8px; }
+  .m2-collapsible summary { padding: 8px 0; cursor: pointer; font-size: 11px; font-weight: 600; color: var(--ink-2); display: flex; align-items: center; justify-content: space-between; }
+  .m2-collapsible summary::before { content: ''; width: 12px; height: 12px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: rotate(45deg); transition: transform .15s; flex-shrink: 0; }
+  .m2-collapsible[open] summary::before { transform: rotate(-135deg); }
+  .m2-collapsible-content { padding-top: 6px; animation: slideDown .15s ease; }
+  
+  .m2-setup { display: flex; flex-direction: column; gap: 8px; }
+  .m2-setup-item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 10px; }
+  .m2-setup-name { font-weight: 600; margin-bottom: 2px; }
+  .m2-setup-desc { color: var(--ink-3); font-size: 9px; margin-bottom: 6px; }
+  .m2-setup-code { font-family: monospace; font-size: 10px; background: var(--bg); padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; color: var(--ink-1); border: 1px solid var(--border); }
+  
+  .m2-activity { display: flex; flex-direction: column; gap: 5px; }
+  .m2-activity-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; }
+  .m2-activity-time { font-size: 10px; color: var(--ink-3); white-space: nowrap; min-width: 45px; }
+  .m2-activity-action { font-weight: 600; color: var(--ink-0); }
+  .m2-activity-detail { color: var(--ink-3); }
+  
+  .m2-request { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .m2-request-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .m2-request-title { font-weight: 600; font-size: 12px; }
+  .m2-request-time { font-size: 10px; color: var(--ink-4); white-space: nowrap; }
+  .m2-request-query { font-size: 11px; color: var(--ink-1); background: var(--bg); padding: 8px 10px; border-radius: 6px; font-family: monospace; margin-bottom: 8px; border: 1px solid var(--border); }
+  .m2-request-reason { font-size: 10px; color: var(--ink-2); font-style: italic; padding: 8px 10px; background: var(--bg); border-radius: 6px; border-left: 3px solid var(--accent); border: 1px solid var(--border); margin-bottom: 10px; }
+  .m2-account-opt { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; cursor: pointer; }
+  .m2-account-opt:hover { border-color: var(--accent); }
+  .m2-account-opt input { accent-color: var(--accent); }
+  .m2-account-name { font-weight: 500; font-size: 11px; margin-bottom: 1px; }
+  .m2-account-meta { font-size: 9px; color: var(--ink-3); }
+  
+  .m2-form-group { margin-bottom: 10px; }
+  .m2-form-label { display: block; font-size: 10px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .3px; margin-bottom: 5px; }
+  .m2-form-select, .m2-form-input { width: 100%; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--ink-0); font-size: 12px; font-family: inherit; }
+  .m2-form-row { display: flex; gap: 8px; }
+  .m2-form-row > * { flex: 1; }
+  .m2-checkbox { display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+  .m2-checkbox input { width: 13px; height: 13px; accent-color: var(--accent); }
+  
+  /* ============================================================
+     MOCKUP 3: SPLIT VIEW (compact - sidebar collapsible)
+     ============================================================ */
+  .m3-layout { display: flex; height: 560px; }
+  .m3-sidebar { width: 160px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+  .m3-sidebar-header { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .m3-sidebar-title { font-size: 12px; font-weight: 700; }
+  .m3-search { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  .m3-search-input { width: 100%; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--ink-0); font-size: 12px; font-family: inherit; }
+  .m3-nav { padding: 6px 8px; display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
+  .m3-nav-section { font-size: 9px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; letter-spacing: .5px; padding: 6px 10px 3px; }
+  .m3-nav-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; color: var(--ink-2); font-size: 11px; font-weight: 500; cursor: pointer; border: none; background: transparent; width: 100%; text-align: left; font-family: inherit; }
+  .m3-nav-item:hover { background: var(--bg); color: var(--ink-0); }
+  .m3-nav-item.active { background: rgba(14,165,233,.15); color: var(--accent); border-left: 2px solid var(--accent); }
+  .m3-nav-item .badge { margin-left: auto; }
+  
+  .m3-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+  .m3-main-header { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .m3-main-title { font-size: 15px; font-weight: 700; }
+  .m3-main-subtitle { font-size: 11px; color: var(--ink-3); margin-top: 1px; }
+  .m3-main-content { flex: 1; overflow-y: auto; padding: 12px; }
+  
+  .m3-detail { display: none; animation: fadeIn .15s ease; }
+  .m3-detail.active { display: block; }
+  
+  .m3-agent-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .m3-avatar-lg { width: 44px; height: 44px; border-radius: 10px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .m3-avatar-lg.pending { background: rgba(245,158,11,.15); }
+  .m3-avatar-lg svg { width: 22px; height: 22px; }
+  .m3-name-lg { font-size: 16px; font-weight: 700; margin-bottom: 3px; }
+  .m3-meta-lg { font-size: 11px; color: var(--ink-3); display: flex; gap: 12px; flex-wrap: wrap; }
+  .m3-status-lg { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 4px; }
+  .m3-status-lg.pending { background: rgba(245,158,11,.15); color: var(--warn); }
+  .m3-status-lg.active { background: rgba(34,197,94,.15); color: var(--success); }
+  
+  .m3-section { margin-bottom: 16px; }
+  .m3-section-title { font-size: 10px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+  
+  .m3-grant { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .m3-grant-title { font-weight: 600; font-size: 12px; margin-bottom: 3px; }
+  .m3-grant-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .m3-grant-badge { font-size: 9px; font-weight: 600; padding: 2px 5px; border-radius: 4px; }
+  .m3-grant-badge.scope { background: var(--surface-2); color: var(--ink-1); }
+  .m3-grant-badge.ask { background: rgba(245,158,11,.15); color: var(--warn); }
+  .m3-grant-badge.time { background: var(--surface-2); color: var(--ink-3); }
+  .m3-grant-badge.cmd { background: var(--surface-2); color: var(--ink-3); font-family: monospace; }
+  .m3-grant-remove { width: 24px; height: 24px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--ink-3); cursor: pointer; flex-shrink: 0; font-size: 12px; }
+  
+  .m3-request { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .m3-request-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .m3-request-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .m3-request-time { font-size: 10px; color: var(--ink-3); }
+  .m3-request-query { font-size: 11px; color: var(--ink-1); background: var(--bg); padding: 8px 10px; border-radius: 6px; font-family: monospace; margin: 10px 0; border: 1px solid var(--border); }
+  .m3-request-reason { font-size: 10px; color: var(--ink-2); font-style: italic; padding: 8px 10px; background: var(--bg); border-radius: 6px; border-left: 3px solid var(--accent); border: 1px solid var(--border); margin-bottom: 12px; }
+  .m3-account-opt { display: flex; align-items: center; gap: 8px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; cursor: pointer; }
+  .m3-account-opt:hover { border-color: var(--accent); }
+  .m3-account-opt input { accent-color: var(--accent); }
+  .m3-account-name { font-weight: 500; font-size: 12px; margin-bottom: 2px; }
+  .m3-account-meta { font-size: 10px; color: var(--ink-3); }
+  .m3-form-group { margin-bottom: 10px; }
+  .m3-form-label { display: block; font-size: 10px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .3px; margin-bottom: 5px; }
+  .m3-form-select, .m3-form-input { width: 100%; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--ink-0); font-size: 12px; font-family: inherit; }
+  .m3-form-row { display: flex; gap: 8px; }
+  .m3-form-row > * { flex: 1; }
+  .m3-checkbox { display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+  .m3-checkbox input { width: 13px; height: 13px; accent-color: var(--accent); }
+  .m3-request-actions { display: flex; gap: 8px; justify-content: flex-end; padding-top: 10px; border-top: 1px solid var(--border); }
+  
+  .m3-setup { display: flex; flex-direction: column; gap: 8px; }
+  .m3-setup-item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 10px; }
+  .m3-setup-name { font-weight: 600; margin-bottom: 2px; }
+  .m3-setup-desc { color: var(--ink-3); font-size: 9px; margin-bottom: 6px; }
+  .m3-setup-code { font-family: monospace; font-size: 10px; background: var(--bg); padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; color: var(--ink-1); border: 1px solid var(--border); }
+  
+  .m3-activity { display: flex; flex-direction: column; gap: 5px; }
+  .m3-activity-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; }
+  .m3-activity-time { font-size: 10px; color: var(--ink-3); white-space: nowrap; min-width: 45px; }
+  .m3-activity-action { font-weight: 600; color: var(--ink-0); }
+  .m3-activity-detail { color: var(--ink-3); }
+  
+  .m3-empty { text-align: center; padding: 40px 12px; color: var(--ink-3); }
+  .m3-empty svg { width: 40px; height: 40px; margin-bottom: 12px; opacity: .4; }
+  .m3-empty-title { font-weight: 600; font-size: 13px; color: var(--ink-1); margin-bottom: 6px; }
+  .m3-empty-desc { font-size: 11px; max-width: 240px; margin: 0 auto; line-height: 1.5; }
+  
+  .m3-connect { max-width: 100%; text-align: center; }
+  .m3-connect-icon { width: 56px; height: 56px; border-radius: 14px; background: rgba(14,165,233,.15); display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; }
+  .m3-connect-icon svg { width: 28px; height: 28px; stroke: var(--accent); }
+  .m3-connect-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+  .m3-connect-desc { font-size: 12px; color: var(--ink-2); margin-bottom: 16px; line-height: 1.6; }
+  .m3-connect-steps { text-align: left; margin: 16px 0; padding-left: 16px; color: var(--ink-2); line-height: 2; font-size: 12px; }
+  .m3-connect-steps code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 11px; }
+  .m3-connect-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+  
+  /* ============================================================
+     MOCKUP 4: ACCORDION (mobile-first, native details)
+     ============================================================ */
+  .m4-usage { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  .m4-usage-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .m4-usage-plan { font-size: 11px; color: var(--ink-3); }
+  .m4-usage-plan b { color: var(--ink-0); }
+  .m4-usage-count { font-size: 16px; font-weight: 700; color: var(--ink-0); }
+  .m4-usage-count.warn { color: var(--warn); }
+  .m4-usage-track { height: 5px; background: var(--surface-2); border-radius: 2.5px; overflow: hidden; margin-bottom: 6px; }
+  .m4-usage-fill { height: 100%; border-radius: 2.5px; transition: width .3s ease; }
+  .m4-usage-fill.warn { background: var(--warn); }
+  .m4-usage-renew { font-size: 10px; color: var(--ink-4); text-align: right; }
+  .m4-usage-actions { display: flex; gap: 6px; margin-top: 6px; }
+  .m4-usage-actions .btn { flex: 1; text-align: center; font-size: 10px; }
+  
+  .m4-accordion { display: flex; flex-direction: column; gap: 6px; }
+  .m4-item { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .m4-header { display: flex; align-items: center; justify-content: space-between; padding: 12px; cursor: pointer; user-select: none; gap: 8px; }
+  .m4-header:hover { background: var(--surface); }
+  .m4-title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+  .m4-icon { width: 28px; height: 28px; border-radius: 6px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .m4-icon.pending { background: rgba(245,158,11,.15); }
+  .m4-icon.active { background: rgba(34,197,94,.15); }
+  .m4-icon svg { width: 16px; height: 16px; }
+  .m4-text { flex: 1; min-width: 0; }
+  .m4-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m4-meta { font-size: 10px; color: var(--ink-3); margin-top: 1px; }
+  .m4-count { font-size: 10px; font-weight: 700; color: var(--ink-3); padding: 2px 6px; background: var(--surface-2); border-radius: 8px; }
+  .m4-chevron { width: 18px; height: 18px; color: var(--ink-3); flex-shrink: 0; transition: transform .2s ease; }
+  .m4-item[open] .m4-chevron { transform: rotate(180deg); }
+  
+  .m4-content { padding: 0 12px 12px; animation: slideDown .15s ease; }
+  
+  .m4-code-box { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .m4-code-label { font-size: 10px; color: var(--warn); font-weight: 600; margin-bottom: 2px; display: block; }
+  .m4-code-value { font-family: monospace; font-size: 18px; font-weight: 700; letter-spacing: 2px; color: var(--accent); }
+  .m4-warn { font-size: 11px; color: var(--ink-2); margin-bottom: 8px; }
+  .m4-warn b { color: var(--ink-1); }
+  .m4-actions { display: flex; gap: 6px; margin-top: 4px; }
+  .m4-actions .btn { flex: 1; text-align: center; font-size: 10px; }
+  
+  .m4-agent-head { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--surface); border-radius: 8px; margin-bottom: 10px; }
+  .m4-agent-avatar { width: 32px; height: 32px; border-radius: 8px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .m4-agent-name { font-weight: 600; font-size: 13px; margin-bottom: 1px; }
+  .m4-agent-meta { font-size: 10px; color: var(--ink-3); }
+  .m4-agent-status { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+  .m4-agent-status.active { background: rgba(34,197,94,.15); color: var(--success); }
+  .m4-agent-status.pending { background: rgba(245,158,11,.15); color: var(--warn); }
+  
+  .m4-grants { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+  .m4-grant { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .m4-grant-title { font-weight: 600; font-size: 12px; margin-bottom: 3px; }
+  .m4-grant-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .m4-grant-badge { font-size: 9px; font-weight: 600; padding: 2px 5px; border-radius: 4px; }
+  .m4-grant-badge.scope { background: var(--surface-2); color: var(--ink-1); }
+  .m4-grant-badge.ask { background: rgba(245,158,11,.15); color: var(--warn); }
+  .m4-grant-badge.shared { background: var(--surface-2); color: var(--ink-3); }
+  .m4-grant-badge.expired { background: rgba(239,68,68,.15); color: var(--danger); }
+  .m4-grant-badge.time { background: var(--surface-2); color: var(--ink-3); }
+  .m4-grant-badge.cmd { background: var(--surface-2); color: var(--ink-3); font-family: monospace; }
+  .m4-grant-remove { width: 24px; height: 24px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--ink-3); cursor: pointer; flex-shrink: 0; font-size: 11px; }
+  
+  .m4-grant-acc { border-top: 1px solid var(--border); margin-top: 8px; }
+  .m4-grant-acc summary { padding: 8px 0; cursor: pointer; font-size: 11px; font-weight: 600; color: var(--ink-2); display: flex; align-items: center; justify-content: space-between; }
+  .m4-grant-acc summary::before { content: ''; width: 12px; height: 12px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: rotate(45deg); transition: transform .15s; flex-shrink: 0; }
+  .m4-grant-acc[open] summary::before { transform: rotate(-135deg); }
+  .m4-grant-acc-content { padding-top: 8px; animation: slideDown .15s ease; }
+  
+  .m4-setup { display: flex; flex-direction: column; gap: 6px; }
+  .m4-setup-item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 10px; }
+  .m4-setup-name { font-weight: 600; margin-bottom: 2px; }
+  .m4-setup-desc { color: var(--ink-3); font-size: 9px; margin-bottom: 6px; }
+  .m4-setup-code { font-family: monospace; font-size: 10px; background: var(--bg); padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; color: var(--ink-1); border: 1px solid var(--border); }
+  
+  .m4-activity { display: flex; flex-direction: column; gap: 5px; }
+  .m4-activity-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 11px; }
+  .m4-activity-icon { width: 24px; height: 24px; border-radius: 6px; background: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .m4-activity-time { font-size: 9px; color: var(--ink-3); white-space: nowrap; margin-bottom: 1px; }
+  .m4-activity-text { font-size: 11px; color: var(--ink-1); line-height: 1.5; }
+  .m4-activity-action { font-weight: 600; color: var(--ink-0); }
+  .m4-activity-detail { color: var(--ink-3); }
+  
+  .m4-request { display: flex; flex-direction: column; gap: 10px; }
+  .m4-request-header { background: var(--surface); border-radius: 8px; padding: 10px; display: flex; align-items: flex-start; gap: 8px; }
+  .m4-request-avatar { width: 28px; height: 28px; border-radius: 6px; background: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .m4-request-title { font-weight: 600; font-size: 13px; margin-bottom: 1px; }
+  .m4-request-time { font-size: 10px; color: var(--ink-3); }
+  .m4-request-query { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-family: monospace; font-size: 11px; color: var(--ink-1); margin-bottom: 8px; }
+  .m4-request-reason { font-size: 10px; color: var(--ink-2); font-style: italic; padding: 8px 10px; background: var(--bg); border-radius: 6px; border-left: 3px solid var(--accent); border: 1px solid var(--border); margin-bottom: 10px; }
+  
+  .m4-account-opt { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; cursor: pointer; }
+  .m4-account-opt:hover { border-color: var(--accent); }
+  .m4-account-opt input { accent-color: var(--accent); }
+  .m4-account-name { font-weight: 500; font-size: 12px; margin-bottom: 1px; }
+  .m4-account-meta { font-size: 9px; color: var(--ink-3); }
+  .m4-account-elsewhere { font-size: 9px; color: var(--warn); margin-top: 2px; display: block; }
+  
+  .m4-form-group { margin-bottom: 10px; }
+  .m4-form-label { display: block; font-size: 10px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .3px; margin-bottom: 5px; }
+  .m4-form-select, .m4-form-input { width: 100%; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--ink-0); font-size: 12px; font-family: inherit; }
+  .m4-form-row { display: flex; gap: 6px; }
+  .m4-form-row > * { flex: 1; }
+  .m4-checkbox { display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+  .m4-checkbox input { width: 13px; height: 13px; accent-color: var(--accent); }
+  .m4-checkbox-group { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+  
+  .m4-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .m4-actions .btn { flex: 1; text-align: center; font-size: 10px; }
+  .m4-actions-end { display: flex; gap: 6px; justify-content: flex-end; margin-top: 10px; }
+  
+  .m4-setup { display: flex; flex-direction: column; gap: 6px; }
+  .m4-setup-item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 10px; }
+  .m4-setup-name { font-weight: 600; margin-bottom: 2px; }
+  .m4-setup-desc { color: var(--ink-3); font-size: 9px; margin-bottom: 6px; }
+  .m4-setup-code { font-family: monospace; font-size: 10px; background: var(--bg); padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; color: var(--ink-1); border: 1px solid var(--border); }
+  
+  .m4-activity { display: flex; flex-direction: column; gap: 5px; }
+  .m4-activity-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 11px; }
+  .m4-activity-icon { width: 24px; height: 24px; border-radius: 6px; background: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .m4-activity-time { font-size: 9px; color: var(--ink-3); white-space: nowrap; margin-bottom: 1px; }
+  .m4-activity-text { font-size: 11px; color: var(--ink-1); line-height: 1.5; }
+  .m4-activity-action { font-weight: 600; color: var(--ink-0); }
+  .m4-activity-detail { color: var(--ink-3); }
+  
+  .m4-empty { text-align: center; padding: 24px 12px; color: var(--ink-3); }
+  .m4-empty svg { width: 36px; height: 36px; margin-bottom: 8px; opacity: .4; }
+  .m4-empty-title { font-weight: 600; font-size: 12px; color: var(--ink-1); margin-bottom: 4px; }
+  .m4-empty-desc { font-size: 11px; max-width: 240px; margin: 0 auto; line-height: 1.5; }
+  
+  .m4-connect { text-align: center; padding: 12px; }
+  .m4-connect-icon { width: 48px; height: 48px; border-radius: 12px; background: rgba(14,165,233,.15); display: flex; align-items: center; justify-content: center; margin: 0 auto 12px; }
+  .m4-connect-icon svg { width: 24px; height: 24px; stroke: var(--accent); }
+  .m4-connect-title { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+  .m4-connect-desc { font-size: 12px; color: var(--ink-2); margin-bottom: 16px; line-height: 1.6; }
+  .m4-connect-steps { text-align: left; margin: 12px 0; padding-left: 14px; color: var(--ink-2); line-height: 2; font-size: 12px; }
+  .m4-connect-steps code { background: var(--surface); padding: 2px 5px; border-radius: 4px; font-family: monospace; font-size: 11px; }
+  
+  /* Bottom bar for m4 (mobile) */
+  .m4-bottom { position: sticky; bottom: 0; padding: 10px 12px; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 8px; }
+  .m4-bottom .btn { flex: 1; text-align: center; font-size: 10px; }
+  
+  /* Page layout */
+  .mockup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 24px; }
+  .mockup-col { display: flex; flex-direction: column; gap: 16px; }
+  .mockup-label { font-size: 12px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  
+  /* Copy feedback */
+  .copied { background: var(--success) !important; color: var(--bg) !important; }
+  
+  @media (max-width: 900px) {
+    .mockup-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Selector -->
+<div style="max-width: 900px; margin: 0 auto 24px;">
+  <div class="mockup-selector" role="tablist">
+    <button class="mockup-tab active" role="tab" data-panel="m1">1. Tabs + Sidebar</button>
+    <button class="mockup-tab" role="tab" data-panel="m2">2. Card Dashboard</button>
+    <button class="mockup-tab" role="tab" data-panel="m3">3. Split View</button>
+    <button class="mockup-tab" role="tab" data-panel="m4">4. Accordion (Mobile)</button>
+  </div>
+</div>
+
+<!-- Mockup 1: Tabs -->
+<div class="mockup-panel active" id="m1" role="tabpanel">
+  <div class="mockup-label">Mockup 1: Tabs + Sidebar (Desktop)</div>
+  <div class="ext-frame">
+    <div class="ext-frame-header">
+      <div><div class="ext-title">AI Agents</div><div class="ext-subtitle">MCP servers connected to OTPilot</div></div>
+      <div style="display:flex;gap:6px;"><button class="btn btn-secondary btn-sm">Import</button><button class="btn btn-primary btn-sm" id="m1-connect">Connect Agent</button></div>
+    </div>
+    <div class="ext-content">
+      <div class="m1-tabs" role="tablist">
+        <button class="m1-tab active" role="tab" data-panel="pending">Pending <span class="badge pending">2</span></button>
+        <button class="m1-tab" role="tab" data-panel="connected">Connected <span class="badge active">3</span></button>
+        <button class="m1-tab" role="tab" data-panel="requests">Requests <span class="badge new">1</span></button>
+        <button class="m1-tab" role="tab" data-panel="activity">Activity</button>
+        <button class="m1-tab" role="tab" data-panel="setup">Setup</button>
+        <button class="m1-tab" role="tab" data-panel="connect">Connect</button>
+      </div>
+
+      <div class="m1-panel active" id="m1-pending" role="tabpanel">
+        <article class="m1-agent pending">
+          <div class="m1-avatar pending"><svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg></div>
+          <div class="m1-info"><div class="m1-name">Claude Code</div><div class="m1-meta">MacBook Pro · 2 min ago</div></div>
+          <span class="m1-status pending">Waiting</span>
+        </article>
+        <article class="m1-agent pending">
+          <div class="m1-avatar pending"><svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg></div>
+          <div class="m1-info"><div class="m1-name">Cursor</div><div class="m1-meta">Linux · 1 hour ago</div></div>
+          <span class="m1-status pending">Waiting</span>
+        </article>
+      </div>
+
+      <div class="m1-panel" id="m1-connected" role="tabpanel">
+        <article class="m1-agent">
+          <div class="m1-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div>
+          <div class="m1-info"><div class="m1-name">Claude Code</div><div class="m1-meta">via Claude Code · MacBook Pro · 3 accounts</div></div>
+          <span class="m1-status active">Connected</span>
+        </article>
+        <article class="m1-agent">
+          <div class="m1-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div>
+          <div class="m1-info"><div class="m1-name">Codex</div><div class="m1-meta">via Codex · Ubuntu · 1 account</div></div>
+          <span class="m1-status active">Connected</span>
+        </article>
+        <article class="m1-agent">
+          <div class="m1-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div>
+          <div class="m1-info"><div class="m1-name">Cursor</div><div class="m1-meta">via Cursor · Windows · 2 accounts</div></div>
+          <span class="m1-status active">Connected</span>
+        </article>
+      </div>
+
+      <div class="m1-panel" id="m1-requests" role="tabpanel">
+        <div class="m1-request">
+          <div class="m1-request-header"><div><div class="m1-request-title">Claude Code asks for an account</div><div class="m1-request-time">for <b>browser_login</b> · 2 min ago</div></div></div>
+          <div class="m1-request-query">github.com production deploy</div>
+          <div class="m1-request-reason">Need to deploy the latest build to production environment</div>
+          <label class="m1-account-opt"><input type="radio" name="m1-req"><div><div class="m1-account-name">GitHub Production</div><div class="m1-account-meta">github.com · Saved for github.com</div></div></label>
+          <label class="m1-account-opt"><input type="radio" name="m1-req"><div><div class="m1-account-name">GitHub Personal</div><div class="m1-account-meta">github.com · Saved for github.com</div></div></label>
+          <label class="m1-account-opt"><input type="radio" name="m1-req"><div><div class="m1-account-name">GitHub Staging</div><div class="m1-account-meta">github.com · Saved for github.com</div></div></label>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+            <div style="font-weight:600;font-size:11px;margin-bottom:6px;">Permissions</div>
+            <div class="m2-form-group"><label class="m2-form-label">Can use</label><select class="m2-form-select"><option value="login">Sign-in: username, password, 2FA</option><option value="2fa" selected>2FA code only</option><option value="fields">Chosen fields…</option></select></div>
+            <div class="m2-form-row"><div class="m2-form-group" style="flex:1"><label class="m2-form-label">For</label><select class="m2-form-select"><option value="1h">1 hour</option><option value="1d">1 day</option><option value="7d" selected>1 week</option></select></div><label class="m2-checkbox"><input type="checkbox"> Ask me every time</label></div>
+            <div class="m2-form-group"><label class="m2-form-label">Only commands</label><input type="text" class="m2-form-input" placeholder="e.g. psql, curl"></div>
+          </div>
+          <div class="m1-actions"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Allow</button></div>
+        </div>
+      </div>
+
+      <div class="m1-panel" id="m1-activity" role="tabpanel">
+        <div class="m3-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg><div class="m3-empty-title">Select an agent</div><div class="m3-empty-desc">Choose an agent from Connected to see its activity</div></div>
+      </div>
+
+      <div class="m1-panel" id="m1-setup" role="tabpanel">
+        <div class="m3-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg><div class="m3-empty-title">Select a connected agent</div><div class="m3-empty-desc">Choose an agent to see setup instructions</div></div>
+      </div>
+
+      <div class="m1-panel" id="m1-connect" role="tabpanel">
+        <div class="m3-empty" style="padding:20px 12px;">
+          <div class="m1-avatar" style="width:48px;height:48px;margin:0 auto 12px;background:rgba(14,165,233,.15)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg></div>
+          <div class="m3-empty-title" style="font-size:14px;">Let your AI agents sign in, safely</div>
+          <div class="m3-empty-desc" style="max-width:300px;">Claude Code, Codex, Cursor or any MCP agent can use the accounts you allow — passwords and 2FA codes — <b style="color:var(--ink-1)">without ever seeing them</b>.</div>
+          <ol style="margin:16px 0;padding-left:18px;color:var(--ink-2);line-height:2;font-size:12px;"><li>In your terminal: <code>npx -y @otpilot/mcp@latest connect</code></li><li>It shows a code and opens a page to sign in. Then approve it here, if the codes match.</li><li>Choose the accounts it can use. Revoke anytime.</li></ol>
+          <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:16px;"><a href="#" class="btn btn-secondary btn-sm">How it works</a><button class="btn btn-primary btn-sm" id="m1-copyCmd">Copy the command</button></div>
+        </div>
+      </div>
+
+      <!-- Pending agent detail (shown when one is selected) -->
+      <div class="m1-detail" id="m1-pending-detail" style="display:none;">
+        <div class="m1-code-box"><span class="m1-code-label">Verification Code</span><span class="m1-code-value">XXXX-XXXX</span><button class="btn btn-secondary btn-sm">Copy</button></div>
+        <p class="m1-warn">Approve only if your terminal shows <b>this same code</b>. If it doesn't, deny.</p>
+        <div class="m1-actions"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Codes match · Connect</button></div>
+      </div>
+
+      <!-- Connected agent detail -->
+      <div class="m1-detail" id="m1-connected-detail" style="display:none;">
+        <div class="m1-section-title">Accounts it can use <button class="btn btn-secondary btn-sm">+ Add account</button></div>
+        <div class="m1-grant"><div class="m1-grant-info"><div class="m1-grant-title">GitHub Production</div><div class="m1-grant-badges"><span class="m1-grant-badge scope">Sign-in: username, password, 2FA</span><span class="m1-grant-badge time">1h left</span></div></div><button class="m1-grant-remove" title="Remove">✕</button></div>
+        <div class="m1-grant"><div class="m1-grant-info"><div class="m1-grant-title">AWS Console</div><div class="m1-grant-badges"><span class="m1-grant-badge scope">2FA code only</span><span class="m1-grant-badge ask">asks every time</span></div></div><button class="m1-grant-remove" title="Remove">✕</button></div>
+        <div class="m1-grant"><div class="m1-grant-info"><div class="m1-grant-title">Database (prod)</div><div class="m1-grant-badges"><span class="m1-grant-badge scope">Chosen fields: host, port, username</span><span class="m1-grant-badge cmd">only psql</span></div></div><button class="m1-grant-remove" title="Remove">✕</button></div>
+        <details class="m2-collapsible" open><summary>Add it to your agent</summary><div class="m2-collapsible-content"><div class="m1-setup"><div class="m1-setup-item"><div class="m1-setup-name">Claude Code</div><div class="m1-setup-desc">In a terminal</div><div class="m1-setup-code">claude mcp add otpilot -- npx -y @otpilot/mcp@latest</div></div><div class="m1-setup-item"><div class="m1-setup-name">Codex</div><div class="m1-setup-desc">In ~/.codex/config.toml</div><div class="m1-setup-code">[mcp_servers.otpilot]&#10;command = "npx"&#10;args = ["-y", "@otpilot/mcp@latest"]</div></div><div class="m1-setup-item"><div class="m1-setup-name">Cursor</div><div class="m1-setup-desc">In ~/.cursor/mcp.json</div><div class="m1-setup-code">{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }</div></div></div></div></details>
+        <details class="m2-collapsible"><summary>Activity</summary><div class="m2-collapsible-content"><div class="m1-activity"><div class="m1-activity-item"><span class="m1-activity-time">14:32</span><span class="m1-activity-action">signed in to</span> <span class="m1-activity-detail">GitHub Production</span></div><div class="m1-activity-item"><span class="m1-activity-time">13:45</span><span class="m1-activity-action">ran a command with</span> <span class="m1-activity-detail">Database (prod) · psql</span></div><div class="m1-activity-item"><span class="m1-activity-time">12:10</span><span class="m1-activity-action">got a 2FA code for</span> <span class="m1-activity-detail">AWS Console</span></div><div class="m1-activity-item"><span class="m1-activity-time">Yesterday</span><span class="m1-activity-action">ran a command with</span> <span class="m1-activity-detail">Database (prod) · pg_dump</span></div></div><button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%">Show more</button></div></details>
+        <div class="m1-actions"><button class="btn btn-ghost btn-sm">Rename</button><button class="btn btn-danger">Revoke agent</button></div>
+      </div>
+    </div>
+
+    <!-- Usage bar (always visible at bottom) -->
+    <div style="border-top:1px solid var(--border);padding:10px 14px;background:var(--bg);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-size:11px;color:var(--ink-3)"><b>Free</b> plan</span>
+        <span style="font-size:16px;font-weight:700;color:var(--warn)">7/10</span>
+      </div>
+      <div style="height:5px;background:var(--surface-2);border-radius:2.5px;overflow:hidden;margin-bottom:6px;"><div style="width:70%;height:100%;background:var(--warn);border-radius:2.5px;transition:width .3s ease;"></div></div>
+      <div style="font-size:10px;color:var(--ink-4);text-align:right;">Renews Apr 15</div>
+      <div style="display:flex;gap:6px;margin-top:8px;"><button class="btn btn-primary btn-sm" style="flex:1">Start free trial</button><a href="#" class="btn btn-secondary btn-sm" style="flex:1;text-decoration:none;text-align:center">Upgrade to Personal</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- Mockup 2: Card Dashboard -->
+<div class="mockup-panel" id="m2" role="tabpanel">
+  <div class="mockup-label">Mockup 2: Card Dashboard (All-in-one scroll)</div>
+  <div class="ext-frame">
+    <div class="ext-frame-header">
+      <div><div class="ext-title">AI Agents</div><div class="ext-subtitle">MCP servers connected to OTPilot</div></div>
+      <div style="display:flex;gap:6px;"><button class="btn btn-secondary btn-sm">Import</button><button class="btn btn-primary btn-sm" id="m2-connect">Connect Agent</button></div>
+    </div>
+    <div class="ext-content">
+      <section class="m2-section">
+        <header class="m2-section-header"><h2 class="m2-section-title">Pending <span class="badge pending">2</span></h2></header>
+        <div class="m2-content">
+          <article class="m2-agent pending">
+            <div class="m2-agent-head"><div class="m2-avatar pending"><svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg></div><div><div class="m2-agent-name">Claude Code</div><div class="m2-agent-meta">MacBook Pro · 2 min ago</div></div><span class="m2-agent-status pending">Waiting</span></div>
+            <div class="m2-code-box"><span class="m2-code-label">Verification Code</span><span class="m2-code-value">XXXX-XXXX</span></div>
+            <p style="font-size:11px;color:var(--ink-2);margin-bottom:10px;">Approve only if your terminal shows <b style="color:var(--ink-1)">this same code</b>. If it doesn't, deny.</p>
+            <div class="m2-agent-actions"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Codes match · Connect</button></div>
+          </article>
+          <article class="m2-agent pending">
+            <div class="m2-agent-head"><div class="m2-avatar pending"><svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg></div><div><div class="m2-agent-name">Cursor</div><div class="m2-agent-meta">Linux · 1 hour ago</div></div><span class="m2-agent-status pending">Waiting</span></div>
+            <div class="m2-code-box"><span class="m2-code-label">Verification Code</span><span class="m2-code-value">YYYY-YYYY</span></div>
+            <p style="font-size:11px;color:var(--ink-2);margin-bottom:10px;">Approve only if your terminal shows <b style="color:var(--ink-1)">this same code</b>. If it doesn't, deny.</p>
+            <div class="m2-agent-actions"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Codes match · Connect</button></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="m2-section">
+        <header class="m2-section-header"><h2 class="m2-section-title">Connected <span class="badge active">3</span></h2><button class="btn btn-secondary btn-sm">+ Add account</button></header>
+        <div class="m2-content">
+          <article class="m2-agent">
+            <div class="m2-agent-head"><div class="m2-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div><div class="m2-agent-name">Claude Code</div><div class="m2-agent-meta">via Claude Code · MacBook Pro · 3 accounts · last used 2h ago</div></div><span class="m2-agent-status active">Connected</span></div>
+            <details class="m2-collapsible"><summary>Accounts it can use (3) <button class="btn btn-secondary btn-sm">+ Add</button></summary><div class="m2-collapsible-content">
+              <article class="m2-agent" style="margin:6px 0;padding:10px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><div><div style="font-weight:600;font-size:12px;">GitHub Production</div><div style="font-size:10px;color:var(--ink-3);display:flex;gap:8px;flex-wrap:wrap;"><span style="background:var(--surface-2);color:var(--ink-1);padding:2px 6px;border-radius:4px;font-size:9px;">Sign-in: username, password, 2FA</span><span style="color:var(--warn);font-size:10px;">1h left</span></div></div><button class="btn btn-ghost btn-sm">✕</button></div></article>
+              <article class="m2-agent" style="margin:6px 0;padding:10px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><div><div style="font-weight:600;font-size:12px;">AWS Console</div><div style="font-size:10px;color:var(--ink-3);display:flex;gap:8px;flex-wrap:wrap;"><span style="background:rgba(245,158,11,.15);color:var(--warn);padding:2px 6px;border-radius:4px;font-size:9px;">2FA code only</span><span style="background:rgba(239,68,68,.15);color:var(--danger);padding:2px 6px;border-radius:4px;font-size:9px;">asks every time</span></div></div><button class="btn btn-ghost btn-sm">✕</button></div></article>
+              <article class="m2-agent" style="margin:6px 0;padding:10px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><div><div style="font-weight:600;font-size:12px;">Database (prod)</div><div style="font-size:10px;color:var(--ink-3);display:flex;gap:8px;flex-wrap:wrap;"><span style="background:var(--surface-2);color:var(--ink-1);padding:2px 6px;border-radius:4px;font-size:9px;">Chosen fields: host, port, username</span><span style="color:var(--accent);font-size:9px;">only psql</span></div></div><button class="btn btn-ghost btn-sm">✕</button></div></article>
+            </div></details>
+            <details class="m2-collapsible" open><summary>Add it to your agent</summary><div class="m2-collapsible-content"><div class="m2-setup"><div class="m2-setup-item"><div class="m2-setup-name">Claude Code</div><div class="m2-setup-desc">In a terminal</div><div class="m2-setup-code">claude mcp add otpilot -- npx -y @otpilot/mcp@latest</div></div><div class="m2-setup-item"><div class="m2-setup-name">Codex</div><div class="m2-setup-desc">In ~/.codex/config.toml</div><div class="m2-setup-code">[mcp_servers.otpilot]&#10;command = "npx"&#10;args = ["-y", "@otpilot/mcp@latest"]</div></div><div class="m2-setup-item"><div class="m2-setup-name">Cursor</div><div class="m2-setup-desc">In ~/.cursor/mcp.json</div><div class="m2-setup-code">{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }</div></div></div></div></details>
+            <details class="m2-collapsible"><summary>Activity <button class="btn btn-ghost btn-sm" style="margin-left:auto;">Show more</button></summary><div class="m2-collapsible-content"><div class="m2-activity"><div class="m2-activity-item"><span class="m2-activity-time">14:32</span><span class="m2-activity-action">signed in to</span> <span class="m2-activity-detail">GitHub Production</span></div><div class="m2-activity-item"><span class="m2-activity-time">13:45</span><span class="m2-activity-action">ran a command with</span> <span class="m2-activity-detail">Database (prod) · psql</span></div><div class="m2-activity-item"><span class="m2-activity-time">12:10</span><span class="m2-activity-action">got a 2FA code for</span> <span class="m2-activity-detail">AWS Console</span></div><div class="m2-activity-item"><span class="m2-activity-time">Yesterday</span><span class="m2-activity-action">ran a command with</span> <span class="m2-activity-detail">Database (prod) · pg_dump</span></div></div><button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%">Show more</button></div></details>
+            <div class="m2-agent-actions"><button class="btn btn-ghost btn-sm">Rename</button><button class="btn btn-danger">Revoke agent</button></div>
+          </article>
+          <article class="m2-agent">
+            <div class="m2-agent-head"><div class="m2-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div><div class="m2-agent-name">Codex</div><div class="m2-agent-meta">via Codex · Ubuntu · 1 account · last used 4h ago</div></div><span class="m2-agent-status active">Connected</span></div>
+            <details class="m2-collapsible"><summary>Accounts it can use (1) <button class="btn btn-secondary btn-sm">+ Add</button></summary><div class="m2-collapsible-content"><article class="m2-agent" style="margin:6px 0;padding:10px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><div><div style="font-weight:600;font-size:12px;">GitHub Personal</div><div style="font-size:10px;color:var(--ink-3);display:flex;gap:8px;flex-wrap:wrap;"><span style="background:var(--surface-2);color:var(--ink-1);padding:2px 6px;border-radius:4px;font-size:9px;">2FA code only</span></div></div><button class="btn btn-ghost btn-sm">✕</button></div></article></div></details>
+            <div class="m2-agent-actions"><button class="btn btn-ghost btn-sm">Rename</button><button class="btn btn-danger">Revoke agent</button></div>
+          </article>
+          <article class="m2-agent">
+            <div class="m2-agent-head"><div class="m2-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div><div class="m2-agent-name">Cursor</div><div class="m2-agent-meta">via Cursor · Windows · 2 accounts · last used 1d ago</div></div><span class="m2-agent-status active">Connected</span></div>
+            <details class="m2-collapsible"><summary>Accounts it can use (2) <button class="btn btn-secondary btn-sm">+ Add</button></summary><div class="m2-collapsible-content">
+              <article class="m2-agent" style="margin:6px 0;padding:10px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><div><div style="font-weight:600;font-size:12px;">GitHub Work</div><div style="font-size:10px;color:var(--ink-3);display:flex;gap:8px;flex-wrap:wrap;"><span style="background:var(--surface-2);color:var(--ink-1);padding:2px 6px;border-radius:4px;font-size:9px;">Sign-in: username, password, 2FA</span></div></div><button class="btn btn-ghost btn-sm">✕</button></div></article>
+              <article class="m2-agent" style="margin:6px 0;padding:10px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;"><div><div style="font-weight:600;font-size:12px;">Docker Hub</div><div style="font-size:10px;color:var(--ink-3);display:flex;gap:8px;flex-wrap:wrap;"><span style="background:rgba(245,158,11,.15);color:var(--warn);padding:2px 6px;border-radius:4px;font-size:9px;">2FA code only</span></div></div><button class="btn btn-ghost btn-sm">✕</button></div></article>
+            </div></details>
+            <div class="m2-agent-actions"><button class="btn btn-ghost btn-sm">Rename</button><button class="btn btn-danger">Revoke agent</button></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="m2-section" style="margin-top:-2px;border-top:none;border-radius:0 0 8px 8px;">
+        <header class="m2-section-header"><h2 class="m2-section-title">Requests <span class="badge new">1</span></h2></header>
+        <div class="m2-content">
+          <div class="m2-request">
+            <div class="m2-request-header"><div><div class="m2-request-title">Claude Code asks for an account</div><div class="m2-request-time">for <b>browser_login</b> · 2 min ago</div></div></div>
+            <div class="m2-request-query">github.com production deploy</div>
+            <div class="m2-request-reason">Need to deploy the latest build to production environment</div>
+            <div style="font-weight:600;font-size:11px;margin:10px 0 6px;">Which account?</div>
+            <label class="m2-account-opt"><input type="radio" name="m2-req"><div class="m2-account-name">GitHub Production</div><div class="m2-account-meta">github.com · Saved for github.com</div></label>
+            <label class="m2-account-opt"><input type="radio" name="m2-req"><div class="m2-account-name">GitHub Personal</div><div class="m2-account-meta">github.com · Saved for github.com</div></label>
+            <label class="m2-account-opt"><input type="radio" name="m2-req"><div class="m2-account-name">GitHub Staging</div><div class="m2-account-meta">github.com · Saved for github.com</div></label>
+            <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+              <div style="font-weight:600;font-size:11px;margin-bottom:6px;">Permissions</div>
+              <div class="m2-form-group"><label class="m2-form-label">Can use</label><select class="m2-form-select"><option value="login">Sign-in: username, password, 2FA</option><option value="2fa" selected>2FA code only</option><option value="fields">Chosen fields…</option></select></div>
+              <div class="m2-form-row"><div class="m2-form-group" style="flex:1"><label class="m2-form-label">For</label><select class="m2-form-select"><option value="1h">1 hour</option><option value="1d">1 day</option><option value="7d" selected>1 week</option></select></div><label class="m2-checkbox"><input type="checkbox"> Ask me every time</label></div>
+              <div class="m2-form-group"><label class="m2-form-label">Only commands</label><input type="text" class="m2-form-input" placeholder="e.g. psql, curl"></div>
+            </div>
+            <div class="m2-actions-end" style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px;"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Allow</button></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="m2-section" style="border-top:none;margin-top:0;">
+        <div class="m2-content" style="padding:16px 12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><span style="font-size:11px;color:var(--ink-3)"><b>Free</b> plan</span><span style="font-size:16px;font-weight:700;color:var(--warn)">7/10</span></div>
+          <div style="height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden;margin-bottom:8px;"><div style="width:70%;height:100%;background:var(--warn);border-radius:3px;transition:width .3s ease;"></div></div>
+          <div style="font-size:10px;color:var(--ink-4);text-align:right;">Renews Apr 15</div>
+          <div style="display:flex;gap:8px;margin-top:10px;"><button class="btn btn-primary" style="flex:1">Start free trial</button><a href="#" class="btn btn-secondary" style="flex:1;text-decoration:none;text-align:center">Upgrade to Personal</a></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- Mockup 3: Split View -->
+<div class="mockup-panel" id="m3" role="tabpanel">
+  <div class="mockup-label">Mockup 3: Split View (Sidebar + Detail)</div>
+  <div class="ext-frame">
+    <div class="ext-frame-header">
+      <div><div class="ext-title">AI Agents</div><div class="ext-subtitle">MCP servers connected to OTPilot</div></div>
+      <div style="display:flex;gap:6px;"><button class="btn btn-secondary btn-sm" id="m3-mobileToggle"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button><button class="btn btn-secondary btn-sm">Import</button><button class="btn btn-primary btn-sm" id="m3-connect">Connect Agent</button></div>
+    </div>
+    <div class="m3-layout">
+      <aside class="m3-sidebar" id="m3-sidebar">
+        <header class="m3-sidebar-header"><span class="m3-sidebar-title">Agents</span><span class="sidebar-badge">2</span></header>
+        <div class="m3-search"><input type="search" class="m3-search-input" placeholder="Search agents…"></div>
+        <nav class="m3-nav" role="navigation">
+          <div class="m3-nav-section">Waiting</div>
+          <button class="m3-nav-item active" data-panel="pending"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>Pending<span class="badge pending">2</span></button>
+          <button class="m3-nav-item" data-panel="requests"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Requests<span class="badge new">1</span></button>
+          <div class="m3-nav-section">Connected</div>
+          <button class="m3-nav-item" data-panel="claude-code"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg>Claude Code<span class="badge active">3</span></button>
+          <button class="m3-nav-item" data-panel="codex"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg>Codex<span class="badge active">1</span></button>
+          <button class="m3-nav-item" data-panel="cursor"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg>Cursor<span class="badge active">2</span></button>
+          <div class="m3-nav-section">More</div>
+          <button class="m3-nav-item" data-panel="activity"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Activity</button>
+          <button class="m3-nav-item" data-panel="setup"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Setup</button>
+          <button class="m3-nav-item" data-panel="connect"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 19a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-6z"/><polyline points="12 5 12 19"/></svg>Connect Agent</button>
+        </nav>
+        <div class="sidebar-footer"><div class="usage-compact"><div class="usage-compact-header"><span class="usage-compact-plan"><b>Free</b> plan</span><span class="usage-compact-count warn">7/10</span></div><div class="usage-compact-bar"><div class="usage-compact-fill" style="width: 70%"></div></div><div class="usage-compact-renew">Renews Apr 15</div></div></div>
+      </aside>
+      <div class="sidebar-overlay" id="m3-overlay"></div>
+      <main class="m3-main">
+        <header class="m3-main-header">
+          <div><div class="m3-main-title" id="m3-title">Pending Agent</div><div class="m3-main-subtitle" id="m3-subtitle">Claude Code · Waiting for approval</div></div>
+          <div style="display:flex;gap:6px;"><button class="btn btn-secondary btn-sm" id="m3-mobileToggle"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button><button class="btn btn-secondary btn-sm">Import</button><button class="btn btn-primary btn-sm" id="m3-connect-btn">Connect Agent</button></div>
+        </header>
+        <div class="m3-main-content">
+          <section class="m3-detail active" id="m3-pending" role="tabpanel">
+            <header class="m3-agent-head"><div class="m3-avatar-lg pending"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg></div><div class="m3-info-lg"><div class="m3-name-lg">Claude Code</div><div class="m3-meta-lg">MacBook Pro · 2 min ago</div></div><span class="m3-status-lg pending">Waiting for approval</span></header>
+            <section class="m3-section"><div style="font-size:12px;font-weight:600;color:var(--ink-0);margin-bottom:6px;">Verification Code</div><div style="display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;"><span style="font-family:monospace;font-size:22px;font-weight:700;letter-spacing:3px;color:var(--accent);">XXXX-XXXX</span><button class="btn btn-secondary btn-sm">Copy</button></div><p style="font-size:11px;color:var(--ink-3);margin-top:6px;">Approve only if your terminal shows <b style="color:var(--ink-1)">this same code</b>. If it doesn't, deny.</p></section>
+            <section class="m3-section"><p style="font-size:12px;color:var(--ink-2);">Connecting gives it <b>no accounts</b>. You choose which ones next, or approve them one by one when it asks.</p></section>
+            <section class="m3-section" style="display:flex;gap:8px;justify-content:flex-end;padding-top:12px;border-top:1px solid var(--border);"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Codes match · Connect</button></section>
+          </section>
+
+          <section class="m3-detail" id="m3-claude-code" role="tabpanel">
+            <header class="m3-agent-head"><div class="m3-avatar-lg"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div class="m3-info-lg"><div class="m3-name-lg">Claude Code</div><div class="m3-meta-lg">via Claude Code · MacBook Pro · connected Mar 15 · last used 2h ago</div></div><div class="m3-agent-header-actions"><button class="btn btn-danger btn-sm">Revoke agent</button></div></header>
+            <section class="m3-section"><div class="m3-section-title">Accounts it can use <button class="btn btn-secondary btn-sm">+ Add account</button></div><div class="m3-grant-list"><article class="m3-grant"><div class="m3-grant-info"><div class="m3-grant-title">GitHub Production</div><div class="m3-grant-badges"><span class="m3-grant-badge scope">Sign-in: username, password, 2FA</span><span class="m3-grant-badge time">1h left</span></div></div><button class="m3-grant-remove" title="Remove">✕</button></article><article class="m3-grant"><div class="m3-grant-info"><div class="m3-grant-title">AWS Console</div><div class="m3-grant-badges"><span class="m3-grant-badge scope">2FA code only</span><span class="m3-grant-badge ask">asks every time</span></div></div><button class="m3-grant-remove" title="Remove">✕</button></article><article class="m3-grant"><div class="m3-grant-info"><div class="m3-grant-title">Database (prod)</div><div class="m3-grant-badges"><span class="m3-grant-badge scope">Chosen fields: host, port, username</span><span class="m3-grant-badge cmd">only psql</span></div></div><button class="m3-grant-remove" title="Remove">✕</button></article></div></section>
+            <details class="m3-section"><summary class="m3-section-title">Add it to your agent</summary><div class="m3-setup-grid" style="margin-top:8px;"><article class="m3-setup-card"><div class="m3-setup-header"><span class="m3-setup-name">Claude Code</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div><div class="m3-setup-desc">In a terminal</div><div class="m3-setup-code">claude mcp add otpilot -- npx -y @otpilot/mcp@latest</div></article><article class="m3-setup-card"><div class="m3-setup-header"><span class="m3-setup-name">Codex</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div><div class="m3-setup-desc">In ~/.codex/config.toml</div><div class="m3-setup-code">[mcp_servers.otpilot]&#10;command = "npx"&#10;args = ["-y", "@otpilot/mcp@latest"]</div></article><article class="m3-setup-card"><div class="m3-setup-header"><span class="m3-setup-name">Cursor</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div><div class="m3-setup-desc">In ~/.cursor/mcp.json</div><div class="m3-setup-code">{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }</div></article></div></details>
+            <details class="m3-section" open><summary class="m3-section-title">Activity</summary><div class="m3-activity-log" style="margin-top:8px;"><article class="m3-activity-item"><div class="m3-activity-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></svg></div><div><div class="m3-activity-time">14:32</div><div class="m3-activity-text"><span class="m3-activity-action">signed in to</span> <span class="m3-activity-detail">GitHub Production</span></div></div></article><article class="m3-activity-item"><div class="m3-activity-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><polyline points="4 17 10 11 16 17 22 11"/><line x1="10" y1="11" x2="10" y2="21"/></svg></div><div><div class="m3-activity-time">13:45</div><div class="m3-activity-text"><span class="m3-activity-action">ran a command with</span> <span class="m3-activity-detail">Database (prod) · psql</span></div></div></article><article class="m3-activity-item"><div class="m3-activity-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div><div><div class="m3-activity-time">12:10</div><div class="m3-activity-text"><span class="m3-activity-action">got a 2FA code for</span> <span class="m3-activity-detail">AWS Console</span></div></div></article><article class="m3-activity-item"><div class="m3-activity-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><polyline points="4 17 10 11 16 17 22 11"/><line x1="10" y1="11" x2="10" y2="21"/></svg></div><div><div class="m3-activity-time">Yesterday</div><div class="m3-activity-text"><span class="m3-activity-action">ran a command with</span> <span class="m3-activity-detail">Database (prod) · pg_dump</span></div></div></article><button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%">Show more</button></div></details>
+            <section class="m3-section" style="display:flex;gap:8px;justify-content:flex-end;padding-top:12px;border-top:1px solid var(--border);"><button class="btn btn-ghost btn-sm">Rename</button><button class="btn btn-danger">Revoke agent</button></section>
+          </section>
+
+          <section class="m3-detail" id="m3-requests" role="tabpanel">
+            <article class="m3-request"><header class="m3-request-header"><div class="m3-request-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div><div class="m3-request-title">Claude Code asks for an account</div><div class="m3-request-time">for <b>browser_login</b> · 2 min ago</div></div></header><div class="m3-request-query">github.com production deploy</div><div class="m3-request-reason">Need to deploy the latest build to production environment</div><div style="font-weight:600;font-size:12px;margin:10px 0 6px;">Which account?</div><div class="m3-account-picker"><label class="m3-account-opt"><input type="radio" name="m3-req"><div class="m3-account-info"><div class="m3-account-name">GitHub Production</div><div class="m3-account-meta">github.com · Saved for github.com</div></div></label><label class="m3-account-opt"><input type="radio" name="m3-req"><div class="m3-account-info"><div class="m3-account-name">GitHub Personal</div><div class="m3-account-meta">github.com · Saved for github.com</div></div></label><label class="m3-account-opt"><input type="radio" name="m3-req"><div class="m3-account-info"><div class="m3-account-name">GitHub Staging</div><div class="m3-account-meta">github.com · Saved for github.com</div></div></label></div><div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);"><div style="font-weight:600;font-size:12px;margin-bottom:8px;">Permissions</div><div class="m3-form-grid"><div class="m3-form-group"><label class="m3-form-label">Can use</label><select class="m3-form-select"><option value="login">Sign-in: username, password, 2FA</option><option value="2fa" selected>2FA code only</option><option value="fields">Chosen fields…</option></select></div><div class="m3-form-group"><label class="m3-form-label">For</label><div style="display:flex;gap:8px;align-items:center;"><select class="m3-form-select" style="flex:1;"><option value="1h">1 hour</option><option value="1d">1 day</option><option value="7d" selected>1 week</option></select><label class="m3-checkbox"><input type="checkbox"> Ask me every time</label></div></div></div><div class="m3-form-group" style="grid-column:1/-1"><label class="m3-form-label">Only commands</label><input type="text" class="m3-form-input" placeholder="e.g. psql, curl"></div></div></div><div class="m3-request-actions"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Allow</button></div></article>
+          </section>
+
+          <section class="m3-detail" id="m3-activity" role="tabpanel"><div class="m3-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg><div class="m3-empty-title">Select an agent</div><div class="m3-empty-desc">Choose an agent from the sidebar to see its activity log</div></div></section>
+          <section class="m3-detail" id="m3-setup" role="tabpanel"><div class="m3-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg><div class="m3-empty-title">Select a connected agent</div><div class="m3-empty-desc">Choose an agent to see setup instructions</div></div></section>
+          <section class="m3-detail" id="m3-connect" role="tabpanel"><div class="m3-connect-view"><div class="m3-connect-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg></div><div class="m3-connect-title">Let your AI agents sign in, safely</div><div class="m3-connect-desc">Claude Code, Codex, Cursor or any MCP agent can use the accounts you allow — passwords and 2FA codes — <b style="color:var(--ink-1)">without ever seeing them</b>.</div><ol class="m3-connect-steps"><li>In your terminal: <code>npx -y @otpilot/mcp@latest connect</code></li><li>It shows a code and opens a page to sign in. Then approve it here, if the codes match.</li><li>Choose the accounts it can use. Revoke anytime.</li></ol><div class="m3-connect-actions"><a href="#" class="btn btn-secondary btn-sm">How it works</a><button class="btn btn-primary btn-sm" id="m3-copyCmd">Copy the command</button></div></div></section>
+          <section class="m3-detail" id="m3-default" role="tabpanel"><div class="m3-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg><div class="m3-empty-title">Select an item</div><div class="m3-empty-desc">Choose an agent, request, or action from the sidebar</div></div></section>
+        </div>
+      </main>
+    </div>
+  </div>
+</div>
+
+<!-- Mockup 4: Accordion (Mobile-first) -->
+<div class="mockup-panel" id="m4" role="tabpanel">
+  <div class="mockup-label">Mockup 4: Mobile-First Accordion (Native details)</div>
+  <div class="ext-frame">
+    <div class="ext-frame-header">
+      <div><div class="ext-title">AI Agents</div><div class="ext-subtitle">MCP servers connected to OTPilot</div></div>
+      <div style="display:flex;gap:6px;"><button class="btn btn-secondary btn-sm">Import</button><button class="btn btn-primary btn-sm" id="m4-connect">Connect Agent</button></div>
+    </div>
+    <div class="ext-content">
+      <div class="m4-usage">
+        <div class="m4-usage-header"><span class="m4-usage-plan"><b>Free</b> plan</span><span class="m4-usage-count warn">7/10</span></div>
+        <div class="m4-usage-track"><div class="m4-usage-fill warn" style="width: 70%"></div></div>
+        <div class="m4-usage-renew">Renews Apr 15</div>
+        <div class="m4-usage-actions"><button class="btn btn-primary btn-sm">Start free trial</button><a href="#" class="btn btn-secondary btn-sm" style="text-decoration:none">Upgrade to Personal</a></div>
+      </div>
+      <div class="m4-accordion">
+        <details class="m4-item" open>
+          <summary class="m4-header">
+            <div class="m4-title"><div class="m4-icon pending"><svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg></div><div class="m4-text"><div class="m4-name">Pending</div><div class="m4-meta">Waiting for approval</div></div></div>
+            <span class="m4-count">2</span>
+            <svg class="m4-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </summary>
+          <div class="m4-content">
+            <div class="m4-code-box"><span class="m4-code-label">Verification Code</span><span class="m4-code-value">XXXX-XXXX</span><button class="btn btn-secondary btn-sm">Copy</button></div>
+            <p class="m4-warn">Approve only if your terminal shows <b>this same code</b>. If it doesn't, deny.</p>
+            <div class="m4-actions"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Codes match · Connect</button></div>
+            <hr style="border:none;border-top:1px solid var(--border);margin:4px 0;">
+            <div class="m4-code-box"><span class="m4-code-label">Verification Code</span><span class="m4-code-value">YYYY-YYYY</span><button class="btn btn-secondary btn-sm">Copy</button></div>
+            <p class="m4-warn">Approve only if your terminal shows <b>this same code</b>. If it doesn't, deny.</p>
+            <div class="m4-actions"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Codes match · Connect</button></div>
+          </div>
+        </details>
+        <details class="m4-item">
+          <summary class="m4-header">
+            <div class="m4-title"><div class="m4-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div><div class="m4-text"><div class="m4-name">Requests</div><div class="m4-meta">1 waiting for you</div></div></div>
+            <span class="m4-count new">1</span>
+            <svg class="m4-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </summary>
+          <div class="m4-content">
+            <div class="m4-request">
+              <div class="m4-request-header"><div class="m4-request-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div><div class="m4-request-title">Claude Code asks for an account</div><div class="m4-request-time">for <b>browser_login</b> · 2 min ago</div></div></div>
+              <div class="m4-request-query">github.com production deploy</div>
+              <div class="m4-request-reason">Need to deploy the latest build to production environment</div>
+              <div style="font-weight:600;font-size:12px;margin:10px 0 6px;">Which account?</div>
+              <label class="m4-account-opt"><input type="radio" name="m4-req"><div class="m4-account-info"><div class="m4-account-name">GitHub Production</div><div class="m4-account-meta">github.com · Saved for github.com</div></div></label>
+              <label class="m4-account-opt"><input type="radio" name="m4-req"><div class="m4-account-info"><div class="m4-account-name">GitHub Personal</div><div class="m4-account-meta">github.com · Saved for github.com</div></div></label>
+              <label class="m4-account-opt"><input type="radio" name="m4-req"><div class="m4-account-info"><div class="m4-account-name">GitHub Staging</div><div class="m4-account-meta">github.com · Saved for github.com</div></div></label>
+              <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><div style="font-weight:600;font-size:12px;margin-bottom:6px;">Permissions</div><div class="m4-form-group"><label class="m4-form-label">Can use</label><select class="m4-form-select"><option value="login">Sign-in: username, password, 2FA</option><option value="2fa" selected>2FA code only</option><option value="fields">Chosen fields…</option></select></div><div class="m4-form-row"><div class="m4-form-group" style="flex:1"><label class="m4-form-label">For</label><select class="m4-form-select"><option value="1h">1 hour</option><option value="1d">1 day</option><option value="7d" selected>1 week</option></select></div><label class="m4-checkbox"><input type="checkbox"> Ask me every time</label></div><div class="m4-form-group"><label class="m4-form-label">Only commands</label><input type="text" class="m4-form-input" placeholder="e.g. psql, curl"></div></div>
+              <div class="m4-actions-end"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Allow</button></div>
+            </div>
+          </div>
+        </details>
+        <details class="m4-item">
+          <summary class="m4-header">
+            <div class="m4-title"><div class="m4-icon active"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div class="m4-text"><div class="m4-name">Claude Code</div><div class="m4-meta">Connected · 3 accounts</div></div></div>
+            <span class="m4-count">3</span>
+            <svg class="m4-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </summary>
+          <div class="m4-content">
+            <div class="m4-agent-head"><div class="m4-agent-avatar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div class="m4-agent-info"><div class="m4-agent-name">Claude Code</div><div class="m4-agent-meta">via Claude Code · MacBook Pro · connected Mar 15 · last used 2h ago</div></div><span class="m4-agent-status active">Connected</span></div>
+            <div class="m4-grants">
+              <div class="m4-grant"><div class="m4-grant-info"><div class="m4-grant-title">GitHub Production</div><div class="m4-grant-badges"><span class="m4-grant-badge scope">Sign-in: username, password, 2FA</span><span class="m4-grant-badge time">1h left</span></div></div><button class="m4-grant-remove" title="Remove">✕</button></div>
+              <div class="m4-grant"><div class="m4-grant-info"><div class="m4-grant-title">AWS Console</div><div class="m4-grant-badges"><span class="m4-grant-badge scope">2FA code only</span><span class="m4-grant-badge ask">asks every time</span></div></div><button class="m4-grant-remove" title="Remove">✕</button></div>
+              <div class="m4-grant"><div class="m4-grant-info"><div class="m4-grant-title">Database (prod)</div><div class="m4-grant-badges"><span class="m4-grant-badge scope">Chosen fields: host, port, username</span><span class="m4-grant-badge cmd">only psql</span></div></div><button class="m4-grant-remove" title="Remove">✕</button></div>
+            </div>
+            <details class="m4-grant-acc"><summary>+ Add account</summary><div class="m4-grant-acc-content"><div style="display:flex;flex-direction:column;gap:6px;max-height:180px;overflow-y:auto;"><label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;"><input type="radio" name="m4-add" style="accent-color:var(--accent);"><div style="flex:1;"><div style="font-weight:500;">GitHub Personal</div><div style="font-size:10px;color:var(--ink-3);">github.com · Saved for github.com</div></div></label><label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;"><input type="radio" name="m4-add" style="accent-color:var(--accent);"><div style="flex:1;"><div style="font-weight:500;">GitHub Staging</div><div style="font-size:10px;color:var(--ink-3);">github.com · Saved for github.com</div></div></label><label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;"><input type="radio" name="m4-add" style="accent-color:var(--accent);"><div style="flex:1;"><div style="font-weight:500;">AWS Production</div><div style="font-size:10px;color:var(--ink-3);">aws.amazon.com · Saved for aws.amazon.com</div></div></label></div><div class="m4-form-group" style="margin-top:10px;"><label class="m4-form-label">Permissions for selected account</label><select class="m4-form-select"><option value="login">Sign-in: username, password, 2FA</option><option value="2fa" selected>2FA code only</option><option value="fields">Chosen fields…</option></select></div><div class="m4-form-row"><div class="m4-form-group" style="flex:1"><label class="m4-form-label">For</label><select class="m4-form-select"><option value="1h">1 hour</option><option value="1d">1 day</option><option value="7d" selected>1 week</option></select></div><label class="m4-checkbox"><input type="checkbox"> Ask me every time</label></div><div class="m4-form-group"><label class="m4-form-label">Only commands</label><input type="text" class="m4-form-input" placeholder="e.g. psql, curl"></div><div class="m4-actions-end"><button class="btn btn-secondary">Cancel</button><button class="btn btn-primary">Allow</button></div></div></details>
+            <details class="m4-grant-acc"><summary>Activity <button class="btn btn-secondary btn-sm" style="margin-left:auto;">Show more</button></summary><div class="m4-grant-acc-content"><div class="m4-activity"><div class="m4-activity-item"><div class="m4-activity-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></svg></div><div><div class="m4-activity-time">14:32</div><div class="m4-activity-text"><span class="m4-activity-action">signed in to</span> <span class="m4-activity-detail">GitHub Production</span></div></div></div><div class="m4-activity-item"><div class="m4-activity-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><polyline points="4 17 10 11 16 17 22 11"/><line x1="10" y1="11" x2="10" y2="21"/></svg></div><div><div class="m4-activity-time">13:45</div><div class="m4-activity-text"><span class="m4-activity-action">ran a command with</span> <span class="m4-activity-detail">Database (prod) · psql</span></div></div></div><div class="m4-activity-item"><div class="m4-activity-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div><div><div class="m4-activity-time">12:10</div><div class="m4-activity-text"><span class="m4-activity-action">got a 2FA code for</span> <span class="m4-activity-detail">AWS Console</span></div></div></div><div class="m4-activity-item"><div class="m4-activity-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><polyline points="4 17 10 11 16 17 22 11"/><line x1="10" y1="11" x2="10" y2="21"/></svg></div><div><div class="m4-activity-time">Yesterday</div><div class="m4-activity-text"><span class="m4-activity-action">ran a command with</span> <span class="m4-activity-detail">Database (prod) · pg_dump</span></div></div></div></div></details>
+            <details class="m4-grant-acc" open><summary>Setup instructions</summary><div class="m4-grant-acc-content"><div class="m4-setup"><div class="m4-setup-item"><div class="m4-setup-item-header"><span class="m4-setup-name">Claude Code</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div><div class="m4-setup-desc">In a terminal</div><div class="m4-setup-code">claude mcp add otpilot -- npx -y @otpilot/mcp@latest</div></div><div class="m4-setup-item"><div class="m4-setup-item-header"><span class="m4-setup-name">Codex</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div><div class="m4-setup-desc">In ~/.codex/config.toml</div><div class="m4-setup-code">[mcp_servers.otpilot]&#10;command = "npx"&#10;args = ["-y", "@otpilot/mcp@latest"]</div></div><div class="m4-setup-item"><div class="m4-setup-item-header"><span class="m4-setup-name">Cursor</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div><div class="m4-setup-desc">In ~/.cursor/mcp.json</div><div class="m4-setup-code">{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }</div></div></div></div></details>
+            <div class="m4-actions-end" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><button class="btn btn-ghost btn-sm">Rename</button><button class="btn btn-danger">Revoke agent</button></div>
+          </div>
+        </details>
+        <details class="m4-item">
+          <summary class="m4-header"><div class="m4-title"><div class="m4-icon active"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div class="m4-text"><div class="m4-name">Codex</div><div class="m4-meta">Connected · 1 account</div></div></div><span class="m4-count">1</span><svg class="m4-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></summary><div class="m4-content"><div class="m4-agent-head"><div class="m4-agent-avatar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div class="m4-agent-info"><div class="m4-agent-name">Codex</div><div class="m4-agent-meta">via Codex · Ubuntu · connected Mar 10 · last used 4h ago</div></div><span class="m4-agent-status active">Connected</span></div><div class="m4-grants"><div class="m4-grant"><div class="m4-grant-info"><div class="m4-grant-title">GitHub Personal</div><div class="m4-grant-badges"><span class="m4-grant-badge scope">2FA code only</span></div></div><button class="m4-grant-remove" title="Remove">✕</button></div></div><details class="m4-grant-acc"><summary>+ Add account</summary><div class="m4-grant-acc-content"><p style="font-size:11px;color:var(--ink-3);margin-bottom:8px;">Select an account from your vault</div><div class="m4-actions-end"><button class="btn btn-secondary">Cancel</button><button class="btn btn-primary" disabled>Allow</button></div></div></details><details class="m4-grant-acc"><summary>Setup instructions</summary><div class="m4-grant-acc-content"><div class="m4-setup"><div class="m4-setup-item"><div class="m4-setup-item-header"><span class="m4-setup-name">Claude Code</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div><div class="m4-setup-desc">In a terminal</div><div class="m4-setup-code">claude mcp add otpilot -- npx -y @otpilot/mcp@latest</div></div></div></div></details><div class="m4-actions-end" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><button class="btn btn-ghost btn-sm">Rename</button><button class="btn btn-danger">Revoke agent</button></div></div></details>
+        <details class="m4-item"><summary class="m4-header"><div class="m4-title"><div class="m4-icon active"><svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div class="m4-text"><div class="m4-name">Cursor</div><div class="m4-meta">Connected · 2 accounts</div></div></div><span class="m4-count">2</span><svg class="m4-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></summary><div class="m4-content"><div class="m4-agent-head"><div class="m4-agent-avatar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div><div class="m4-agent-info"><div class="m4-agent-name">Cursor</div><div class="m4-agent-meta">via Cursor · Windows · connected Mar 8 · last used 1d ago</div></div><span class="m4-agent-status active">Connected</span></div><div class="m4-grants"><div class="m4-grant"><div class="m4-grant-info"><div class="m4-grant-title">GitHub Work</div><div class="m4-grant-badges"><span class="m4-grant-badge scope">Sign-in: username, password, 2FA</span></div></div><button class="m4-grant-remove" title="Remove">✕</button></div><div class="m4-grant"><div class="m4-grant-info"><div class="m4-grant-title">Docker Hub</div><div class="m4-grant-badges"><span class="m4-grant-badge scope">2FA code only</span></div></div><button class="m4-grant-remove" title="Remove">✕</button></div></div><details class="m4-grant-acc"><summary>Setup instructions</summary><div class="m4-grant-acc-content"><div class="m4-setup"><div class="m4-setup-item"><div class="m4-setup-item-header"><span class="m4-setup-name">Claude Code</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div><div class="m4-setup-desc">In a terminal</div><div class="m4-setup-code">claude mcp add otpilot -- npx -y @otpilot/mcp@latest</div></div></div></div></details><div class="m4-actions-end" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><button class="btn btn-ghost btn-sm">Rename</button><button class="btn btn-danger">Revoke agent</button></div></div></details>
+        <details class="m4-item"><summary class="m4-header"><div class="m4-title"><div class="m4-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div><div class="m4-text"><div class="m4-name">Activity</div><div class="m4-meta">All agents</div></div></div><svg class="m4-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></summary><div class="m4-content"><div class="m4-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg><div class="m4-empty-title">Select an agent</div><div class="m4-empty-desc">Open a connected agent to see its activity log</div></div></div></details>
+        <details class="m4-item"><summary class="m4-header"><div class="m4-title"><div class="m4-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div><div class="m4-text"><div class="m4-name">Setup</div><div class="m4-meta">MCP configuration</div></div></div><svg class="m4-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></summary><div class="m4-content"><div class="m4-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg><div class="m4-empty-title">Select a connected agent</div><div class="m4-empty-desc">Open an agent to see setup instructions for your editor</div></div></div></details>
+        <details class="m4-item"><summary class="m4-header"><div class="m4-title"><div class="m4-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 19a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-6z"/><polyline points="12 5 12 19"/></svg></div><div class="m4-text"><div class="m4-name">Connect Agent</div><div class="m4-meta">Add a new MCP server</div></div></div><svg class="m4-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></summary><div class="m4-content"><div class="m4-connect"><div class="m4-connect-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg></div><div class="m4-connect-title">Let your AI agents sign in, safely</div><div class="m4-connect-desc">Claude Code, Codex, Cursor or any MCP agent can use the accounts you allow — passwords and 2FA codes — <b style="color:var(--ink-1)">without ever seeing them</b>.</div><ol class="m4-connect-steps"><li>In your terminal: <code>npx -y @otpilot/mcp@latest connect</code></li><li>It shows a code and opens a page to sign in. Then approve it here, if the codes match.</li><li>Choose the accounts it can use. Revoke anytime.</li></ol><div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:12px;"><a href="#" class="btn btn-secondary btn-sm">How it works</a><button class="btn btn-primary btn-sm" id="m4-copyCmd">Copy the command</button></div></div></div></details>
+      </div>
+    </div>
+    <div class="m4-bottom"><button class="btn btn-secondary">Deny</button><button class="btn btn-primary">Allow</button></div>
+  </div>
+</div>
+
+<script>
+  // Tab selector
+  document.querySelectorAll('.mockup-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.mockup-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      document.querySelectorAll('.mockup-panel').forEach(p => p.classList.remove('active'));
+      document.getElementById(tab.dataset.panel).classList.add('active');
+    });
+  });
+
+  // Mockup 1 tabs
+  document.querySelectorAll('#m1 .m1-tab').forEach(t => t.addEventListener('click', () => {
+    document.querySelectorAll('#m1 .m1-tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.querySelectorAll('#m1 .m1-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('m1-' + t.dataset.panel).classList.add('active');
+    // Show detail
+    document.querySelectorAll('#m1 .m1-detail').forEach(d => d.style.display = 'none');
+    if (t.dataset.panel === 'connected') document.getElementById('m1-connected-detail').style.display = 'block';
+    else if (t.dataset.panel === 'pending') document.getElementById('m1-pending-detail').style.display = 'block';
+  }));
+
+  // Mockup 1 agent click -> show detail
+  document.querySelectorAll('#m1-pending .m1-agent').forEach((a, i) => a.addEventListener('click', () => {
+    document.querySelectorAll('#m1-pending .m1-agent').forEach(x => x.classList.remove('selected'));
+    a.classList.add('selected');
+    document.getElementById('m1-pending-detail').style.display = 'block';
+  }));
+  document.querySelectorAll('#m1-connected .m1-agent').forEach((a, i) => a.addEventListener('click', () => {
+    document.querySelectorAll('#m1-connected .m1-agent').forEach(x => x.classList.remove('selected'));
+    a.classList.add('selected');
+    document.getElementById('m1-connected-detail').style.display = 'block';
+  }));
+
+  // Mockup 3 sidebar nav
+  document.querySelectorAll('#m3 .m3-nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      document.querySelectorAll('#m3 .m3-nav-item').forEach(n => n.classList.remove('active'));
+      item.classList.add('active');
+      document.querySelectorAll('#m3 .m3-detail').forEach(p => p.classList.remove('active'));
+      const panels = {
+        'pending': 'm3-pending', 'requests': 'm3-requests', 'claude-code': 'm3-claude-code',
+        'codex': 'm3-codex', 'cursor': 'm3-cursor', 'activity': 'm3-activity',
+        'setup': 'm3-setup', 'connect': 'm3-connect'
+      };
+      if (panels[item.dataset.panel]) document.getElementById(panels[item.dataset.panel]).classList.add('active');
+      else document.getElementById('m3-default').classList.add('active');
+      const titles = {
+        'pending': { title: 'Pending Agent', subtitle: 'Claude Code · Waiting for approval' },
+        'requests': { title: 'Request', subtitle: 'Claude Code · asks for an account' },
+        'claude-code': { title: 'Claude Code', subtitle: 'via Claude Code · MacBook Pro · connected Mar 15' },
+        'codex': { title: 'Codex', subtitle: 'via Codex · Ubuntu · connected Mar 10' },
+        'cursor': { title: 'Cursor', subtitle: 'via Cursor · Windows · connected Mar 8' },
+        'activity': { title: 'Activity', subtitle: 'All agents activity log' },
+        'setup': { title: 'Setup', subtitle: 'MCP configuration for your editors' },
+        'connect': { title: 'Connect Agent', subtitle: 'Add a new MCP server to OTPilot' }
+      };
+      const t = titles[item.dataset.panel] || { title: 'Agents', subtitle: 'MCP servers connected to OTPilot' };
+      document.getElementById('m3-title').textContent = t.title;
+      document.getElementById('m3-subtitle').textContent = t.subtitle;
+      document.getElementById('m3-sidebar').classList.remove('open');
+      document.getElementById('m3-overlay').classList.remove('visible');
+    });
+  });
+  document.getElementById('m3-mobileToggle')?.addEventListener('click', () => {
+    document.getElementById('m3-sidebar').classList.toggle('open');
+    document.getElementById('m3-overlay').classList.toggle('visible');
+  });
+  document.getElementById('m3-overlay')?.addEventListener('click', () => {
+    document.getElementById('m3-sidebar').classList.remove('open');
+    document.getElementById('m3-overlay').classList.remove('visible');
+  });
+
+  // Copy buttons
+  document.querySelectorAll('.setup-copy').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const item = btn.closest('.m1-setup-item, .m2-setup-item, .m3-setup-card, .m4-setup-item, .m4-setup-item-header');
+      const code = item.querySelector('.m1-setup-code, .m2-setup-code, .m3-setup-code, .m4-setup-code')?.textContent?.trim();
+      if (code) {
+        await navigator.clipboard.writeText(code);
+        const original = btn.textContent;
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = original; btn.classList.remove('copied'); }, 1500);
+      }
+    });
+  });
+  document.querySelectorAll('#m1-copyCmd, #m3-copyCmd, #m4-copyCmd').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await navigator.clipboard.writeText('npx -y @otpilot/mcp@latest connect');
+      const original = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = original, 1500);
+    });
+  });
+
+  // Ensure only one accordion open at a time for m4 (optional UX)
+  // document.querySelectorAll('#m4 .m4-item').forEach(item => {
+  //   item.addEventListener('toggle', () => {
+  //     if (item.open) {
+  //       document.querySelectorAll('#m4 .m4-item').forEach(other => {
+  //         if (other !== item) other.open = false;
+  //       });
+  //     }
+  //   });
+  // });
+</script>
+</body></html>

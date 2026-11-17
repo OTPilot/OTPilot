@@ -160,12 +160,11 @@ const Agents = (() => {
     return VaultShares.parts(item).filter(p => !p.walletSecret);
   }
 
-  // The scope that suits an item by default: its 2FA code when it has one
-  // (the least it can give), else a login's sign-in, else the other item
-  // types' own fields (a server, an API key…).
+  // The scope that suits an item by default: full sign-in for logins
+  // (username, password, 2FA), else 2FA code, else the item's own fields.
   function defaultScope(item) {
-    if (item.totp?.secret) return { kind: '2fa' };
     if (item.type === 'login') return { kind: 'login' };
+    if (item.totp?.secret) return { kind: '2fa' };
     return { kind: 'fields', parts: partsFor(item).map(p => p.key) };
   }
 

@@ -1,0 +1,606 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Agents Mockup 3: Split View</title>
+<style>
+  :root {
+    --bg: #0f172a; --surface: #1e293b; --surface-2: #334155;
+    --border: #1e3a5f; --ink-0: #f1f5f9; --ink-1: #e2e8f0;
+    --ink-2: #cbd5e1; --ink-3: #94a3b8; --ink-4: #64748b;
+    --accent: #0ea5e9; --accent-2: #38bdf8;
+    --success: #22c55e; --warn: #f59e0b; --danger: #ef4444;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--font-ui); background: var(--bg); color: var(--ink-0); min-height: 100vh; height: 100vh; display: flex; flex-direction: column; }
+  .app { display: flex; flex: 1; overflow: hidden; }
+
+  /* Sidebar */
+  .sidebar { width: 280px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+  .sidebar-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .sidebar-title { font-size: 15px; font-weight: 700; }
+  .sidebar-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 10px; background: rgba(245,158,11,.15); color: var(--warn); }
+  .sidebar-search { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .search-input { width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--ink-0); font-size: 13px; font-family: inherit; }
+  .search-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(14,165,233,.2); }
+
+  .sidebar-nav { padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .nav-section { font-size: 10px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; letter-spacing: .5px; padding: 8px 12px 4px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; color: var(--ink-2); font-size: 13px; font-weight: 500; cursor: pointer; transition: all .1s; border: none; background: transparent; width: 100%; text-align: left; font-family: inherit; }
+  .nav-item:hover { background: var(--bg); color: var(--ink-0); }
+  .nav-item.active { background: rgba(14,165,233,.15); color: var(--accent); border-left: 2px solid var(--accent); }
+  .nav-item .badge { margin-left: auto; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 10px; }
+  .nav-item .badge.pending { background: rgba(245,158,11,.15); color: var(--warn); }
+  .nav-item .badge.active { background: rgba(34,197,94,.15); color: var(--success); }
+  .nav-item .badge.new { background: rgba(239,68,68,.15); color: var(--danger); }
+
+  .sidebar-footer { margin-top: auto; padding: 16px; border-top: 1px solid var(--border); }
+  .usage-compact { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .usage-compact-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 11px; }
+  .usage-compact-plan { color: var(--ink-3); }
+  .usage-compact-plan b { color: var(--ink-0); }
+  .usage-compact-count { font-size: 18px; font-weight: 700; color: var(--ink-0); }
+  .usage-compact-count.warn { color: var(--warn); }
+  .usage-compact-bar { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+  .usage-compact-fill { height: 100%; background: var(--warn); border-radius: 2px; transition: width .3s ease; }
+  .usage-compact-renew { font-size: 10px; color: var(--ink-4); margin-top: 6px; text-align: right; }
+
+  /* Main content */
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+  .main-header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .main-title { font-size: 20px; font-weight: 700; }
+  .main-subtitle { font-size: 13px; color: var(--ink-3); margin-top: 2px; }
+  .header-actions { display: flex; gap: 8px; }
+
+  .btn { padding: 10px 18px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: all .15s; }
+  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-primary:hover { background: var(--accent-2); }
+  .btn-secondary { background: var(--surface-2); color: var(--ink-1); border: 1px solid var(--border); }
+  .btn-secondary:hover { background: var(--border); }
+  .btn-ghost { background: transparent; color: var(--ink-2); }
+  .btn-ghost:hover { color: var(--ink-0); }
+  .btn-sm { padding: 8px 12px; font-size: 12px; }
+  .btn-danger { background: var(--danger); color: white; }
+
+  .main-content { flex: 1; overflow-y: auto; padding: 24px; }
+
+  /* Detail panels */
+  .detail-panel { display: none; animation: fadeIn .15s ease; }
+  .detail-panel.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Agent detail */
+  .agent-detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .agent-avatar-lg { width: 56px; height: 56px; border-radius: 14px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .agent-avatar-lg svg { width: 28px; height: 28px; }
+  .agent-avatar-lg.pending { background: rgba(245,158,11,.15); }
+  .agent-info-lg { flex: 1; min-width: 0; }
+  .agent-name-lg { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .agent-meta-lg { font-size: 13px; color: var(--ink-3); display: flex; gap: 16px; flex-wrap: wrap; }
+  .agent-status-lg { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 6px; white-space: nowrap; }
+  .agent-status-lg.pending { background: rgba(245,158,11,.15); color: var(--warn); }
+  .agent-status-lg.active { background: rgba(34,197,94,.15); color: var(--success); }
+  .agent-status-lg.new { background: rgba(239,68,68,.15); color: var(--danger); }
+  .agent-header-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+  /* Sections */
+  .detail-section { margin-bottom: 24px; }
+  .section-title { font-size: 12px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+  .section-title .btn { padding: 6px 10px; font-size: 11px; }
+
+  /* Grants list */
+  .grant-list { display: flex; flex-direction: column; gap: 8px; }
+  .grant-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .grant-info { flex: 1; min-width: 0; }
+  .grant-title { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+  .grant-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+  .grant-badge { font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px; white-space: nowrap; }
+  .grant-badge.scope { background: var(--surface-2); color: var(--ink-1); }
+  .grant-badge.ask { background: rgba(245,158,11,.15); color: var(--warn); }
+  .grant-badge.shared { background: var(--surface-2); color: var(--ink-3); }
+  .grant-badge.expired { background: rgba(239,68,68,.15); color: var(--danger); }
+  .grant-badge.time { background: var(--surface-2); color: var(--ink-3); }
+  .grant-badge.cmds { background: var(--surface-2); color: var(--ink-3); }
+  .grant-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .btn-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--ink-3); cursor: pointer; transition: all .1s; }
+  .btn-icon:hover { background: var(--surface-2); color: var(--ink-0); border-color: var(--accent); }
+  .btn-icon.danger:hover { background: rgba(239,68,68,.15); color: var(--danger); border-color: var(--danger); }
+
+  /* Request detail */
+  .request-detail { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .request-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .request-agent-info { display: flex; align-items: center; gap: 12px; }
+  .request-avatar { width: 40px; height: 40px; border-radius: 10px; background: var(--bg); display: flex; align-items: center; justify-content: center; }
+  .request-title { font-weight: 600; font-size: 15px; margin-bottom: 2px; }
+  .request-time { font-size: 12px; color: var(--ink-3); }
+  .request-query { font-size: 13px; color: var(--ink-1); background: var(--bg); padding: 10px 12px; border-radius: 8px; font-family: monospace; margin: 12px 0; border: 1px solid var(--border); }
+  .request-reason { font-size: 12px; color: var(--ink-2); font-style: italic; padding: 10px 12px; background: var(--bg); border-radius: 8px; border-left: 3px solid var(--accent); border: 1px solid var(--border); margin-bottom: 16px; }
+  .account-picker { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+  .account-option { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: all .1s; }
+  .account-option:hover { border-color: var(--accent); }
+  .account-option.selected { border-color: var(--accent); background: rgba(14,165,233,.08); }
+  .account-option input { accent-color: var(--accent); }
+  .account-option-info { flex: 1; }
+  .account-option-name { font-weight: 500; font-size: 13px; margin-bottom: 2px; }
+  .account-option-meta { font-size: 11px; color: var(--ink-3); }
+  .account-option-elsewhere { font-size: 11px; color: var(--warn); margin-top: 4px; display: block; }
+
+  /* Form */
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-label { font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .3px; }
+  .form-select, .form-input { padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--ink-0); font-size: 13px; font-family: inherit; }
+  .form-select:focus, .form-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(14,165,233,.2); }
+  .checkbox-group { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; transition: all .1s; }
+  .checkbox-label:hover { border-color: var(--accent); }
+  .checkbox-label input { width: 14px; height: 14px; accent-color: var(--accent); }
+
+  .request-actions { display: flex; gap: 10px; justify-content: flex-end; padding-top: 16px; border-top: 1px solid var(--border); }
+
+  /* Setup instructions */
+  .setup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .setup-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .setup-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .setup-name { font-weight: 600; font-size: 13px; }
+  .setup-desc { font-size: 11px; color: var(--ink-3); margin-bottom: 10px; }
+  .setup-code { font-family: monospace; font-size: 11px; background: var(--bg); padding: 10px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; color: var(--ink-1); border: 1px solid var(--border); }
+  .setup-copy { margin-top: 10px; width: 100%; }
+
+  /* Activity log */
+  .activity-log { display: flex; flex-direction: column; gap: 6px; }
+  .activity-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+  .activity-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .activity-time { font-size: 11px; color: var(--ink-3); white-space: nowrap; margin-bottom: 4px; }
+  .activity-text { font-size: 13px; color: var(--ink-1); line-height: 1.5; }
+  .activity-action { font-weight: 600; color: var(--ink-0); }
+  .activity-detail { color: var(--ink-3); }
+
+  /* Empty state */
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--ink-3); }
+  .empty-state svg { width: 56px; height: 56px; margin-bottom: 16px; opacity: .4; }
+  .empty-title { font-weight: 600; font-size: 16px; color: var(--ink-1); margin-bottom: 8px; }
+  .empty-desc { font-size: 14px; max-width: 320px; margin: 0 auto; line-height: 1.5; }
+  .empty-action { margin-top: 20px; }
+
+  /* Connect view */
+  .connect-view { max-width: 480px; margin: 0 auto; text-align: center; }
+  .connect-icon { width: 80px; height: 80px; border-radius: 20px; background: rgba(14,165,233,.15); display: flex; align-items: center; justify-content: center; margin: 0 auto 24px; }
+  .connect-icon svg { width: 40px; height: 40px; stroke: var(--accent); }
+  .connect-title { font-size: 20px; font-weight: 700; margin-bottom: 10px; }
+  .connect-desc { font-size: 14px; color: var(--ink-2); margin-bottom: 24px; line-height: 1.6; max-width: 400px; margin-left: auto; margin-right: auto; }
+  .connect-steps { text-align: left; margin: 24px 0; padding-left: 20px; color: var(--ink-2); line-height: 2; }
+  .connect-steps code { background: var(--surface); padding: 2px 8px; border-radius: 6px; font-family: monospace; font-size: 13px; }
+  .connect-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 24px; }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; transform: translateX(-100%); transition: transform .25s ease; box-shadow: 4px 0 24px rgba(0,0,0,.4); }
+    .sidebar.open { transform: translateX(0); }
+    .main { flex: 1; }
+    .mobile-toggle { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--ink-1); }
+    .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 99; }
+    .sidebar-overlay.visible { display: block; }
+  }
+  @media (min-width: 901px) {
+    .mobile-toggle { display: none; }
+    .sidebar-overlay { display: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <header class="sidebar-header">
+      <span class="sidebar-title">Agents</span>
+      <span class="sidebar-badge">2</span>
+    </header>
+    <div class="sidebar-search">
+      <input type="search" class="search-input" placeholder="Search agents…">
+    </div>
+    <nav class="sidebar-nav" role="navigation">
+      <div class="nav-section">Waiting</div>
+      <button class="nav-item active" data-panel="pending">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
+        Pending
+        <span class="badge pending">2</span>
+      </button>
+      <button class="nav-item" data-panel="requests">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Requests
+        <span class="badge new">1</span>
+      </button>
+      <div class="nav-section">Connected</div>
+      <button class="nav-item" data-panel="claude-code">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg>
+        Claude Code
+        <span class="badge active">3</span>
+      </button>
+      <button class="nav-item" data-panel="codex">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg>
+        Codex
+        <span class="badge active">1</span>
+      </button>
+      <button class="nav-item" data-panel="cursor">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg>
+        Cursor
+        <span class="badge active">2</span>
+      </button>
+      <div class="nav-section">More</div>
+      <button class="nav-item" data-panel="activity">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Activity
+      </button>
+      <button class="nav-item" data-panel="setup">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Setup
+      </button>
+      <button class="nav-item" data-panel="connect">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 19a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-6z"/><polyline points="12 5 12 19"/></svg>
+        Connect Agent
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="usage-compact">
+        <div class="usage-compact-header">
+          <span class="usage-compact-plan"><b>Free</b> plan</span>
+          <span class="usage-compact-count warn">7/10</span>
+        </div>
+        <div class="usage-compact-bar"><div class="usage-compact-fill" style="width: 70%"></div></div>
+        <div class="usage-compact-renew">Renews Apr 15</div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <!-- Main -->
+  <main class="main">
+    <header class="main-header">
+      <div>
+        <div class="main-title" id="mainTitle">Pending Agent</div>
+        <div class="main-subtitle" id="mainSubtitle">Claude Code · Waiting for approval</div>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-secondary btn-sm" id="mobileToggle">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <button class="btn btn-secondary btn-sm">Import</button>
+        <button class="btn btn-primary" id="connectBtn">Connect Agent</button>
+      </div>
+    </header>
+
+    <div class="main-content">
+      <!-- Pending Agent Detail -->
+      <section class="detail-panel active" id="panel-pending" role="tabpanel">
+        <header class="agent-detail-header">
+          <div class="agent-avatar-lg pending"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--warn)"/><circle cx="15" cy="14" r="1.2" fill="var(--warn)"/></svg></div>
+          <div class="agent-info-lg">
+            <div class="agent-name-lg">Claude Code</div>
+            <div class="agent-meta-lg">MacBook Pro · 2 min ago</div>
+          </div>
+          <span class="agent-status-lg pending">Waiting for approval</span>
+        </header>
+
+        <section class="detail-section">
+          <div style="font-size: 13px; font-weight: 600; color: var(--ink-0); margin-bottom: 8px;">Verification Code</div>
+          <div style="display: flex; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
+            <span class="code" style="font-family: monospace; font-size: 28px; font-weight: 700; letter-spacing: 4px; color: var(--accent);">XXXX-XXXX</span>
+            <button class="btn btn-secondary">Copy</button>
+          </div>
+          <p style="font-size: 12px; color: var(--ink-3); margin-top: 8px;">Approve only if your terminal shows <b style="color: var(--ink-1)">this same code</b>. If it doesn't, deny: someone else is asking.</p>
+        </section>
+
+        <section class="detail-section">
+          <p style="font-size: 13px; color: var(--ink-2);">Connecting gives it <b>no accounts</b>. You choose which ones next, or approve them one by one when it asks.</p>
+        </section>
+
+        <section class="detail-section" style="display: flex; gap: 10px; justify-content: flex-end; padding-top: 16px; border-top: 1px solid var(--border);">
+          <button class="btn btn-secondary">Deny</button>
+          <button class="btn btn-primary">Codes match · Connect</button>
+        </section>
+      </section>
+
+      <!-- Connected Agent Detail -->
+      <section class="detail-panel" id="panel-claude-code" role="tabpanel">
+        <header class="agent-detail-header">
+          <div class="agent-avatar-lg"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div>
+          <div class="agent-info-lg">
+            <div class="agent-name-lg">Claude Code</div>
+            <div class="agent-meta-lg">via Claude Code · MacBook Pro · connected Mar 15 · last used 2h ago</div>
+          </div>
+          <div class="agent-header-actions">
+            <button class="btn btn-danger">Revoke agent</button>
+          </div>
+        </header>
+
+        <section class="detail-section">
+          <div class="section-title">Accounts it can use <button class="btn btn-secondary btn-sm">+ Add account</button></div>
+          <div class="grant-list">
+            <article class="grant-card">
+              <div class="grant-info">
+                <div class="grant-title">GitHub Production</div>
+                <div class="grant-badges">
+                  <span class="grant-badge scope">Sign-in: username, password, 2FA</span>
+                  <span class="grant-badge time">1h left</span>
+                </div>
+              </div>
+              <div class="grant-actions"><button class="btn-icon danger" title="Remove">✕</button></div>
+            </article>
+            <article class="grant-card">
+              <div class="grant-info">
+                <div class="grant-title">AWS Console</div>
+                <div class="grant-badges">
+                  <span class="grant-badge scope">2FA code only</span>
+                  <span class="grant-badge ask">asks every time</span>
+                </div>
+              </div>
+              <div class="grant-actions"><button class="btn-icon danger" title="Remove">✕</button></div>
+            </article>
+            <article class="grant-card">
+              <div class="grant-info">
+                <div class="grant-title">Database (prod)</div>
+                <div class="grant-badges">
+                  <span class="grant-badge scope">Chosen fields: host, port, username</span>
+                  <span class="grant-badge cmds">only psql</span>
+                </div>
+              </div>
+              <div class="grant-actions"><button class="btn-icon danger" title="Remove">✕</button></div>
+            </article>
+          </div>
+        </section>
+
+        <details class="detail-section">
+          <summary class="section-title">Add it to your agent</summary>
+          <div class="setup-grid" style="margin-top: 12px;">
+            <article class="setup-card">
+              <div class="setup-header"><span class="setup-name">Claude Code</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div>
+              <div class="setup-desc">In a terminal</div>
+              <div class="setup-code">claude mcp add otpilot -- npx -y @otpilot/mcp@latest</div>
+            </article>
+            <article class="setup-card">
+              <div class="setup-header"><span class="setup-name">Codex</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div>
+              <div class="setup-desc">In ~/.codex/config.toml</div>
+              <div class="setup-code">[mcp_servers.otpilot]
+command = "npx"
+args = ["-y", "@otpilot/mcp@latest"]</div>
+            </article>
+            <article class="setup-card">
+              <div class="setup-header"><span class="setup-name">Cursor</span><button class="btn btn-secondary btn-sm setup-copy">Copy</button></div>
+              <div class="setup-desc">In ~/.cursor/mcp.json</div>
+              <div class="setup-code">{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }</div>
+            </article>
+          </div>
+        </details>
+
+        <details class="detail-section" open>
+          <summary class="section-title">Activity</summary>
+          <div class="activity-log" style="margin-top: 12px;">
+            <article class="activity-item">
+              <div class="activity-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></svg></div>
+              <div>
+                <div class="activity-time">14:32</div>
+                <div class="activity-text"><span class="activity-action">signed in to</span> <span class="activity-detail">GitHub Production</span></div>
+              </div>
+            </article>
+            <article class="activity-item">
+              <div class="activity-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><polyline points="4 17 10 11 16 17 22 11"/><line x1="10" y1="11" x2="10" y2="21"/></svg></div>
+              <div>
+                <div class="activity-time">13:45</div>
+                <div class="activity-text"><span class="activity-action">ran a command with</span> <span class="activity-detail">Database (prod) · psql</span></div>
+              </div>
+            </article>
+            <article class="activity-item">
+              <div class="activity-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
+              <div>
+                <div class="activity-time">12:10</div>
+                <div class="activity-text"><span class="activity-action">got a 2FA code for</span> <span class="activity-detail">AWS Console</span></div>
+              </div>
+            </article>
+            <article class="activity-item">
+              <div class="activity-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><polyline points="4 17 10 11 16 17 22 11"/><line x1="10" y1="11" x2="10" y2="21"/></svg></div>
+              <div>
+                <div class="activity-time">Yesterday</div>
+                <div class="activity-text"><span class="activity-action">ran a command with</span> <span class="activity-detail">Database (prod) · pg_dump</span></div>
+              </div>
+            </article>
+            <button class="btn btn-ghost btn-sm" style="margin-top: 8px; width: 100%;">Show more</button>
+          </div>
+        </details>
+
+        <section class="detail-section" style="display: flex; gap: 10px; justify-content: flex-end; padding-top: 16px; border-top: 1px solid var(--border);">
+          <button class="btn btn-ghost btn-sm">Rename</button>
+          <button class="btn btn-danger">Revoke agent</button>
+        </section>
+      </section>
+
+      <!-- Request Detail -->
+      <section class="detail-panel" id="panel-requests" role="tabpanel">
+        <article class="request-detail">
+          <header class="request-header">
+            <div class="request-agent-info">
+              <div class="request-avatar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="var(--success)"/><circle cx="15" cy="14" r="1.2" fill="var(--success)"/></svg></div>
+              <div>
+                <div class="request-title">Claude Code asks for an account</div>
+                <div class="request-time">for <b>browser_login</b> · 2 min ago</div>
+              </div>
+            </div>
+          </header>
+
+          <div class="request-query">github.com production deploy</div>
+          <div class="request-reason">Need to deploy the latest build to production environment</div>
+
+          <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px;">Which account?</div>
+          <div class="account-picker">
+            <label class="account-option">
+              <input type="radio" name="req-account">
+              <div class="account-option-info">
+                <div class="account-option-name">GitHub Production</div>
+                <div class="account-option-meta">github.com · Saved for github.com</div>
+              </div>
+            </label>
+            <label class="account-option">
+              <input type="radio" name="req-account">
+              <div class="account-option-info">
+                <div class="account-option-name">GitHub Personal</div>
+                <div class="account-option-meta">github.com · Saved for github.com</div>
+              </div>
+            </label>
+            <label class="account-option">
+              <input type="radio" name="req-account">
+              <div class="account-option-info">
+                <div class="account-option-name">GitHub Staging</div>
+                <div class="account-option-meta">github.com · Saved for github.com</div>
+              </div>
+            </label>
+          </div>
+
+          <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+            <div style="font-weight: 600; font-size: 13px; margin-bottom: 12px;">Permissions</div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">Can use</label>
+                <select class="form-select">
+                  <option value="login">Sign-in: username, password, 2FA</option>
+                  <option value="2fa" selected>2FA code only</option>
+                  <option value="fields">Chosen fields…</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">For</label>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                  <select class="form-select" style="flex: 1;">
+                    <option value="1h">1 hour</option>
+                    <option value="1d">1 day</option>
+                    <option value="7d" selected>1 week</option>
+                  </select>
+                  <label class="checkbox-label"><input type="checkbox"> Ask me every time</label>
+                </div>
+              </div>
+              <div class="form-group" style="grid-column: 1 / -1;">
+                <label class="form-label">Only with these commands (optional)</label>
+                <input type="text" class="form-input" placeholder="e.g. psql, curl">
+              </div>
+            </div>
+          </div>
+
+          <div class="request-actions">
+            <button class="btn btn-secondary">Deny</button>
+            <button class="btn btn-primary">Allow</button>
+          </div>
+        </article>
+      </section>
+
+      <!-- Activity View -->
+      <section class="detail-panel" id="panel-activity" role="tabpanel">
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+          <div class="empty-title">Select an agent</div>
+          <div class="empty-desc">Choose an agent from the sidebar to see its activity log</div>
+        </div>
+      </section>
+
+      <!-- Setup View -->
+      <section class="detail-panel" id="panel-setup" role="tabpanel">
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg>
+          <div class="empty-title">Select a connected agent</div>
+          <div class="empty-desc">Choose an agent to see setup instructions for your editor</div>
+        </div>
+      </section>
+
+      <!-- Connect View -->
+      <section class="detail-panel" id="panel-connect" role="tabpanel">
+        <div class="connect-view">
+          <div class="connect-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg></div>
+          <div class="connect-title">Let your AI agents sign in, safely</div>
+          <div class="connect-desc">Claude Code, Codex, Cursor or any MCP agent can use the accounts you allow — passwords and 2FA codes — <b style="color: var(--ink-1)">without ever seeing them</b>.</div>
+          <ol class="connect-steps">
+            <li>In your terminal: <code>npx -y @otpilot/mcp@latest connect</code></li>
+            <li>It shows a code and opens a page to sign in. Then approve it here, if the codes match.</li>
+            <li>Choose the accounts it can use. Revoke anytime.</li>
+          </ol>
+          <div class="connect-actions">
+            <a href="#" class="btn btn-secondary">How it works</a>
+            <button class="btn btn-primary" id="copyCmd">Copy the command</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Default empty -->
+      <section class="detail-panel" id="panel-default" role="tabpanel">
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="14" r="1.2"/></svg>
+          <div class="empty-title">Select an item</div>
+          <div class="empty-desc">Choose an agent, request, or action from the sidebar</div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+  // Navigation
+  const panels = {
+    'pending': 'panel-pending',
+    'requests': 'panel-requests',
+    'claude-code': 'panel-claude-code',
+    'codex': 'panel-codex',
+    'cursor': 'panel-cursor',
+    'activity': 'panel-activity',
+    'setup': 'panel-setup',
+    'connect': 'panel-connect'
+  };
+
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const panel = item.dataset.panel;
+      // Update nav
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      item.classList.add('active');
+      // Update panels
+      document.querySelectorAll('.detail-panel').forEach(p => p.classList.remove('active'));
+      if (panels[panel]) {
+        document.getElementById(panels[panel]).classList.add('active');
+        // Update header
+        const titles = {
+          'pending': { title: 'Pending Agent', subtitle: 'Claude Code · Waiting for approval' },
+          'requests': { title: 'Request', subtitle: 'Claude Code · asks for an account' },
+          'claude-code': { title: 'Claude Code', subtitle: 'via Claude Code · MacBook Pro · connected Mar 15' },
+          'codex': { title: 'Codex', subtitle: 'via Codex · Ubuntu · connected Mar 10' },
+          'cursor': { title: 'Cursor', subtitle: 'via Cursor · Windows · connected Mar 8' },
+          'activity': { title: 'Activity', subtitle: 'All agents activity log' },
+          'setup': { title: 'Setup', subtitle: 'MCP configuration for your editors' },
+          'connect': { title: 'Connect Agent', subtitle: 'Add a new MCP server to OTPilot' }
+        };
+        const t = titles[panel] || { title: 'Agents', subtitle: 'MCP servers connected to OTPilot' };
+        document.getElementById('mainTitle').textContent = t.title;
+        document.getElementById('mainSubtitle').textContent = t.subtitle;
+      } else {
+        document.querySelectorAll('.detail-panel').forEach(p => p.classList.remove('active'));
+        document.getElementById('panel-default').classList.add('active');
+        document.getElementById('mainTitle').textContent = 'Agents';
+        document.getElementById('mainSubtitle').textContent = 'MCP servers connected to OTPilot';
+      }
+      // Close sidebar on mobile
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebarOverlay').classList.remove('visible');
+    });
+  });
+
+  // Mobile sidebar toggle
+  document.getElementById('mobileToggle')?.addEventListener('click', () => {
+    document.getElementById('sidebar').classList.toggle('open');
+    document.getElementById('sidebarOverlay').classList.toggle('visible');
+  });
+  document.getElementById('sidebarOverlay')?.addEventListener('click', () => {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('sidebarOverlay').classList.remove('visible');
+  });
+
+  // Copy command
+  document.getElementById('copyCmd')?.addEventListener('click', async () => {
+    await navigator.clipboard.writeText('npx -y @otpilot/mcp@latest connect');
+    alert('Copied!');
+  });
+</script>
+</body></html>
