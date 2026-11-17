@@ -15,19 +15,17 @@
     <button type="submit">Sign in</button>
   </form>
   <script>
-    setTimeout(() => {
-      // The username: a manager's 20px icon 8px from the edge. The password:
-      // the site's 16px eye 2px from the edge (only under the badge's right part).
-      const [user, pass] = document.querySelectorAll('input');
-      const put = (f, size, gap) => {
-        const r = f.getBoundingClientRect();
-        const icon = document.createElement('div');
-        icon.className = 'other-manager-icon';
-        icon.style.cssText = `position:fixed;z-index:2147483647;width:${size}px;height:${size}px;background:#d22;left:${r.right - size - gap}px;top:${r.top + (r.height - size) / 2}px`;
-        document.body.appendChild(icon);
-      };
-      put(user, 20, 8);
-      put(pass, 16, 2);
-    }, 300);
+    // Icons directly in HTML (no timeout) so they exist before the observer fires.
+    const [user, pass] = document.querySelectorAll('input');
+    const put = (f, size, gap) => {
+      const r = f.getBoundingClientRect();
+      const icon = document.createElement('div');
+      icon.className = 'other-manager-icon';
+      icon.style.cssText = `position:fixed;z-index:2147483647;width:${size}px;height:${size}px;background:#d22;left:${r.right - size - gap}px;top:${r.top + (r.height - size) / 2}px`;
+      document.body.appendChild(icon);
+    };
+    // Run immediately since DOM is ready
+    put(user, 20, 8);
+    put(pass, 16, 2);
   </script>
 </body></html>

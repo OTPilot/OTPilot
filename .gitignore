@@ -32,3 +32,9 @@ extra_files
 design
 test-results/
 playwright-report/
+
+# Pi agent artifacts
+.gitignore_hidden_message
+extension/.agents/
+extension/.claude/
+extension/skills-lock.json

@@ -248,7 +248,23 @@ test('the badge toggles the dropdown; Escape, typing or a click elsewhere closes
   const site = await context.newPage();
   await site.goto(`${SITE}/login.html`);
   const drop = site.locator('#otpilot-login-dropdown');
-  const badge = site.locator('.otpilot-field-badge[data-kind="login"]').nth(1); // the password field's
+  const badges = site.locator('.otpilot-field-badge[data-kind="login"]');
+  await expect(badges).toHaveCount(2);
+  const debug = await site.evaluate(() => {
+    const email = document.querySelector('input[name="email"]');
+    const pass = document.querySelector('input[name="password"]');
+    const newPass = document.querySelector('input[name="new_pw"]');
+    const box = el => el ? el.getBoundingClientRect() : null;
+    const badges = [...document.querySelectorAll('.otpilot-field-badge')].map(el => ({ d: el.style.display, r: el.getBoundingClientRect() }));
+    return { email: box(email), pass: box(pass), newPass: box(newPass), badges };
+  });
+  console.log('debug:', JSON.stringify(debug, null, 2));
+  const placed = await site.evaluate(() => {
+    const box = el => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, d: el.style.display }; };
+    return [...document.querySelectorAll('.otpilot-field-badge')].map(box);
+  });
+  console.log('badges at start:', JSON.stringify(placed));
+  const badge = badges.nth(1); // the password field's
   await expect(badge).toBeVisible();
   await badge.click();
   await expect(drop).toBeVisible();
@@ -626,6 +642,13 @@ test('another manager\'s icon at the field\'s edge: the OTPilot badge sits besid
   const badges = site.locator('.otpilot-field-badge[data-kind="login"]');
   await expect(badges).toHaveCount(2);
   await site.evaluate(() => window.dispatchEvent(new Event('resize')));
+  const placed = await site.evaluate(() => {
+    const box = el => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
+    const badges = [...document.querySelectorAll('.otpilot-field-badge')].map(box);
+    const icons = [...document.querySelectorAll('.other-manager-icon')].map(box);
+    return { badges, icons };
+  });
+  console.log('placed:', JSON.stringify(placed));
   await expect.poll(() => site.evaluate(() => {
     const icons = [...document.querySelectorAll('.other-manager-icon')].map(e => e.getBoundingClientRect());
     return [...document.querySelectorAll('.otpilot-field-badge')].every(b => {

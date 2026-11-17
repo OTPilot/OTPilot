@@ -1161,17 +1161,21 @@
         scan(node, false);
         if (node.shadowRoot) scan(node.shadowRoot, false);
       } else {
+        // Direct children only, and only those that sit on this field: a
+        // query of a wide sibling is the rest of the page.
         for (const c of node.children) {
           if (c.contains(field)) continue;
+          const o = c.getBoundingClientRect();
+          if (o.bottom < r.top - 2 || o.top > r.bottom + 2 || o.right < r.left || o.left > r.right + 8) continue;
           add(c);
-          scan(c, true);
+          if (o.width < 420 && o.height < 220) scan(c, true);
         }
         if (node.shadowRoot) scan(node.shadowRoot, true);
         break;
       }
     }
-    const root = field.getRootNode();
-    if (root instanceof ShadowRoot) scan(root, false);
+    const rootNode = field.getRootNode();
+    if (rootNode instanceof ShadowRoot) scan(rootNode, false);
     return out;
   }
 
@@ -1269,6 +1273,7 @@
     // doesn't take hits. Only roots that aren't the page around the field.
     for (const root of document.body?.children || []) {
       if (root.contains(field)) continue;
+      addEl(root); // the icon itself, not only something wrapped inside it
       const walk = (node, depth) => {
         if (depth > 4) return;
         for (const el of node.children || []) {
@@ -1291,16 +1296,23 @@
       if (!/url\(/i.test(s.backgroundImage)) return;
       const posX = s.backgroundPositionX || '';
       if (!/\bright\b|100%/.test(`${posX} ${s.backgroundPosition}`)) return;
-      const px = /([\d.]+)px/.exec(s.backgroundSize);
-      if (!px) return;
-      const w = parseFloat(px[1]);
-      if (w < 8 || w > 48) return;
       const host = el.getBoundingClientRect();
       if (host.right < r.right - 8 || host.left > r.right) return;
-      const inset = /calc\(100%\s*-\s*([\d.]+)px\)/.exec(posX) || /right\s+([\d.]+)px/.exec(s.backgroundPosition);
       const border = parseFloat(s.borderRightWidth) || 0;
+      const inset = /calc\(100%\s*-\s*([\d.]+)px\)/.exec(posX) || /right\s+([\d.]+)px/.exec(s.backgroundPosition);
       const right = host.right - border - (inset ? parseFloat(inset[1]) : 0);
-      spans.push([right - w, right]);
+      const px = /([\d.]+)px/.exec(s.backgroundSize);
+      if (px) {
+        const w = parseFloat(px[1]);
+        if (w >= 8 && w <= 48) spans.push([right - w, right]);
+        return;
+      }
+      // background-size: auto — the image's own size. Capping the padding at
+      // 28px left a 28px image, 12px from the edge, under the badge. The
+      // padding is what the site kept clear for it.
+      const padR = parseFloat(s.paddingRight) || 0;
+      if (padR >= 24) spans.push([host.right - border - padR, host.right - border]);
+      else spans.push([right - 28, right]);
     };
     reserveBg(field);
     reserveBg(field.parentElement);
@@ -1313,6 +1325,28 @@
       const padL = parseFloat(st.paddingLeft) || 0;
       const border = parseFloat(st.borderRightWidth) || 0;
       if (padR >= padL + 16 && padR >= 24) spans.push([r.right - border - Math.min(padR, 28), r.right - border]);
+    }
+    return { els: [...hosts], spans };
+  }
+
+  // Discovery (the walks, the hit-test) is not redone on every scroll frame:
+  // scroll only remeasures what was found. Offsets are from the field's right
+  // edge, so an icon that scrolls with the field stays put relative to it.
+  const _obstacles = new WeakMap();
+  function rememberObstacles(field, r, found) {
+    _obstacles.set(field, {
+      els: found.els,
+      rel: found.spans.map(([L, R]) => [r.right - L, r.right - R]),
+    });
+  }
+  function measureObstacles(field, r) {
+    const cached = _obstacles.get(field);
+    if (!cached) return null;
+    const spans = cached.rel.map(([dL, dR]) => [r.right - dL, r.right - dR]);
+    for (const el of cached.els) {
+      if (!el.isConnected) continue;
+      const o = el.getBoundingClientRect();
+      if (o.width >= 8 && o.right > r.left && o.left < r.right + 2) spans.push([o.left, o.right]);
     }
     return spans;
   }
@@ -1346,11 +1380,17 @@
   // button and another manager's icon — never on top of them.
   function placeBadge(b, field) {
     const r = field.getBoundingClientRect();
-    const size = Math.min(BADGE, Math.floor(r.height - 8));
-    const show = size >= 14 && r.width > size * 4 && isPasswordShown(field);
+    const size = Math.min(BADGE, Math.floor(r.height - 6));
+    const show = size >= 12 && r.width > size * 4 && isPasswordShown(field);
     b.style.display = show ? '' : 'none';
     if (!show) return;
-    const left = badgeLeftIn(r, size, occupiedSpans(field, r));
+    let spans = measureObstacles(field, r);
+    if (!spans) {
+      const found = occupiedSpans(field, r);
+      spans = found.spans;
+      rememberObstacles(field, r, found);
+    }
+    const left = badgeLeftIn(r, size, spans);
     if (left == null) { b.style.display = 'none'; return; }
     Object.assign(b.style, {
       width: `${size}px`, height: `${size}px`, padding: '0',
@@ -1377,12 +1417,12 @@
     if (!chrome.runtime?.id) return;
     const targets = badgeTargets();
     for (const [field, b] of _badges) {
-      if (!targets.has(field)) { b.remove(); _badges.delete(field); }
+      if (!targets.has(field)) { b.remove(); _badges.delete(field); _obstacles.delete(field); }
     }
     for (const [field, [kind, open]] of targets) {
       let b = _badges.get(field);
       if (b && b.dataset.kind !== kind) { b.remove(); b = null; }
-      if (!b) { b = makeBadge(field, kind, open); _badges.set(field, b); document.body.appendChild(b); }
+      if (!b) { b = makeBadge(field, kind, open); _badges.set(field, b); document.body.appendChild(b); _obstacles.delete(field); }
       placeBadge(b, field);
     }
     if (_anchor && !_anchor.field.isConnected) closeDropdown();
