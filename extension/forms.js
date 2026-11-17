@@ -1099,6 +1099,7 @@
     Object.assign(b.style, {
       position: 'fixed', zIndex: '2147483647', width: `${BADGE}px`, height: `${BADGE}px`, padding: '0',
       margin: '0', border: '0', background: 'transparent', cursor: 'pointer', lineHeight: '0', opacity: '.9',
+      display: 'none', // hidden until placeBadge computes final position
     });
     isolate(b, true);
     b.addEventListener('click', trusted(() => {
@@ -1378,12 +1379,12 @@
   // Inside the field, sized to fit it (hidden on a field too small or
   // scrolled away). In the rightmost gap that clears the site's eye, a clear
   // button and another manager's icon — never on top of them.
+  // Starts hidden, computes final position, then shows in one frame — no jump.
   function placeBadge(b, field) {
     const r = field.getBoundingClientRect();
     const size = Math.min(BADGE, Math.floor(r.height - 6));
     const show = size >= 12 && r.width > size * 4 && isPasswordShown(field);
-    b.style.display = show ? '' : 'none';
-    if (!show) return;
+    if (!show) { b.style.display = 'none'; return; }
     let spans = measureObstacles(field, r);
     if (!spans) {
       const found = occupiedSpans(field, r);
@@ -1392,9 +1393,11 @@
     }
     const left = badgeLeftIn(r, size, spans);
     if (left == null) { b.style.display = 'none'; return; }
+    const top = r.top + (r.height - size) / 2;
+    b.style.display = '';
     Object.assign(b.style, {
       width: `${size}px`, height: `${size}px`, padding: '0',
-      left: `${left}px`, top: `${r.top + (r.height - size) / 2}px`,
+      left: `${left}px`, top: `${top}px`,
     });
     const svg = b.firstElementChild;
     if (svg) { svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%'); }
