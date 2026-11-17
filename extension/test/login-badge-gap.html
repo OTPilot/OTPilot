@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in</title>
+<style>
+  .field { position: relative; width: 340px; height: 48px; margin: 16px; border: 1px solid #ccc; border-radius: 12px; }
+  .field input { width: 100%; height: 100%; box-sizing: border-box; border: 0; border-radius: 12px; padding: 0 52px 0 12px; background: transparent; }
+  /* Another manager's icon, not a hit target, left of the padding the eye uses. */
+  .lp { position: absolute; right: 80px; top: 10px; width: 28px; height: 28px; background: #e24; pointer-events: none; }
+  .eye { position: absolute; right: 10px; top: 12px; width: 24px; height: 24px; border: 0; background: #888; pointer-events: none; }
+</style></head>
+<body>
+  <form onsubmit="return false">
+    <div class="field">
+      <input type="email" name="email" autocomplete="username" aria-label="Email">
+      <span class="lp" id="email-lp"></span>
+    </div>
+    <div class="field">
+      <input type="password" name="password" autocomplete="current-password" aria-label="Password">
+      <button type="button" class="eye" aria-label="Ver contraseña"></button>
+    </div>
+    <button type="submit">Sign in</button>
+  </form>
+  <script>
+    // The password field's other-manager icon is appended to <body>, like
+    // LastPass, and doesn't take hits — elementsFromPoint never sees it.
+    const pass = document.querySelector('input[name="password"]');
+    const r = pass.getBoundingClientRect();
+    const icon = document.createElement('div');
+    icon.id = 'pass-lp';
+    icon.style.cssText = `position:fixed;z-index:2147483646;pointer-events:none;width:28px;height:28px;background:#e24;left:${r.right - 80 - 28}px;top:${r.top + (r.height - 28) / 2}px`;
+    document.body.appendChild(icon);
+  </script>
+</body></html>

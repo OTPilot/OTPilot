@@ -992,13 +992,15 @@
   // password. The corner offer stays as well.
   const DROP_ID = 'otpilot-login-dropdown';
   const BADGE_CLASS = 'otpilot-field-badge';
-  const BADGE = 22;
+  // Fills the button (the shield used to sit in a padded 22px box and read
+  // much smaller than another manager's icon, LastPass's 22px square).
+  const BADGE = 28;
   let _pageLogins = null;        // the last vaultLoginsForPage answer for this page's form
   let _filling = false;          // a fill is focusing fields
   const _badges = new Map();     // field -> badge
   let _anchor = null;            // { el, field } of the open dropdown
 
-  const BADGE_SVG = `<svg width="${BADGE}" height="${BADGE}" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  const BADGE_SVG = `<svg width="${BADGE}" height="${BADGE}" viewBox="22 8 84 112" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <path d="M64 14 L102 31 V66 Q102 95 64 114 Q26 95 26 66 V31 Z" style="fill:var(--accent-2, #38bdf8)"/>
     <circle cx="64" cy="66" r="20" style="fill:var(--bg, #0f172a)"/>
     <circle cx="64" cy="66" r="5" style="fill:var(--accent-2, #38bdf8)"/></svg>`;
@@ -1095,7 +1097,7 @@
     themeUi(b);
     b.innerHTML = BADGE_SVG;
     Object.assign(b.style, {
-      position: 'fixed', zIndex: '2147483647', width: `${BADGE + 4}px`, height: `${BADGE + 4}px`, padding: '2px',
+      position: 'fixed', zIndex: '2147483647', width: `${BADGE}px`, height: `${BADGE}px`, padding: '0',
       margin: '0', border: '0', background: 'transparent', cursor: 'pointer', lineHeight: '0', opacity: '.9',
     });
     isolate(b, true);
@@ -1106,52 +1108,253 @@
     return b;
   }
 
+  // A control small enough to be an icon or a short trailing button
+  // (show password, clear) — not a floating label drawn over the whole field.
+  function iconBox(o, r) {
+    if (o.width < 8 || o.height < 8) return false;
+    if (o.width > 120 || o.width > r.width * 0.55) return false;
+    if (o.height > Math.max(96, r.height + 28)) return false;
+    return Math.min(o.bottom, r.bottom) - Math.max(o.top, r.top) >= 8;
+  }
+
   // Something drawn over the field at (x, y) that isn't the field, the page
   // around it or ours: another password manager's icon (LastPass, 1Password,
-  // Bitwarden…), or the site's own (show password, clear).
+  // Bitwarden…), or the site's own (show password, clear). Hit-testing
+  // misses a control with pointer-events: none — see occupiedSpans.
   function coveredAt(field, x, y) {
     let stack;
     try { stack = document.elementsFromPoint(x, y); } catch { return null; }
+    const r = field.getBoundingClientRect();
     for (const el of stack) {
       if (el === field || el.closest?.(`.${BADGE_CLASS}, [data-otpilot-ui]`)) continue;
       if (el.contains(field)) return null; // down to the page under the field: nothing on top
-      // An icon is small: a floating label or a wrapper drawn over the
-      // whole field isn't one (it's skipped, and what's under it checked).
-      const o = el.getBoundingClientRect();
-      if (o.width > 64 || o.height > 64) continue;
+      if (!iconBox(el.getBoundingClientRect(), r)) continue;
       return el;
     }
     return null;
   }
 
-  // Inside the field's right edge, sized to fit it (hidden on a field too
-  // small or scrolled away). Where another icon sits there (a password
-  // manager's, the site's eye), it moves left, beside it.
+  // Controls drawn in the field's wrapper (and an open shadow root): the
+  // site's eye is often a sibling, not something hit-testing can see.
+  function trailingCandidates(field) {
+    const r = field.getBoundingClientRect();
+    const out = [];
+    const seen = new Set();
+    const add = el => {
+      if (!el || el.nodeType !== 1 || el === field || seen.has(el)) return;
+      if (el.contains(field) || field.contains(el)) return;
+      if (el.closest?.(`.${BADGE_CLASS}, [data-otpilot-ui]`)) return;
+      seen.add(el);
+      out.push(el);
+    };
+    const scan = (root, iconsOnly) => {
+      const sel = iconsOnly
+        ? 'button, [role="button"], a, svg, img, i, span, iframe'
+        : 'button, [role="button"], a, svg, img, i, span, iframe, div';
+      for (const el of root.querySelectorAll?.(sel) || []) add(el);
+    };
+    let node = field.parentElement;
+    for (let i = 0; node && node !== document.body && i < 5; i++, node = node.parentElement) {
+      const box = node.getBoundingClientRect();
+      const tight = box.width <= r.width + 100 && box.height <= r.height + 80;
+      if (tight) {
+        scan(node, false);
+        if (node.shadowRoot) scan(node.shadowRoot, false);
+      } else {
+        for (const c of node.children) {
+          if (c.contains(field)) continue;
+          add(c);
+          scan(c, true);
+        }
+        if (node.shadowRoot) scan(node.shadowRoot, true);
+        break;
+      }
+    }
+    const root = field.getRootNode();
+    if (root instanceof ShadowRoot) scan(root, false);
+    return out;
+  }
+
+  // A ::before/::after that reads as an icon pinned to its host's right.
+  function pseudoIcons(el) {
+    if (!el?.getBoundingClientRect) return [];
+    const host = el.getBoundingClientRect();
+    const out = [];
+    for (const pseudo of ['::before', '::after']) {
+      const s = getComputedStyle(el, pseudo);
+      if (!s || s.content === 'none' || s.content === 'normal' || s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) === 0) continue;
+      const w = parseFloat(s.width);
+      const h = parseFloat(s.height);
+      if (!(w >= 8 && w <= 80 && h >= 8 && h <= 96)) continue;
+      if (s.position !== 'absolute' && s.position !== 'fixed') continue;
+      const right = s.right.endsWith('%') ? parseFloat(s.right) / 100 * host.width : parseFloat(s.right);
+      const leftProp = s.left.endsWith('%') ? parseFloat(s.left) / 100 * host.width : parseFloat(s.left);
+      const left = Number.isFinite(right) ? host.right - right - w : (Number.isFinite(leftProp) ? host.left + leftProp : NaN);
+      if (!Number.isFinite(left)) continue;
+      out.push({ left, right: left + w, top: host.top, bottom: host.bottom, width: w, height: h });
+    }
+    return out;
+  }
+
+  // The whole control, not the dot or SVG inside it: a child box would
+  // leave the badge on top of the rest of the icon.
+  function iconHost(el, field, r) {
+    let best = el;
+    for (let node = el.parentElement, i = 0; node && node !== document.body && i < 4; i++, node = node.parentElement) {
+      if (node.contains(field)) break;
+      const o = node.getBoundingClientRect();
+      if (!iconBox(o, r) || !node.contains(best)) break;
+      best = node;
+    }
+    return best;
+  }
+
+  function shownIcon(el) {
+    const st = getComputedStyle(el);
+    return st.visibility !== 'hidden' && st.display !== 'none' && Number(st.opacity) !== 0;
+  }
+
+  // Another extension's icon painted in a closed shadow (LastPass: a 0×0
+  // [data-lastpass-icon-root], the 22px square drawn inside). Hit-testing
+  // retargets to that host, whose own box is empty — the sample points are
+  // the icon. Also any icon-sized element the walks missed.
+  function probeForeignIcons(field, r) {
+    const spans = [];
+    const points = new Map();
+    const ys = [r.top + r.height * 0.3, r.top + r.height * 0.5, r.top + r.height * 0.7];
+    for (let x = r.right - 4; x > Math.max(r.left + 8, r.right - 88); x -= 6) {
+      for (const y of ys) {
+        let stack;
+        try { stack = document.elementsFromPoint(x, y); } catch { continue; }
+        for (const el of stack) {
+          if (el === field || el.closest?.(`.${BADGE_CLASS}, [data-otpilot-ui]`)) continue;
+          if (el.contains(field)) break;
+          const o = el.getBoundingClientRect();
+          if (iconBox(o, r)) { spans.push([o.left, o.right]); break; }
+          // Painted icon whose host box isn't the icon.
+          if (o.width < 12 && o.height < 12) {
+            const pts = points.get(el) || [];
+            pts.push(x);
+            points.set(el, pts);
+            break;
+          }
+        }
+      }
+    }
+    for (const xs of points.values()) {
+      const pad = 12;
+      spans.push([Math.min(...xs) - pad, Math.max(...xs) + pad]);
+    }
+    return spans;
+  }
+
+  // Icons drawn on the field's right, as [left, right] intervals: the site's
+  // eye (even pointer-events: none), another manager's icon on <body> or in
+  // a closed shadow, a pseudo-element, a right-aligned background. Not the
+  // whole padding.
+  function occupiedSpans(field, r) {
+    const hosts = new Set();
+    const spans = [];
+    const addEl = el => {
+      if (!el || hosts.has(el) || el.closest?.(`.${BADGE_CLASS}, [data-otpilot-ui]`)) return;
+      const host = iconHost(el, field, r);
+      if (hosts.has(host) || !shownIcon(host)) return;
+      const o = host.getBoundingClientRect();
+      if (!iconBox(o, r) || o.left >= r.right + 2 || o.right <= r.left + r.width * 0.35) return;
+      hosts.add(host);
+      spans.push([o.left, o.right]);
+    };
+    for (const el of trailingCandidates(field)) addEl(el);
+    // A manager's icon appended to <body> (LastPass…), including one that
+    // doesn't take hits. Only roots that aren't the page around the field.
+    for (const root of document.body?.children || []) {
+      if (root.contains(field)) continue;
+      const walk = (node, depth) => {
+        if (depth > 4) return;
+        for (const el of node.children || []) {
+          if (el.contains?.(field) || el.closest?.(`.${BADGE_CLASS}, [data-otpilot-ui]`)) continue;
+          const o = el.getBoundingClientRect();
+          if (o.bottom < r.top - 2 || o.top > r.bottom + 2 || o.right < r.left || o.left > r.right + 8) continue;
+          if (iconBox(o, r)) addEl(el);
+          else if (o.width < 420 && o.height < 220) walk(el, depth + 1);
+        }
+      };
+      walk(root, 0);
+    }
+    for (const span of probeForeignIcons(field, r)) spans.push(span);
+    for (const o of [...pseudoIcons(field), ...pseudoIcons(field.parentElement)]) {
+      if (iconBox(o, r) && o.left < r.right - 2 && o.right > r.left) spans.push([o.left, o.right]);
+    }
+    const reserveBg = el => {
+      if (!el) return;
+      const s = getComputedStyle(el);
+      if (!/url\(/i.test(s.backgroundImage)) return;
+      const posX = s.backgroundPositionX || '';
+      if (!/\bright\b|100%/.test(`${posX} ${s.backgroundPosition}`)) return;
+      const px = /([\d.]+)px/.exec(s.backgroundSize);
+      if (!px) return;
+      const w = parseFloat(px[1]);
+      if (w < 8 || w > 48) return;
+      const host = el.getBoundingClientRect();
+      if (host.right < r.right - 8 || host.left > r.right) return;
+      const inset = /calc\(100%\s*-\s*([\d.]+)px\)/.exec(posX) || /right\s+([\d.]+)px/.exec(s.backgroundPosition);
+      const border = parseFloat(s.borderRightWidth) || 0;
+      const right = host.right - border - (inset ? parseFloat(inset[1]) : 0);
+      spans.push([right - w, right]);
+    };
+    reserveBg(field);
+    reserveBg(field.parentElement);
+    // Padding that reserves an eye we couldn't see: one icon at the edge,
+    // not the whole padding (that shoved the badge onto the icon beside it).
+    const edgeTaken = spans.some(([L, R]) => R > r.right - 16 && L < r.right);
+    if (!edgeTaken) {
+      const st = getComputedStyle(field);
+      const padR = parseFloat(st.paddingRight) || 0;
+      const padL = parseFloat(st.paddingLeft) || 0;
+      const border = parseFloat(st.borderRightWidth) || 0;
+      if (padR >= padL + 16 && padR >= 24) spans.push([r.right - border - Math.min(padR, 28), r.right - border]);
+    }
+    return spans;
+  }
+
+  // Rightmost place inside the field where a `size`-wide badge overlaps no
+  // span. The gap between a manager's icon and the eye is used when it fits;
+  // otherwise the badge sits left of the whole row.
+  function badgeLeftIn(r, size, spans) {
+    const gap = 2;
+    const maxRight = r.right - 6;
+    const minLeft = r.left + 4;
+    const blocks = [];
+    for (const [L, R] of [...spans].sort((a, b) => a[0] - b[0])) {
+      const span = [L - gap, R + gap];
+      const last = blocks[blocks.length - 1];
+      if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
+      else blocks.push(span);
+    }
+    const rights = [maxRight, ...blocks.map(([L]) => L)].filter(x => x - size >= minLeft && x <= maxRight + 0.5);
+    let best = null;
+    for (const right of rights) {
+      const left = right - size;
+      if (blocks.some(([L, R]) => left < R && right > L)) continue;
+      if (best == null || left > best) best = left;
+    }
+    return best;
+  }
+
+  // Inside the field, sized to fit it (hidden on a field too small or
+  // scrolled away). In the rightmost gap that clears the site's eye, a clear
+  // button and another manager's icon — never on top of them.
   function placeBadge(b, field) {
     const r = field.getBoundingClientRect();
-    const size = Math.min(BADGE + 4, Math.floor(r.height - 6));
+    const size = Math.min(BADGE, Math.floor(r.height - 8));
     const show = size >= 14 && r.width > size * 4 && isPasswordShown(field);
     b.style.display = show ? '' : 'none';
     if (!show) return;
-    const top = r.top + (r.height - size) / 2;
-    let left = r.right - size - 6;
-    // Sampled across the badge's whole area (a small icon may sit under
-    // its right part only).
-    const coveredIn = l => {
-      for (const fx of [0.1, 0.5, 0.9]) for (const fy of [0.25, 0.5, 0.75]) {
-        const o = coveredAt(field, l + size * fx, top + size * fy);
-        if (o) return o;
-      }
-      return null;
-    };
-    for (let i = 0; i < 3 && left > r.left + r.width / 2; i++) {
-      const other = coveredIn(left);
-      if (!other) break;
-      left = Math.min(left, other.getBoundingClientRect().left) - size - 4;
-    }
+    const left = badgeLeftIn(r, size, occupiedSpans(field, r));
+    if (left == null) { b.style.display = 'none'; return; }
     Object.assign(b.style, {
-      width: `${size}px`, height: `${size}px`, padding: `${Math.max(1, Math.round(size / 10))}px`,
-      left: `${left}px`, top: `${top}px`,
+      width: `${size}px`, height: `${size}px`, padding: '0',
+      left: `${left}px`, top: `${r.top + (r.height - size) / 2}px`,
     });
     const svg = b.firstElementChild;
     if (svg) { svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%'); }
@@ -1434,4 +1637,8 @@
   check();
   offerSave();
   continueLaunch();
+  // LastPass draws its icon after load, inside a closed shadow: the light-DOM
+  // root arriving retriggers the observer, and these cover a paint that lands
+  // a moment later (no further mutation outside the shadow).
+  for (const ms of [800, 2000]) setTimeout(() => { if (chrome.runtime?.id) syncBadges(); }, ms);
 })();

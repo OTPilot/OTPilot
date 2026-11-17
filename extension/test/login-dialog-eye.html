@@ -1,0 +1,42 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in</title>
+<style>
+  dialog { border: 0; border-radius: 16px; padding: 24px; width: 380px; }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  .row { position: relative; width: 320px; margin: 0 0 12px; }
+  .row input { width: 100%; height: 48px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 12px; padding: 0 12px; }
+  /* The site's "ver contraseña": drawn over the field's right edge, and not
+     a hit target (the page toggles from the field). Hit-testing never sees it. */
+  .eye {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    width: 28px; height: 28px; border: 0; border-radius: 6px; background: #e24;
+    pointer-events: none;
+  }
+  /* A clear control just left of the eye: the badge sits left of both. */
+  .clear {
+    position: absolute; right: 42px; top: 50%; transform: translateY(-50%);
+    width: 22px; height: 22px; border: 0; border-radius: 4px; background: #bbb;
+    pointer-events: none;
+  }
+  /* Confirm: the eye is only a background, and padding reserves it. */
+  .bg input {
+    padding: 0 44px 0 12px;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Crect width='20' height='20' fill='%23e24'/%3E%3C/svg%3E") right 12px center / 20px 20px no-repeat;
+  }
+</style></head>
+<body>
+  <dialog open>
+    <form onsubmit="return false">
+      <div class="row"><input type="email" name="email" autocomplete="username" aria-label="Email"></div>
+      <div class="row">
+        <input type="password" name="password" autocomplete="current-password" aria-label="Password">
+        <button type="button" class="clear" tabindex="-1" aria-hidden="true"></button>
+        <button type="button" class="eye" tabindex="-1" aria-label="Ver contraseña"></button>
+      </div>
+      <button type="submit">Sign in</button>
+    </form>
+  </dialog>
+  <form id="confirm" class="bg" onsubmit="return false" style="margin-top:24px">
+    <div class="row"><input type="password" name="new_pw" autocomplete="new-password" aria-label="New password"></div>
+  </form>
+</body></html>
