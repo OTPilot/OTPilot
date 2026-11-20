@@ -25,7 +25,6 @@ const AGENT_ACTIONS = { browser_login: 'signed in to', login_attempt: 'tried to 
 let _agentsData = null;     // last Agents.list()
 let _agentsItems = [];      // vault items (decrypted) for names and pickers
 let _agentsSel = null;      // { kind: 'agent' | 'request' | 'connect', id }
-let _activeTab = 'pending'; // 'pending' | 'connected' | 'requests' | 'activity' | 'setup' | 'connect'
 
 const agentAv = (pending, lg) => `<span class="ag-av${pending ? ' pending' : ''}${lg ? ' lg' : ''}">${AGENT_ICON}</span>`;
 const agentById = id => _agentsData?.agents.find(a => a.id === id);
@@ -119,104 +118,41 @@ async function renderAgentsPanel(fresh = null) {
       : { kind: 'connect' };
   }
 
-  // Render tabs
-  const pendingCount = pending.length;
-  const requestCount = requests.length;
-  const activeCount = active.length;
-  let tabsHtml = `
-    <button class="tab${_activeTab === 'pending' ? ' active' : ''}" data-tab="pending">Pending`;
-  if (pendingCount) tabsHtml += ` <span class="tab-badge">${pendingCount}</span>`;
-  tabsHtml += `</button>
-    <button class="tab${_activeTab === 'connected' ? ' active' : ''}" data-tab="connected">Connected`;
-  if (activeCount) tabsHtml += ` <span class="tab-badge">${activeCount}</span>`;
-  tabsHtml += `</button>
-    <button class="tab${_activeTab === 'requests' ? ' active' : ''}" data-tab="requests">Requests`;
-  if (requestCount) tabsHtml += ` <span class="tab-badge warn">${requestCount}</span>`;
-  tabsHtml += `</button>
-    <button class="tab${_activeTab === 'activity' ? ' active' : ''}" data-tab="activity">Activity</button>
-    <button class="tab${_activeTab === 'setup' ? ' active' : ''}" data-tab="setup">Setup</button>
-    <button class="tab${_activeTab === 'connect' ? ' active' : ''}" data-tab="connect">Connect</button>`;
-  document.getElementById('agents-tabs').innerHTML = tabsHtml;
-  document.querySelectorAll('#agents-tabs .tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-      _activeTab = btn.dataset.tab;
-      renderAgentsPanel();
-    });
-  });
-
-  // Render list based on active tab
-  let listHtml = '';
-  if (_activeTab === 'pending') {
-    if (pending.length || requestCount) {
-      listHtml += `<div class="lc-section">Waiting <span class="ag-pill warn">${pendingCount + requestCount}</span></div>`;
-      listHtml += pending.map(a => agentRow({ kind: 'agent', id: a.id }, true, a.name, 'wants to connect', true)).join('');
-      listHtml += requests.map(r => {
-        const a = agentById(r.agent_id);
-        const what = r.item_id ? `wants to use ${itemTitle(r.item_id)}` : `asks for ${r.query || 'an account'}`;
-        return agentRow({ kind: 'request', id: r.id }, true, a?.name || 'Agent', what, true);
-      }).join('');
-    } else {
-      listHtml = '<div class="lc-empty">No agents waiting</div>';
-    }
-  } else if (_activeTab === 'connected') {
-    if (active.length) {
-      listHtml += '<div class="lc-section">Connected</div>';
-      listHtml += active.map(a => agentRow({ kind: 'agent', id: a.id }, false, a.name,
-        [Agents.clientLabel(a), a.machine, `${a.grants.length} account${a.grants.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '), false)).join('');
-    } else {
-      listHtml = '<div class="lc-empty">No connected agents</div>';
-    }
-  } else if (_activeTab === 'requests') {
-    if (requestCount) {
-      listHtml += `<div class="lc-section">Requests <span class="ag-pill warn">${requestCount}</span></div>`;
-      listHtml += requests.map(r => {
-        const a = agentById(r.agent_id);
-        const what = r.item_id ? `wants to use ${itemTitle(r.item_id)}` : `asks for ${r.query || 'an account'}`;
-        return agentRow({ kind: 'request', id: r.id }, true, a?.name || 'Agent', what, true);
-      }).join('');
-    } else {
-      listHtml = '<div class="lc-empty">No pending requests</div>';
-    }
-  } else if (_activeTab === 'activity') {
-    if (active.length) {
-      listHtml += '<div class="lc-section">Activity</div>';
-      listHtml += active.map(a => agentRow({ kind: 'agent', id: a.id }, false, a.name,
-        `${a.grants.length} account${a.grants.length === 1 ? '' : 's'} · last used ${a.last_used_at ? noticeAgo(a.last_used_at) : 'never'}`, false)).join('');
-    } else {
-      listHtml = '<div class="lc-empty">No connected agents</div>';
-    }
-  } else if (_activeTab === 'setup') {
-    if (active.length) {
-      listHtml += '<div class="lc-section">Setup</div>';
-      listHtml += active.map(a => agentRow({ kind: 'agent', id: a.id }, false, a.name,
-        `${Agents.clientLabel(a) || 'unknown'} · ${a.machine}`, false)).join('');
-    } else {
-      listHtml = '<div class="lc-empty">No connected agents</div>';
-    }
-  } else if (_activeTab === 'connect') {
-    listHtml = '<div class="lc-empty">Click Connect Agent to add a new MCP server</div>';
+  const row = (sel, pendingAv, name, sub, dot) => `
+    <button class="lc-row${_agentsSel.kind === sel.kind && _agentsSel.id === sel.id ? ' sel' : ''}" data-kind="${sel.kind}" data-id="${esc(sel.id)}">
+      ${agentAv(pendingAv)}
+      <span class="lc-row-text"><span class="lc-row-name">${esc(name)}</span><span class="lc-row-sub">${esc(sub)}</span></span>
+      ${dot ? '<i class="ag-row-dot"></i>' : ''}
+    </button>`;
+  let html = '';
+  if (pending.length || requests.length) {
+    html += `<div class="lc-section">Pending <span class="ag-pill warn">${pending.length + requests.length}</span></div>`;
+    html += pending.map(a => row({ kind: 'agent', id: a.id }, true, a.name, 'wants to connect', true)).join('');
+    html += requests.map(r => {
+      const a = agentById(r.agent_id);
+      const what = r.item_id ? `wants to use ${itemTitle(r.item_id)}` : `asks for ${r.query || 'an account'}`;
+      return row({ kind: 'request', id: r.id }, true, a?.name || 'Agent', what, true);
+    }).join('');
   }
-  list.innerHTML = listHtml || '<div class="lc-empty">Nothing here</div>';
+  if (active.length) {
+    html += '<div class="lc-section">Connected</div>';
+    html += active.map(a => row({ kind: 'agent', id: a.id }, false, a.name,
+      [Agents.clientLabel(a), a.machine, `${a.grants.length} account${a.grants.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '), false)).join('');
+  }
+  list.innerHTML = html || '<div class="lc-empty">No agents yet</div>';
   list.querySelectorAll('.lc-row').forEach(b => b.addEventListener('click', () => {
     _agentsSel = { kind: b.dataset.kind, id: b.dataset.id };
     renderAgentsPanel();
   }));
-  // Connect Agent button (re-attached on each render since button is recreated)
-  const connectBtn = document.getElementById('agents-connect');
-  if (connectBtn) connectBtn.onclick = () => { _agentsSel = { kind: 'connect' }; renderAgentsPanel(); };
 
   renderAgentsLimit();
-  renderDetailPanel(detail);
-}
-
-// Agent row for the sidebar list
-function agentRow(sel, pendingAv, name, sub, dot) {
-  const isSel = _agentsSel.kind === sel.kind && _agentsSel.id === sel.id;
-  return `<button class="lc-row${isSel ? ' sel' : ''}" data-kind="${sel.kind}" data-id="${esc(sel.id)}">
-    ${agentAv(pendingAv)}
-    <span class="lc-row-text"><span class="lc-row-name">${esc(name)}</span><span class="lc-row-sub">${esc(sub)}</span></span>
-    ${dot ? '<i class="ag-row-dot"></i>' : ''}
-  </button>`;
+  if (_agentsSel.kind === 'connect') renderAgentConnectHelp(detail);
+  else if (_agentsSel.kind === 'request') renderAgentRequest(detail, requests.find(r => r.id === _agentsSel.id));
+  else {
+    const a = agentById(_agentsSel.id);
+    if (a.status === 'pending') renderPendingAgent(detail, a);
+    else renderActiveAgent(detail, a);
+  }
 }
 
 // Free plan: the monthly agent uses (usage is null / missing on paid, a trial
@@ -265,15 +201,6 @@ function renderAgentsLimit() {
       }
     }
   });
-}
-
-function renderDetailPanel(detail) {
-  if (_agentsSel.kind === 'connect') return renderAgentConnectHelp(detail);
-  if (_agentsSel.kind === 'request') return renderAgentRequest(detail, _agentsData.requests.find(r => r.id === _agentsSel.id));
-  const a = agentById(_agentsSel.id);
-  if (!a) { detail.innerHTML = '<div class="ag-empty">Select an agent</div>'; return; }
-  if (a.status === 'pending') return renderPendingAgent(detail, a);
-  return renderActiveAgent(detail, a);
 }
 
 function renderAgentConnectHelp(detail) {
@@ -579,7 +506,7 @@ function renderActiveAgent(detail, a) {
         <div class="ag-grow" style="min-width:0"><div class="ag-t1">${esc(name)} <span class="ag-note">${esc(where)}</span></div>
           <pre class="ag-mono" style="margin:4px 0 0;white-space:pre-wrap;word-break:break-all">${esc(cmd)}</pre></div>
         <button type="button" class="ag-btn link sm" data-copy="${i}">Copy</button></div>`).join('')}</div>
-      <div class="ag-note" style="margin-top:4px">Connected it with <span class="ag-mono">--name</span> or <span class="ag-mono">--profile</span>? Add <span class="ag-mono">--profile <name></span> after <span class="ag-mono">@otpilot/mcp@latest</span>.</div>
+      <div class="ag-note" style="margin-top:4px">Connected it with <span class="ag-mono">--name</span> or <span class="ag-mono">--profile</span>? Add <span class="ag-mono">--profile &lt;name&gt;</span> after <span class="ag-mono">@otpilot/mcp@latest</span>.</div>
     </details>
     <div>
       <div class="ag-sec-head">Activity</div>
@@ -702,6 +629,10 @@ setInterval(async () => {
   if (agentsShape(fresh) === agentsShape(_agentsData) || agentsBusy(panel) || panel.style.display === 'none') return;
   renderAgentsPanel(fresh);
 }, 10_000);
+document.getElementById('agents-connect').addEventListener('click', () => {
+  _agentsSel = { kind: 'connect' };
+  renderAgentsPanel();
+});
 
 // ── The editor's "AI agents" section (saved logins) ─────────────────────────
 // Which agents can use this item, and allowing a connected one (its default
