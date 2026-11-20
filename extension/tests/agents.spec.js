@@ -1,4 +1,4 @@
-import { test, expect, seedUnlocked, waitForVault, writeAccounts, TEST_SECRET } from './fixtures.js';
+import { test, expect, seedUnlocked, seedLocked, waitForVault, writeAccounts, TEST_SECRET, TEST_PASSWORD } from './fixtures.js';
 import { installFakeAgents } from './fakeAgents.js';
 
 // 2.1 AI agents (docs/agents/plan.md): approving an agent after checking its
@@ -968,4 +968,81 @@ test('opened from the page card, the popup goes straight to what waits', async (
     await renderAgentsPanel();
   });
   await expect(page.locator('#agents-detail')).toContainText('Asks for bank');
+});
+
+test('opened from the page card on a locked vault: a slow unlock still lands on Agents', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedLocked(page, { accounts: [], userPlan: 'personal' });
+  await page.evaluate(() => chrome.storage.session.set({ agentsOpen: Date.now() }));
+  await page.reload();
+  await expect(page.locator('#lock-overlay')).not.toHaveClass(/hidden/);
+  // Read (and cleared) while the lock screen waits.
+  await expect.poll(() => page.evaluate(async () => (await chrome.storage.session.get('agentsOpen')).agentsOpen ?? null)).toBeNull();
+  // Long after the marker's 30 s.
+  await page.evaluate(() => { const now = Date.now; Date.now = () => now() + 120_000; });
+  await page.fill('#lock-password', TEST_PASSWORD);
+  await page.click('#lock-login-btn');
+  await expect(page.locator('#agents-panel')).toBeVisible();
+});
+
+test('a failed save keeps the scopes the account can\'t have disabled', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    const bank = (await Agents.vaultItems(await VaultKeys.getKey())).find(i => i.title === 'Bank');
+    await Agents.grant(a, bank, { scope: { kind: 'login' } });
+    return a.id;
+  });
+  await openAgent(page, agentId);
+  await page.locator('#agents-detail .ag-row[data-item]', { hasText: 'Bank' }).click();
+  const sheet = sheetOf(page);
+  await expect(sheet.locator('input.ag-scope[value="2fa"]')).toBeDisabled(); // Bank has no 2FA code
+  await page.evaluate(() => { Agents.grant = async () => { throw new Error('Network down'); }; });
+  await sheet.getByRole('button', { name: 'Save' }).click();
+  await expect(sheet.locator('.ag-err')).toContainText('Network down');
+  await expect(sheet.locator('input.ag-scope[value="2fa"]')).toBeDisabled();
+  await expect(sheet.locator('input.ag-scope[value=login]')).toBeEnabled();
+  await expect(sheet.getByRole('button', { name: 'Save' })).toBeEnabled();
+});
+
+test('sheets and dialogs take the focus, keep it, and give it back on close', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    const gh = (await Agents.vaultItems(await VaultKeys.getKey())).find(i => i.title === 'GitHub');
+    await Agents.grant(a, gh, { scope: { kind: 'login' } });
+    return a.id;
+  });
+  await openAgent(page, agentId);
+  const row = page.locator('#agents-detail .ag-row[data-item]', { hasText: 'GitHub' });
+  await row.focus();
+  await page.keyboard.press('Enter');
+  const sheet = sheetOf(page);
+  await expect(sheet.locator('input.ag-scope[value=login]')).toBeFocused();
+  const inSheet = () => page.evaluate(() => !!document.activeElement?.closest('#agents-layer .ag-sheet'));
+  for (let i = 0; i < 25; i++) {
+    await page.keyboard.press(i % 3 ? 'Tab' : 'Shift+Tab');
+    expect(await inSheet()).toBe(true);
+  }
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await expect(row).toBeFocused();
+
+  // The ⋯ menu → the revoke dialog → Cancel: back on the ⋯ button.
+  const menu = page.locator('#agents-detail [data-act=menu]');
+  await menu.focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('menuitem', { name: 'Revoke agent…' }).click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  for (let i = 0; i < 5; i++) {
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('#agents-layer .ag-modal'))).toBe(true);
+  }
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(menu).toBeFocused();
 });

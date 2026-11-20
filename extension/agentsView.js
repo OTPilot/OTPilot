@@ -138,14 +138,48 @@ function agentsRouteValid(s) {
 
 // ── overlays: the ⋯ menu, sheets, the revoke dialog ──
 const agentsLayer = () => document.getElementById('agents-layer');
-function closeAgentsOverlays() { const l = agentsLayer(); if (l) l.innerHTML = ''; }
+// What opened the overlay (a row, the ⋯ button): focus goes back to it on
+// close. One overlay replacing another (the menu → the revoke dialog) keeps
+// the first opener.
+let _agentsOpener = null;
+const AG_FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+function setAgentsLayer(html) {
+  const layer = agentsLayer();
+  if (!layer.firstChild) _agentsOpener = document.activeElement instanceof HTMLElement && !layer.contains(document.activeElement) ? document.activeElement : null;
+  layer.innerHTML = html;
+  return layer;
+}
+function closeAgentsOverlays() {
+  const l = agentsLayer();
+  if (!l?.firstChild) return;
+  const back = l.contains(document.activeElement) && _agentsOpener;
+  l.innerHTML = '';
+  _agentsOpener = null;
+  if (back?.isConnected) back.focus();
+}
+// Focus into an overlay: its `first` control, else its first focusable one.
+function focusAgentsOverlay(box, first) {
+  (first || box.querySelector(AG_FOCUSABLE))?.focus();
+}
 function openAgentsSheet(label, html) {
-  agentsLayer().innerHTML = `<div class="ag-dim"></div><div class="ag-sheet" role="dialog" aria-modal="true" aria-label="${esc(label)}">${html}</div>`;
-  agentsLayer().querySelector('.ag-dim').addEventListener('click', closeAgentsOverlays);
-  return agentsLayer().querySelector('.ag-sheet');
+  const layer = setAgentsLayer(`<div class="ag-dim"></div><div class="ag-sheet" role="dialog" aria-modal="true" aria-label="${esc(label)}">${html}</div>`);
+  layer.querySelector('.ag-dim').addEventListener('click', closeAgentsOverlays);
+  return layer.querySelector('.ag-sheet');
 }
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && agentsLayer()?.firstChild && document.getElementById('agents-panel')?.style.display !== 'none') closeAgentsOverlays();
+  const layer = agentsLayer();
+  if (!layer?.firstChild || document.getElementById('agents-panel')?.style.display === 'none') return;
+  if (e.key === 'Escape') { closeAgentsOverlays(); return; }
+  // Tab stays inside the open sheet / dialog / menu: the controls under it
+  // could navigate away and lose what's being chosen.
+  if (e.key !== 'Tab') return;
+  const box = layer.querySelector('.ag-sheet, .ag-modal, .ag-menu');
+  const all = box ? [...box.querySelectorAll(AG_FOCUSABLE)].filter(el => el.offsetParent !== null) : [];
+  if (!all.length) { e.preventDefault(); return; }
+  const first = all[0], last = all[all.length - 1];
+  if (!box.contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+  else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 });
 
 // `fresh`: the list already fetched (the timer's), so nothing changes between
@@ -345,15 +379,23 @@ function renderAgentsList(detail) {
 }
 
 // Runs `fn` with the buttons of `box` disabled; shows its error in `box`.
+// Disables a box's controls while an action runs; the returned function puts
+// back only those it disabled (a scope the item can't have stays disabled).
+function lockControls(box, selector = 'button, select, input') {
+  const was = [...box.querySelectorAll(selector)].filter(b => !b.disabled);
+  was.forEach(b => { b.disabled = true; });
+  return () => was.forEach(b => { b.disabled = false; });
+}
+
 async function agentAct(box, fn) {
-  box.querySelectorAll('button, select, input').forEach(b => { b.disabled = true; });
+  const unlock = lockControls(box);
   box.querySelector('.ag-err')?.remove();
   try {
     await fn();
     await renderAgentsPanel();
     renderNotices();
   } catch (e) {
-    box.querySelectorAll('button, select, input').forEach(b => { b.disabled = false; });
+    unlock();
     (box.querySelector('.ag-foot') || box).insertAdjacentHTML(box.querySelector('.ag-foot') ? 'beforebegin' : 'beforeend', `<div class="ag-err">${esc(agentError(e))}</div>`);
   }
 }
@@ -726,12 +768,12 @@ async function mountLastUse(box, a) {
 function openAgentMenu(btn, a) {
   const panel = document.getElementById('agents-panel').getBoundingClientRect();
   const r = btn.getBoundingClientRect();
-  agentsLayer().innerHTML = `<div class="ag-catch"></div><div class="ag-menu" role="menu" style="top:${Math.round(r.bottom - panel.top + 6)}px;right:${Math.round(panel.right - r.right)}px">
+  setAgentsLayer(`<div class="ag-catch"></div><div class="ag-menu" role="menu" style="top:${Math.round(r.bottom - panel.top + 6)}px;right:${Math.round(panel.right - r.right)}px">
     <button type="button" role="menuitem" data-act="rename">${AG_I.edit}Rename</button>
     <button type="button" role="menuitem" data-act="setup">${AG_I.terminal}Add it to your agent app…</button>
     <button type="button" role="menuitem" data-act="activity">${AG_I.pulse}See its activity</button>
     <hr>
-    <button type="button" role="menuitem" class="red" data-act="revoke">${AG_I.trash}Revoke agent…</button></div>`;
+    <button type="button" role="menuitem" class="red" data-act="revoke">${AG_I.trash}Revoke agent…</button></div>`);
   const layer = agentsLayer();
   layer.querySelector('.ag-catch').addEventListener('click', closeAgentsOverlays);
   layer.querySelector('[data-act=rename]').addEventListener('click', () => { closeAgentsOverlays(); startRename(a); });
@@ -763,12 +805,12 @@ function startRename(a) {
 }
 
 function openRevokeDialog(a) {
-  agentsLayer().innerHTML = `<div class="ag-dim"></div><div class="ag-modal" role="alertdialog" aria-modal="true" aria-label="Revoke ${esc(a.name)}">
+  setAgentsLayer(`<div class="ag-dim"></div><div class="ag-modal" role="alertdialog" aria-modal="true" aria-label="Revoke ${esc(a.name)}">
     <span class="ag-av lg bad">${AG_I.trash}</span>
     <div class="ag-t1 ag-lg">Revoke ${esc(a.name)}?</div>
     <p>It loses ${a.grants.length ? `its ${plural(a.grants.length, 'account', 'accounts')}` : 'its access'} right away. What it already used can't be taken back: change those passwords if you no longer trust it.</p>
     <div class="ag-btns"><span class="ag-grow"></span><button type="button" class="ag-btn" data-act="cancel">Cancel</button>
-      <button type="button" class="ag-btn dangerfill" data-act="revoke">Revoke agent</button></div></div>`;
+      <button type="button" class="ag-btn dangerfill" data-act="revoke">Revoke agent</button></div></div>`);
   const modal = agentsLayer().querySelector('.ag-modal');
   agentsLayer().querySelector('.ag-dim').addEventListener('click', closeAgentsOverlays);
   modal.querySelector('[data-act=cancel]').addEventListener('click', closeAgentsOverlays);
@@ -841,6 +883,7 @@ function openGrantSheet(a, g) {
   sheet.querySelector('[data-act=cancel]').addEventListener('click', closeAgentsOverlays);
   sheet.querySelector('[data-act=remove]').addEventListener('click', () => agentAct(sheet, () => Agents.ungrant(a.id, g.item_id)));
   sheet.querySelector('[data-act=save]')?.addEventListener('click', () => agentAct(sheet, () => Agents.grant(a, item, readGrantForm(sheet, g))));
+  focusAgentsOverlay(sheet, sheet.querySelector('input.ag-scope:checked'));
 }
 
 // ── Adding it to the agent app ──
@@ -938,10 +981,10 @@ async function mountAgentsSection(body) {
       <div class="ag-note">Agents never see these values. Changes here apply now.</div>`;
     box.hidden = false;
     const act = async fn => {
-      box.querySelectorAll('button, select').forEach(b => { b.disabled = true; });
+      const unlock = lockControls(box, 'button, select');
       box.querySelector('.ag-err')?.remove();
       try { await fn(); data = await Agents.list(); active.splice(0, active.length, ...data.agents.filter(a => a.status === 'active')); draw(); } catch (e) {
-        box.querySelectorAll('button, select').forEach(b => { b.disabled = false; });
+        unlock();
         box.insertAdjacentHTML('beforeend', `<div class="ag-err">${esc(agentError(e))}</div>`);
       }
     };

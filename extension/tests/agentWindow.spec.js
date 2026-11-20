@@ -114,6 +114,27 @@ test("a page that can't show the card: the next one the user switches to does", 
   await expect(card(site)).toContainText('An AI agent wants to connect.');
 });
 
+test('a new card on another tab removes the one on the earlier tab', async ({ context, extensionId }) => {
+  const { worker, run } = await fakeWaiting(context, extensionId, { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] });
+  const first = await context.newPage();
+  await first.goto(`${SITE}/blank.html`);
+  await first.bringToFront();
+  await run();
+  await expect(card(first)).toHaveCount(1);
+  const second = await context.newPage();
+  await second.goto(`${SITE}/blank.html?2`);
+  await second.bringToFront();
+  await worker.evaluate(() => { __agents.requests.push({ id: 'rq1', agent_id: 'ag1', query: 'github', item_id: null }); });
+  await run();
+  await expect(card(second)).toHaveCount(1);
+  await expect(card(first)).toHaveCount(0);
+  // All answered: the remaining card goes too.
+  await worker.evaluate(() => { __agents.agents = []; __agents.requests = []; });
+  await run();
+  await expect(card(second)).toHaveCount(0);
+  await worker.evaluate(() => chrome.action.setBadgeText({ text: '' }));
+});
+
 test('the Agents window closes itself once nothing waits any more', async ({ context, extensionId }) => {
   const { installFakeAgents } = await import('./fakeAgents.js');
   const page = await context.newPage();

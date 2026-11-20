@@ -5741,15 +5741,17 @@ async function silentPullSync() {
   // so there's no flash — this just confirms it and keeps the cache in sync.
   chrome.storage.local.get('theme', d => applyTheme(d.theme || DEFAULT_THEME));
 
-  const justAuthenticated = await initLock();
-  await loadState();
   // Opened for an AI agent waiting: by the card on a page (`agentsOpen`, set
   // by the background a moment ago) or in its own window (?view=agents).
+  // Read before the unlock, which can take its time.
   const { agentsOpen } = await chrome.storage.session.get('agentsOpen');
   if (agentsOpen) chrome.storage.session.remove('agentsOpen');
-  const forAgents = new URLSearchParams(location.search).get('view') === 'agents' || Date.now() - (agentsOpen || 0) < 30_000;
+  const fromAgentsCard = Date.now() - (agentsOpen || 0) < 30_000;
+  const forAgents = new URLSearchParams(location.search).get('view') === 'agents' || fromAgentsCard;
+  const justAuthenticated = await initLock();
+  await loadState();
   if (forAgents) {
-    if (agentsOpen) _agentsSel = { kind: 'waiting' };
+    if (fromAgentsCard) _agentsSel = { kind: 'waiting' };
     showView('agents');
   }
   await syncActiveIndexToUrl();

@@ -1616,6 +1616,11 @@ function announceWaitingAgents() {
     // An open Agents view (the popup, or its window) shows the new one.
     chrome.runtime.sendMessage({ action: 'agentsShow' }).catch(() => {});
     const tabId = await showAgentsCard(agentsCardText(pending.length, requests.length));
+    // One card at a time: the one on an earlier tab goes, so none is left
+    // behind saying something waits once it's answered.
+    if (tabId != null && st.tabId != null && st.tabId !== tabId) {
+      chrome.tabs.sendMessage(st.tabId, { action: 'agentsNoticeClear' }, { frameId: 0 }).catch(() => {});
+    }
     await chrome.storage.session.set({ [AGENTS_CARD]: tabId == null
       ? { ids: known, tabId: st.tabId ?? null, pending: true }
       : { ids, tabId, pending: false } });
