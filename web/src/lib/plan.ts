@@ -17,6 +17,8 @@ export type UserData = {
   trial_active?: boolean
   /** Can start one (`POST /billing/trial`). */
   trial_available?: boolean
+  /** The post-trial offer (50% off the first year) is open until then; the annual checkout applies it. */
+  trial_offer_until?: string | null
 }
 
 export const TRIAL_DAYS = 30
@@ -51,4 +53,9 @@ export function formatTrialEnd(endsAt: string) {
 /** Subscribing now keeps the trial's remaining days free (the first charge waits for its end). */
 export function trialCarriesOver(endsAt: string | null | undefined, now = Date.now()) {
   return !!endsAt && Date.parse(endsAt) - now >= CARRY_OVER_MS
+}
+
+/** The post-trial offer is still open (the server decides; this only hides it once past). */
+export function trialOfferOpen(until: string | null | undefined, now = Date.now()) {
+  return !!until && Date.parse(until) > now
 }

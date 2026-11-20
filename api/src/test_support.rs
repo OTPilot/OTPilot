@@ -104,6 +104,7 @@ pub fn test_state(db: PgPool) -> AppState {
         stripe_webhook_secret: String::new(),
         stripe_personal_monthly_price_id: "price_personal_monthly".into(),
         stripe_personal_annual_price_id: "price_personal_annual".into(),
+        stripe_trial_offer_coupon_id: String::new(),
         stripe_team_lite_monthly_price_id: String::new(),
         stripe_team_lite_annual_price_id: String::new(),
         stripe_extra_seat_price_id: String::new(),

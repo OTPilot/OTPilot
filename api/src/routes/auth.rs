@@ -38,6 +38,9 @@ struct SyncUserResponse {
     trial_active: bool,
     /// Can start one (`POST /billing/trial`).
     trial_available: bool,
+    /// The post-trial offer (50% off the first year) is open until then;
+    /// the annual checkout applies it.
+    trial_offer_until: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -205,7 +208,7 @@ async fn sync_user(
         }
     }
 
-    let user = sqlx::query_as::<_, SyncUserResponse>(
+    let user = sqlx::query_as::<_, SyncUserResponse>(&format!(
         r#"
         SELECT
             u.id, u.plan, (u.personal_subscription_id IS NOT NULL) AS personal_subscription, u.created_at,
@@ -220,13 +223,17 @@ async fn sync_user(
             (SELECT COUNT(*) FROM devices WHERE user_id = u.id) AS devices_count,
             u.trial_ends_at,
             (u.plan = 'personal' AND NOT u.has_personal_cloud AND COALESCE(u.trial_ends_at > NOW(), false)) AS trial_active,
-            ($2 AND u.plan = 'free' AND u.trial_ends_at IS NULL AND NOT u.has_personal_cloud) AS trial_available
+            ($2 AND u.plan = 'free' AND u.trial_ends_at IS NULL AND NOT u.has_personal_cloud) AS trial_available,
+            CASE WHEN $3 AND {offer} THEN u.trial_offer_sent_at + make_interval(days => {days}) END AS trial_offer_until
         FROM users u
         WHERE u.id = $1
         "#,
-    )
+        offer = crate::trial::offer_open_sql("u"),
+        days = crate::trial::OFFER_OPEN_DAYS,
+    ))
     .bind(auth.id)
     .bind(state.trial_enabled)
+    .bind(!state.stripe_trial_offer_coupon_id.is_empty() && !state.stripe_personal_annual_price_id.is_empty())
     .fetch_one(&state.db)
     .await?;
 

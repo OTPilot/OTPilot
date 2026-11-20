@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/api'
-import { formatTrialEnd, trialCarriesOver, useUserPlan } from '../../lib/plan'
+import { formatTrialEnd, trialCarriesOver, trialOfferOpen, useUserPlan } from '../../lib/plan'
 import TrialCard from './TrialCard'
 
 export default function Billing() {
@@ -11,7 +11,8 @@ export default function Billing() {
   const { data: userData, isLoading } = useUserPlan(justUpgraded)
   const [upgrading, setUpgrading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [yearly, setYearly] = useState(false)
+  // The offer email links here with ?offer=1: yearly is the discounted one.
+  const [yearly, setYearly] = useState(params.get('offer') === '1')
 
   async function checkout(path: string, body?: unknown) {
     setUpgrading(true)
@@ -56,6 +57,19 @@ export default function Billing() {
   const isPaid = (plan === 'personal' && !isTrial) || plan === 'team_lite' || plan === 'team_pro'
   const trialEnd = isTrial ? userData?.trial_ends_at : null
   const isTeam = plan === 'team_lite' || plan === 'team_pro'
+  // Re-rendered when the offer closes, so a page left open doesn't keep
+  // showing $15 (the server stops applying it then).
+  const [, setOfferTick] = useState(0)
+  const offerEnd = userData?.trial_offer_until
+  useEffect(() => {
+    if (!offerEnd) return
+    const ms = Date.parse(offerEnd) - Date.now()
+    if (!(ms > 0) || ms > 2 ** 31 - 1) return
+    const t = setTimeout(() => setOfferTick((n) => n + 1), ms + 1000)
+    return () => clearTimeout(t)
+  }, [offerEnd])
+  const offerUntil = trialOfferOpen(userData?.trial_offer_until) ? userData!.trial_offer_until! : null
+  const personalOffer = !!offerUntil && yearly && !isPaid
   const isOwner = !!team && !!userData && team.owner_id === userData.id
   const isNonOwnerMember = isTeam && !!team && !isOwner
 
@@ -128,6 +142,21 @@ export default function Billing() {
 
       {userData && <TrialCard user={userData} showSubscribe={false} />}
 
+      {offerUntil && !isPaid && (
+        <div className="rounded-2xl border border-teal-500/30 bg-teal-500/10 px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-teal-300">50% off your first year of Personal</p>
+            <p className="text-xs text-zinc-400">$15 instead of $30 when you choose yearly, until {formatTrialEnd(offerUntil)}. Applied at checkout, no code needed.</p>
+          </div>
+          {!yearly && (
+            <button onClick={() => setYearly(true)}
+              className="shrink-0 px-4 py-2 rounded-xl bg-white/8 text-white hover:bg-white/12 border border-white/10 text-sm font-semibold">
+              Show yearly
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Billing-period toggle (applies to Team Lite) */}
       <div className="flex justify-center">
         <div className="inline-flex items-center gap-2 p-1 rounded-xl bg-white/5 border border-white/10">
@@ -159,12 +188,13 @@ export default function Billing() {
         {/* Personal Cloud */}
         <PlanCard
           name="Personal"
-          price={yearly ? '$30' : '$3'}
-          priceNote={yearly ? 'per year' : 'per month'}
+          price={yearly ? (personalOffer ? '$15' : '$30') : '$3'}
+          priceLabel={personalOffer ? '50% off' : undefined}
+          priceNote={yearly ? (personalOffer ? 'first year, then $30/year' : 'per year') : 'per month'}
           features={personalFeatures}
           current={plan === 'personal'}
           highlight={!isPaid}
-          cta={isPaid ? (plan === 'personal' ? 'Current plan' : null) : (upgrading ? 'Redirecting to Stripe…' : `${isTrial ? 'Subscribe' : 'Upgrade'} — ${yearly ? '$30/yr' : '$3/mo'}`)}
+          cta={isPaid ? (plan === 'personal' ? 'Current plan' : null) : (upgrading ? 'Redirecting to Stripe…' : `${isTrial ? 'Subscribe' : 'Upgrade'} — ${yearly ? (personalOffer ? '$15 first year' : '$30/yr') : '$3/mo'}`)}
           ctaDisabled={isPaid || isLoading}
           onCtaClick={!isPaid ? handleUpgrade : undefined}
           ctaNote={!isPaid
