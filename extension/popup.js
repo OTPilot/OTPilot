@@ -5104,7 +5104,9 @@ const TRIAL_NUDGE_MAX = 3;          // "Not now" this many times and it's gone
 const TRIAL_ENDED_BANNER_DAYS = 30;
 const DAY_MS = 864e5;
 
-const trialDaysLeft = endsAt => Math.max(0, Math.ceil((Date.parse(endsAt) - Date.now()) / DAY_MS));
+// At most the trial's length: a clock a little behind the server's would
+// otherwise read "31 of 30 days left" on the first day.
+const trialDaysLeft = endsAt => Math.min(TRIAL_DAYS, Math.max(0, Math.ceil((Date.parse(endsAt) - Date.now()) / DAY_MS)));
 const trialDate = endsAt => new Date(endsAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 const billingUrl = () => CONFIG.DASHBOARD_URL + '/dashboard/billing';
 
@@ -5741,8 +5743,15 @@ async function silentPullSync() {
 
   const justAuthenticated = await initLock();
   await loadState();
-  // Opened by the background for an AI agent waiting (?view=agents).
-  if (new URLSearchParams(location.search).get('view') === 'agents') showView('agents');
+  // Opened for an AI agent waiting: by the card on a page (`agentsOpen`, set
+  // by the background a moment ago) or in its own window (?view=agents).
+  const { agentsOpen } = await chrome.storage.session.get('agentsOpen');
+  if (agentsOpen) chrome.storage.session.remove('agentsOpen');
+  const forAgents = new URLSearchParams(location.search).get('view') === 'agents' || Date.now() - (agentsOpen || 0) < 30_000;
+  if (forAgents) {
+    if (agentsOpen) _agentsSel = { kind: 'waiting' };
+    showView('agents');
+  }
   await syncActiveIndexToUrl();
   // The user may have opened Accounts while the vault was still loading.
   refreshAccountsUI();
@@ -5770,7 +5779,7 @@ async function silentPullSync() {
       if (!session) return;
       const syncKey = await CloudSync.getSyncKey();
       // Opened for an agent waiting: it stays on the Agents view.
-      if (!syncKey && new URLSearchParams(location.search).get('view') !== 'agents') showView('sync');
+      if (!syncKey && !forAgents) showView('sync');
     } catch {}
   })();
 

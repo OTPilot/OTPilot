@@ -616,6 +616,38 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   }
 });
 
+// An AI agent waiting for an answer (background.js announceWaitingAgents):
+// a card like the unlock one. It names nothing (the page can read it); its
+// button, on a real click, opens OTPilot on what waits. Below another
+// OTPilot card already in the corner.
+chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (msg.action === 'agentsNoticeClear') { document.getElementById('otpilot-agents-notice')?.remove(); return; }
+  if (msg.action !== 'agentsNotice' || window.top !== window || !document.body) return;
+  showAgentsNotice(String(msg.text || ''));
+  reply({ ok: true });
+});
+
+function showAgentsNotice(text) {
+  document.getElementById('otpilot-agents-notice')?.remove();
+  const el = makeOverlay('otpilot-agents-notice');
+  el.innerHTML = `${OVERLAY_HEADER}
+    <div style="padding:12px 14px;">
+      <div class="otpilot-agents-text" style="color:var(--ink-2, #cbd5e1);font-size:13px;line-height:1.45;margin-bottom:10px;"></div>
+      <button class="otpilot-agents-review" style="width:100%;padding:8px;background:var(--accent, #0ea5e9);border:none;border-radius:6px;color:var(--on-accent, #fff);font-size:13px;font-weight:600;cursor:pointer;">Review in OTPilot</button>
+    </div>`;
+  el.querySelector('.otpilot-agents-text').textContent = text;
+  const others = ['otpilot-lock', 'otpilot-login-fill', 'otpilot-suggestion', 'otpilot-save-url', 'otpilot-code-reveal']
+    .map(id => document.getElementById(id)).filter(Boolean);
+  if (others.length) el.style.top = `${Math.max(...others.map(o => o.getBoundingClientRect().bottom)) + 8}px`;
+  document.body.appendChild(el);
+  el.querySelector('.otpilot-overlay-close').onclick = () => el.remove();
+  el.querySelector('.otpilot-agents-review').addEventListener('click', e => {
+    if (!e.isTrusted || !chrome.runtime?.id) return;
+    chrome.runtime.sendMessage({ action: 'agentsReview' }).catch(() => {});
+    el.remove();
+  });
+}
+
 function showLockOverlay(accountName, onUnlock, onDismiss) {
   if (document.getElementById('otpilot-lock')) return;
 

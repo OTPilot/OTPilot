@@ -952,3 +952,20 @@ test('with two agents, Activity shows every use and filters by agent', async ({ 
   await expect(detail.locator('.ag-log')).toContainText('from claude');
   await expect(detail.locator('.ag-filter[aria-pressed=true]')).toHaveText('Claude Code');
 });
+
+test('opened from the page card, the popup goes straight to what waits', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(() => chrome.storage.session.set({ agentsOpen: Date.now() }));
+  await page.reload();
+  await expect(page.locator('#agents-panel')).toBeVisible();
+  expect(await page.evaluate(async () => (await chrome.storage.session.get('agentsOpen')).agentsOpen)).toBeUndefined();
+  await page.evaluate(() => { SupabaseAuth.getSession = async () => ({ user: { id: 'user-me' } }); });
+  await installFakeAgents(page);
+  await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    fakeAgents.addRequest(a.id, { query: 'bank' });
+    await renderAgentsPanel();
+  });
+  await expect(page.locator('#agents-detail')).toContainText('Asks for bank');
+});

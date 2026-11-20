@@ -1574,7 +1574,7 @@ async function refreshNotices() {
   if (n) await chrome.action.setBadgeBackgroundColor({ color: '#0284c7' });
   // An AI agent is waiting for an answer: check every 30 s (the shortest
   // alarm) instead of every poll, until nothing waits. With agents connected,
-  // every minute (a request then opens its window soon, not at the next
+  // every minute (a request then shows its card soon, not at the next
   // 5-minute poll).
   let { agentsKnown } = await chrome.storage.local.get('agentsKnown');
   // Not known yet (an update, a new sign-in): asked once, so an account with
@@ -1586,46 +1586,92 @@ async function refreshNotices() {
   if (account && (agentsWaiting || agentsKnown)) chrome.alarms.create(AGENTS_ALARM, { periodInMinutes: agentsWaiting ? 0.5 : 1 });
   else chrome.alarms.clear(AGENTS_ALARM);
   if (agentsWaiting) announceWaitingAgents();
+  else dropAgentsCard();
   return data;
 }
 
-// An agent waiting for the user (one to approve, or a request) opens the
-// popup's Agents view in its own window, like the dashboard-unlock approval:
-// once per agent / request. Closed without an answer, only the badge stays.
-// An open window is focused instead of opening a second one.
-const AGENTS_ANNOUNCED = 'agentsAnnounced'; // session: { ids: [...], windowId }
+// An agent waiting for the user (one to approve, or a request): a card on
+// the page in front of them (content.js showAgentsNotice), like "Unlock
+// OTPilot", once per agent / request. Its button opens the popup on what
+// waits; no window opens on its own. When the active tab can't show it (a
+// chrome:// page, the store, a PDF), the next page they switch to does.
+// The card names nothing (the page can read it). Closed, or once nothing
+// waits, only the toolbar badge stays.
+const AGENTS_CARD = 'agentsCard'; // session: { ids: [announced], tabId, pending }
 function announceWaitingAgents() {
   return navigator.locks.request('otpilot-agents-announce', async () => {
     let data;
     try { data = await Agents.list(); } catch { return; }
-    const ids = [
-      ...(data.agents || []).filter(a => a.status === 'pending').map(a => `a:${a.id}`),
-      ...(data.requests || []).map(r => `r:${r.id}`),
-    ];
-    const { [AGENTS_ANNOUNCED]: seen = {} } = await chrome.storage.session.get(AGENTS_ANNOUNCED);
-    const known = seen.ids || [];
-    const fresh = ids.filter(id => !known.includes(id));
+    const pending = (data.agents || []).filter(a => a.status === 'pending');
+    const requests = data.requests || [];
+    const ids = [...pending.map(a => `a:${a.id}`), ...requests.map(r => `r:${r.id}`)];
+    const { [AGENTS_CARD]: st = {} } = await chrome.storage.session.get(AGENTS_CARD);
     // Only what still waits is remembered (an answered one never comes back).
-    let windowId = seen.windowId ?? null;
-    if (fresh.length) {
-      const open = windowId != null && await chrome.windows.get(windowId).then(() => true, () => false);
-      if (open) {
-        await chrome.windows.update(windowId, { focused: true }).catch(() => {});
-        // It may show another view now: back to Agents (agentsView.js).
-        chrome.runtime.sendMessage({ action: 'agentsShow' }).catch(() => {});
-      }
-      else {
-        windowId = null;
-        try {
-          const win = await chrome.windows.create({
-            url: chrome.runtime.getURL('popup.html?view=agents&window=1'), type: 'popup', width: 620, height: 640, focused: true,
-          });
-          windowId = win.id;
-        } catch {}
-      }
+    const known = (st.ids || []).filter(id => ids.includes(id));
+    if (!ids.length) { await dropAgentsCard(st); return; }
+    if (!ids.some(id => !known.includes(id))) {
+      await chrome.storage.session.set({ [AGENTS_CARD]: { ...st, ids: known } });
+      return;
     }
-    await chrome.storage.session.set({ [AGENTS_ANNOUNCED]: { ids, windowId } });
+    // An open Agents view (the popup, or its window) shows the new one.
+    chrome.runtime.sendMessage({ action: 'agentsShow' }).catch(() => {});
+    const tabId = await showAgentsCard(agentsCardText(pending.length, requests.length));
+    await chrome.storage.session.set({ [AGENTS_CARD]: tabId == null
+      ? { ids: known, tabId: st.tabId ?? null, pending: true }
+      : { ids, tabId, pending: false } });
   });
+}
+
+function agentsCardText(pending, requests) {
+  if (!requests) return pending === 1 ? 'An AI agent wants to connect. Check its code in OTPilot.' : `${pending} AI agents want to connect. Check their codes in OTPilot.`;
+  if (!pending) return requests === 1 ? 'An AI agent is asking to use an account.' : `AI agents are asking to use ${requests} accounts.`;
+  return `${pending + requests} things from your AI agents are waiting for you.`;
+}
+
+// The card on the active tab's page: its id, or null when that page can't
+// show it.
+async function showAgentsCard(text) {
+  let tab;
+  try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch { return null; }
+  if (!tab?.id || !/^https?:/.test(tab.url || '')) return null;
+  const res = await chrome.tabs.sendMessage(tab.id, { action: 'agentsNotice', text }, { frameId: 0 }).catch(() => null);
+  return res?.ok ? tab.id : null;
+}
+
+// Nothing waits any more: the card goes from the page that shows it.
+async function dropAgentsCard(st) {
+  if (!st) ({ [AGENTS_CARD]: st } = await chrome.storage.session.get(AGENTS_CARD));
+  if (!st || (!st.ids?.length && st.tabId == null && !st.pending)) return;
+  if (st.tabId != null) chrome.tabs.sendMessage(st.tabId, { action: 'agentsNoticeClear' }, { frameId: 0 }).catch(() => {});
+  await chrome.storage.session.set({ [AGENTS_CARD]: { ids: [] } });
+}
+
+// A card that found no page to show on: tried again on the next one.
+async function retryAgentsCard() {
+  const { [AGENTS_CARD]: st } = await chrome.storage.session.get(AGENTS_CARD);
+  if (st?.pending) announceWaitingAgents();
+}
+chrome.tabs.onActivated.addListener(() => { retryAgentsCard(); });
+chrome.tabs.onUpdated.addListener((_id, info, tab) => { if (info.status === 'complete' && tab.active) retryAgentsCard(); });
+
+// The card's button (a real click, checked in content.js): the popup opens
+// on what waits (popup.js reads `agentsOpen`). Where the popup can't be
+// opened from here (older Chrome, no focused window), the Agents view in a
+// window instead.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.action !== 'agentsReview') return;
+  if (!sender.tab || sender.frameId !== 0) { sendResponse(null); return; }
+  openAgentsPopup(sender.tab.windowId).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
+  return true;
+});
+
+async function openAgentsPopup(windowId) {
+  await chrome.storage.session.set({ agentsOpen: Date.now() });
+  try {
+    await chrome.action.openPopup(windowId != null ? { windowId } : undefined);
+    return;
+  } catch { /* fall back to a window */ }
+  await chrome.windows.create({ url: chrome.runtime.getURL('popup.html?view=agents&window=1'), type: 'popup', width: 620, height: 640, focused: true });
 }
 
 const AGENTS_ALARM = 'otpilot-agents-waiting';
@@ -1760,6 +1806,12 @@ chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
   }
   if (msg?.action === 'unlockVault') {
     requestDashboardUnlock(msg.userId).then(sendResponse, () => sendResponse({ ok: false, error: 'failed' }));
+    return true;
+  }
+  // The connect page claimed an agent's pairing: it waits for approval now,
+  // so the card shows at once instead of at the next check.
+  if (msg?.action === 'agentsCheck') {
+    refreshNotices().then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
     return true;
   }
 });

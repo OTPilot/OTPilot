@@ -6,6 +6,8 @@
 ### Extension
 
 - **Agents view, cleaner**: three tabs. *Agents* lists the connected agents (a notice says when something waits); open one to see what it can use, tap an account to change its permissions or remove it, and find rename, setup instructions and revoke (now confirmed first) in its ⋯ menu. *Requests* holds what waits for you: a new agent's code, an account request in two steps (which account, what it can use), and "ask every time" uses answered in one tap. *Activity* shows every agent's uses, or one agent's. Adding an account now gives the whole sign-in (username, password and 2FA) by default. Setup instructions include [Pi](https://pi.dev).
+- An AI agent waiting for you (a new one to approve, an account request) shows a **card on the page you're on**, like "Unlock OTPilot", instead of opening a window; **Review in OTPilot** opens the extension on it. Connecting an agent from the website shows it right away.
+- The trial's days left never read more than 30 ("31 of 30" with a clock a few seconds behind the server's).
 - Free keeps unlimited items: the 50-item limit is gone (a CSV import of any size works). The Agents view shows the monthly uses card for Free (N of 10, the renew date) and offers **Start free trial** / **Upgrade to Personal** when they run out.
 
 ### API
@@ -21,6 +23,7 @@
 ### Web
 
 - Pricing, FAQ and the AI agents page describe the Free agent limits (1 agent, 10 uses a month) and no item limit.
+- The connect page tells the extension when an agent waits, so its card shows at once. The trial's days left never exceed 30.
 - The agent setup guide has a Pi tab (`pi mcp add otpilot -- npx -y @otpilot/mcp@latest`).
 
 

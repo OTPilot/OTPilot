@@ -39,6 +39,14 @@ function send<T>(id: string, msg: unknown, timeoutMs: number): Promise<T | null>
   })
 }
 
+/** Tells the installed extension an agent now waits for approval (its
+ *  pairing was just claimed), so it shows its card at once instead of at its
+ *  next check. Best effort: nothing happens without the extension. */
+export function notifyAgentWaiting(): void {
+  if (!runtime()) return
+  for (const id of IDS) void send(id, { action: 'agentsCheck' }, 1500)
+}
+
 export type ExtensionAccount = 'same' | 'other' | 'signed-out'
 export type FoundExtension = { id: string; account: ExtensionAccount }
 

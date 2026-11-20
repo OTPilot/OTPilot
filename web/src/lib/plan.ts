@@ -38,8 +38,10 @@ export function useUserPlan(forceRefresh = false) {
   })
 }
 
+// At most the trial's length: a clock a little behind the server's would
+// otherwise read "31 days left" on the first day.
 export function trialDaysLeft(endsAt: string, now = Date.now()) {
-  return Math.max(0, Math.ceil((Date.parse(endsAt) - now) / 864e5))
+  return Math.min(TRIAL_DAYS, Math.max(0, Math.ceil((Date.parse(endsAt) - now) / 864e5)))
 }
 
 export function formatTrialEnd(endsAt: string) {

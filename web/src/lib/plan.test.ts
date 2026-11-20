@@ -10,6 +10,8 @@ describe('trial', () => {
     expect(trialDaysLeft(inHours(72), now)).toBe(3)
     expect(trialDaysLeft(inHours(2), now)).toBe(1)
     expect(trialDaysLeft(inHours(-5), now)).toBe(0)
+    // A clock a few seconds behind the server's, on the trial's first day.
+    expect(trialDaysLeft(inHours(30 * 24 + 0.01), now)).toBe(30)
   })
 
   it('carries the trial over to a subscription only with 49 h or more left (Stripe needs 48)', () => {
