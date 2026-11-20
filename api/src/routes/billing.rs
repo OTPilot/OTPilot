@@ -205,7 +205,7 @@ async fn create_checkout(
     params.push(("automatic_tax[enabled]", "true"));
 
     let res = client
-        .post("https://api.stripe.com/v1/checkout/sessions")
+        .post(format!("{}/v1/checkout/sessions", state.stripe_api_base))
         .basic_auth(&state.stripe_secret_key, Some(""))
         .form(&params)
         .send()
@@ -500,7 +500,8 @@ async fn webhook(
                 // tabs) keeps the first, and the new one is canceled.
                 let granted = sqlx::query(
                     "UPDATE users SET plan = CASE WHEN plan IN ('team_lite', 'team_pro') THEN plan ELSE 'personal' END, \
-                     has_personal_cloud = true, personal_subscription_id = NULLIF($1, ''), stripe_customer_id = $2 \
+                     has_personal_cloud = true, personal_subscription_id = NULLIF($1, ''), stripe_customer_id = $2, \
+                     subscribed_at = COALESCE(subscribed_at, NOW()) \
                      WHERE id = $3 AND deletion_started_at IS NULL
                        AND (personal_subscription_id IS NULL OR personal_subscription_id = $1)",
                 )
@@ -533,7 +534,8 @@ async fn webhook(
                 // An account being deleted (or gone) gets nothing: the new
                 // subscription is cancelled instead of left charging.
                 let granted = sqlx::query(
-                    "UPDATE users SET plan = 'team_lite', stripe_customer_id = $1
+                    "UPDATE users SET plan = 'team_lite', stripe_customer_id = $1,
+                         subscribed_at = COALESCE(subscribed_at, NOW())
                      WHERE id = $2 AND deletion_started_at IS NULL",
                 )
                 .bind(customer_id)
@@ -576,7 +578,8 @@ async fn webhook(
                 // before 2.0 can still complete): set plan + the flag.
                 drop(tx);
                 sqlx::query(
-                    "UPDATE users SET plan = 'personal', has_personal_cloud = true, stripe_customer_id = $1 WHERE id = $2",
+                    "UPDATE users SET plan = 'personal', has_personal_cloud = true, stripe_customer_id = $1, \
+                     subscribed_at = COALESCE(subscribed_at, NOW()) WHERE id = $2",
                 )
                 .bind(customer_id)
                 .bind(user_id)
@@ -720,6 +723,7 @@ mod db_tests {
         body::Body,
         http::{Method, Request, StatusCode},
     };
+    use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -1086,6 +1090,129 @@ mod db_tests {
             StatusCode::OK
         );
         assert_eq!(row(&pool, user).await.2.as_deref(), Some("sub_1"));
+    }
+
+    /// A Stripe stand-in answering every Checkout session with a URL; keeps
+    /// the form fields of each request.
+    async fn checkout_stand_in() -> (String, Arc<Mutex<Vec<Vec<(String, String)>>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let app = Router::new().fallback(move |body: axum::body::Bytes| {
+            let log = log.clone();
+            async move {
+                let query = String::from_utf8_lossy(&body);
+                let fields: Vec<(String, String)> =
+                    reqwest::Url::parse(&format!("http://x/?{query}"))
+                        .unwrap()
+                        .query_pairs()
+                        .into_owned()
+                        .collect();
+                log.lock().unwrap().push(fields);
+                Json(json!({ "url": "https://checkout.example/s" }))
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (base, seen)
+    }
+
+    /// Opens a Personal checkout; the coupon Stripe was asked for, if any.
+    async fn coupon_of(
+        app: &Router,
+        seen: &Mutex<Vec<Vec<(String, String)>>>,
+        user: Uuid,
+        annual: bool,
+    ) -> Option<String> {
+        let (s, _) = call(
+            app,
+            user,
+            Method::POST,
+            "/billing/checkout",
+            Some(json!({ "annual": annual })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let fields = seen.lock().unwrap().pop().expect("sent to Stripe");
+        let price = if annual {
+            "price_personal_annual"
+        } else {
+            "price_personal_monthly"
+        };
+        assert!(fields.contains(&("line_items[0][price]".into(), price.into())));
+        fields
+            .into_iter()
+            .find(|(k, _)| k == "discounts[0][coupon]")
+            .map(|(_, v)| v)
+    }
+
+    async fn offer_sent_days_ago(db: &sqlx::PgPool, user: Uuid, days: i32) {
+        sqlx::query(
+            "UPDATE users SET trial_ends_at = NOW() - interval '30 days',
+                              trial_offer_sent_at = NOW() - make_interval(days => $2)
+             WHERE id = $1",
+        )
+        .bind(user)
+        .bind(days)
+        .execute(db)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_annual_checkout_applies_the_offer_only_while_it_is_open() {
+        let db = test_db().await;
+        let (base, seen) = checkout_stand_in().await;
+        let mut state = test_state(db.pool.clone());
+        state.stripe_api_base = base;
+        state.stripe_trial_offer_coupon_id = "trial-offer-50".into();
+        let app = router().with_state(state.clone());
+
+        let user = create_user(&db.pool, "free").await;
+        offer_sent_days_ago(&db.pool, user, 1).await;
+        assert_eq!(
+            coupon_of(&app, &seen, user, true).await.as_deref(),
+            Some("trial-offer-50")
+        );
+        // Monthly: never.
+        assert_eq!(coupon_of(&app, &seen, user, false).await, None);
+
+        // No email sent, or its week over: nothing.
+        let none = create_user(&db.pool, "free").await;
+        assert_eq!(coupon_of(&app, &seen, none, true).await, None);
+        offer_sent_days_ago(&db.pool, user, crate::trial::OFFER_OPEN_DAYS + 1).await;
+        assert_eq!(coupon_of(&app, &seen, user, true).await, None);
+
+        // No coupon configured: nothing, even with the offer open.
+        offer_sent_days_ago(&db.pool, user, 1).await;
+        let mut plain = state.clone();
+        plain.stripe_trial_offer_coupon_id = String::new();
+        let plain = router().with_state(plain);
+        assert_eq!(coupon_of(&plain, &seen, user, true).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_subscription_cancelled_during_the_offer_does_not_reopen_it() {
+        let (base, seen) = checkout_stand_in().await;
+        let (_, pool, _guard) = app().await;
+        let mut state = test_state(pool.clone());
+        state.stripe_webhook_secret = SECRET.into();
+        state.stripe_api_base = base;
+        state.stripe_trial_offer_coupon_id = "trial-offer-50".into();
+        let app = router().with_state(state);
+
+        let user = create_user(&pool, "free").await;
+        offer_sent_days_ago(&pool, user, 1).await;
+        assert!(coupon_of(&app, &seen, user, true).await.is_some());
+        // Subscribed with it, then cancelled at once: Free again.
+        send_event(&app, completed(user, "personal", "sub_offer")).await;
+        send_event(&app, deleted("sub_offer")).await;
+        assert_eq!(row(&pool, user).await, ("free".into(), false, None));
+        assert_eq!(coupon_of(&app, &seen, user, true).await, None);
+        assert!(crate::trial::offer_until(&pool, user)
+            .await
+            .unwrap()
+            .is_none());
     }
 }
 

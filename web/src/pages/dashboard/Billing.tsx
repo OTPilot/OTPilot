@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/api'
@@ -57,6 +57,17 @@ export default function Billing() {
   const isPaid = (plan === 'personal' && !isTrial) || plan === 'team_lite' || plan === 'team_pro'
   const trialEnd = isTrial ? userData?.trial_ends_at : null
   const isTeam = plan === 'team_lite' || plan === 'team_pro'
+  // Re-rendered when the offer closes, so a page left open doesn't keep
+  // showing $15 (the server stops applying it then).
+  const [, setOfferTick] = useState(0)
+  const offerEnd = userData?.trial_offer_until
+  useEffect(() => {
+    if (!offerEnd) return
+    const ms = Date.parse(offerEnd) - Date.now()
+    if (!(ms > 0) || ms > 2 ** 31 - 1) return
+    const t = setTimeout(() => setOfferTick((n) => n + 1), ms + 1000)
+    return () => clearTimeout(t)
+  }, [offerEnd])
   const offerUntil = trialOfferOpen(userData?.trial_offer_until) ? userData!.trial_offer_until! : null
   const personalOffer = !!offerUntil && yearly && !isPaid
   const isOwner = !!team && !!userData && team.owner_id === userData.id

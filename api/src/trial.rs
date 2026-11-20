@@ -43,11 +43,12 @@ pub const OFFER_OPEN_DAYS: i32 = 7;
 const TICK: Duration = Duration::from_secs(3600);
 
 /// Who the offer is still open to: its email went out less than
-/// `OFFER_OPEN_DAYS` ago and they're Free, never entitled to Personal. A SQL
-/// condition on the `users` row named `t` (binds nothing).
+/// `OFFER_OPEN_DAYS` ago and they're Free and never paid (`subscribed_at`:
+/// a subscription cancelled since doesn't reopen it). A SQL condition on
+/// the `users` row named `t` (binds nothing).
 pub fn offer_open_sql(t: &str) -> String {
     format!(
-        "({t}.plan = 'free' AND NOT {t}.has_personal_cloud
+        "({t}.plan = 'free' AND NOT {t}.has_personal_cloud AND {t}.subscribed_at IS NULL
           AND {t}.trial_offer_sent_at > NOW() - make_interval(days => {OFFER_OPEN_DAYS}))"
     )
 }
@@ -215,7 +216,8 @@ pub async fn tick(state: &AppState) -> Result<()> {
     }
     let offers = sqlx::query_as::<_, (Uuid, String, DateTime<Utc>)>(
         "UPDATE users SET trial_offer_sent_at = NOW()
-         WHERE plan = 'free' AND NOT has_personal_cloud AND trial_ended_sent_at IS NOT NULL
+         WHERE plan = 'free' AND NOT has_personal_cloud AND subscribed_at IS NULL
+           AND trial_ended_sent_at IS NOT NULL
            AND trial_ends_at <= NOW() - make_interval(days => $1)
            AND trial_ends_at > NOW() - make_interval(days => $2)
            AND trial_offer_sent_at IS NULL AND email IS NOT NULL AND deletion_started_at IS NULL
@@ -457,6 +459,13 @@ mod tests {
             .execute(&db.pool)
             .await
             .unwrap();
+        // Paid once, cancelled since: Free again, but not offered.
+        let former = ended_days_ago(&db.pool, OFFER_AFTER_DAYS).await;
+        sqlx::query("UPDATE users SET subscribed_at = NOW() - interval '2 days' WHERE id = $1")
+            .bind(former)
+            .execute(&db.pool)
+            .await
+            .unwrap();
         let team = ended_days_ago(&db.pool, OFFER_AFTER_DAYS).await;
         sqlx::query("UPDATE users SET plan = 'team_lite' WHERE id = $1")
             .bind(team)
@@ -468,6 +477,7 @@ mod tests {
         assert!(!offer_sent(&db.pool, old).await);
         assert!(!offer_sent(&db.pool, subscribed).await);
         assert!(!offer_sent(&db.pool, team).await);
+        assert!(!offer_sent(&db.pool, former).await);
 
         // Subscribing closes an open offer.
         assert!(offer_until(&db.pool, user).await.unwrap().is_some());
