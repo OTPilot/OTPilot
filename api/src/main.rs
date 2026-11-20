@@ -27,6 +27,9 @@ pub struct AppState {
     pub stripe_webhook_secret: String,
     pub stripe_personal_monthly_price_id: String,
     pub stripe_personal_annual_price_id: String,
+    /// Stripe coupon (50% off, once) the annual checkout applies while the
+    /// post-trial offer is open (`trial::offer_until`). Empty: no offer.
+    pub stripe_trial_offer_coupon_id: String,
     pub stripe_team_lite_monthly_price_id: String,
     pub stripe_team_lite_annual_price_id: String,
     pub stripe_extra_seat_price_id: String,
@@ -107,6 +110,8 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("STRIPE_PERSONAL_MONTHLY_PRICE_ID").unwrap_or_default();
     let stripe_personal_annual_price_id =
         std::env::var("STRIPE_PERSONAL_ANNUAL_PRICE_ID").unwrap_or_default();
+    let stripe_trial_offer_coupon_id =
+        std::env::var("STRIPE_TRIAL_OFFER_COUPON_ID").unwrap_or_default();
     // Team plan prices are optional (feature unconfigured → empty string).
     let stripe_team_lite_monthly_price_id =
         std::env::var("STRIPE_TEAM_LITE_MONTHLY_PRICE_ID").unwrap_or_default();
@@ -142,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
         stripe_webhook_secret,
         stripe_personal_monthly_price_id,
         stripe_personal_annual_price_id,
+        stripe_trial_offer_coupon_id,
         stripe_team_lite_monthly_price_id,
         stripe_team_lite_annual_price_id,
         stripe_extra_seat_price_id,

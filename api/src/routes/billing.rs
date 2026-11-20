@@ -124,7 +124,8 @@ struct CheckoutUserRow {
 /// left than this the first charge is simply now.
 const MIN_TRIAL_CARRY_HOURS: i64 = 49;
 
-/// Personal subscription checkout ($3/mo or $30/yr). Body `{ "annual": bool }`.
+/// Personal subscription checkout ($3/mo or $30/yr; the first year at 50% off
+/// while the post-trial offer is open). Body `{ "annual": bool }`.
 /// Returns the Stripe Checkout URL.
 async fn create_checkout(
     State(state): State<AppState>,
@@ -185,6 +186,19 @@ async fn create_checkout(
     let trial_end = trial_carry_over(user.trial_ends_at, chrono::Utc::now());
     if let Some(end) = trial_end.as_deref() {
         params.push(("subscription_data[trial_end]", end));
+    }
+    // The post-trial offer (its email): 50% off the first year, annual only.
+    // Decided here, never by the client.
+    if annual
+        && !state.stripe_trial_offer_coupon_id.is_empty()
+        && crate::trial::offer_until(&state.db, auth.id)
+            .await?
+            .is_some()
+    {
+        params.push((
+            "discounts[0][coupon]",
+            state.stripe_trial_offer_coupon_id.as_str(),
+        ));
     }
     let mut customer = None;
     params.extend(customer_params(&state.db, auth.id, &email, &mut customer).await?);

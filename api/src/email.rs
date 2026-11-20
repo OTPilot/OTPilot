@@ -561,6 +561,39 @@ fn plural(n: i64, word: &str) -> String {
     }
 }
 
+/// `trial::OFFER_AFTER_DAYS` after a trial ended unsubscribed: 50% off the
+/// first year (the Stripe coupon the annual checkout applies until `until`).
+pub async fn send_trial_offer_email(
+    enabled: bool,
+    api_key: Option<&str>,
+    from: &str,
+    to: &str,
+    until: DateTime<Utc>,
+) -> bool {
+    send(enabled, api_key, from, to, trial_offer(until)).await
+}
+
+fn trial_offer(until: DateTime<Utc>) -> Mail {
+    let date = long_date(until);
+    Mail {
+        subject: "Half price on your first year of OTPilot Personal".into(),
+        eyebrow: "An offer for you",
+        title: "Turn sync back on for $15".into(),
+        paras: vec![
+            "Your trial ended a week ago. If keeping your codes and passwords in sync across your browsers was useful, your first year of Personal is half price.".into(),
+            format!("The discount is applied for you when you choose yearly on the billing page, until {date}. No code to enter."),
+        ],
+        details: vec![
+            ("First year", "$15 (instead of $30)".into()),
+            ("Then", "$30/year · cancel anytime".into()),
+            ("Until", date),
+        ],
+        cta: ("Get 50% off", format!("{SITE}/dashboard/billing?offer=1")),
+        footnote: Some("Staying on Free is fine too: everything keeps working on each device.".into()),
+        ..Default::default()
+    }
+}
+
 /// Sent when a user subscribes to the Personal (cloud sync) plan.
 pub async fn send_personal_subscription_email(
     enabled: bool,
@@ -696,6 +729,17 @@ mod tests {
             days_left(now + chrono::Duration::minutes(24 * 60 + 30), now),
             2
         );
+    }
+
+    #[test]
+    fn the_offer_links_to_billing_and_says_until_when() {
+        let until = DateTime::parse_from_rfc3339("2026-03-09T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mail = trial_offer(until);
+        assert!(mail.cta.1.ends_with("/dashboard/billing?offer=1"));
+        assert!(mail.paras[1].contains("March 9, 2026"));
+        assert!(mail.html().contains("$15 (instead of $30)"));
     }
 
     #[test]

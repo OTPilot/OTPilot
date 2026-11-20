@@ -9,7 +9,10 @@
 //! emails); the checkout carries the remaining days over as a Stripe trial.
 //!
 //! `spawn` runs `tick` every hour: expire ended trials, then send the
-//! reminder (`REMINDER_DAYS` before the end) and the "trial ended" email.
+//! reminder (`REMINDER_DAYS` before the end), the "trial ended" email and,
+//! `OFFER_AFTER_DAYS` after the end, one offer of 50% off the first year
+//! (only with `STRIPE_TRIAL_OFFER_COUPON_ID` set; `offer_open` says whether
+//! the checkout applies it).
 //! Each email is claimed by setting its column in the same UPDATE that picks
 //! the users, so two API instances never send one twice; one the email queue
 //! drops (full) is released for the next run. `sync-user` also
@@ -30,7 +33,36 @@ pub const REMINDER_DAYS: i32 = 3;
 /// A trial that ended longer ago than this gets no "trial ended" email (the
 /// user was on a team then, and has left it since).
 const ENDED_EMAIL_DAYS: i32 = 7;
+/// Days after the end of a trial the discount offer goes out.
+pub const OFFER_AFTER_DAYS: i32 = 7;
+/// A trial that ended longer ago than this gets no offer (sent late, or
+/// the user was on a team then).
+const OFFER_LATEST_DAYS: i32 = 14;
+/// How long the offer stays open after its email.
+pub const OFFER_OPEN_DAYS: i32 = 7;
 const TICK: Duration = Duration::from_secs(3600);
+
+/// Who the offer is still open to: its email went out less than
+/// `OFFER_OPEN_DAYS` ago and they're Free, never entitled to Personal. A SQL
+/// condition on the `users` row named `t` (binds nothing).
+pub fn offer_open_sql(t: &str) -> String {
+    format!(
+        "({t}.plan = 'free' AND NOT {t}.has_personal_cloud
+          AND {t}.trial_offer_sent_at > NOW() - make_interval(days => {OFFER_OPEN_DAYS}))"
+    )
+}
+
+/// When the caller's offer closes, while it's open.
+pub async fn offer_until(db: &PgPool, user: Uuid) -> Result<Option<DateTime<Utc>>> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT users.trial_offer_sent_at + make_interval(days => {OFFER_OPEN_DAYS})
+         FROM users WHERE id = $1 AND {}",
+        offer_open_sql("users")
+    ))
+    .bind(user)
+    .fetch_optional(db)
+    .await?)
+}
 
 /// Starts the caller's trial when they can still have one (Free, never had
 /// one, never entitled to Personal, not being deleted). Returns its end, or
@@ -174,6 +206,41 @@ pub async fn tick(state: &AppState) -> Result<()> {
         }
     }
     release(&state.db, "trial_ended_sent_at", &dropped).await?;
+
+    // The offer: only when the checkout can apply it.
+    if state.stripe_trial_offer_coupon_id.is_empty()
+        || state.stripe_personal_annual_price_id.is_empty()
+    {
+        return Ok(());
+    }
+    let offers = sqlx::query_as::<_, (Uuid, String, DateTime<Utc>)>(
+        "UPDATE users SET trial_offer_sent_at = NOW()
+         WHERE plan = 'free' AND NOT has_personal_cloud AND trial_ended_sent_at IS NOT NULL
+           AND trial_ends_at <= NOW() - make_interval(days => $1)
+           AND trial_ends_at > NOW() - make_interval(days => $2)
+           AND trial_offer_sent_at IS NULL AND email IS NOT NULL AND deletion_started_at IS NULL
+         RETURNING id, email, NOW() + make_interval(days => $3)",
+    )
+    .bind(OFFER_AFTER_DAYS)
+    .bind(OFFER_LATEST_DAYS)
+    .bind(OFFER_OPEN_DAYS)
+    .fetch_all(&state.db)
+    .await?;
+    let mut dropped = Vec::new();
+    for (id, email, until) in offers {
+        let queued = crate::email::send_trial_offer_email(
+            state.send_emails,
+            state.resend_api_key.as_deref(),
+            &state.from_email,
+            &email,
+            until,
+        )
+        .await;
+        if !queued {
+            dropped.push(id);
+        }
+    }
+    release(&state.db, "trial_offer_sent_at", &dropped).await?;
     Ok(())
 }
 
@@ -309,6 +376,107 @@ mod tests {
         // Claimed again on the next run.
         tick(&state).await.unwrap();
         assert!(row(&db.pool, user).await.2);
+    }
+
+    async fn offer_sent(db: &PgPool, user: Uuid) -> bool {
+        sqlx::query_scalar("SELECT trial_offer_sent_at IS NOT NULL FROM users WHERE id = $1")
+            .bind(user)
+            .fetch_one(db)
+            .await
+            .unwrap()
+    }
+
+    fn offer_state(db: &PgPool) -> AppState {
+        let mut state = test_state(db.clone());
+        state.stripe_trial_offer_coupon_id = "trial-offer-50".into();
+        state
+    }
+
+    /// A trial that ended `days` ago, its "ended" email sent.
+    async fn ended_days_ago(db: &PgPool, days: i32) -> Uuid {
+        let user = create_user(db, "free").await;
+        sqlx::query(
+            "UPDATE users SET email = 'a@b.c', trial_ends_at = NOW() - make_interval(days => $2),
+                              trial_ended_sent_at = NOW() - make_interval(days => $2)
+             WHERE id = $1",
+        )
+        .bind(user)
+        .bind(days)
+        .execute(db)
+        .await
+        .unwrap();
+        user
+    }
+
+    #[tokio::test]
+    async fn the_offer_goes_once_a_week_after_the_end() {
+        let db = test_db().await;
+        let state = offer_state(&db.pool);
+        let user = ended_days_ago(&db.pool, OFFER_AFTER_DAYS - 1).await;
+        tick(&state).await.unwrap();
+        assert!(!offer_sent(&db.pool, user).await);
+        assert!(offer_until(&db.pool, user).await.unwrap().is_none());
+
+        sqlx::query(
+            "UPDATE users SET trial_ends_at = NOW() - make_interval(days => $2) WHERE id = $1",
+        )
+        .bind(user)
+        .bind(OFFER_AFTER_DAYS)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        tick(&state).await.unwrap();
+        assert!(offer_sent(&db.pool, user).await);
+        let until = offer_until(&db.pool, user).await.unwrap().expect("open");
+        let hours = (until - Utc::now()).num_hours();
+        assert!((24 * OFFER_OPEN_DAYS as i64 - 1..=24 * OFFER_OPEN_DAYS as i64).contains(&hours));
+
+        // Closed once its week is over.
+        sqlx::query("UPDATE users SET trial_offer_sent_at = NOW() - make_interval(days => $2) WHERE id = $1")
+            .bind(user)
+            .bind(OFFER_OPEN_DAYS)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(offer_until(&db.pool, user).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn no_offer_without_a_coupon_for_subscribers_or_old_trials() {
+        let db = test_db().await;
+        // No coupon configured: nothing is sent.
+        let user = ended_days_ago(&db.pool, OFFER_AFTER_DAYS).await;
+        tick(&test_state(db.pool.clone())).await.unwrap();
+        assert!(!offer_sent(&db.pool, user).await);
+
+        let state = offer_state(&db.pool);
+        let old = ended_days_ago(&db.pool, OFFER_LATEST_DAYS + 1).await;
+        let subscribed = ended_days_ago(&db.pool, OFFER_AFTER_DAYS).await;
+        sqlx::query("UPDATE users SET plan = 'personal', has_personal_cloud = true WHERE id = $1")
+            .bind(subscribed)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let team = ended_days_ago(&db.pool, OFFER_AFTER_DAYS).await;
+        sqlx::query("UPDATE users SET plan = 'team_lite' WHERE id = $1")
+            .bind(team)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        tick(&state).await.unwrap();
+        assert!(offer_sent(&db.pool, user).await);
+        assert!(!offer_sent(&db.pool, old).await);
+        assert!(!offer_sent(&db.pool, subscribed).await);
+        assert!(!offer_sent(&db.pool, team).await);
+
+        // Subscribing closes an open offer.
+        assert!(offer_until(&db.pool, user).await.unwrap().is_some());
+        sqlx::query("UPDATE users SET plan = 'personal', has_personal_cloud = true WHERE id = $1")
+            .bind(user)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(offer_until(&db.pool, user).await.unwrap().is_none());
     }
 
     #[tokio::test]
