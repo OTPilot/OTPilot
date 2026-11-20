@@ -1,11 +1,16 @@
 import { test, expect, seedUnlocked } from './fixtures.js';
 
-// An AI agent waiting for the user opens the Agents view in a window, once per
-// agent / request (background.js announceWaitingAgents); closing it leaves the badge.
+// An AI agent waiting for the user shows a card on the page in front of them,
+// once per agent / request (background.js announceWaitingAgents); its button
+// opens the popup on what waits, or the Agents view in a window where the
+// popup can't be opened. No window opens on its own.
 
+const SITE = 'http://localhost:8765/test';
 const popups = context => context.pages().filter(p => p.url().includes('popup.html?view=agents&window=1'));
+const card = page => page.locator('#otpilot-agents-notice');
 
-test('a waiting agent opens the Agents window once; closed without an answer it stays closed; a new request opens it again', async ({ context, extensionId }) => {
+// The worker answers from `__agents` (pending agents, requests).
+async function fakeWaiting(context, extensionId, agents) {
   const setup = await context.newPage();
   await setup.goto(`chrome-extension://${extensionId}/popup.html`);
   await setup.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
@@ -13,40 +18,120 @@ test('a waiting agent opens the Agents window once; closed without an answer it 
   await setup.close();
   let [worker] = context.serviceWorkers();
   if (!worker) worker = await context.waitForEvent('serviceworker');
-  await worker.evaluate(() => {
-    globalThis.__agents = { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] };
-    const realFetch = globalThis.fetch;
+  await worker.evaluate(a => {
+    globalThis.__agents = a;
+    const realFetch = globalThis.__realFetch || (globalThis.__realFetch = globalThis.fetch);
     globalThis.fetch = async url => String(url).endsWith('/notifications')
-      ? new Response(JSON.stringify({ invites: [], notices: [], agents: { pending: __agents.agents.filter(a => a.status === 'pending').length, requests: __agents.requests.length } }))
+      ? new Response(JSON.stringify({ invites: [], notices: [], agents: { pending: __agents.agents.filter(x => x.status === 'pending').length, requests: __agents.requests.length } }))
       : realFetch(url);
     SupabaseAuth.getAccessToken = async () => 'token';
     Agents.list = async () => structuredClone(__agents);
-    return chrome.storage.session.remove('agentsAnnounced');
-  });
-
+    return chrome.storage.session.remove(['agentsCard', 'agentsOpen']);
+  }, agents);
   const run = () => worker.evaluate(async () => { await refreshNotices(); await navigator.locks.request('otpilot-agents-announce', () => {}); });
-  await run();
-  await expect.poll(() => popups(context).length).toBe(1);
-  const win = popups(context)[0];
-  await expect(win.locator('#agents-panel')).toBeVisible();
-  expect(await worker.evaluate(() => chrome.action.getBadgeText({}))).toBe('1');
+  return { worker, run };
+}
 
-  // Same agent still waiting: no second window.
+test('a waiting agent shows a card on the page once; closed, it stays closed; a new request shows it again; no window opens', async ({ context, extensionId }) => {
+  const { worker, run } = await fakeWaiting(context, extensionId, { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] });
+  const site = await context.newPage();
+  await site.goto(`${SITE}/blank.html`);
+  await site.bringToFront();
   await run();
-  await win.waitForTimeout(300);
-  expect(popups(context)).toHaveLength(1);
+  await expect(card(site)).toContainText('An AI agent wants to connect. Check its code in OTPilot.');
+  expect(await worker.evaluate(() => chrome.action.getBadgeText({}))).toBe('1');
+  expect(popups(context)).toHaveLength(0);
+
+  // Same agent still waiting: the same card, no second one.
+  await run();
+  await expect(card(site)).toHaveCount(1);
 
   // Closed without an answer: only the badge.
-  await win.close();
+  await card(site).locator('.otpilot-overlay-close').click();
   await run();
-  await worker.evaluate(() => new Promise(r => setTimeout(r, 300)));
-  expect(popups(context)).toHaveLength(0);
+  await site.waitForTimeout(300);
+  await expect(card(site)).toHaveCount(0);
   expect(await worker.evaluate(() => chrome.action.getBadgeText({}))).toBe('1');
 
-  // A new request: the window opens again.
+  // A new request: the card again.
   await worker.evaluate(() => { __agents.requests.push({ id: 'rq1', agent_id: 'ag1', query: 'github', item_id: null }); });
   await run();
+  await expect(card(site)).toContainText('2 things from your AI agents are waiting for you.');
+
+  // Answered elsewhere: nothing waits, the card goes.
+  await worker.evaluate(() => { __agents.agents = []; __agents.requests = []; });
+  await run();
+  await expect(card(site)).toHaveCount(0);
+  expect(popups(context)).toHaveLength(0);
+});
+
+test("the card names nothing, and its Review opens OTPilot on what waits (a window where the popup can't open)", async ({ context, extensionId }) => {
+  const { worker, run } = await fakeWaiting(context, extensionId, {
+    agents: [{ id: 'ag1', status: 'active', name: 'Secret Bot', public_key: '', grants: [] }],
+    requests: [{ id: 'rq1', agent_id: 'ag1', query: 'bank.example', item_id: null }],
+  });
+  const site = await context.newPage();
+  await site.goto(`${SITE}/blank.html`);
+  await site.bringToFront();
+  await run();
+  await expect(card(site)).toContainText('An AI agent is asking to use an account.');
+  await expect(card(site)).not.toContainText('Secret Bot');
+  await expect(card(site)).not.toContainText('bank.example');
+
+  // A page script's click does nothing.
+  await site.evaluate(() => document.querySelector('#otpilot-agents-notice .otpilot-agents-review').click());
+  await expect(card(site)).toHaveCount(1);
+
+  // The popup opens where it can.
+  await worker.evaluate(() => { globalThis.__opened = []; chrome.action.openPopup = async o => { __opened.push(o); }; });
+  await card(site).getByRole('button', { name: 'Review in OTPilot' }).click();
+  await expect(card(site)).toHaveCount(0);
+  await expect.poll(() => worker.evaluate(() => __opened.length)).toBe(1);
+  expect(await worker.evaluate(async () => !!(await chrome.storage.session.get('agentsOpen')).agentsOpen)).toBe(true);
+
+  // Where it can't, the Agents view in a window.
+  await worker.evaluate(async () => {
+    chrome.action.openPopup = async () => { throw new Error('no'); };
+    await chrome.storage.session.remove('agentsCard');
+  });
+  await run();
+  await card(site).getByRole('button', { name: 'Review in OTPilot' }).click();
   await expect.poll(() => popups(context).length).toBe(1);
+  await worker.evaluate(() => chrome.action.setBadgeText({ text: '' }));
+});
+
+test("a page that can't show the card: the next one the user switches to does", async ({ context, extensionId }) => {
+  const { run } = await fakeWaiting(context, extensionId, { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] });
+  const site = await context.newPage();
+  await site.goto(`${SITE}/blank.html`);
+  const ext = await context.newPage();
+  await ext.goto(`chrome-extension://${extensionId}/unlock.html`);
+  await ext.bringToFront();
+  await run();
+  await site.waitForTimeout(300);
+  await expect(card(site)).toHaveCount(0);
+  await site.bringToFront();
+  await expect(card(site)).toContainText('An AI agent wants to connect.');
+});
+
+test('a new card on another tab removes the one on the earlier tab', async ({ context, extensionId }) => {
+  const { worker, run } = await fakeWaiting(context, extensionId, { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] });
+  const first = await context.newPage();
+  await first.goto(`${SITE}/blank.html`);
+  await first.bringToFront();
+  await run();
+  await expect(card(first)).toHaveCount(1);
+  const second = await context.newPage();
+  await second.goto(`${SITE}/blank.html?2`);
+  await second.bringToFront();
+  await worker.evaluate(() => { __agents.requests.push({ id: 'rq1', agent_id: 'ag1', query: 'github', item_id: null }); });
+  await run();
+  await expect(card(second)).toHaveCount(1);
+  await expect(card(first)).toHaveCount(0);
+  // All answered: the remaining card goes too.
+  await worker.evaluate(() => { __agents.agents = []; __agents.requests = []; });
+  await run();
+  await expect(card(second)).toHaveCount(0);
   await worker.evaluate(() => chrome.action.setBadgeText({ text: '' }));
 });
 
@@ -65,7 +150,7 @@ test('the Agents window closes itself once nothing waits any more', async ({ con
   await page.evaluate(() => renderAgentsPanel());
   await expect(page.locator('#agents-detail')).toContainText('Codex wants to connect');
   // Denying the only agent: nothing waits, the window closes on its own.
-  page.evaluate(() => [...document.querySelectorAll('#agents-detail button')].find(b => b.textContent.trim() === 'Deny').click()).catch(() => {});
+  page.evaluate(() => [...document.querySelectorAll('#agents-detail button')].find(b => b.textContent.trim() === "Codes don't match").click()).catch(() => {});
   await expect.poll(() => page.isClosed(), { timeout: 5000 }).toBe(true);
 });
 
@@ -84,7 +169,7 @@ test('approving the only agent in the window keeps it open for the add-account f
   await page.evaluate(() => fakeAgents.addAgent({ name: 'Codex' }));
   await page.evaluate(() => renderAgentsPanel());
   await page.locator('#agents-detail').getByRole('button', { name: 'Codes match · Connect' }).click();
-  await expect(page.locator('#agents-detail .ag-pick')).toBeVisible();
+  await expect(page.locator('#agents-layer .ag-sheet .ag-pick')).toBeVisible();
   await page.waitForTimeout(2000);
   expect(page.isClosed()).toBe(false);
   await expect(page.locator('#agents-panel')).toBeVisible();
@@ -149,61 +234,26 @@ test('an account whose agents are not known yet is asked once, then checked ever
   expect(r).toEqual({ calls: 1, alarm: 1 });
 });
 
-test('a new request while the window shows another view brings it back to Agents', async ({ context, extensionId }) => {
-  const setup = await context.newPage();
-  await setup.goto(`chrome-extension://${extensionId}/popup.html`);
-  await setup.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
-  await seedUnlocked(setup, { accounts: [] });
-  await setup.close();
-  let [worker] = context.serviceWorkers();
-  if (!worker) worker = await context.waitForEvent('serviceworker');
-  await worker.evaluate(() => {
-    globalThis.__agents = { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] };
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = async url => String(url).endsWith('/notifications')
-      ? new Response(JSON.stringify({ invites: [], notices: [], agents: { pending: 1, requests: __agents.requests.length } }))
-      : realFetch(url);
-    SupabaseAuth.getAccessToken = async () => 'token';
-    Agents.list = async () => structuredClone(__agents);
-    return chrome.storage.session.remove('agentsAnnounced');
-  });
-  const run = () => worker.evaluate(async () => { await refreshNotices(); await navigator.locks.request('otpilot-agents-announce', () => {}); });
+test('a new request while the Agents window shows another view brings it back to Agents', async ({ context, extensionId }) => {
+  const { worker, run } = await fakeWaiting(context, extensionId, { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] });
+  const win = await context.newPage();
+  await win.goto(`chrome-extension://${extensionId}/popup.html?view=agents&window=1`);
+  await expect(win.locator('#agents-panel')).toBeVisible();
   await run();
-  await expect.poll(() => popups(context).length).toBe(1);
-  const win = popups(context)[0];
-  await expect(win.locator('#agents-panel')).toBeVisible(); // the window finished opening on Agents
   await win.click('#nav-home');
   await expect(win.locator('#agents-panel')).toBeHidden();
   await worker.evaluate(() => { __agents.requests.push({ id: 'rq2', agent_id: 'ag1', query: 'aws', item_id: null }); });
   await run();
   await expect(win.locator('#agents-panel')).toBeVisible();
-  expect(popups(context)).toHaveLength(1);
   await worker.evaluate(() => chrome.action.setBadgeText({ text: '' }));
 });
 
-test('a new request never takes the window away from the vault editor', async ({ context, extensionId }) => {
-  const setup = await context.newPage();
-  await setup.goto(`chrome-extension://${extensionId}/popup.html`);
-  await setup.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
-  await seedUnlocked(setup, { accounts: [] });
-  await setup.close();
-  let [worker] = context.serviceWorkers();
-  if (!worker) worker = await context.waitForEvent('serviceworker');
-  await worker.evaluate(() => {
-    globalThis.__agents = { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] };
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = async url => String(url).endsWith('/notifications')
-      ? new Response(JSON.stringify({ invites: [], notices: [], agents: { pending: 1, requests: __agents.requests.length } }))
-      : realFetch(url);
-    SupabaseAuth.getAccessToken = async () => 'token';
-    Agents.list = async () => structuredClone(__agents);
-    return chrome.storage.session.remove('agentsAnnounced');
-  });
-  const run = () => worker.evaluate(async () => { await refreshNotices(); await navigator.locks.request('otpilot-agents-announce', () => {}); });
-  await run();
-  await expect.poll(() => popups(context).length).toBe(1);
-  const win = popups(context)[0];
+test('a new request never takes the Agents window away from the vault editor', async ({ context, extensionId }) => {
+  const { worker, run } = await fakeWaiting(context, extensionId, { agents: [{ id: 'ag1', status: 'pending', public_key: '', grants: [] }], requests: [] });
+  const win = await context.newPage();
+  await win.goto(`chrome-extension://${extensionId}/popup.html?view=agents&window=1`);
   await expect(win.locator('#agents-panel')).toBeVisible();
+  await run();
   await win.click('#nav-settings');
   await win.click('#btn-add');
   await win.locator('#add-type-menu [data-add-type="note"]').click();

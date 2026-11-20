@@ -3927,11 +3927,11 @@ function fillNotices() {
   const ag = _notices.agents || {};
   if (ag.pending) {
     row(ag.pending === 1 ? '<b>An AI agent</b> wants to connect' : `<b>${ag.pending} AI agents</b> want to connect`,
-      'Check its code before approving', [['Review', 'primary', async () => { closeNotices(); showView('agents'); }]]);
+      'Check its code before approving', [['Review', 'primary', async () => { closeNotices(); _agentsSel = { kind: 'waiting' }; showView('agents'); }]]);
   }
   if (ag.requests) {
     row(ag.requests === 1 ? '<b>An AI agent</b> is asking to use an account' : `<b>AI agents</b> are asking to use ${ag.requests} accounts`,
-      'Waiting for your answer', [['Review', 'primary', async () => { closeNotices(); showView('agents'); }]]);
+      'Waiting for your answer', [['Review', 'primary', async () => { closeNotices(); _agentsSel = { kind: 'waiting' }; showView('agents'); }]]);
   }
   for (const inv of _notices.invites) {
     const hours = Math.max(1, Math.round((new Date(inv.expires_at).getTime() - Date.now()) / 3600000));
@@ -5104,7 +5104,9 @@ const TRIAL_NUDGE_MAX = 3;          // "Not now" this many times and it's gone
 const TRIAL_ENDED_BANNER_DAYS = 30;
 const DAY_MS = 864e5;
 
-const trialDaysLeft = endsAt => Math.max(0, Math.ceil((Date.parse(endsAt) - Date.now()) / DAY_MS));
+// At most the trial's length: a clock a little behind the server's would
+// otherwise read "31 of 30 days left" on the first day.
+const trialDaysLeft = endsAt => Math.min(TRIAL_DAYS, Math.max(0, Math.ceil((Date.parse(endsAt) - Date.now()) / DAY_MS)));
 const trialDate = endsAt => new Date(endsAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 const billingUrl = () => CONFIG.DASHBOARD_URL + '/dashboard/billing';
 
@@ -5739,10 +5741,19 @@ async function silentPullSync() {
   // so there's no flash — this just confirms it and keeps the cache in sync.
   chrome.storage.local.get('theme', d => applyTheme(d.theme || DEFAULT_THEME));
 
+  // Opened for an AI agent waiting: by the card on a page (`agentsOpen`, set
+  // by the background a moment ago) or in its own window (?view=agents).
+  // Read before the unlock, which can take its time.
+  const { agentsOpen } = await chrome.storage.session.get('agentsOpen');
+  if (agentsOpen) chrome.storage.session.remove('agentsOpen');
+  const fromAgentsCard = Date.now() - (agentsOpen || 0) < 30_000;
+  const forAgents = new URLSearchParams(location.search).get('view') === 'agents' || fromAgentsCard;
   const justAuthenticated = await initLock();
   await loadState();
-  // Opened by the background for an AI agent waiting (?view=agents).
-  if (new URLSearchParams(location.search).get('view') === 'agents') showView('agents');
+  if (forAgents) {
+    if (fromAgentsCard) _agentsSel = { kind: 'waiting' };
+    showView('agents');
+  }
   await syncActiveIndexToUrl();
   // The user may have opened Accounts while the vault was still loading.
   refreshAccountsUI();
@@ -5770,7 +5781,7 @@ async function silentPullSync() {
       if (!session) return;
       const syncKey = await CloudSync.getSyncKey();
       // Opened for an agent waiting: it stays on the Agents view.
-      if (!syncKey && new URLSearchParams(location.search).get('view') !== 'agents') showView('sync');
+      if (!syncKey && !forAgents) showView('sync');
     } catch {}
   })();
 

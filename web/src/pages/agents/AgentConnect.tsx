@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
 import { agentCode } from '../../lib/agentCode'
+import { notifyAgentWaiting } from '../../lib/extensionBridge'
 import Logo from '../../components/Logo'
 
 // Opened by `otpilot-mcp connect` (docs/agents/plan.md): the signed-in user
@@ -73,7 +74,11 @@ export default function AgentConnect() {
       setNetError(true)
       return
     }
-    if (res.ok) { setState({ ...state, kind: 'claimed' }); return }
+    if (res.ok) {
+      setState({ ...state, kind: 'claimed' })
+      notifyAgentWaiting()
+      return
+    }
     const j = await res.json().catch(() => ({}))
     setState({ kind: 'error', message: j.error ?? 'Could not connect this agent. Run the connect command again.' })
   }

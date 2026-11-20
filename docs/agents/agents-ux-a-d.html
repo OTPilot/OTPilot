@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Agents · opciones A y D, todas las pantallas</title>
+<style>
+
+:root {
+  --bg:#faf9f5; --bg-deep:#f1efe7; --surface:#ffffff; --surface-2:#eeece3; --border:#e3ded1;
+  --ink-0:#171c17; --ink-1:#262b25; --ink-2:#454b42; --ink-3:#6b7268; --ink-4:#8b9184; --ink-5:#a8ac9e;
+  --accent:#2f6f4f; --accent-2:#3d8a63; --on-accent:#ffffff; --danger:#c94f3f; --warning:#b8792c;
+  --accent-2-rgb:61,138,99; --danger-rgb:201,79,63; --warning-rgb:184,121,44;
+  --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#e7e3d8;font-family:var(--font-ui);color:var(--ink-2);-webkit-font-smoothing:antialiased}
+.page{max-width:1290px;margin:0 auto;padding:28px 24px 80px}
+.top h1{font-size:24px;color:var(--ink-0);margin:0 0 6px}
+.top p{margin:0;color:var(--ink-3);font-size:14px;line-height:1.5;max-width:900px}
+nav.jump{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 0}
+nav.jump a{font-size:12.5px;font-weight:600;color:var(--accent);background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:6px 12px;text-decoration:none}
+.box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin:18px 0 0;font-size:13px;line-height:1.55;color:var(--ink-2)}
+.box h3{margin:0 0 8px;font-size:14px;color:var(--ink-0)}
+.box ol{margin:0;padding-left:18px;columns:2;column-gap:34px}
+.box li{break-inside:avoid;margin-bottom:5px}
+.box.rec{border-color:rgba(var(--accent-2-rgb),.5);background:#f3f8f4}
+section.opt{margin-top:46px}
+.opt-h{display:flex;align-items:center;gap:10px}
+.opt-h .tag{font-size:12px;font-weight:800;color:var(--on-accent);background:var(--accent);border-radius:6px;padding:2px 8px}
+.opt-h h2{margin:0;font-size:19px;color:var(--ink-0)}
+.desc{font-size:13.5px;color:var(--ink-2);line-height:1.55;max-width:1050px;margin:6px 0 4px}
+.pc{display:flex;gap:34px;font-size:12.5px;line-height:1.5;margin:6px 0 14px;color:var(--ink-3)}
+.pc b{color:var(--ink-1)} .pc ul{margin:2px 0 0;padding-left:16px}
+.frames{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+figure{margin:0}
+figcaption{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-4);margin:0 0 7px}
+.note{font-size:12px;color:var(--ink-3);max-width:600px;margin:8px 0 0;line-height:1.5}
+
+/* ── popup chrome (600 × 580, like popup.html) ── */
+.pop{width:600px;height:580px;background:var(--bg);border-radius:10px;box-shadow:0 1px 0 rgba(0,0,0,.04),0 12px 32px rgba(40,35,20,.18);display:flex;flex-direction:column;overflow:hidden;font-size:12px}
+.hdr{display:flex;align-items:center;gap:8px;padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
+.hdr h1{font-size:15px;font-weight:700;color:var(--ink-0);margin:0}
+.hdr-r{margin-left:auto;display:flex;gap:12px;color:var(--ink-4)} .hdr-r svg{width:16px;height:16px}
+.prow{flex:1;display:flex;min-height:0}
+.rail{width:56px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:3px}
+.rb{width:44px;height:42px;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--ink-5);font-size:8px;font-weight:700}
+.rb svg{width:17px;height:17px}
+.rb.on{color:var(--accent-2);background:rgba(var(--accent-2-rgb),.1)}
+.main{flex:1;min-width:0;display:flex;min-height:0;position:relative}
+.dcol{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.scroll{flex:1;min-width:0;overflow-y:auto;padding:14px 16px 18px;display:flex;flex-direction:column;gap:12px}
+.foot{display:flex;gap:8px;align-items:center;padding:10px 16px;border-top:1px solid var(--border);background:var(--surface);flex-shrink:0}
+
+/* ── pieces ── */
+.grow{flex:1;min-width:0}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agav{width:26px;height:26px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;background:rgba(var(--accent-2-rgb),.14);color:var(--accent-2)}
+.agav svg{width:15px;height:15px}
+.agav.lg{width:36px;height:36px;border-radius:10px} .agav.lg svg{width:20px;height:20px}
+.agav.xl{width:54px;height:54px;border-radius:15px} .agav.xl svg{width:30px;height:30px}
+.agav.warn{background:rgba(var(--warning-rgb),.15);color:var(--warning)}
+.fav{width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-weight:700;font-size:12px}
+.t1{font-size:12.5px;font-weight:600;color:var(--ink-0)}
+.t1.lg{font-size:15px;font-weight:700}
+.t2{font-size:11px;color:var(--ink-4);margin-top:1px}
+.t2 b{color:var(--ink-2);font-weight:600}
+.ahead{display:flex;align-items:center;gap:10px}
+.btn{font:inherit;font-size:11.5px;font-weight:600;padding:6px 12px;border-radius:7px;border:1px solid var(--border);background:var(--surface);color:var(--ink-1);white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.ghost{background:none;border-color:transparent;color:var(--accent-2);padding:2px 4px}
+.btn.danger{color:var(--danger);border-color:rgba(var(--danger-rgb),.35)}
+.btn.sm{font-size:11px;padding:4px 9px}
+.btn svg{width:13px;height:13px}
+.icbtn{width:28px;height:28px;border-radius:7px;border:1px solid var(--border);background:var(--surface);display:inline-flex;align-items:center;justify-content:center;color:var(--ink-3);flex-shrink:0}
+.icbtn svg{width:15px;height:15px}
+.icbtn.on{border-color:var(--accent-2);color:var(--accent-2);box-shadow:0 0 0 2px rgba(var(--accent-2-rgb),.15)}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;background:rgba(var(--accent-2-rgb),.12);color:var(--accent);white-space:nowrap;flex-shrink:0}
+.chip svg{width:10px;height:10px}
+.chip.warn{background:rgba(var(--warning-rgb),.14);color:var(--warning)}
+.chip.muted{background:var(--surface-2);color:var(--ink-3);font-weight:600}
+.sec{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-4);margin-bottom:-5px;min-height:20px}
+.sec .n{background:var(--surface-2);color:var(--ink-3);border-radius:999px;padding:0 6px;font-size:9.5px;letter-spacing:0}
+.sec .r{margin-left:auto;text-transform:none;letter-spacing:0}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;flex-shrink:0}
+.acc{display:flex;align-items:center;gap:10px;padding:9px 10px 9px 12px;border-bottom:1px solid var(--bg-deep)}
+.acc:last-child{border-bottom:0}
+.x{width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:var(--ink-5);flex-shrink:0}
+.x svg{width:13px;height:13px}
+.addrow{display:flex;align-items:center;gap:10px;padding:9px 12px;color:var(--accent-2);font-weight:600;font-size:12px}
+.addrow .plus{width:26px;height:26px;border-radius:7px;border:1.5px dashed rgba(var(--accent-2-rgb),.55);display:inline-flex;align-items:center;justify-content:center}
+.addrow .plus svg{width:13px;height:13px}
+.day{font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--ink-4);padding:6px 12px 4px;background:var(--bg);border-top:1px solid var(--bg-deep)}
+.card .day:first-child{border-top:0}
+.act{display:flex;align-items:center;gap:10px;padding:7px 12px}
+.ai{width:24px;height:24px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.ai svg{width:13px;height:13px}
+.ai.in{background:rgba(var(--accent-2-rgb),.12);color:var(--accent-2)}
+.ai.run{background:rgba(74,95,160,.1);color:#4a5fa0}
+.ai.k2{background:rgba(var(--warning-rgb),.13);color:var(--warning)}
+.ai.bad{background:rgba(var(--danger-rgb),.1);color:var(--danger)}
+.act .t1{font-weight:500}
+.act time{font-size:10.5px;color:var(--ink-4);font-variant-numeric:tabular-nums;flex-shrink:0}
+.more-row{text-align:center;font-size:11.5px;font-weight:600;color:var(--accent-2);padding:8px;border-top:1px solid var(--bg-deep)}
+code{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;background:var(--surface-2);padding:1px 5px;border-radius:4px;color:var(--ink-1);font-style:normal}
+.banner{display:flex;align-items:center;gap:10px;padding:9px 10px 9px 12px;border-radius:10px;background:rgba(var(--warning-rgb),.09);border:1px solid rgba(var(--warning-rgb),.35);flex-shrink:0}
+.banner .dot{width:8px;height:8px;border-radius:50%;background:var(--warning);flex-shrink:0;box-shadow:0 0 0 3px rgba(var(--warning-rgb),.2)}
+.banner .t1{font-weight:500}
+.use{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;color:var(--ink-3);background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:3px 9px;white-space:nowrap;flex-shrink:0}
+.use i{display:inline-block;width:30px;height:4px;border-radius:2px;background:var(--surface-2);position:relative;overflow:hidden}
+.use i::after{content:'';position:absolute;top:0;bottom:0;left:0;width:70%;background:var(--warning)}
+.menu{position:absolute;right:16px;top:54px;width:250px;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 10px 28px rgba(40,35,20,.2);padding:5px;z-index:5}
+.menu div{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:7px;font-size:12px;color:var(--ink-1)}
+.menu div.hl{background:var(--bg)}
+.menu svg{width:14px;height:14px;color:var(--ink-4);flex-shrink:0}
+.menu hr{border:0;border-top:1px solid var(--border);margin:4px 2px}
+.menu .red,.menu .red svg{color:var(--danger)}
+.switch{display:inline-flex;align-items:center;gap:4px;font:inherit;font-size:15px;font-weight:700;color:var(--ink-0);background:none;border:0;padding:0}
+.switch svg{width:14px;height:14px;color:var(--ink-4)}
+.safe{font-size:10.5px;color:var(--ink-4);display:flex;gap:6px;align-items:flex-start;line-height:1.45}
+.safe svg{width:12px;height:12px;color:var(--accent-2);flex-shrink:0;margin-top:1px}
+
+/* add-account sheet + access form */
+.dim{position:absolute;inset:0;background:rgba(23,28,23,.3);z-index:4}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:94%;background:var(--surface);border-radius:14px 14px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.18);z-index:5;display:flex;flex-direction:column}
+.sheet-h{display:flex;align-items:flex-start;gap:8px;padding:14px 16px 10px}
+.sheet-b{padding:0 16px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+.search{display:flex;align-items:center;gap:7px;border:1px solid var(--accent-2);box-shadow:0 0 0 2px rgba(var(--accent-2-rgb),.12);border-radius:8px;padding:7px 10px;background:var(--surface);color:var(--ink-1);font-size:12px}
+.search svg{width:13px;height:13px;color:var(--ink-4)}
+.pick-list{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:9px;overflow:hidden;flex-shrink:0}
+.pi{display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid var(--bg-deep);background:var(--surface)}
+.pi:last-child{border-bottom:0}
+.pi.on{background:rgba(var(--accent-2-rgb),.07)}
+.radio{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--ink-5);flex-shrink:0;position:relative}
+.pi.on .radio,.radio.on{border-color:var(--accent-2)}
+.pi.on .radio::after,.radio.on::after{content:'';position:absolute;inset:2.5px;border-radius:50%;background:var(--accent-2)}
+.lbl{font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-4);margin-bottom:-4px}
+.seg3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.seg3 .o{border:1px solid var(--border);border-radius:9px;padding:8px 10px;background:var(--surface)}
+.seg3 .o b{display:block;font-size:12px;color:var(--ink-0)}
+.seg3 .o span{display:block;font-size:10.5px;color:var(--ink-4);margin-top:2px}
+.seg3 .o.on{border-color:var(--accent-2);box-shadow:0 0 0 1px var(--accent-2) inset;background:rgba(var(--accent-2-rgb),.06)}
+.vopts{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:9px;overflow:hidden;flex-shrink:0}
+.vo{display:flex;align-items:center;gap:9px;padding:7px 10px;border-bottom:1px solid var(--bg-deep);background:var(--surface)}
+.vo:last-child{border-bottom:0}
+.vo b{display:block;font-size:12px;color:var(--ink-0)}
+.vo .grow span{display:block;font-size:10.5px;color:var(--ink-4)}
+.vo.on{background:rgba(var(--accent-2-rgb),.06)}
+.def{font-style:normal;font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);background:rgba(var(--accent-2-rgb),.13);border-radius:4px;padding:1px 5px;display:inline-block}
+.seg3 .def{margin-bottom:3px}
+.picks{display:flex;gap:6px;flex-wrap:wrap}
+.pk{font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:999px;border:1px solid var(--border);color:var(--ink-2);background:var(--surface);white-space:nowrap}
+.pk.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.more{font-size:12px;color:var(--ink-3)}
+.more summary{color:var(--accent-2);font-weight:600;list-style:none;cursor:pointer}
+.more summary::-webkit-details-marker{display:none}
+.more summary::before{content:'▸ '}
+.more[open] summary::before{content:'▾ '}
+.mrow{display:flex;align-items:center;gap:8px;margin-top:8px}
+.cbx{width:14px;height:14px;border:1.5px solid var(--ink-5);border-radius:4px;flex-shrink:0}
+.inp{flex:1;border:1px solid var(--border);border-radius:7px;padding:6px 9px;color:var(--ink-5);font-size:11.5px;background:var(--bg)}
+.quote{font-size:12.5px;color:var(--ink-1);font-style:italic;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent-2);border-radius:8px;padding:8px 10px;flex-shrink:0}
+.quote span{display:block;font-style:normal;font-size:10.5px;color:var(--ink-4);margin-top:3px}
+
+/* list column (B, C) */
+.lcol{width:184px;flex-shrink:0;border-right:1px solid var(--border);background:var(--bg-deep);display:flex;flex-direction:column}
+.lsec{font-size:9.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-4);padding:12px 12px 4px;display:flex;align-items:center;gap:6px}
+.lsec .chip{padding:0 6px}
+.lr{display:flex;align-items:center;gap:8px;margin:1px 6px;padding:7px 8px;border-radius:8px;border-left:2px solid transparent}
+.lr .agav{width:24px;height:24px}
+.lr .t1{font-size:11.5px} .lr .t2{font-size:10px}
+.lr.sel{background:rgba(var(--accent-2-rgb),.1);border-left-color:var(--accent-2)}
+.lr.need{background:rgba(var(--warning-rgb),.07)}
+.lr.need.sel{border-left-color:var(--warning);background:rgba(var(--warning-rgb),.15)}
+.lfoot{margin-top:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
+.meter{font-size:10.5px;color:var(--ink-3);display:flex;flex-direction:column;gap:4px}
+.bar{height:4px;border-radius:2px;background:var(--surface-2);overflow:hidden}
+.bar i{display:block;height:100%;width:70%;background:var(--warning)}
+.lfoot .btn{justify-content:center}
+
+/* tabs (B segmented, D top tabs) */
+.segt{display:flex;gap:2px;background:var(--surface-2);border-radius:9px;padding:3px;flex-shrink:0}
+.segt span{flex:1;text-align:center;font-size:11.5px;font-weight:600;color:var(--ink-3);padding:5px 0;border-radius:7px}
+.segt span.on{background:var(--surface);color:var(--ink-0);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.segt .c{font-size:10px;color:var(--ink-4);margin-left:4px}
+.ttabs{display:flex;align-items:flex-end;gap:2px;padding:0 12px 0 10px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+.tt{font-size:12px;font-weight:600;color:var(--ink-3);padding:11px 9px 9px;border-bottom:2px solid transparent;display:inline-flex;gap:5px;align-items:center;margin-bottom:-1px}
+.tt.on{color:var(--ink-0);border-bottom-color:var(--accent-2)}
+.tt .c{font-size:10px;font-weight:700;background:var(--surface-2);color:var(--ink-3);border-radius:999px;padding:0 6px}
+.tt .c.warn{background:rgba(var(--warning-rgb),.18);color:var(--warning)}
+.ttabs .r{margin-left:auto;display:flex;gap:8px;align-items:center;padding-bottom:7px}
+
+/* C: new agent */
+.codetile{background:var(--ink-0);color:#f6f4ee;border-radius:12px;padding:16px;text-align:center;flex-shrink:0}
+.codetile .c{font-family:ui-monospace,Menlo,monospace;font-size:30px;font-weight:700;letter-spacing:.14em}
+.codetile .h{font-size:11px;color:#b9bcae;margin-top:4px}
+.check{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--ink-2);line-height:1.45}
+.check svg{width:14px;height:14px;color:var(--accent-2);flex-shrink:0;margin-top:2px}
+.check b{color:var(--ink-0)}
+
+/* D: agent cards */
+.acard{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px;flex-shrink:0}
+.acard .hd{display:flex;align-items:center;gap:10px}
+.accchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.ac{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:8px;padding:3px 8px 3px 3px;font-size:11.5px;color:var(--ink-1);background:var(--bg);max-width:250px;min-width:0}
+.ac .fav{width:20px;height:20px;font-size:10px;border-radius:5px}
+.ac .w{width:7px;height:7px;border-radius:50%;background:var(--warning);flex-shrink:0}
+.ac.add{color:var(--accent-2);font-weight:600;border-style:dashed;padding:3px 9px;background:none}
+.ac.add svg{width:12px;height:12px}
+.mini{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;padding-top:9px;border-top:1px solid var(--bg-deep);font-size:11px;color:var(--ink-4)}
+.mini b{color:var(--ink-2);font-weight:600}
+.mini a{color:var(--accent-2);font-weight:600;flex-shrink:0}
+
+/* E: empty */
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px 40px;gap:12px}
+.steps{display:flex;flex-direction:column;gap:9px;text-align:left;width:100%;max-width:410px;margin-top:4px}
+.step{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--ink-2);line-height:1.45}
+.step i{font-style:normal;width:20px;height:20px;border-radius:50%;background:var(--surface-2);color:var(--ink-1);font-size:10.5px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.cmd{display:flex;align-items:center;gap:8px;background:var(--ink-0);color:#eef0e8;border-radius:9px;padding:8px 8px 8px 12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;margin-left:30px}
+.cmd .btn{margin-left:auto;background:#2b312a;border-color:#3a4238;color:#eef0e8;font-family:var(--font-ui)}
+.works{font-size:11px;color:var(--ink-4)}
+.works a{color:var(--accent-2);font-weight:600}
+
+.grp{font-size:12.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:30px 0 12px;border-top:1px solid #d6d1c3;padding-top:14px}
+.flow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;margin:10px 0 0}
+.flow span{background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-weight:600;color:var(--ink-1)}
+.flow i{color:var(--ink-4);font-style:normal}
+.back{display:inline-flex;align-items:center;gap:2px;font-size:12px;font-weight:600;color:var(--accent-2);margin-bottom:-4px;align-self:flex-start}
+.back svg{width:14px;height:14px}
+.arow,.nrow{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--bg-deep)}
+.arow:last-child,.nrow:last-child{border-bottom:0}
+.arow.hov{background:var(--bg)}
+.chev{color:var(--ink-5);display:inline-flex;flex-shrink:0}
+.chev svg{width:15px;height:15px}
+.lastuse{display:flex;align-items:center;gap:10px;padding:10px 12px}
+.modal{position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);width:340px;background:var(--surface);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.25);padding:18px;z-index:6;display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.modal p{margin:0;font-size:12px;color:var(--ink-3);line-height:1.5}
+.mbtns{display:flex;gap:8px;justify-content:flex-end;width:100%;margin-top:6px}
+.btn.dangerfill{background:var(--danger);border-color:var(--danger);color:#fff}
+.srow{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-bottom:1px solid var(--bg-deep)}
+.srow:last-child{border-bottom:0}
+.codeb{margin:6px 0 0;font-family:ui-monospace,Menlo,monospace;font-size:10.5px;background:var(--bg-deep);border-radius:6px;padding:7px 9px;white-space:pre-wrap;word-break:break-all;color:var(--ink-1)}
+.limit{border:1px solid rgba(var(--warning-rgb),.45);background:rgba(var(--warning-rgb),.07);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:7px;flex-shrink:0}
+.bar.full i{width:100%;background:var(--danger)}
+.use.full{color:var(--danger);border-color:rgba(var(--danger-rgb),.4)}
+.use.full i::after{width:100%;background:var(--danger)}
+.cbx.on{background:var(--accent-2);border-color:var(--accent-2);position:relative}
+.cbx.on::after{content:'';position:absolute;left:3.5px;top:.5px;width:3px;height:7px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.menu .grow,.menu .grow div{display:block;padding:0;border-radius:0}
+.menu .lsec2{font-size:9.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-4);padding:6px 9px 2px;display:block}
+.menu .agav{width:24px;height:24px}
+.menu .agav svg{width:14px;height:14px;color:var(--accent-2)}
+.menu .t1{font-size:12px}
+.menu .t2{font-size:10.5px}
+.ttl{font-size:15px;font-weight:700;color:var(--ink-0)}
+</style></head>
+<body>
+<div class="page">
+  <div class="top">
+    <h1>Agents: todas las pantallas de A y D</h1>
+    <p>Las dos opciones que elegiste, cada pantalla en el tamaño real del popup. En D ahora hay un paso más: primero ves la lista de agentes, al entrar a uno ves qué puede usar, y al tocar una cuenta editás sus permisos. Lo que se toca en cada pantalla lleva a la siguiente.</p>
+    <nav class="jump"><a href="#d">D · Pestañas + entrar al agente</a><a href="#a">A · Una sola página</a></nav>
+  </div>
+
+  <div class="box">
+    <h3>Igual en las dos</h3>
+    <ol>
+      <li>Las cuentas del agente tienen una flecha ›. Al tocar una se editan sus permisos, y desde ahí se le quita el acceso. Ya no hay una ✕ que se pueda tocar sin querer.</li>
+      <li>Agregar una cuenta viene con <b>“Everything to sign in”</b> (usuario, contraseña y 2FA) ya elegido.</li>
+      <li>Un pedido de cuenta se responde en dos pasos: qué cuenta y qué puede usar. Un pedido de “usar ahora” (si marcaste <i>Ask me every time</i>) se responde con un toque, sin entrar.</li>
+      <li>Renombrar, instalarlo en Claude Code / Codex / Cursor y revocar están en el menú <b>⋯</b> del agente. Revocar pide confirmación.</li>
+    </ol>
+  </div>
+
+  <section class="opt" id="d">
+    <div class="opt-h"><span class="tag">D</span><h2>Pestañas arriba + entrar al agente</h2></div>
+    <div class="flow"><span>Agents</span><i>→</i><span>un agente: qué puede usar</span><i>→</i><span>una cuenta: sus permisos</span></div>
+    <div class="flow"><span>Requests</span><i>→</i><span>un pedido</span><i>&nbsp;·&nbsp;</i><span>Activity</span><i>(todos los agentes, filtrable)</i></div>
+    <div id="dgroups"></div>
+  </section>
+
+  <section class="opt" id="a">
+    <div class="opt-h"><span class="tag">A</span><h2>Una sola página</h2></div>
+    <div class="flow"><span>el agente (▾ para cambiar)</span><i>→</i><span>una cuenta: sus permisos</span><i>&nbsp;·&nbsp;</i><span>“Review” en el aviso</span><i>→</i><span>un pedido</span></div>
+    <div id="agroups"></div>
+  </section>
+</div>
+
+<script>
+const S = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+const P = {
+  robot:'<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4"/><circle cx="9" cy="14" r="1.2" fill="currentColor"/><circle cx="15" cy="14" r="1.2" fill="currentColor"/>',
+  home:'<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>',
+  vault:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  key:'<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L21 2M16 7l3 3M18.5 4.5l2 2"/>',
+  team:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+  sync:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  help:'<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  power:'<path d="M18.4 6.6a9 9 0 1 1-12.8 0"/><path d="M12 2v10"/>',
+  caret:'<path d="M6 9l6 6 6-6"/>',
+  chev:'<path d="M9 18l6-6-6-6"/>',
+  back:'<path d="M15 18l-6-6 6-6"/>',
+  dots:'<circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/>',
+  x:'<path d="M18 6L6 18M6 6l12 12"/>',
+  signin:'<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/>',
+  run:'<path d="M4 17l6-6-6-6"/><path d="M12 19h8"/>',
+  lock:'<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+  check:'<path d="M20 6L9 17l-5-5"/>',
+  warn:'<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+  edit:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  terminal:'<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 9l3 3-3 3M12 15h5"/>',
+  trash:'<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  copy:'<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  pulse:'<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+};
+const LOGO = `<svg width="20" height="20" viewBox="0 0 128 128"><path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" fill="var(--border)"/><path d="M64 18 L98 33 V66 Q98 92 64 110 Q30 92 30 66 V33 Z" fill="none" stroke="var(--accent-2)" stroke-width="4.5" stroke-linejoin="round"/><circle cx="64" cy="68" r="20" fill="var(--bg)" stroke="var(--accent-2)" stroke-width="4"/><line x1="64" y1="68" x2="57" y2="54" stroke="var(--accent-2)" stroke-width="4" stroke-linecap="round"/><line x1="64" y1="68" x2="78" y2="72" stroke="var(--accent-2)" stroke-width="3" stroke-linecap="round"/><circle cx="64" cy="68" r="3" fill="var(--accent-2)"/></svg>`;
+const rail = () => `<div class="rail">${[['home','Home'],['vault','Vault'],['key','Generate'],['team','Team'],['robot','Agents',1],['gear','Settings'],['sync','Sync']]
+  .map(([i, l, on]) => `<div class="rb${on ? ' on' : ''}">${S(P[i])}<span>${l}</span></div>`).join('')}</div>`;
+const pop = content => `<div class="pop"><div class="hdr">${LOGO}<h1>OTPilot</h1><div class="hdr-r">${S(P.plus)}${S(P.help)}${S(P.power)}</div></div><div class="prow">${rail()}<div class="main">${content}</div></div></div>`;
+const frame = (cap, content, note) => `<figure><figcaption>${cap}</figcaption>${pop(content)}<p class="note">${note}</p></figure>`;
+const group = (title, frames) => `<h3 class="grp">${title}</h3><div class="frames">${frames.join('')}</div>`;
+const page = (top, body, foot) => `<div class="dcol">${top || ''}<div class="scroll">${body}</div>${foot || ''}</div>`;
+
+// ── data ──
+const AG = { name: 'Claude Code Counterpart', sub: 'via <b>Claude Code</b> · work · last used 2 h ago' };
+const ACCS = [
+  { t: 'api.yourcounterpart.com', l: 'A', c: '#3f6fb5', chips: [['warn', 'Asks every time']] },
+  { t: 'qa-counterpart.test-counterpart.com', l: 'Q', c: '#7b5cb5', chips: [] },
+  { t: 'Broker Portal QA', l: 'B', c: '#b5643f', chips: [['muted', 'Shared · alberto@']] },
+];
+const AGENTS = [
+  ['Claude Code Counterpart', 'via <b>Claude Code</b> · work', '3 accounts', '2 h ago'],
+  ['Cursor', 'via <b>Cursor</b> · laptop', '2 accounts', 'yesterday'],
+];
+const ACT = [
+  ['Today', [
+    ['run', 'Ran <code>uv</code>', 'qa-counterpart.test-counterpart.com', '17:45'],
+    ['run', 'Ran <code>uv</code>', 'qa-counterpart.test-counterpart.com', '12:56'],
+    ['in', 'Signed in', 'qa-counterpart.test-counterpart.com · via cloudflareaccess.com', '12:49'],
+  ]],
+  ['Oct 14', [
+    ['in', 'Signed in', 'qa-counterpart.test-counterpart.com', '12:47'],
+    ['k2', 'Got a 2FA code', 'api.yourcounterpart.com', '11:02'],
+    ['bad', 'Sign-in rejected by the site', 'Broker Portal QA', '10:58'],
+  ]],
+];
+const ACT_SHORT = [ACT[0]];
+const ACT_ALL = [
+  ['Today', [
+    ['run', 'Ran <code>uv</code>', 'qa-counterpart.test-counterpart.com', '17:45', 'Claude Code Counterpart'],
+    ['in', 'Signed in', 'github.com', '15:20', 'Cursor'],
+    ['run', 'Ran <code>uv</code>', 'qa-counterpart.test-counterpart.com', '12:56', 'Claude Code Counterpart'],
+    ['in', 'Signed in', 'qa-counterpart.test-counterpart.com', '12:49', 'Claude Code Counterpart'],
+  ]],
+  ['Oct 14', [
+    ['k2', 'Got a 2FA code', 'api.yourcounterpart.com', '11:02', 'Claude Code Counterpart'],
+    ['bad', 'Sign-in rejected by the site', 'Broker Portal QA', '10:58', 'Claude Code Counterpart'],
+    ['run', 'Ran <code>psql</code>', 'Staging DB', '09:31', 'Cursor'],
+  ]],
+];
+const SETUP = [
+  ['Claude Code', 'in a terminal', 'claude mcp add otpilot -- npx -y @otpilot/mcp@latest'],
+  ['Codex', 'in ~/.codex/config.toml', '[mcp_servers.otpilot]\ncommand = "npx"\nargs = ["-y", "@otpilot/mcp@latest"]'],
+  ['Cursor', 'in ~/.cursor/mcp.json', '{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }'],
+];
+const AI = { run: P.run, in: P.signin, k2: P.lock, bad: P.warn };
+
+// ── pieces ──
+const fav = (l, c) => `<span class="fav" style="background:${c}">${l}</span>`;
+const agav = (cls = '') => `<span class="agav ${cls}">${S(P.robot)}</span>`;
+const back = l => `<div class="back">${S(P.back)}${l}</div>`;
+const accRow = a => `<div class="acc">${fav(a.l, a.c)}<div class="grow"><div class="t1 ell">${a.t}</div><div class="t2 ell">Username, password &amp; 2FA · until you revoke</div></div>${a.chips.map(([k, t]) => `<span class="chip ${k}">${t}</span>`).join('')}<span class="chev">${S(P.chev)}</span></div>`;
+const accCard = () => `<div class="card">${ACCS.map(accRow).join('')}</div>`;
+const actCard = (groups, more) => `<div class="card">${groups.map(([d, rows]) => `<div class="day">${d}</div>${rows.map(r => `<div class="act"><span class="ai ${r[0]}">${S(AI[r[0]])}</span><div class="grow"><div class="t1 ell">${r[1]}</div><div class="t2 ell">${r[4] ? `<b>${r[4]}</b> · ` : ''}${r[2]}</div></div><time>${r[3]}</time></div>`).join('')}`).join('')}${more ? `<div class="more-row">${more}</div>` : ''}</div>`;
+const use = full => `<span class="use${full ? ' full' : ''}"><i></i>${full ? '10/10' : '7/10'} uses</span>`;
+const head = ({ switcher, usage, full, menuOn } = {}) => `<div class="ahead">${agav('lg')}<div class="grow">${switcher ? `<button class="switch">${AG.name}${S(P.caret)}</button>` : `<div class="t1 lg ell">${AG.name}</div>`}<div class="t2 ell">${AG.sub}</div></div>${usage ? use(full) : ''}<span class="icbtn${menuOn ? ' on' : ''}">${S(P.dots)}</span></div>`;
+const accSec = `<div class="sec">What it can use <span class="n">3</span><span class="r"><button class="btn ghost sm">${S(P.plus)}Add account</button></span></div>`;
+const SAFE = `<div class="safe">${S(P.shield)}<span>Agents never see these values: OTPilot signs in or runs the command and only returns the result.</span></div>`;
+const REQ_BANNER = `<div class="banner"><span class="dot"></span><div class="grow"><div class="t1 ell">Asks for <b>staging.counterpart.com</b></div><div class="t2 ell">“Run the e2e suite against staging” · 2 min ago</div></div><button class="btn sm">Deny</button><button class="btn sm pri">Review</button></div>`;
+const needsCard = `<div class="card">
+  <div class="nrow">${agav('warn')}<div class="grow"><div class="t1 ell">Account request</div><div class="t2 ell">Claude Code Counterpart asks for staging.counterpart.com · 2 min ago</div></div><span class="chev">${S(P.chev)}</span></div>
+  <div class="nrow">${agav('warn')}<div class="grow"><div class="t1 ell">New agent</div><div class="t2 ell">Codex on laptop wants to connect · 1 min ago</div></div><span class="chev">${S(P.chev)}</span></div>
+  <div class="nrow">${agav('warn')}<div class="grow"><div class="t1 ell">Use api.yourcounterpart.com now</div><div class="t2 ell">Claude Code Counterpart · for <code>run</code> · 30 s ago</div></div><button class="btn sm">Deny</button><button class="btn sm pri">Allow once</button></div>
+</div>`;
+const lastUse = `<div class="card lastuse"><span class="ai run">${S(P.run)}</span><div class="grow"><div class="t2">Last used 2 h ago</div><div class="t1 ell" style="font-weight:500">Ran <code>uv</code> on qa-counterpart.test-counterpart.com</div></div><span class="btn ghost sm">All activity ›</span></div>`;
+const menu = (items, style = '') => `<div class="menu" style="${style}">${items}</div>`;
+const MENU_ITEMS = (extra = '') => `<div class="hl">${S(P.edit)}Rename</div><div>${S(P.terminal)}Add it to Claude Code, Codex, Cursor…</div>${extra}<hr><div class="red">${S(P.trash)}Revoke agent…</div>`;
+const SWITCH = menu(`<span class="lsec2">Your agents</span>
+  <div class="hl">${agav()}<div class="grow"><div class="t1">Claude Code Counterpart</div><div class="t2">work · 3 accounts</div></div><span style="color:var(--accent-2);display:inline-flex">${S(P.check)}</span></div>
+  <div>${agav()}<div class="grow"><div class="t1">Cursor</div><div class="t2">laptop · 2 accounts</div></div></div>
+  <hr><div style="color:var(--accent-2);font-weight:600">${S(P.plus)}Connect another agent</div>`, 'left:62px;right:auto;top:52px;width:270px');
+
+function accessForm(layout, label = 'What it can use', o = {}) {
+  const opts = [['Everything to sign in', 'Username, password &amp; 2FA', 1], ['2FA code only', 'Just the 6-digit code'], ['Choose fields', 'Pick exactly what']];
+  const def = on => on && !o.noDef ? '<em class="def">Default</em>' : '';
+  const choices = layout === 'grid'
+    ? `<div class="seg3">${opts.map(([b, s, on]) => `<div class="o${on ? ' on' : ''}">${def(on)}<b>${b}</b><span>${s}</span></div>`).join('')}</div>`
+    : `<div class="vopts">${opts.map(([b, s, on]) => `<div class="vo${on ? ' on' : ''}"><span class="radio${on ? ' on' : ''}"></span><div class="grow"><b>${b}</b><span>${s}</span></div>${def(on)}</div>`).join('')}</div>`;
+  return `${label ? `<div class="lbl">${label}</div>` : ''}${choices}
+    <div class="lbl">For how long</div><div class="picks"><span class="pk on">Until I revoke</span><span class="pk">1 hour</span><span class="pk">1 day</span><span class="pk">1 week</span></div>
+    <details class="more"${o.open ? ' open' : ''}><summary>More options</summary><div class="mrow"><span class="cbx${o.ask ? ' on' : ''}"></span>Ask me every time it uses it</div><div class="mrow"><span style="white-space:nowrap">Only these commands</span><span class="inp">e.g. psql, curl</span></div></details>`;
+}
+
+const addSheet = `<div class="dim"></div><div class="sheet">
+  <div class="sheet-h"><div class="grow"><div class="t1 lg">Add an account</div><div class="t2">Claude Code Counterpart can use it without ever seeing the values.</div></div><span class="x">${S(P.x)}</span></div>
+  <div class="sheet-b">
+    <div class="search">${S(P.search)}staging<span style="width:1px;height:14px;background:var(--ink-1)"></span></div>
+    <div class="pick-list">
+      <div class="pi on"><span class="radio"></span>${fav('S', '#2f8a6b')}<div class="grow"><div class="t1 ell">Staging Counterpart</div><div class="t2 ell">staging.counterpart.com · login with 2FA</div></div></div>
+      <div class="pi"><span class="radio"></span>${fav('D', '#6b7268')}<div class="grow"><div class="t1 ell">Staging DB</div><div class="t2 ell">Database · host, user, password</div></div></div>
+    </div>
+    ${accessForm('grid')}
+  </div>
+  <div class="foot"><button class="btn">Cancel</button><span class="grow"></span><button class="btn pri">Allow Staging Counterpart</button></div>
+</div>`;
+const editSheet = `<div class="dim"></div><div class="sheet">
+  <div class="sheet-h">${fav('A', '#3f6fb5')}<div class="grow"><div class="t1 lg">api.yourcounterpart.com</div><div class="t2">Claude Code Counterpart can use it since Oct 14</div></div><span class="x">${S(P.x)}</span></div>
+  <div class="sheet-b">${accessForm('list', 'What it can use', { noDef: 1, open: 1, ask: 1 })}</div>
+  <div class="foot"><button class="btn danger">${S(P.trash)}Remove access</button><span class="grow"></span><button class="btn">Cancel</button><button class="btn pri">Save</button></div>
+</div>`;
+const revokeModal = `<div class="dim"></div><div class="modal"><span class="agav lg" style="background:rgba(var(--danger-rgb),.12);color:var(--danger)">${S(P.trash)}</span>
+  <div class="t1 lg">Revoke Claude Code Counterpart?</div>
+  <p>It loses its 3 accounts right away. What it already used can't be taken back: change those passwords if you no longer trust it.</p>
+  <div class="mbtns"><button class="btn">Cancel</button><button class="btn dangerfill">Revoke agent</button></div></div>`;
+
+const reviewBody = backLbl => `${back(backLbl)}
+  <div class="ahead">${agav('lg warn')}<div class="grow"><div class="t2">Claude Code Counterpart · 2 min ago</div><div class="t1 lg">Wants to sign in to staging.counterpart.com</div></div></div>
+  <div class="quote">“Run the e2e suite against staging”<span>Reason the agent gave · for <code>browser_login</code></span></div>
+  <div class="lbl">1 · Which account</div>
+  <div class="pick-list">
+    <div class="pi on"><span class="radio"></span>${fav('S', '#2f8a6b')}<div class="grow"><div class="t1 ell">Staging Counterpart</div><div class="t2 ell">staging.counterpart.com</div></div><span class="chip">${S(P.check)}Matches</span></div>
+    <div class="pi"><span class="radio"></span>${fav('C', '#6b7268')}<div class="grow"><div class="t1 ell">Counterpart SSO</div><div class="t2 ell" style="color:var(--warning)">Saved for sso.counterpart.com, not staging</div></div></div>
+  </div>
+  ${accessForm('list', '2 · What it can use')}`;
+const reviewFoot = `<div class="foot"><button class="btn danger">Deny</button><span class="grow"></span><button class="btn pri">Allow Staging Counterpart</button></div>`;
+const newAgentBody = backLbl => `${back(backLbl)}
+  <div class="ahead">${agav('lg warn')}<div class="grow"><div class="t1 lg">Codex wants to connect</div><div class="t2">from <b>laptop</b> · 1 min ago</div></div></div>
+  <div class="codetile"><div class="c">K7QM-2XPA</div><div class="h">Your terminal shows a code too</div></div>
+  <div class="check">${S(P.check)}<span><b>Same code in your terminal?</b> Connect. If not, deny: someone else is asking.</span></div>
+  <div class="check">${S(P.check)}<span>Connecting gives it <b>no accounts</b>. You pick them next, or approve each one when it asks.</span></div>
+  <div class="check">${S(P.check)}<span>Revoke it anytime from its ⋯ menu.</span></div>`;
+const newAgentFoot = `<div class="foot"><button class="btn danger">Codes don’t match</button><span class="grow"></span><button class="btn pri">${S(P.check)}Codes match · Connect</button></div>`;
+const setupBody = backLbl => `${back(backLbl)}
+  <div><div class="ttl">Add it to your agent</div><div class="t2" style="margin-top:3px">Claude Code Counterpart is connected on <b>work</b>. Add OTPilot to the app you use there:</div></div>
+  <div class="card">${SETUP.map(([n, w, c]) => `<div class="srow"><div class="grow"><div class="t1">${n} <span class="t2" style="font-weight:400">${w}</span></div><pre class="codeb">${c}</pre></div><button class="btn sm">${S(P.copy)}Copy</button></div>`).join('')}</div>
+  <div class="safe">${S(P.terminal)}<span>Connected it with <code>--name</code> or <code>--profile</code>? Add <code>--profile &lt;name&gt;</code> after <code>@otpilot/mcp@latest</code>.</span></div>`;
+const limitCard = `<div class="limit"><div class="t1">You've used all 10 agent uses this month</div><div class="bar full"><i></i></div>
+  <div class="t2" style="line-height:1.45;margin:0">Your agents can still list accounts and ask for access, but can't sign in or run commands until <b>Dec 1</b>.</div>
+  <div style="display:flex;gap:8px;margin-top:4px"><button class="btn pri">Start free trial</button><button class="btn">Upgrade to Personal</button></div></div>`;
+const EMPTY = connect => `<div class="empty">${agav('xl')}
+  <div class="t1" style="font-size:17px">Let your AI agents sign in, safely</div>
+  <div style="font-size:12.5px;color:var(--ink-3);line-height:1.5;max-width:390px">Claude Code, Codex or Cursor can use the accounts you allow, passwords and 2FA codes included, <b style="color:var(--ink-1)">without ever seeing them</b>.</div>
+  <div class="steps">
+    <div class="step"><i>1</i><span>Run this in your terminal:</span></div>
+    <div class="cmd">npx -y @otpilot/mcp@latest ${connect}<button class="btn sm">${S(P.copy)}Copy</button></div>
+    <div class="step"><i>2</i><span>Check the code it shows matches the one here, and connect.</span></div>
+    <div class="step"><i>3</i><span>Pick the accounts it can use. Revoke anytime.</span></div>
+  </div>
+  <div class="works">Works with Claude Code · Codex · Cursor · any MCP client · <a>How it works</a></div></div>`;
+
+// ═════════════ D ═════════════
+const ttabs = (on, o = {}) => {
+  const c = (n, warn) => n ? `<span class="c${warn ? ' warn' : ''}">${n}</span>` : '';
+  return `<div class="ttabs"><span class="tt${on === 'ag' ? ' on' : ''}">Agents${c(o.ag ?? 2)}</span><span class="tt${on === 'req' ? ' on' : ''}">Requests${c(o.req ?? 3, 1)}</span><span class="tt${on === 'act' ? ' on' : ''}">Activity</span><div class="r">${use(o.full)}<button class="btn sm pri">${S(P.plus)}Connect</button></div></div>`;
+};
+const agentsList = `<div class="card">${AGENTS.map(([n, s, c, u], i) => `<div class="arow${i === 0 ? ' hov' : ''}">${agav('lg')}<div class="grow"><div class="t1 ell" style="font-size:13.5px">${n}</div><div class="t2 ell">${s} · used ${u}</div></div><span class="chip muted">${c}</span><span class="chev">${S(P.chev)}</span></div>`).join('')}</div>`;
+const waitBanner = `<div class="banner"><span class="dot"></span><div class="grow"><div class="t1">3 things are waiting for you</div><div class="t2">An account request, a new agent and a use to approve</div></div><button class="btn sm pri">Review</button></div>`;
+const agentD = menuOn => `${back('Agents')}${head({ menuOn })}${accSec}${accCard()}${lastUse}${SAFE}`;
+const D_MENU = menu(MENU_ITEMS(`<div>${S(P.pulse)}See its activity</div>`), 'top:124px');
+
+document.getElementById('dgroups').innerHTML =
+  group('Día a día', [
+    frame('D1 · Agents', page(ttabs('ag'), `${waitBanner}<div class="sec">Your agents</div>${agentsList}${SAFE}`),
+      'La primera pantalla es la lista de agentes: nombre, desde dónde corre, cuántas cuentas tiene y cuándo se usó. Si algo espera respuesta, un aviso lleva a <i>Requests</i>.'),
+    frame('D2 · Dentro de un agente', page(ttabs('ag'), agentD()),
+      'Al entrar ves qué puede usar. Cada cuenta dice su permiso en palabras; las chips marcan lo que se sale de lo normal. Abajo, su último uso y un atajo a su actividad.'),
+    frame('D3 · Menú ⋯ del agente', page(ttabs('ag'), agentD(1)) + D_MENU,
+      'Lo que se usa poco queda en el menú: renombrar, instalarlo en Claude Code / Codex / Cursor, ver su actividad y revocar.'),
+  ]) +
+  group('Permisos', [
+    frame('D4 · Permisos de una cuenta', page(ttabs('ag'), agentD()) + editSheet,
+      'Al tocar una cuenta se abre una hoja con sus permisos tal como están (acá: todo, preguntando cada vez). Desde ahí también se le quita el acceso.'),
+    frame('D5 · Agregar una cuenta', page(ttabs('ag'), agentD()) + addSheet,
+      'Se busca en la bóveda y viene con “Everything to sign in” elegido. Un toque para la duración; lo demás, plegado.'),
+  ]) +
+  group('Cuando el agente pide algo', [
+    frame('D6 · Requests', page(ttabs('req'), `<div class="sec">Waiting for you</div>${needsCard}<div class="safe">${S(P.pulse)}<span>Requests nobody answers expire after 10 minutes, and the agent is told so.</span></div>`),
+      'Todo lo que espera respuesta, en un solo lugar. Lo simple (usar ahora una cuenta que pide aprobación cada vez) se responde en la misma fila; lo demás abre su pantalla.'),
+    frame('D7 · Pedido de una cuenta', page(ttabs('req'), reviewBody('Requests'), reviewFoot),
+      'Dos pasos: qué cuenta (solo las que coinciden con lo pedido, avisando si una es de otro sitio) y qué puede usar, con “Everything” por defecto.'),
+    frame('D8 · Agente nuevo', page(ttabs('req'), newAgentBody('Requests'), newAgentFoot),
+      'El código grande y lo que implica conectar. Al conectar se abre D5 para elegir sus primeras cuentas.'),
+  ]) +
+  group('Otras pantallas', [
+    frame('D9 · Activity', page(ttabs('act'), `<div class="picks"><span class="pk on">All agents</span><span class="pk">Claude Code Counterpart</span><span class="pk">Cursor</span></div>${actCard(ACT_ALL, 'Show earlier')}`),
+      'La actividad de todos los agentes junta, filtrable por agente. “All activity ›” en D2 llega acá con ese agente ya filtrado.'),
+    frame('D10 · Agregarlo a Claude Code, Codex, Cursor', page(ttabs('ag'), setupBody('Claude Code Counterpart')),
+      'Las instrucciones de instalación salen de la página del agente y quedan acá, desde el menú ⋯.'),
+    frame('D11 · Revocar', page(ttabs('ag'), agentD()) + revokeModal,
+      'Pide confirmación y dice qué pasa con lo que ya usó.'),
+  ]) +
+  group('Casos especiales', [
+    frame('D12 · Sin agentes', page(ttabs('ag', { ag: 0, req: 0 }), EMPTY('connect')),
+      'La primera vez: un comando para copiar y tres pasos. Sin sesión, el comando se reemplaza por “Sign in to connect one”.'),
+    frame('D13 · Free: usos del mes agotados', page(ttabs('ag', { full: 1, req: 0 }), `${limitCard}<div class="sec">Your agents</div>${agentsList}`),
+      'La pastilla se pone roja y la tarjeta aparece solo cuando se agotan los usos. Antes, la pastilla “7/10 uses” alcanza.'),
+  ]);
+
+// ═════════════ A ═════════════
+const agentA = ({ banner = true, menuOn, full, needs } = {}) =>
+  `${head({ switcher: 1, usage: 1, menuOn, full })}${full ? limitCard : ''}${needs ? `<div class="sec">Needs you <span class="n">3</span></div>${needsCard}` : (banner ? REQ_BANNER : '')}${accSec}${accCard()}<div class="sec">Recent activity<span class="r"><button class="btn ghost sm">See all</button></span></div>${actCard(ACT_SHORT)}`;
+
+document.getElementById('agroups').innerHTML =
+  group('Día a día', [
+    frame('A1 · El agente', page('', agentA()),
+      'Una sola página: el agente, lo que espera respuesta, sus cuentas y la actividad reciente. “See all” abre A9.'),
+    frame('A2 · Cambiar de agente', page('', agentA({ banner: false })) + SWITCH,
+      'Con más de un agente, se cambia desde el nombre ▾. Desde ahí también se conecta otro.'),
+    frame('A3 · Menú ⋯ del agente', page('', agentA()) + menu(MENU_ITEMS(), 'top:54px'),
+      'Lo que se usa poco: renombrar, instalarlo en Claude Code / Codex / Cursor y revocar.'),
+  ]) +
+  group('Permisos', [
+    frame('A4 · Permisos de una cuenta', page('', agentA({ banner: false })) + editSheet,
+      'Igual que en D: al tocar una cuenta se ven y cambian sus permisos, o se le quita el acceso.'),
+    frame('A5 · Agregar una cuenta', page('', agentA({ banner: false })) + addSheet,
+      'Con “Everything to sign in” elegido por defecto.'),
+  ]) +
+  group('Cuando el agente pide algo', [
+    frame('A6 · Varias cosas esperando', page('', agentA({ needs: 1 })),
+      'Con un solo pedido se ve el aviso de A1; con varios, una lista “Needs you” arriba de las cuentas. Lo simple se responde en la fila.'),
+    frame('A7 · Pedido de una cuenta', page('', reviewBody('Claude Code Counterpart'), reviewFoot),
+      '“Review” abre el pedido en la misma página, con una flecha para volver.'),
+    frame('A8 · Agente nuevo', page('', newAgentBody('Claude Code Counterpart'), newAgentFoot),
+      'Si no hay ningún agente todavía, se abre directo acá, sin flecha para volver.'),
+  ]) +
+  group('Otras pantallas', [
+    frame('A9 · Toda la actividad', page('', `${back('Claude Code Counterpart')}<div class="ttl">Activity</div>${actCard(ACT, 'Show earlier')}`),
+      'La actividad de este agente, por días.'),
+    frame('A10 · Agregarlo a Claude Code, Codex, Cursor', page('', setupBody('Claude Code Counterpart')),
+      'Desde el menú ⋯.'),
+    frame('A11 · Revocar', page('', agentA({ banner: false })) + revokeModal,
+      'Pide confirmación.'),
+  ]) +
+  group('Casos especiales', [
+    frame('A12 · Sin agentes', page('', EMPTY('connect')),
+      'Igual que D12, sin pestañas.'),
+    frame('A13 · Free: usos del mes agotados', page('', agentA({ banner: false, full: 1 })),
+      'La tarjeta aparece arriba de las cuentas solo cuando se agotan los usos.'),
+  ]);
+</script>
+</body></html>

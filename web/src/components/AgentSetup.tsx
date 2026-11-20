@@ -28,6 +28,14 @@ const CLIENTS: { id: string; label: string; steps: { text: string; code?: string
     ],
   },
   {
+    id: 'pi',
+    label: 'Pi',
+    steps: [
+      { text: 'Connect it, then approve it in the extension if the codes match:', code: 'npx -y @otpilot/mcp@latest connect --name Pi' },
+      { text: 'Add the server to Pi (then /reload in a running session):', code: 'pi mcp add otpilot -- npx -y @otpilot/mcp@latest --profile pi' },
+    ],
+  },
+  {
     id: 'server',
     label: 'Server / VPS',
     steps: [
