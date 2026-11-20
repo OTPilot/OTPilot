@@ -29,6 +29,7 @@ Or add the server to your agent yourself (`connect` prints these for you):
 | Claude Code | `claude mcp add otpilot -- npx -y @otpilot/mcp@latest` |
 | Codex | `~/.codex/config.toml`: `[mcp_servers.otpilot]` `command = "npx"` `args = ["-y", "@otpilot/mcp@latest"]` |
 | Cursor | `~/.cursor/mcp.json`: `{ "mcpServers": { "otpilot": { "command": "npx", "args": ["-y", "@otpilot/mcp@latest"] } } }` |
+| [Pi](https://pi.dev) | `pi mcp add otpilot -- npx -y @otpilot/mcp@latest` |
 
 **Skill for any agent:** [`plugin/skills/otpilot/SKILL.md`](https://github.com/OTPilot/OTPilot/blob/main/mcp/plugin/skills/otpilot/SKILL.md) teaches an agent when and how to use these tools (and how to set them up). Install it with `npx skills add OTPilot/OTPilot` (it asks which agents), or copy it to your agent's skills folder. This repository is its only official source.
 

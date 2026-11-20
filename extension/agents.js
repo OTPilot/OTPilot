@@ -146,7 +146,7 @@ const Agents = (() => {
   // { kind: '2fa' } the 2FA secret (+ sites); { kind: 'login' } username,
   // password, 2FA and sites; { kind: 'fields', parts: [...] } chosen parts
   // (VaultShares.parts keys). The title always goes.
-  const SCOPE_LABELS = { '2fa': '2FA code', login: 'Sign-in', fields: 'Chosen fields' };
+  const SCOPE_LABELS = { '2fa': '2FA code only', login: 'Username, password & 2FA', fields: 'Chosen fields' };
 
   function partsOf(scope) {
     if (scope.kind === '2fa') return ['totp', 'urls'];
@@ -160,17 +160,26 @@ const Agents = (() => {
     return VaultShares.parts(item).filter(p => !p.walletSecret);
   }
 
-  // The scope that suits an item by default: its 2FA code when it has one
-  // (the least it can give), else a login's sign-in, else the other item
-  // types' own fields (a server, an API key…).
+  // The scope that suits an item by default: a login's whole sign-in
+  // (username, password, 2FA: what the agent needs to sign in), else the
+  // 2FA code of another item that has one, else the item's own fields (a
+  // server, an API key…).
   function defaultScope(item) {
-    if (item.totp?.secret) return { kind: '2fa' };
     if (item.type === 'login') return { kind: 'login' };
+    if (item.totp?.secret) return { kind: '2fa' };
     return { kind: 'fields', parts: partsFor(item).map(p => p.key) };
   }
 
   // What a scope gives of this item, for the UI ("2FA code · Password").
+  // A login's sign-in names what this login holds ("Username & password").
   function scopeSummary(item, scope) {
+    if (scope.kind === 'login') {
+      const has = id => !!Vault.getField(item, id)?.value;
+      const parts = [has('username') && 'username', has('password') && 'password', item.totp?.secret && '2FA'].filter(Boolean);
+      if (!parts.length) return SCOPE_LABELS.login;
+      const text = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}`;
+      return text[0].toUpperCase() + text.slice(1);
+    }
     if (scope.kind !== 'fields') return SCOPE_LABELS[scope.kind];
     const all = VaultShares.parts(item);
     const labels = new Map(all.map(p => [p.key, p.label]));

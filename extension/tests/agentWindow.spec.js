@@ -65,7 +65,7 @@ test('the Agents window closes itself once nothing waits any more', async ({ con
   await page.evaluate(() => renderAgentsPanel());
   await expect(page.locator('#agents-detail')).toContainText('Codex wants to connect');
   // Denying the only agent: nothing waits, the window closes on its own.
-  page.evaluate(() => [...document.querySelectorAll('#agents-detail button')].find(b => b.textContent.trim() === 'Deny').click()).catch(() => {});
+  page.evaluate(() => [...document.querySelectorAll('#agents-detail button')].find(b => b.textContent.trim() === "Codes don't match").click()).catch(() => {});
   await expect.poll(() => page.isClosed(), { timeout: 5000 }).toBe(true);
 });
 
@@ -84,7 +84,7 @@ test('approving the only agent in the window keeps it open for the add-account f
   await page.evaluate(() => fakeAgents.addAgent({ name: 'Codex' }));
   await page.evaluate(() => renderAgentsPanel());
   await page.locator('#agents-detail').getByRole('button', { name: 'Codes match · Connect' }).click();
-  await expect(page.locator('#agents-detail .ag-pick')).toBeVisible();
+  await expect(page.locator('#agents-layer .ag-sheet .ag-pick')).toBeVisible();
   await page.waitForTimeout(2000);
   expect(page.isClosed()).toBe(false);
   await expect(page.locator('#agents-panel')).toBeVisible();

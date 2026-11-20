@@ -5,6 +5,7 @@
 
 ### Extension
 
+- **Agents view, cleaner**: three tabs. *Agents* lists the connected agents (a notice says when something waits); open one to see what it can use, tap an account to change its permissions or remove it, and find rename, setup instructions and revoke (now confirmed first) in its ⋯ menu. *Requests* holds what waits for you: a new agent's code, an account request in two steps (which account, what it can use), and "ask every time" uses answered in one tap. *Activity* shows every agent's uses, or one agent's. Adding an account now gives the whole sign-in (username, password and 2FA) by default. Setup instructions include [Pi](https://pi.dev).
 - Free keeps unlimited items: the 50-item limit is gone (a CSV import of any size works). The Agents view shows the monthly uses card for Free (N of 10, the renew date) and offers **Start free trial** / **Upgrade to Personal** when they run out.
 
 ### API
@@ -14,11 +15,13 @@
 
 ### MCP (`@otpilot/mcp` 0.3.0)
 
+- `connect` also prints how to add the server to Pi; the README and the skill list it too.
 - Sends an `x-otpilot-mcp` header; `browser_login` and `run` open their accounts with one call (a `run` with several accounts is one use), and the server's limit and "update the MCP" messages are shown as they are. `list_accounts` ends with the monthly usage when on Free.
 
 ### Web
 
 - Pricing, FAQ and the AI agents page describe the Free agent limits (1 agent, 10 uses a month) and no item limit.
+- The agent setup guide has a Pi tab (`pi mcp add otpilot -- npx -y @otpilot/mcp@latest`).
 
 
 ## v2.1.10

@@ -27,6 +27,18 @@ async function setup(context, extensionId, { free = false } = {}) {
 
 const itemId = (page, title) => page.evaluate(async t => (await Agents.vaultItems(await VaultKeys.getKey())).find(i => i.title === t).id, title);
 
+// The view: tabs (Agents / Requests / Activity), an agent's page, sheets.
+const openAgent = async (page, id) => {
+  await page.click('#nav-agents');
+  await page.click(`#agents-detail .ag-row[data-agent="${id}"]`);
+};
+const sheetOf = page => page.locator('#agents-layer .ag-sheet');
+const waitingCount = page => page.locator('.ag-tab[data-tab=requests] .ag-count');
+const openMenuItem = async (page, name) => {
+  await page.locator('#agents-detail [data-act=menu]').click();
+  await page.getByRole('menuitem', { name }).click();
+};
+
 test('the verification code matches the shared test vector', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
   const key = 'BAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=';
@@ -39,18 +51,24 @@ test('approve a pending agent after its code, then let it use a 2FA code only', 
     const a = await fakeAgents.addAgent({ name: 'Codex' });
     return { id: a.id, code: await Agents.code(a.public_key) };
   });
+  // Nothing connected yet: the view opens on the agent waiting.
   await page.click('#nav-agents');
   const detail = page.locator('#agents-detail');
   await expect(detail).toContainText('Codex wants to connect');
   await expect(detail.locator('.code')).toHaveText(agent.code);
   await detail.getByRole('button', { name: 'Codes match · Connect' }).click();
 
-  // Connected: the add-account picker opens; GitHub, 2FA only.
-  await expect(page.locator('#agents-list')).toContainText('Connected');
-  await detail.locator('.ag-pick button', { hasText: 'GitHub' }).click();
-  await expect(detail.locator('.ag-scope')).toHaveValue('2fa');
-  await detail.getByRole('button', { name: 'Allow' }).click();
-  await expect(detail.locator('.ag-card-row', { hasText: 'GitHub' })).toContainText('2FA code');
+  // Connected: its page, with the add-account sheet open. A login defaults
+  // to everything it needs to sign in; here, its 2FA code only.
+  await expect(detail).toContainText('What it can use');
+  const sheet = sheetOf(page);
+  await sheet.locator('.ag-pick button', { hasText: 'GitHub' }).click();
+  await expect(sheet.locator('input.ag-scope[value=login]')).toBeChecked();
+  await expect(sheet.locator('.ag-opt', { hasText: 'Everything to sign in' })).toContainText('Username, password & 2FA');
+  await sheet.locator('input.ag-scope[value="2fa"]').check();
+  await sheet.getByRole('button', { name: 'Allow GitHub' }).click();
+  await expect(sheetOf(page)).toHaveCount(0);
+  await expect(detail.locator('.ag-row[data-item]', { hasText: 'GitHub' })).toContainText('2FA code only');
 
   const copy = await page.evaluate(async ({ id, item }) => fakeAgents.openGrant(id, item), { id: agent.id, item: await itemId(page, 'GitHub') });
   expect(copy.title).toBe('GitHub');
@@ -65,7 +83,7 @@ test('denying a pending agent removes it', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
   await page.evaluate(() => fakeAgents.addAgent({ name: 'Stranger' }));
   await page.click('#nav-agents');
-  await page.locator('#agents-detail').getByRole('button', { name: 'Deny' }).click();
+  await page.locator('#agents-detail').getByRole('button', { name: "Codes don't match" }).click();
   await expect(page.locator('#agents-detail')).toContainText('Let your AI agents sign in, safely');
   expect(await page.evaluate(() => fakeAgents.agents.size)).toBe(0);
 });
@@ -78,14 +96,23 @@ test('an agent asking for an account: the match is offered and allowed with its 
     fakeAgents.addRequest(a.id, { query: 'bank', reason: 'check the transfer', tool: 'browser_login' });
     return a.id;
   });
+  // An agent connected: the Agents tab says something waits.
   await page.click('#nav-agents');
   const detail = page.locator('#agents-detail');
-  await expect(detail).toContainText('Claude Code asks for bank');
+  await expect(detail.locator('.ag-banner')).toContainText('Something is waiting for you');
+  await expect(waitingCount(page)).toHaveText('1');
+  await detail.getByRole('button', { name: 'Review' }).click();
+  await expect(detail).toContainText('Asks for bank');
+  await expect(detail).toContainText('Claude Code');
   await expect(detail).toContainText('check the transfer');
   await detail.locator('.ag-pick button', { hasText: 'Bank' }).click();
-  await expect(detail.locator('.ag-scope')).toHaveValue('login'); // no 2FA on this one
+  await expect(detail.locator('input.ag-scope[value=login]')).toBeChecked();
+  await expect(detail.locator('input.ag-scope[value="2fa"]')).toBeDisabled(); // no 2FA on this one
+  await expect(detail.locator('.ag-opt', { hasText: 'Everything to sign in' })).toContainText('Username & password');
   await detail.getByRole('button', { name: /Allow Bank for Claude Code/ }).click();
-  await expect(page.locator('#agents-list')).not.toContainText('asks for');
+  // Answered: back on the agent's page, with Bank.
+  await expect(waitingCount(page)).toHaveCount(0);
+  await expect(detail.locator('.ag-row[data-item]', { hasText: 'Bank' })).toBeVisible();
 
   const bank = await itemId(page, 'Bank');
   const copy = await page.evaluate(({ a, i }) => fakeAgents.openGrant(a, i), { a: agentId, i: bank });
@@ -101,15 +128,15 @@ test("an account added from the agent's page answers its open request", async ({
     fakeAgents.addRequest(a.id, { query: 'an account to test with' });
     return a.id;
   });
-  await page.click('#nav-agents');
-  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  await openAgent(page, agentId);
   const detail = page.locator('#agents-detail');
-  await expect(detail.locator('.ag-request[data-req]')).toContainText('Asks for an account to test with');
-  await detail.getByRole('button', { name: '+ Add account' }).click();
-  await detail.locator('.ag-pick button', { hasText: 'Bank' }).click();
-  await expect(detail.locator('.ag-answers')).toBeChecked();
-  await detail.locator('.ag-adding [data-act=allow]').click();
-  await expect(page.locator('#agents-list')).not.toContainText('asks for');
+  await expect(detail.locator('.ag-banner[data-req]')).toContainText('Asks for an account to test with');
+  await detail.getByRole('button', { name: 'Add account' }).click();
+  const sheet = sheetOf(page);
+  await sheet.locator('.ag-pick button', { hasText: 'Bank' }).click();
+  await expect(sheet.locator('.ag-answers')).toBeChecked();
+  await sheet.locator('[data-act=allow]').click();
+  await expect(waitingCount(page)).toHaveCount(0);
   const req = await page.evaluate(() => [...fakeAgents.requests.values()][0]);
   expect([req.status, req.item_id]).toEqual(['allowed', await itemId(page, 'Bank')]);
 });
@@ -122,16 +149,17 @@ test('unticking "Answers its request" adds the account and leaves the request wa
     fakeAgents.addRequest(a.id, { query: 'github' });
     return a.id;
   });
-  await page.click('#nav-agents');
-  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  await openAgent(page, agentId);
   const detail = page.locator('#agents-detail');
-  await detail.getByRole('button', { name: '+ Add account' }).click();
-  await detail.locator('.ag-pick button', { hasText: 'Bank' }).click();
-  await detail.locator('.ag-answers').uncheck();
-  await detail.locator('.ag-adding [data-act=allow]').click();
-  await expect(detail.locator('.ag-card-row[data-item]')).toContainText('Bank');
+  await detail.getByRole('button', { name: 'Add account' }).click();
+  const sheet = sheetOf(page);
+  await sheet.locator('.ag-pick button', { hasText: 'Bank' }).click();
+  await sheet.locator('.ag-answers').uncheck();
+  await sheet.locator('[data-act=allow]').click();
+  await expect(detail.locator('.ag-row[data-item]')).toContainText('Bank');
   expect(await page.evaluate(() => [...fakeAgents.requests.values()][0].status)).toBe('pending');
-  await expect(page.locator('#agents-list')).toContainText('asks for github');
+  await expect(waitingCount(page)).toHaveText('1');
+  await expect(detail.locator('.ag-banner[data-req]')).toContainText('Asks for github');
 });
 
 test('a request answered elsewhere meanwhile still leaves the account added', async ({ context, extensionId }) => {
@@ -142,14 +170,14 @@ test('a request answered elsewhere meanwhile still leaves the account added', as
     fakeAgents.addRequest(a.id, { query: 'bank' });
     return a.id;
   });
-  await page.click('#nav-agents');
-  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  await openAgent(page, agentId);
   const detail = page.locator('#agents-detail');
-  await detail.getByRole('button', { name: '+ Add account' }).click();
-  await detail.locator('.ag-pick button', { hasText: 'Bank' }).click();
+  await detail.getByRole('button', { name: 'Add account' }).click();
+  const sheet = sheetOf(page);
+  await sheet.locator('.ag-pick button', { hasText: 'Bank' }).click();
   await page.evaluate(() => { [...fakeAgents.requests.values()][0].status = 'denied'; }); // answered on another device
-  await detail.locator('.ag-adding [data-act=allow]').click();
-  await expect(detail.locator('.ag-card-row[data-item]')).toContainText('Bank');
+  await sheet.locator('[data-act=allow]').click();
+  await expect(detail.locator('.ag-row[data-item]')).toContainText('Bank');
   await expect(detail.locator('.ag-err')).toHaveCount(0);
 });
 
@@ -161,16 +189,16 @@ test('a request that fails to be answered stays pending and the page says so', a
     fakeAgents.addRequest(a.id, { query: 'bank' });
     return a.id;
   });
-  await page.click('#nav-agents');
-  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  await openAgent(page, agentId);
   const detail = page.locator('#agents-detail');
-  await detail.getByRole('button', { name: '+ Add account' }).click();
-  await detail.locator('.ag-pick button', { hasText: 'Bank' }).click();
+  await detail.getByRole('button', { name: 'Add account' }).click();
+  const sheet = sheetOf(page);
+  await sheet.locator('.ag-pick button', { hasText: 'Bank' }).click();
   await page.evaluate(() => { const real = Agents.answer; Agents.answer = async () => { Agents.answer = real; throw Object.assign(new Error('agents 503'), { status: 503 }); }; });
-  await detail.locator('.ag-adding [data-act=allow]').click();
-  await expect(detail.locator('.ag-card-row[data-item]')).toContainText('Bank');
+  await sheet.locator('[data-act=allow]').click();
+  await expect(detail.locator('.ag-row[data-item]')).toContainText('Bank');
   await expect(detail.locator('.ag-err')).toContainText("Bank is added, but its request couldn't be answered");
-  await expect(page.locator('#agents-list')).toContainText('asks for bank');
+  await expect(waitingCount(page)).toHaveText('1');
 });
 
 test('Review on the agent page opens its request', async ({ context, extensionId }) => {
@@ -181,19 +209,21 @@ test('Review on the agent page opens its request', async ({ context, extensionId
     fakeAgents.addRequest(a.id, { query: 'bank' });
     return a.id;
   });
-  await page.click('#nav-agents');
-  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
-  await page.locator('#agents-detail').getByRole('button', { name: 'Review' }).click();
-  await expect(page.locator('#agents-detail')).toContainText('Claude Code asks for bank');
+  await openAgent(page, agentId);
+  await page.locator('#agents-detail .ag-banner[data-req]').getByRole('button', { name: 'Review' }).click();
+  await expect(page.locator('#agents-detail')).toContainText('Asks for bank');
+  await expect(page.locator('.ag-tab[data-tab=requests]')).toHaveAttribute('aria-selected', 'true');
 });
 
 test('an agent approved on another device has to be checked here before writing copies', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
-  await page.evaluate(() => fakeAgents.addAgent({ name: 'Cursor', status: 'active' }));
+  const agentId = await page.evaluate(async () => (await fakeAgents.addAgent({ name: 'Cursor', status: 'active' })).id);
   await page.click('#nav-agents');
+  await expect(page.locator('#agents-detail .ag-row[data-agent]')).toContainText('Check its code');
+  await page.click(`#agents-detail .ag-row[data-agent="${agentId}"]`);
   const detail = page.locator('#agents-detail');
   await expect(detail).toContainText('Approved on another device');
-  await expect(detail.getByRole('button', { name: '+ Add account' })).toBeDisabled();
+  await expect(detail.getByRole('button', { name: 'Add account' })).toBeDisabled();
   const refused = await page.evaluate(async () => {
     const a = [...fakeAgents.agents.values()][0];
     const item = (await Agents.vaultItems(await VaultKeys.getKey()))[0];
@@ -201,7 +231,7 @@ test('an agent approved on another device has to be checked here before writing 
   });
   expect(refused).toContain('Check this agent');
   await detail.getByRole('button', { name: 'Codes match' }).click();
-  await expect(detail.getByRole('button', { name: '+ Add account' })).toBeEnabled();
+  await expect(detail.getByRole('button', { name: 'Add account' })).toBeEnabled();
 });
 
 test('copies follow the vault: an edited password is re-sent, a deleted item loses its grant', async ({ context, extensionId }) => {
@@ -254,31 +284,34 @@ test('a grant follows its item to the new id sync gave it (Free, all slots used)
 
 const setUsage = (page, usage) => page.evaluate(u => { fakeAgents.usage = u; }, usage);
 const usage = (used, extra = {}) => ({ used, limit: 10, resets_at: '2026-07-01T00:00:00Z', trial_available: false, ...extra });
+// The card shows on the Agents tab: give it an agent.
+const withAgent = page => page.evaluate(async () => { const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' }); await Agents.pin(a); });
+const pill = page => page.locator('#agents-limit .ag-use');
+const limitCard = page => page.locator('#agents-detail .ag-limit');
 
-test('free plan: the monthly uses card shows even at 0 of 10', async ({ context, extensionId }) => {
+test('free plan: the uses pill shows even at 0 of 10, with no card', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, { free: true });
   await setUsage(page, usage(0));
+  await withAgent(page);
   await page.click('#nav-agents');
-  const card = page.locator('#agents-limit .ag-limit');
-  await expect(card).toContainText('Free plan · 0 of 10 uses this month');
-  await expect(card).toContainText('Renews Jul 1');
-  const meter = card.locator('.ag-meter');
-  await expect(meter).toHaveAttribute('role', 'meter');
-  await expect(meter).toHaveAttribute('aria-valuenow', '0');
-  await expect(meter).toHaveAttribute('aria-valuetext', '0 of 10 uses this month');
-  await expect(page.locator('#agents-limit button')).toHaveCount(0);
+  await expect(pill(page)).toHaveText('0/10 uses');
+  await expect(pill(page)).toHaveAttribute('role', 'meter');
+  await expect(pill(page)).toHaveAttribute('aria-valuenow', '0');
+  await expect(pill(page)).toHaveAttribute('aria-valuetext', '0 of 10 uses this month');
+  await expect(pill(page)).toHaveAttribute('title', 'Free plan · 0 of 10 uses this month · renews Jul 1');
+  await expect(limitCard(page)).toHaveCount(0);
 });
 
 test('free plan: 7 of 10 has no warning, 9 of 10 does, and the 10 s refresh redraws it', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, { free: true });
   await setUsage(page, usage(7));
   await page.click('#nav-agents');
-  await expect(page.locator('#agents-limit')).toContainText('7 of 10 uses this month');
-  await expect(page.locator('#agents-limit .ag-meter.warn')).toHaveCount(0);
+  await expect(pill(page)).toHaveText('7/10 uses');
+  await expect(page.locator('#agents-limit .ag-use.warn')).toHaveCount(0);
   await setUsage(page, usage(9));
   await page.evaluate(async () => renderAgentsPanel(await Agents.list()));
-  await expect(page.locator('#agents-limit .ag-meter.warn')).toHaveCount(1);
-  await expect(page.locator('#agents-limit')).toContainText('9 of 10 uses this month');
+  await expect(page.locator('#agents-limit .ag-use.warn')).toHaveCount(1);
+  await expect(pill(page)).toHaveText('9/10 uses');
 });
 
 test('free plan: agentsShape changes with usage', async ({ context, extensionId }) => {
@@ -290,11 +323,11 @@ test('free plan: agentsShape changes with usage', async ({ context, extensionId 
   expect(same).toBe(false);
 });
 
-test('free plan: a new renewal date alone changes agentsShape and redraws the card', async ({ context, extensionId }) => {
+test('free plan: a new renewal date alone changes agentsShape and redraws the pill', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, { free: true });
   await setUsage(page, usage(0));
   await page.click('#nav-agents');
-  await expect(page.locator('#agents-limit')).toContainText('Renews Jul 1');
+  await expect(pill(page)).toHaveAttribute('title', /renews Jul 1/);
   const same = await page.evaluate(() => {
     const d = { agents: [], usage: { used: 0, limit: 10, trial_available: false, resets_at: '2026-07-01T00:00:00Z' } };
     return agentsShape(d) === agentsShape({ ...d, usage: { ...d.usage, resets_at: '2026-08-01T00:00:00Z' } });
@@ -302,21 +335,24 @@ test('free plan: a new renewal date alone changes agentsShape and redraws the ca
   expect(same).toBe(false);
   await setUsage(page, usage(0, { resets_at: '2026-08-01T00:00:00Z' }));
   await page.evaluate(async () => renderAgentsPanel(await Agents.list()));
-  await expect(page.locator('#agents-limit')).toContainText('Renews Aug 1');
+  await expect(pill(page)).toHaveAttribute('title', /renews Aug 1/);
 });
 
-test('free plan: 10 of 10 offers the trial, starting it hides the card', async ({ context, extensionId }) => {
+test('free plan: 10 of 10 offers the trial (never had one), starting it hides the card', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, { free: true });
   await setUsage(page, usage(10, { trial_available: true }));
+  await withAgent(page);
   await page.evaluate(() => {
     window.__trial = 0;
     CloudSync.startTrial = async () => { window.__trial++; fakeAgents.usage = null; };
   });
   await page.click('#nav-agents');
-  const card = page.locator('#agents-limit .ag-limit');
+  await expect(page.locator('#agents-limit .ag-use.full')).toHaveAttribute('aria-valuenow', '10');
+  const card = limitCard(page);
+  await expect(card).toContainText("You've used all 10 agent uses this month");
   await expect(card.locator('[aria-live="polite"]')).toContainText("can't sign in or run commands until Jul 1");
-  await expect(card.locator('.ag-meter')).toHaveAttribute('aria-valuenow', '10');
   await card.getByRole('button', { name: 'Start free trial' }).click();
+  await expect(limitCard(page)).toHaveCount(0);
   await expect(page.locator('#agents-limit')).toBeEmpty();
   expect(await page.evaluate(() => window.__trial)).toBe(1);
 });
@@ -324,39 +360,42 @@ test('free plan: 10 of 10 offers the trial, starting it hides the card', async (
 test('free plan: a failed trial start says so and offers the upgrade', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, { free: true });
   await setUsage(page, usage(10, { trial_available: true }));
+  await withAgent(page);
   await page.evaluate(() => { CloudSync.startTrial = async () => { throw new Error('nope'); }; });
   await page.click('#nav-agents');
   await page.getByRole('button', { name: 'Start free trial' }).click();
-  await expect(page.locator('#agents-limit')).toContainText('Could not start the trial. Try again, or upgrade to Personal.');
+  await expect(limitCard(page)).toContainText('Could not start the trial. Try again, or upgrade to Personal.');
   await expect(page.getByRole('button', { name: 'Start free trial' })).toBeEnabled();
-  await expect(page.locator('#agents-limit a', { hasText: 'Upgrade to Personal' })).toHaveAttribute('href', /\/dashboard\/billing$/);
+  await expect(limitCard(page).locator('a', { hasText: 'Upgrade to Personal' })).toHaveAttribute('href', /\/dashboard\/billing$/);
 });
 
-test('free plan: 10 of 10 without a trial links to Personal', async ({ context, extensionId }) => {
+test('free plan: 10 of 10 after a trial (or without one on offer) links to Personal only', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, { free: true });
   await setUsage(page, usage(10));
+  await withAgent(page);
   await page.click('#nav-agents');
-  const link = page.locator('#agents-limit a', { hasText: 'Upgrade to Personal' });
-  await expect(link).toHaveAttribute('href', /\/dashboard\/billing$/);
-  await expect(page.locator('#agents-limit')).toContainText('Renews Jul 1');
-  await expect(page.locator('#agents-limit button')).toHaveCount(0);
+  await expect(limitCard(page).locator('a', { hasText: 'Upgrade to Personal' })).toHaveAttribute('href', /\/dashboard\/billing$/);
+  await expect(limitCard(page)).toContainText('until Jul 1');
+  await expect(limitCard(page).locator('button')).toHaveCount(0);
 });
 
-test('paid plan or no usage: the card is hidden', async ({ context, extensionId }) => {
+test('paid plan or no usage: no pill, no card', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
+  await withAgent(page);
   await page.click('#nav-agents');
-  await expect(page.locator('#agents-list')).toBeVisible();
+  await expect(page.locator('#agents-detail')).toContainText('Your agents');
   await expect(page.locator('#agents-limit')).toBeEmpty();
   await setUsage(page, undefined);
   await page.evaluate(async () => renderAgentsPanel(await Agents.list()));
   await expect(page.locator('#agents-limit')).toBeEmpty();
+  await expect(limitCard(page)).toHaveCount(0);
 });
 
-test('free plan: a server without usage hides the card', async ({ context, extensionId }) => {
+test('free plan: a server without usage shows no pill', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId, { free: true });
   await setUsage(page, undefined);
   await page.click('#nav-agents');
-  await expect(page.locator('#agents-list')).toBeVisible();
+  await expect(page.locator('#agents-detail')).toBeVisible();
   await expect(page.locator('#agents-limit')).toBeEmpty();
 });
 
@@ -364,17 +403,18 @@ test('free plan: the second-agent error and a fourth grant', async ({ context, e
   const page = await setup(context, extensionId, { free: true });
   expect(await page.evaluate(() => agentError({ body: { error: 'free plan limit: one agent' } })))
     .toBe('The free plan allows one connected agent. Disconnect it first, or upgrade to Personal.');
-  await page.evaluate(async () => {
+  const agentId = await page.evaluate(async () => {
     const a = await fakeAgents.addAgent({ status: 'active' });
     await Agents.pin(a);
     for (let i = 0; i < 3; i++) a.grants.set(crypto.randomUUID(), { scope: { kind: '2fa' }, commands: [] });
+    return a.id;
   });
-  await page.click('#nav-agents');
-  const detail = page.locator('#agents-detail');
-  await detail.getByRole('button', { name: '+ Add account' }).click();
-  await detail.locator('.ag-pick button', { hasText: 'GitHub' }).click();
-  await detail.getByRole('button', { name: 'Allow' }).click();
-  await expect(detail.locator('.ag-err')).toHaveCount(0);
+  await openAgent(page, agentId);
+  await page.locator('#agents-detail').getByRole('button', { name: 'Add account' }).click();
+  const sheet = sheetOf(page);
+  await sheet.locator('.ag-pick button', { hasText: 'GitHub' }).click();
+  await sheet.getByRole('button', { name: 'Allow GitHub' }).click();
+  await expect(page.locator('#agents-detail .ag-err')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => [...fakeAgents.agents.values()][0].grants.size)).toBe(4);
 });
 
@@ -388,8 +428,9 @@ test('the editor lists the agents that can use a login and allows one', async ({
   await page.locator('#accounts-list .acc-row, #accounts-list .lc-row', { hasText: 'GitHub' }).first().click();
   const section = page.locator('#acc-detail .ag-editor');
   await expect(section).toContainText('No agent can use this account');
-  await section.getByRole('button', { name: /Allow \(2FA code\)/ }).click();
+  await section.getByRole('button', { name: 'Allow (Username, password & 2FA)' }).click();
   await expect(section.locator('.ag-card-row')).toContainText('Claude Code');
+  await expect(section.locator('.ag-card-row')).toContainText('Username, password & 2FA');
   await section.locator('.ag-x').click();
   await expect(section).toContainText('No agent can use this account');
 });
@@ -470,15 +511,17 @@ test('an expired account is renewed in place, with its settings', async ({ conte
     await Agents.grant(a, item, { scope: { kind: 'login' }, expiresAt: new Date(Date.now() - 60e3).toISOString(), commands: ['gh'] });
     return a.id;
   });
-  await page.click('#nav-agents');
-  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  await openAgent(page, agentId);
   const detail = page.locator('#agents-detail');
-  await expect(detail).toContainText('expired');
-  await detail.getByRole('button', { name: 'Renew' }).first().click();
-  await expect(detail.locator('.ag-duration')).toHaveValue('1h');
-  await expect(detail.locator('.ag-commands')).toHaveValue('gh');
-  await detail.locator('.ag-adding').getByRole('button', { name: 'Renew' }).click();
-  await expect(detail).toContainText('1 h left');
+  const row = detail.locator('.ag-row[data-item]', { hasText: 'GitHub' });
+  await expect(row.locator('.ag-pill')).toHaveText('Expired');
+  await row.click();
+  const sheet = sheetOf(page);
+  await expect(sheet).toContainText('Expired. Pick how long to renew it for.');
+  await expect(sheet.locator('input[name=ag-dur][value="1h"]')).toBeChecked();
+  await expect(sheet.locator('.ag-commands')).toHaveValue('gh');
+  await sheet.getByRole('button', { name: 'Renew' }).click();
+  await expect(row).toContainText('1 h left');
   const g = await page.evaluate(id => [...fakeAgents.agents.get(id).grants.values()][0], agentId);
   expect(g.commands).toEqual(['gh']);
   expect(new Date(g.expires_at).getTime()).toBeGreaterThan(Date.now());
@@ -505,21 +548,20 @@ test('the Agents view picks up a new request on its own, and never redraws over 
     };
     return a.id;
   });
-  await page.click('#nav-agents');
-  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  await openAgent(page, agentId);
   const detail = page.locator('#agents-detail');
   // The click's own redraw finishes first: held, it would look like the
-  // timer's, and redraw over the form when released (a click's does, on purpose).
+  // timer's, and redraw over the sheet when released (a click's does, on purpose).
   await page.waitForFunction(() => window.__renders === 0);
   await page.evaluate(a => { window.__hold = true; fakeAgents.addRequest(a, { query: 'bank' }); }, agentId);
-  // The timer's redraw is now held halfway; the user opens a form meanwhile.
+  // The timer's redraw is now held halfway; the user opens a sheet meanwhile.
   await page.waitForFunction(() => window.__paused, null, { timeout: 15_000 });
-  await detail.getByRole('button', { name: '+ Add account' }).click();
-  await expect(detail.locator('.ag-adding .ag-picker')).toBeVisible();
+  await detail.getByRole('button', { name: 'Add account' }).click();
+  await expect(sheetOf(page).locator('.ag-picker')).toBeVisible();
   await page.evaluate(() => { window.__hold = false; window.__release(); });
   await page.waitForTimeout(1000);
-  await expect(detail.locator('.ag-adding .ag-picker')).toBeVisible(); // the form stayed
-  await detail.getByRole('button', { name: 'Cancel' }).click();
+  await expect(sheetOf(page).locator('.ag-picker')).toBeVisible(); // the sheet stayed
+  await sheetOf(page).getByRole('button', { name: 'Cancel' }).click();
   await expect(detail).toContainText('Asks for bank', { timeout: 15_000 });
 });
 
@@ -551,16 +593,16 @@ test('items shared with me can be given to an agent, and go when my access does'
     await Agents.pin({ id: a.id, public_key: a.public_key });
     return a.id;
   });
-  await page.click('#nav-agents');
-  await page.click(`#agents-list .lc-row[data-kind=agent][data-id="${agentId}"]`);
+  await openAgent(page, agentId);
   const detail = page.locator('#agents-detail');
-  await detail.getByRole('button', { name: '+ Add account' }).click();
-  await detail.locator('.ag-search').fill('acme');
-  await expect(detail.locator('.ag-pick button', { hasText: 'Acme admin' })).toContainText('Shared · ana@acme.io');
-  await expect(detail.locator('.ag-pick button', { hasText: 'Ops console' })).toContainText('Shared · Ops');
-  await detail.locator('.ag-pick button', { hasText: 'Acme admin' }).click();
-  await detail.locator('.ag-adding [data-act=allow]').click();
-  await expect(detail.locator('.ag-card-row[data-item]', { hasText: 'Acme admin' })).toContainText('Shared · ana@acme.io');
+  await detail.getByRole('button', { name: 'Add account' }).click();
+  const sheet = sheetOf(page);
+  await sheet.locator('.ag-search').fill('acme');
+  await expect(sheet.locator('.ag-pick button', { hasText: 'Acme admin' })).toContainText('Shared · ana@acme.io');
+  await expect(sheet.locator('.ag-pick button', { hasText: 'Ops console' })).toContainText('Shared · Ops');
+  await sheet.locator('.ag-pick button', { hasText: 'Acme admin' }).click();
+  await sheet.locator('[data-act=allow]').click();
+  await expect(detail.locator('.ag-row[data-item]', { hasText: 'Acme admin' })).toContainText('Shared · ana@acme.io');
   const copy = await page.evaluate(({ a, i }) => fakeAgents.openGrant(a, i), { a: agentId, i: s.share });
   expect(copy.fields.map(f => f.value)).toEqual(['team@acme.io', 'acme-pass']);
 
@@ -595,18 +637,27 @@ test('items shared with me can be given to an agent, and go when my access does'
   expect(await page.evaluate(a => fakeAgents.agents.get(a).grants.size, agentId)).toBe(0);
 });
 
-test('a connected agent shows how to add it to Claude Code, Codex and Cursor', async ({ context, extensionId }) => {
+test('a connected agent shows how to add it to Claude Code, Codex, Cursor and Pi', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
-  await page.evaluate(async () => {
+  const agentId = await page.evaluate(async () => {
     const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
     await Agents.pin({ id: a.id, public_key: a.public_key });
+    return a.id;
   });
-  await page.click('#nav-agents');
-  const setupBox = page.locator('#agents-detail .ag-setup');
-  await expect(setupBox).toHaveAttribute('open', ''); // nothing used yet: shown open
-  await expect(setupBox).toContainText('claude mcp add otpilot -- npx -y @otpilot/mcp@latest');
-  await expect(setupBox).toContainText('[mcp_servers.otpilot]');
-  await expect(setupBox).toContainText('~/.cursor/mcp.json');
+  await openAgent(page, agentId);
+  const detail = page.locator('#agents-detail');
+  // Nothing used yet: its page points there.
+  await expect(detail.locator('.ag-hint')).toContainText('Not used yet');
+  await detail.getByRole('button', { name: 'Show me how' }).click();
+  await expect(detail).toContainText('Add it to your agent');
+  await expect(detail).toContainText('claude mcp add otpilot -- npx -y @otpilot/mcp@latest');
+  await expect(detail).toContainText('[mcp_servers.otpilot]');
+  await expect(detail).toContainText('~/.cursor/mcp.json');
+  await expect(detail).toContainText('pi mcp add otpilot -- npx -y @otpilot/mcp@latest');
+  // Also from its ⋯ menu, once it's been used.
+  await detail.locator('.ag-back').click();
+  await openMenuItem(page, 'Add it to your agent app…');
+  await expect(detail.locator('.ag-setup-row')).toHaveCount(4);
 });
 
 test('a request with a long account name fits the popup (no sideways scroll)', async ({ context, extensionId }) => {
@@ -617,6 +668,7 @@ test('a request with a long account name fits the popup (no sideways scroll)', a
     fakeAgents.addRequest(a.id, { query: 'feature-deploy-sec-618-619-hardening.test-counterpart.com', reason: 'Sign in to the Django admin', tool: 'request_access' });
   });
   await page.click('#nav-agents');
+  await page.locator('#agents-detail').getByRole('button', { name: 'Review' }).click();
   await expect(page.locator('#agents-detail')).toContainText('test-counterpart.com');
   expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(600);
 });
@@ -636,6 +688,7 @@ test('a request for a site offers the logins of that domain, else every account'
   });
   await page.click('#nav-agents');
   const detail = page.locator('#agents-detail');
+  await detail.getByRole('button', { name: 'Review' }).click();
   await expect(detail.locator('.ag-picker')).toContainText('No account in your vault matches nothing-like-it.example.org');
   await expect(detail.locator('.ag-picker button, .ag-picker input')).toHaveCount(0); // never the whole vault
   await expect(detail.getByRole('button', { name: 'Allow' })).toBeDisabled();
@@ -653,7 +706,8 @@ test('a request lists only its matches, says which the agent has and which are s
     fakeAgents.addRequest(a.id, { query: 'feature-deploy.test-counterpart.com' });
   });
   await page.click('#nav-agents');
-  await page.click('#agents-list .lc-row[data-kind=request]');
+  await page.click('.ag-tab[data-tab=requests]');
+  await page.click('#agents-detail .ag-row[data-kind=request]');
   const pick = page.locator('#agents-detail .ag-pick');
   await expect(pick.locator('button')).toHaveCount(1);
   await expect(pick).toContainText('Already allowed');
@@ -693,8 +747,11 @@ test("an agent's activity shows ten uses and loads the next ten from the API", a
     for (let i = 0; i < 23; i++) fakeAgents.addUse(a.id, { detail: `cmd ${i}` });
     return a.id;
   });
+  // One agent: the Activity tab is its own list, ten at a time.
   await page.click('#nav-agents');
+  await page.click('.ag-tab[data-tab=activity]');
   const box = page.locator(`#agents-detail .ag-activity[data-agent="${agentId}"]`);
+  await expect(box.locator('.ag-day').first()).toHaveText('Today');
   await expect(box.locator('.ag-log')).toHaveCount(10);
   await expect(box.locator('.ag-log').first()).toContainText('cmd 22');
   await box.getByRole('button', { name: 'Show more' }).click();
@@ -715,6 +772,7 @@ test('more new uses than a page between refreshes: the list restarts from the ne
     return a.id;
   });
   await page.click('#nav-agents');
+  await page.click('.ag-tab[data-tab=activity]');
   const box = page.locator(`#agents-detail .ag-activity[data-agent="${agentId}"]`);
   await expect(box.locator('.ag-log')).toHaveCount(10);
   await box.getByRole('button', { name: 'Show more' }).click();
@@ -725,7 +783,7 @@ test('more new uses than a page between refreshes: the list restarts from the ne
   await expect(box.locator('.ag-log')).toHaveCount(10);
   await box.getByRole('button', { name: 'Show more' }).click();
   await expect(box.locator('.ag-log')).toHaveCount(20);
-  const details = await box.locator('.ag-log span').allTextContents();
+  const details = await box.locator('.ag-log .ag-t2').allTextContents();
   expect(details.map(t => Number(t.match(/cmd (\d+)/)[1]))).toEqual(Array.from({ length: 20 }, (_, i) => 35 - i));
 });
 
@@ -739,13 +797,17 @@ test('an agent shows the client it runs in, and can be renamed', async ({ contex
   });
   await page.click('#nav-agents');
   const detail = page.locator('#agents-detail');
-  await expect(detail.locator('.ag-t2').first()).toContainText('via Claude Code · work');
-  await expect(page.locator('#agents-list')).toContainText('Claude Code · work · 0 accounts');
-  await detail.getByRole('button', { name: 'Rename' }).click();
+  const row = detail.locator(`.ag-row[data-agent="${agentId}"]`);
+  await expect(row).toContainText('via Claude Code · work · not used yet');
+  await expect(row).toContainText('0 accounts');
+  await row.click();
+  await expect(detail.locator('.ag-head .ag-t2')).toContainText('via Claude Code · work');
+  await openMenuItem(page, 'Rename');
   await detail.locator('.ag-rename').fill('Claude Code (work)');
   await detail.locator('.ag-rename').press('Enter');
   await expect(detail.locator('.ag-name .ag-t1')).toHaveText('Claude Code (work)');
-  await expect(page.locator('#agents-list')).toContainText('Claude Code (work)');
+  await detail.locator('.ag-back').click();
+  await expect(detail.locator('.ag-row[data-agent]')).toContainText('Claude Code (work)');
   expect(await page.evaluate(id => fakeAgents.agents.get(id).name, agentId)).toBe('Claude Code (work)');
 });
 
@@ -757,25 +819,136 @@ test('renaming: Cancel and Escape send nothing, a refresh never redraws over the
     await Agents.pin({ id: a.id, public_key: a.public_key });
     return a.id;
   });
-  await page.click('#nav-agents');
+  await openAgent(page, agentId);
   const detail = page.locator('#agents-detail');
-  await expect(detail.locator('.ag-t2').first()).toContainText('via constructor');
+  await expect(detail.locator('.ag-head .ag-t2')).toContainText('via constructor');
   const patches = () => page.evaluate(() => fakeAgents.calls.filter(c => c.startsWith('PATCH')).length);
 
-  await detail.getByRole('button', { name: 'Rename' }).click();
+  await openMenuItem(page, 'Rename');
   await detail.locator('.ag-rename').fill('Nope');
   await detail.getByRole('button', { name: 'Cancel' }).click();
   await expect(detail.locator('.ag-name .ag-t1')).toHaveText('AI agent');
-  await detail.getByRole('button', { name: 'Rename' }).click();
+  await openMenuItem(page, 'Rename');
   await detail.locator('.ag-rename').fill('Nope either');
   await detail.locator('.ag-rename').press('Escape');
   await expect(detail.locator('.ag-name .ag-t1')).toHaveText('AI agent');
   expect(await patches()).toBe(0);
 
   // A refresh with news (a new request) while typing: the field stays.
-  await detail.getByRole('button', { name: 'Rename' }).click();
+  await openMenuItem(page, 'Rename');
   await detail.locator('.ag-rename').fill('Half typed');
   await page.evaluate(async id => { fakeAgents.addRequest(id, { query: 'github' }); await renderAgentsPanel(await Agents.list()); }, agentId);
   await expect(detail.locator('.ag-rename')).toHaveValue('Half typed');
   expect(await patches()).toBe(0);
+});
+
+test("an account's sheet changes what the agent can use, or removes it", async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    for (const item of await Agents.vaultItems(await VaultKeys.getKey())) await Agents.grant(a, item, { scope: { kind: 'login' } });
+    return a.id;
+  });
+  await openAgent(page, agentId);
+  const detail = page.locator('#agents-detail');
+  const row = detail.locator('.ag-row[data-item]', { hasText: 'GitHub' });
+  await expect(row).toContainText('Username, password & 2FA · until you revoke');
+  await row.click();
+  const sheet = sheetOf(page);
+  await expect(sheet.locator('input.ag-scope[value=login]')).toBeChecked();
+  await sheet.locator('input.ag-scope[value="2fa"]').check();
+  await sheet.locator('.ag-more summary').click();
+  await sheet.locator('.ag-ask').check();
+  await sheet.getByRole('button', { name: 'Save' }).click();
+  await expect(row).toContainText('2FA code only');
+  await expect(row.locator('.ag-pill')).toHaveText('Asks every time');
+  const gh = await itemId(page, 'GitHub');
+  expect((await page.evaluate(({ a, i }) => fakeAgents.openGrant(a, i), { a: agentId, i: gh })).fields).toEqual([]);
+
+  // Escape closes the sheet without saving; Remove access takes it away.
+  await row.click();
+  await page.keyboard.press('Escape');
+  await expect(sheetOf(page)).toHaveCount(0);
+  await detail.locator('.ag-row[data-item]', { hasText: 'Bank' }).click();
+  await sheetOf(page).getByRole('button', { name: 'Remove access' }).click();
+  await expect(detail.locator('.ag-row[data-item]', { hasText: 'Bank' })).toHaveCount(0);
+  expect(await page.evaluate(a => [...fakeAgents.agents.get(a).grants.keys()], agentId)).toEqual([gh]);
+});
+
+test('revoking an agent asks first: Cancel keeps it, Revoke agent removes it', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    return a.id;
+  });
+  await openAgent(page, agentId);
+  await openMenuItem(page, 'Revoke agent…');
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toContainText('Revoke Claude Code?');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(await page.evaluate(() => fakeAgents.agents.size)).toBe(1);
+  await openMenuItem(page, 'Revoke agent…');
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Revoke agent' }).click();
+  await expect(page.locator('#agents-detail')).toContainText('Let your AI agents sign in, safely');
+  expect(await page.evaluate(() => fakeAgents.agents.size)).toBe(0);
+});
+
+test('a use of an "ask every time" account is answered in its Requests row', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    const item = (await Agents.vaultItems(await VaultKeys.getKey())).find(i => i.title === 'GitHub');
+    await Agents.grant(a, item, { scope: { kind: 'login' }, askEveryTime: true });
+    fakeAgents.addRequest(a.id, { item_id: item.id, tool: 'run' });
+    fakeAgents.addRequest(a.id, { query: 'bank' });
+  });
+  await page.click('#nav-agents');
+  await expect(page.locator('#agents-detail .ag-banner')).toContainText('2 things are waiting for you');
+  await expect(page.locator('#agents-detail .ag-banner')).toContainText('1 account request and 1 use to approve');
+  await page.locator('#agents-detail .ag-banner').getByRole('button', { name: 'Review' }).click();
+  const row = page.locator('#agents-detail .ag-row[data-req]');
+  await expect(row).toContainText('Use GitHub now');
+  await row.getByRole('button', { name: 'Allow once' }).click();
+  await expect(waitingCount(page)).toHaveText('1');
+  const statuses = await page.evaluate(() => [...fakeAgents.requests.values()].map(r => r.status));
+  expect(statuses).toEqual(['allowed', 'pending']);
+  await expect(page.locator('#agents-detail .ag-row[data-kind=request]')).toContainText('Claude Code asks for bank');
+});
+
+test("the bell's Review opens the only thing waiting", async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    fakeAgents.addRequest(a.id, { query: 'bank' });
+  });
+  await page.evaluate(() => renderNotices({ invites: [], notices: [], agents: { pending: 0, requests: 1 } }));
+  await page.click('#btn-notices');
+  await page.locator('#notices-menu .notice-btn', { hasText: 'Review' }).click();
+  await expect(page.locator('#agents-detail')).toContainText('Asks for bank');
+});
+
+test('with two agents, Activity shows every use and filters by agent', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const ids = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    const b = await fakeAgents.addAgent({ name: 'Cursor', status: 'active' });
+    for (const x of [a, b]) await Agents.pin(x);
+    fakeAgents.addUse(a.id, { detail: 'from claude' });
+    fakeAgents.addUse(b.id, { detail: 'from cursor' });
+    return { a: a.id, b: b.id };
+  });
+  await page.click('#nav-agents');
+  await page.click('.ag-tab[data-tab=activity]');
+  const detail = page.locator('#agents-detail');
+  await expect(detail.locator('.ag-log')).toHaveCount(2);
+  await expect(detail.locator('.ag-log', { hasText: 'from cursor' })).toContainText('Cursor');
+  await detail.locator('.ag-filter', { hasText: 'Claude Code' }).click();
+  await expect(detail.locator(`.ag-activity[data-agent="${ids.a}"] .ag-log`)).toHaveCount(1);
+  await expect(detail.locator('.ag-log')).toContainText('from claude');
+  await expect(detail.locator('.ag-filter[aria-pressed=true]')).toHaveText('Claude Code');
 });

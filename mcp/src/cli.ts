@@ -64,6 +64,7 @@ function setupLines(profile: string) {
     `  Claude Code   claude mcp add otpilot -- npx -y @otpilot/mcp@latest${args}`,
     `  Codex         in ~/.codex/config.toml:  [mcp_servers.otpilot]  command = "npx"  args = ${argList}`,
     `  Cursor        in ~/.cursor/mcp.json:  { "mcpServers": { "otpilot": { "command": "npx", "args": ${argList} } } }`,
+    `  Pi            pi mcp add otpilot -- npx -y @otpilot/mcp@latest${args}`,
   ]
 }
 

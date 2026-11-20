@@ -3927,11 +3927,11 @@ function fillNotices() {
   const ag = _notices.agents || {};
   if (ag.pending) {
     row(ag.pending === 1 ? '<b>An AI agent</b> wants to connect' : `<b>${ag.pending} AI agents</b> want to connect`,
-      'Check its code before approving', [['Review', 'primary', async () => { closeNotices(); showView('agents'); }]]);
+      'Check its code before approving', [['Review', 'primary', async () => { closeNotices(); _agentsSel = { kind: 'waiting' }; showView('agents'); }]]);
   }
   if (ag.requests) {
     row(ag.requests === 1 ? '<b>An AI agent</b> is asking to use an account' : `<b>AI agents</b> are asking to use ${ag.requests} accounts`,
-      'Waiting for your answer', [['Review', 'primary', async () => { closeNotices(); showView('agents'); }]]);
+      'Waiting for your answer', [['Review', 'primary', async () => { closeNotices(); _agentsSel = { kind: 'waiting' }; showView('agents'); }]]);
   }
   for (const inv of _notices.invites) {
     const hours = Math.max(1, Math.round((new Date(inv.expires_at).getTime() - Date.now()) / 3600000));
