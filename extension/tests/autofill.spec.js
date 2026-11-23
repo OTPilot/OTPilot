@@ -46,6 +46,22 @@ test('content script fills OTP field when triggered via extension message', asyn
   await expect(input).toHaveValue(/^\d{6}$/, { timeout: 5000 });
 });
 
+test("Instagram's 2FA field (verificationCode) is filled", async ({ context, extensionId }) => {
+  const popupPage = await context.newPage();
+  await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seedUnlocked(popupPage);
+  await popupPage.evaluate(([secret]) => new Promise(r => chrome.storage.local.set({
+    accounts: [{ name: 'Instagram', secret, urls: 'localhost', email: '' }],
+    activeIndex: 0,
+  }, r)), [TEST_SECRET]);
+  const page = await context.newPage();
+  await page.goto('http://localhost:8765/test/2fa-instagram.html');
+  await page.waitForLoadState('networkidle');
+  const tabId = await popupPage.evaluate(async () => (await chrome.tabs.query({ url: 'http://localhost:8765/test/2fa-instagram.html' }))[0]?.id ?? null);
+  await popupPage.evaluate(id => chrome.tabs.sendMessage(id, { action: 'fill', accountIndex: 0 }), tabId);
+  await expect(page.locator('input[name="verificationCode"]')).toHaveValue(/^\d{6}$/, { timeout: 5000 });
+});
+
 test('filled code is highlighted (filled class added)', async ({ context, extensionId }) => {
   const popupPage = await context.newPage();
   await popupPage.goto(`chrome-extension://${extensionId}/popup.html`);
