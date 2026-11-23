@@ -28,6 +28,8 @@ Call `list_accounts`. Each account says what it allows: its **2FA code** only, i
 
 Need an account that isn't listed? Call `request_access` with a short `query` (the service, e.g. `"staging AWS"`) and a `reason` the user will read. It waits up to 90 s for the user to answer in the OTPilot extension.
 
+You don't have to check first: `browser_login` and `run` ask the user themselves when the account isn't allowed yet, or doesn't allow what they need (its sign-in when only the 2FA code is allowed, its 2FA code, a field). The user gets the request in OTPilot with the account already picked; if it's still waiting, tell them (see below) and call the tool again: it waits for the same request instead of asking twice.
+
 ## Test or use a website
 
 1. `browser_login` with the account's name (and `url` if you need a specific page of that site). OTPilot signs in itself: username, password and the 2FA code.
@@ -38,6 +40,8 @@ const context = await browser.newContext({ storageState: '.otpilot/staging.json'
 ```
 
 With the Playwright MCP or a test runner, pass the same file as the storage state. Keep `.otpilot/` out of git (add it to `.gitignore`).
+
+**2FA with another default method.** Many sites (GitHub, Google, Microsoft…) show a passkey, a security key or a prompt on a phone first, and the authenticator app's code only under "More options", "Try another way" or "Use your authenticator app". OTPilot looks for that option and uses the code; you don't need to do anything. If it still can't (the site offers no authenticator app, or the account has no 2FA code in OTPilot), the result says so: tell the user what the site asked for. Never finish the sign-in by hand, and never ask the user to paste a code.
 
 A site behind a bot check gets a visible browser window where the user may have to solve it (`show_browser: false` never opens one, e.g. on a server). If it can't finish (wrong password, a captcha, an unusual step), tell the user what happened; don't retry in a loop.
 

@@ -435,6 +435,53 @@ test('the editor lists the agents that can use a login and allows one', async ({
   await expect(section).toContainText('No agent can use this account');
 });
 
+test("the editor's Edit opens that account's permissions in the Agents view", async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    const gh = (await Agents.vaultItems(await VaultKeys.getKey())).find(i => i.title === 'GitHub');
+    await Agents.grant(a, gh, { scope: { kind: '2fa' } });
+  });
+  await page.click('#nav-settings');
+  await page.locator('#accounts-list .acc-row, #accounts-list .lc-row', { hasText: 'GitHub' }).first().click();
+  const section = page.locator('#acc-detail .ag-editor');
+  await expect(section.locator('.ag-card-row')).toContainText('2FA code only');
+  await section.getByRole('button', { name: 'Edit' }).click();
+  const sheet = sheetOf(page);
+  await expect(sheet).toContainText('GitHub');
+  await expect(sheet.locator('input.ag-scope[value="2fa"]')).toBeChecked();
+  await sheet.locator('input.ag-scope[value=login]').check();
+  await sheet.getByRole('button', { name: 'Save' }).click();
+  await expect(sheetOf(page)).toHaveCount(0);
+  await expect(page.locator('#agents-detail .ag-row[data-item]', { hasText: 'GitHub' })).toContainText('Username, password & 2FA');
+});
+
+test('a request for more of an account it has starts from its grant, widened to the sign-in, and updates it', async ({ context, extensionId }) => {
+  const page = await setup(context, extensionId);
+  const agentId = await page.evaluate(async () => {
+    const a = await fakeAgents.addAgent({ name: 'Claude Code', status: 'active' });
+    await Agents.pin(a);
+    const gh = (await Agents.vaultItems(await VaultKeys.getKey())).find(i => i.title === 'GitHub');
+    await Agents.grant(a, gh, { scope: { kind: '2fa' }, commands: ['gh'] });
+    fakeAgents.addRequest(a.id, { query: 'GitHub', reason: 'browser_login: needs its sign-in (username and password) of "GitHub"; it may only use its 2FA code now.', tool: 'browser_login' });
+    return a.id;
+  });
+  await page.click('#nav-agents');
+  await page.click('.ag-tab[data-tab=requests]');
+  await page.click('#agents-detail .ag-row[data-kind=request]');
+  const detail = page.locator('#agents-detail');
+  await expect(detail).toContainText('it may only use its 2FA code now');
+  await detail.locator('.ag-pick button', { hasText: 'GitHub' }).click();
+  await expect(detail.locator('input.ag-scope[value=login]')).toBeChecked();
+  await expect(detail.locator('.ag-commands')).toHaveValue('gh'); // its other settings kept
+  await detail.getByRole('button', { name: /Update GitHub for Claude Code/ }).click();
+  await expect(waitingCount(page)).toHaveCount(0);
+  const copy = await page.evaluate(async ({ a, t }) => fakeAgents.openGrant(a, (await Agents.vaultItems(await VaultKeys.getKey())).find(i => i.title === t).id), { a: agentId, t: 'GitHub' });
+  expect(copy.fields.map(f => f.id)).toEqual(['username', 'password']);
+  expect(copy.totp.secret).toBe(TEST_SECRET);
+});
+
 test('agents waiting show in the bell and on the rail', async ({ context, extensionId }) => {
   const page = await setup(context, extensionId);
   await page.evaluate(() => renderNotices({ invites: [], notices: [], agents: { pending: 1, requests: 2 } }));

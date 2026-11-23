@@ -99,6 +99,16 @@ beforeAll(async () => {
       await new Promise(r => setTimeout(r, 1500))
       return valid ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=auto; Path=/' }) : html('bad code')
     }
+    // GitHub-like: after the password, a passkey prompt first; the authenticator
+    // app's code is under "More options" (an SMS option beside it).
+    if (url.pathname === '/gh') return html('<form method="post" action="/gh-pass"><input name="login" autocomplete="username"><input type="password" name="pw"><button>Sign in</button></form>')
+    if (url.pathname === '/gh-pass') return form.get('pw') === 'hunter2-secret'
+      ? html(`<h1>Two-factor authentication</h1><p>Use your passkey</p><button type="button">Use passkey</button>
+        <details><summary>More options</summary><ul><li><a href="/sessions/two-factor/sms">Send a code via SMS</a></li>
+        <li><a href="/sessions/two-factor/app">Use your authenticator app</a></li></ul></details>`)
+      : html('<form method="post" action="/gh-pass"><input type="password" name="pw"></form>')
+    if (url.pathname === '/sessions/two-factor/app') return html('<form method="post" action="/otp"><input id="app_totp" name="code" autocomplete="one-time-code"><button>Verify</button></form>')
+    if (url.pathname === '/sessions/two-factor/sms') return html('sms sent')
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return (await validCode(form.get('code')))
       ? html('<h1>Dashboard</h1>', { 'set-cookie': 'session=signed-in; Path=/' })
@@ -216,6 +226,27 @@ describe('browser_login', () => {
     expect(r.status).toBe('signed_in')
     expect(autoSubmits).toBe(1)
   }, 40_000)
+
+  it('switches a 2FA step that shows a passkey first to the authenticator app (never SMS)', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}gh`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`), show: false })
+    expect(r.status).toBe('signed_in')
+    const state = JSON.parse(readFileSync(r.storageState!, 'utf8'))
+    expect(state.cookies.map((c: { name: string; value: string }) => `${c.name}=${c.value}`)).toContain('session=signed-in')
+  }, 60_000)
+
+  it('a code field on a page that doesn\'t read like 2FA is still a step it has no code for', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: null }), { url: base, outDir: tmpdir(), show: false })
+    expect(r).toMatchObject({ status: 'needs_user', needs: '2fa' })
+  }, 60_000)
+
+  it('a 2FA step it has no code for is not a sign-in, and says the code is missing', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: null }), { url: `${base}gh`, outDir: tmpdir(), show: false })
+    expect(r).toMatchObject({ status: 'needs_user', needs: '2fa' })
+    expect(r.note).toMatch(/no 2FA code/)
+  }, 60_000)
 
   it('reports a rejected password instead of claiming success', async ctx => {
     if (!browserOk) ctx.skip()

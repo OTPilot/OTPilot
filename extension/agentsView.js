@@ -581,15 +581,22 @@ function renderAgentRequest(detail, r) {
   detail.prepend(backLink('Requests', { kind: 'requests' }));
   let chosen = null;
   const allow = detail.querySelector('[data-act=allow]');
+  let current = null;
   mountRequestPicker(detail.querySelector('.ag-picker'), r, a, item => {
     chosen = item;
-    detail.querySelector('.ag-grant').innerHTML = agentGrantFormHTML(item, null, '2 · What it can use');
+    // An account the agent already has (it asked for more of it: its sign-in,
+    // its 2FA code, a field; the reason says which): its permissions as they
+    // are — a login's 2FA code only widened to the whole sign-in —, and
+    // allowing changes that grant.
+    current = a?.grants.find(g => g.item_id === item.id) || null;
+    const start = current && { ...current, scope: item.type === 'login' && current.scope.kind === '2fa' ? { kind: 'login' } : current.scope };
+    detail.querySelector('.ag-grant').innerHTML = agentGrantFormHTML(item, start, '2 · What it can use');
     mountGrantForm(detail);
     allow.disabled = false;
-    allow.textContent = `Allow ${item.title || 'it'} for ${a?.name || 'the agent'}`;
+    allow.textContent = current ? `Update ${item.title || 'it'} for ${a?.name || 'the agent'}` : `Allow ${item.title || 'it'} for ${a?.name || 'the agent'}`;
   });
   detail.querySelector('[data-act=deny]').addEventListener('click', () => agentAct(detail, () => Agents.decide(r, 'deny')));
-  allow.addEventListener('click', () => agentAct(detail, () => Agents.decide(r, 'allow', { agent: a, item: chosen, opts: readGrantForm(detail) })));
+  allow.addEventListener('click', () => agentAct(detail, () => Agents.decide(r, 'allow', { agent: a, item: chosen, opts: readGrantForm(detail, current) })));
 }
 
 // ── Activity: grouped by day; one agent's ten at a time ──
@@ -746,6 +753,10 @@ function renderActiveAgent(detail, a) {
   }));
   detail.querySelector('[data-act=add]').addEventListener('click', () => openAddSheet(a, asks));
   if (_agentsSel.adding && a.pinned) { _agentsSel.adding = false; openAddSheet(a, asks); }
+  // Opened from an item editor's "Edit": that account's permissions.
+  const editing = _agentsSel.editItem && a.grants.find(g => g.item_id === _agentsSel.editItem);
+  _agentsSel.editItem = null;
+  if (editing) openGrantSheet(a, editing);
 }
 
 // Its newest use, with a way to the rest.
@@ -971,6 +982,7 @@ async function mountAgentsSection(body) {
         const g = a.grants.find(x => x.item_id === itemId);
         return `<div class="ag-card-row" data-agent="${esc(a.id)}">${agentAv(false)}<div class="ag-grow"><div class="ag-t1">${esc(a.name)}</div>
           <div class="ag-t2">${esc(Agents.scopeSummary(item, g.scope))}${g.ask_every_time ? ' · asks every time' : ''}</div></div>
+          <button type="button" class="ag-btn link sm" data-act="edit" title="Change what ${esc(a.name)} can use">Edit</button>
           <button class="ag-x" title="Stop letting ${esc(a.name)} use this">✕</button></div>`;
       }).join('')}</div>` : '<div class="ag-note">No agent can use this account.</div>'}
       <div class="ag-btns" style="margin-top:6px">
@@ -988,8 +1000,15 @@ async function mountAgentsSection(body) {
         box.insertAdjacentHTML('beforeend', `<div class="ag-err">${esc(agentError(e))}</div>`);
       }
     };
-    box.querySelectorAll('.ag-card-row[data-agent]').forEach(row => row.querySelector('.ag-x')
-      .addEventListener('click', () => act(() => Agents.ungrant(row.dataset.agent, itemId))));
+    box.querySelectorAll('.ag-card-row[data-agent]').forEach(row => {
+      row.querySelector('.ag-x').addEventListener('click', () => act(() => Agents.ungrant(row.dataset.agent, itemId)));
+      // Its permissions (scope, duration, ask every time, commands) are
+      // changed in the Agents view's sheet.
+      row.querySelector('[data-act=edit]').addEventListener('click', () => {
+        _agentsSel = { kind: 'agent', id: row.dataset.agent, editItem: itemId };
+        showView('agents');
+      });
+    });
     box.querySelector('[data-act=allow]')?.addEventListener('click', () => {
       const agent = active.find(a => a.id === box.querySelector('select').value);
       act(() => Agents.grant(agent, item, { scope: Agents.defaultScope(item) }));

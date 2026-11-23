@@ -19,6 +19,8 @@ export type LoginResult = {
   blocked?: boolean
   /** The 2FA codes it sent (for the caller to scrub from what it returns; never shown). */
   sent?: string[]
+  /** The site asked for a 2FA code this account's copy doesn't hold: the caller asks the user for it. */
+  needs?: '2fa'
 }
 
 /** A page address without its query or fragment: a form sent with GET puts the password or code there. */
@@ -146,6 +148,61 @@ const botCheck = (page: Page) => page.evaluate(() =>
     .some(el => { const r = el.getBoundingClientRect(); return r.width > 30 && r.height > 30 && getComputedStyle(el).visibility !== 'hidden' }),
 ).catch(() => false)
 
+/**
+ * A second step after the password: the address (/two-factor, /mfa, /webauthn…)
+ * or the page's title and headings say so. Never the whole text: a signed-in
+ * page may mention 2FA in its settings.
+ */
+const CHALLENGE_PATH = /(^|[/_.-])(two[-_]?factor|2fa|mfa|otp|totp|webauthn|passkeys?|challenge|second[-_]?factor|verify|verification)([/_.-]|$)/i
+const CHALLENGE_TEXT = /two[- ]factor|2-step|two[- ]step|2fa|multi[- ]factor|verify (it'?s|that it'?s|your identity)|authentication code|verification code|passkey|security key|authenticator/i
+export const challenge = (page: Page) => page.evaluate(([path, text]) => {
+  if (new RegExp(path, 'i').test(location.pathname)) return true
+  const heads = [...document.querySelectorAll('h1, h2, legend, [role=heading]')].map(h => (h as HTMLElement).innerText || '').join(' ')
+  return new RegExp(text, 'i').test(`${document.title} ${heads}`)
+}, [CHALLENGE_PATH.source, CHALLENGE_TEXT.source]).catch(() => false)
+
+/**
+ * A 2FA step that shows another method first (a passkey, a security key, a
+ * prompt on a phone: GitHub, Google, Microsoft) usually links to the
+ * authenticator app's code: "Use your authenticator app", or under "More
+ * options" / "Try another way". Never an SMS, an email or a recovery code.
+ */
+const APP_OPTION = /authenticator|authentication app|verification app|code from (an?|your|the) app|use (a|an|your) (verification|one-time|security) code|\btotp\b/i
+const NOT_APP = /\bsms\b|text message|\btext\b|phone call|\bcall\b|e-?mail|backup|recovery|security key|passkey|push|approve|notification|prompt/i
+const MORE_OPTIONS = /more options|other options|another (way|method|option)|different (way|method|option)|other ways|sign in another way|having (trouble|problems)|can.?t use|try another|use something else|switch method/i
+
+/** Clicks the shortest visible control whose text matches `re` (and not `not`); whether it found one. */
+async function clickOption(page: Page, re: RegExp, not: RegExp | null): Promise<boolean> {
+  const found = await page.evaluate(([src, notSrc]) => {
+    document.querySelectorAll('[data-otpilot-pick]').forEach(el => el.removeAttribute('data-otpilot-pick'))
+    const want = new RegExp(src, 'i')
+    const skip = notSrc ? new RegExp(notSrc, 'i') : null
+    const shown = (el: Element) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden' }
+    const all = [...document.querySelectorAll('a, button, summary, [role=button], [role=link], [role=menuitem], [role=option], [role=radio], [role=tab], li[tabindex], div[tabindex]')]
+      .map(el => [el, ((el as HTMLElement).innerText || el.getAttribute('aria-label') || '').trim()] as const)
+      .filter(([el, t]) => t && t.length <= 140 && want.test(t) && !(skip && skip.test(t)) && shown(el))
+      .sort((a, b) => a[1].length - b[1].length)
+    if (!all.length) return false
+    all[0][0].setAttribute('data-otpilot-pick', '')
+    return true
+  }, [re.source, not?.source ?? null] as const).catch(() => false)
+  if (!found) return false
+  return page.locator('[data-otpilot-pick]').first().click({ timeout: 5000 }).then(() => true, () => false)
+}
+
+/**
+ * On a 2FA step that shows no code field: switches to the authenticator
+ * app's code, opening the other methods first when they're folded away.
+ * Whether it clicked the app's option.
+ */
+async function switchToApp(page: Page): Promise<boolean> {
+  if (await clickOption(page, APP_OPTION, NOT_APP)) return true
+  if (!(await clickOption(page, MORE_OPTIONS, null))) return false
+  await page.waitForTimeout(800)
+  await settle(page)
+  return clickOption(page, APP_OPTION, NOT_APP)
+}
+
 /** Steps (never values) to stderr with OTPILOT_DEBUG=1, for a sign-in that misbehaves. */
 const debug = (m: string) => { if (process.env.OTPILOT_DEBUG) process.stderr.write(`[otpilot] ${new Date().toISOString().slice(11, 23)} ${m}\n`) }
 
@@ -245,7 +302,9 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     // Each step is submitted at most once: a page still asking for the same
     // thing after it means it was rejected (or needs a person), never a retry.
     const tried = new Set<'username' | 'password' | 'otp'>()
-    const drive = async () => { for (let step = 0; step < 5; step++) {
+    // Clicks towards the authenticator app on a 2FA step showing another method.
+    let switches = 0
+    const drive = async () => { for (let step = 0; step < 8; step++) {
       if (!covers(page.url())) {
         if (!filledSomething) throw new Error(`The site sent the browser to ${new URL(page.url()).hostname}, which isn't one of "${item.title}"'s saved sites. Nothing was filled.`)
         break // signed in and redirected elsewhere (an app domain): done
@@ -286,6 +345,12 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
           tried.add('username')
           lastStep = 'username'
           if (!(await submitted(page, user, PASSWORD))) break
+        } else if (item.totp?.secret && lastStep === 'password' && switches < 2 && (await challenge(page)) && (await switchToApp(page))) {
+          // A 2FA step defaulting to a passkey or a phone prompt: its
+          // authenticator-app option, then the code field on the next step.
+          switches++
+          debug('switched the 2FA step to the authenticator app')
+          await settled(page)
         } else break
       }
       await settle(page)
@@ -298,8 +363,12 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     // code that shows up then.
     // Not done while a field still asks, a submitted username hasn't led to
     // the password yet, or a bot check is up (its fields hidden is no success).
+    // A 2FA step after the password that OTPilot couldn't fill: no code in
+    // this copy, or no way to the authenticator app.
+    const secondStep = async () => lastStep === 'password' && covers(page.url())
+      && ((await challenge(page)) || !!(await firstVisible(page, OTP)))
     const pending = async () => (await asking()) || (covers(page.url())
-      && ((lastStep === 'username' && !!(await firstVisible(page, USER))) || (await botCheck(page))))
+      && ((lastStep === 'username' && !!(await firstVisible(page, USER))) || (await botCheck(page)) || (await secondStep())))
     if (!headless && filledSomething && (await pending())) {
       while (humanLeft() > 0 && (await pending())) {
         // The next step showed up once the person got through: OTPilot fills
@@ -313,7 +382,13 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     }
     await settled(page)
     const stillAsking = await pending()
-    debug(`done: still asking ${stillAsking}, last step ${lastStep}`)
+    const stuckAt2fa = stillAsking && (await secondStep())
+    debug(`done: still asking ${stillAsking}, last step ${lastStep}${stuckAt2fa ? ', at a 2FA step' : ''}`)
+    if (stuckAt2fa && !note) {
+      note = item.totp?.secret
+        ? 'After the password the site asks for a second step (a passkey, a security key or a prompt on a phone) and OTPilot found no option to use the authenticator app\'s code instead. Ask the user to sign in, or to choose the authenticator app as that site\'s default 2FA method.'
+        : 'After the password the site asks for a 2FA code, and this account gives this agent no 2FA code.'
+    }
     // A sign-in that never got past the username (rejected, or a step OTPilot
     // can't see) isn't one: only a submitted password or code counts.
     const unfinished = lastStep === 'username' || (!submittedPassword && lastStep !== 'otp')
@@ -321,6 +396,7 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
       return {
         status: 'needs_user',
         sent,
+        ...(stuckAt2fa && !item.totp?.secret ? { needs: '2fa' as const } : {}),
         url: bare(page.url()),
         title: await page.title(),
         note: note || (filledSomething
