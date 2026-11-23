@@ -16,11 +16,14 @@
 - AI agents on Free: 1 agent with any number of accounts and 10 uses a UTC month (a use = one `browser_login` or `run`; listing accounts and asking for access are free). New `POST /agent/grants/open` opens the copies for a tool call in one transaction and counts the use (retries with the same `use_id` aren't counted twice); at 10 it answers 402 `agent_uses_exhausted` with the upgrade link and whether a trial is available. `GET /agent/grants` returns labels and `usage`; `GET /agents` returns `usage`. Personal, Team and the trial are unlimited.
 - Deploy the API before publishing the MCP.
 
+### MCP (`@otpilot/mcp` 0.3.1)
+
+- `browser_login` on a 2FA step that shows another method first (a passkey, a security key, a prompt on a phone: GitHub, Google, Microsoft) clicks the site's option to use the authenticator app ("Use your authenticator app", under "More options" / "Try another way" too; never SMS, email or recovery codes). A 2FA step it can't fill is no longer reported as signed in.
+- `browser_login` and `run` ask the user by themselves (an account request in OTPilot, waited up to 90 s; calling again waits for the same one) when the account isn't allowed, or doesn't allow what they need (sign-in on a 2FA-only grant, a 2FA code, username / password / notes outside the scope). A field or 2FA code found missing only once the copy is open is reported to the user the same way.
+
 ### MCP (`@otpilot/mcp` 0.3.0)
 
 - `connect` also prints how to add the server to Pi; the README and the skill list it too.
-- `browser_login` on a 2FA step that shows another method first (a passkey, a security key, a prompt on a phone: GitHub, Google, Microsoft) clicks the site's option to use the authenticator app ("Use your authenticator app", under "More options" / "Try another way" too; never SMS, email or recovery codes). A 2FA step it can't fill is no longer reported as signed in.
-- `browser_login` and `run` ask the user by themselves (an account request in OTPilot, waited up to 90 s; calling again waits for the same one) when the account isn't allowed, or doesn't allow what they need (sign-in on a 2FA-only grant, a 2FA code, username / password / notes outside the scope). A field or 2FA code found missing only once the copy is open is reported to the user the same way.
 - Sends an `x-otpilot-mcp` header; `browser_login` and `run` open their accounts with one call (a `run` with several accounts is one use), and the server's limit and "update the MCP" messages are shown as they are. `list_accounts` ends with the monthly usage when on Free.
 
 ### Web
