@@ -3,36 +3,58 @@
 
 ## Unreleased
 
+
+## v2.1.12
+
 ### Extension
 
-- Instagram's 2FA code is filled (its "Security Code" field, `verificationCode`, never matched).
 - **Agents view, cleaner**: three tabs. *Agents* lists the connected agents (a notice says when something waits); open one to see what it can use, tap an account to change its permissions or remove it, and find rename, setup instructions and revoke (now confirmed first) in its ⋯ menu. *Requests* holds what waits for you: a new agent's code, an account request in two steps (which account, what it can use), and "ask every time" uses answered in one tap. *Activity* shows every agent's uses, or one agent's. Adding an account now gives the whole sign-in (username, password and 2FA) by default. Setup instructions include [Pi](https://pi.dev).
 - An AI agent waiting for you (a new one to approve, an account request) shows a **card on the page you're on**, like "Unlock OTPilot", instead of opening a window; **Review in OTPilot** opens the extension on it. Connecting an agent from the website shows it right away.
-- The trial's days left never read more than 30 ("31 of 30" with a clock a few seconds behind the server's).
 - An agent's account can be changed from the login editor too (**Edit** beside the agent opens its permissions). An agent asking for more of an account it already has (its sign-in when only the 2FA code was allowed, its 2FA code, a field) gets a request whose form starts from what it has now, and allowing it updates that account (**Update**).
-- Free keeps unlimited items: the 50-item limit is gone (a CSV import of any size works). The Agents view shows the monthly uses card for Free (N of 10, the renew date) and offers **Start free trial** / **Upgrade to Personal** when they run out.
+- Instagram's 2FA code is filled (its "Security Code" field, `verificationCode`, never matched).
+- The OTPilot badge in sign-in fields no longer covers LastPass's icon or the site's show-password eye: it takes the free spot beside them, and its shield is bigger (28 px).
+- The trial's days left never read more than 30 ("31 of 30" with a clock a few seconds behind the server's).
 
 ### API
 
-- AI agents on Free: 1 agent with any number of accounts and 10 uses a UTC month (a use = one `browser_login` or `run`; listing accounts and asking for access are free). New `POST /agent/grants/open` opens the copies for a tool call in one transaction and counts the use (retries with the same `use_id` aren't counted twice); at 10 it answers 402 `agent_uses_exhausted` with the upgrade link and whether a trial is available. `GET /agent/grants` returns labels and `usage`; `GET /agents` returns `usage`. Personal, Team and the trial are unlimited.
-- Deploy the API before publishing the MCP.
+- **Post-trial offer**: a week after a Personal trial ends without a subscription, one email offers the first year of the annual plan at $15 (50% off), open for 7 days; the discount is applied by the server at checkout. Off unless `STRIPE_TRIAL_OFFER_COUPON_ID` is set. Migration `0030_trial_offer.sql`.
 
 ### MCP (`@otpilot/mcp` 0.3.1)
 
 - `browser_login` on a 2FA step that shows another method first (a passkey, a security key, a prompt on a phone: GitHub, Google, Microsoft) clicks the site's option to use the authenticator app ("Use your authenticator app", under "More options" / "Try another way" too; never SMS, email or recovery codes). A 2FA step it can't fill is no longer reported as signed in.
 - `browser_login` and `run` ask the user by themselves (an account request in OTPilot, waited up to 90 s; calling again waits for the same one) when the account isn't allowed, or doesn't allow what they need (sign-in on a 2FA-only grant, a 2FA code, username / password / notes outside the scope). A field or 2FA code found missing only once the copy is open is reported to the user the same way.
+- `connect` also prints how to add the server to Pi; the README and the skill list it too.
 - **To update:** restart your agent (the setup runs `npx -y @otpilot/mcp@latest`); the connection stays. The README's new *Updating* section covers a pinned or global install and a stale npx cache. The Claude Code plugin is 0.3.1 too (`/plugin update otpilot` brings the new skill).
+
+### Web
+
+- Billing shows the post-trial offer ("$15 first year, then $30/year"); the email's link preselects yearly.
+- The connect page tells the extension when an agent waits, so its card shows at once. The trial's days left never exceed 30.
+- The agent setup guide has a Pi tab (`pi mcp add otpilot -- npx -y @otpilot/mcp@latest`).
+
+
+## v2.1.11
+
+### Extension
+
+- **Extra sign-in fields**: a sign-in form with more than username and password (BBVA Argentina: document type and number) saves those fields on the login ("More fields") and fills them back, a bank's document type too when the page keeps its list inside its own control. Never card, CVV, IBAN, captcha or code fields; a field you added by hand is never filled on a page.
+- A username field masked like a password (BBVA) is saved and filled as the username, with no password generator on it; a read-only PIN keypad field (ABANCA) is filled.
+- Logins without a password (2FA only, with a username) are offered on sign-in forms as "no password saved": picking one fills the username and focuses the password field.
+- The OTPilot badge sits beside another password manager's icon instead of under it.
+- Toasts ("API key saved", "login saved"…) show above a site's modal dialog or side panel.
+- Free keeps unlimited items: the 50-item limit is gone (a CSV import of any size works). The Agents view shows the monthly uses card for Free (N of 10, the renew date) and offers **Start free trial** / **Upgrade to Personal** when they run out.
+
+### API
+
+- AI agents on Free: 1 agent with any number of accounts and 10 uses a UTC month (a use = one `browser_login` or `run`; listing accounts and asking for access are free). New `POST /agent/grants/open` opens the copies for a tool call in one transaction and counts the use (retries with the same `use_id` aren't counted twice); at 10 it answers 402 `agent_uses_exhausted` with the upgrade link and whether a trial is available. `GET /agent/grants` returns labels and `usage`; `GET /agents` returns `usage`. Personal, Team and the trial are unlimited.
 
 ### MCP (`@otpilot/mcp` 0.3.0)
 
-- `connect` also prints how to add the server to Pi; the README and the skill list it too.
-- Sends an `x-otpilot-mcp` header; `browser_login` and `run` open their accounts with one call (a `run` with several accounts is one use), and the server's limit and "update the MCP" messages are shown as they are. `list_accounts` ends with the monthly usage when on Free.
+- Sends an `x-otpilot-mcp` header; `browser_login` and `run` open their accounts with one call (a `run` with several accounts is one use), and the server's limit and "update the MCP" messages are shown as they are. `list_accounts` ends with the monthly usage when on Free. Listed in the MCP Registry.
 
 ### Web
 
 - Pricing, FAQ and the AI agents page describe the Free agent limits (1 agent, 10 uses a month) and no item limit.
-- The connect page tells the extension when an agent waits, so its card shows at once. The trial's days left never exceed 30.
-- The agent setup guide has a Pi tab (`pi mcp add otpilot -- npx -y @otpilot/mcp@latest`).
 
 
 ## v2.1.10

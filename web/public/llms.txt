@@ -6,6 +6,8 @@ OTPilot is a Chrome extension that keeps your passwords and your 2FA (TOTP) code
 
 ## Versions
 
+- 2.1.12: a cleaner Agents view (agents, requests, activity); an agent waiting shows a card on the page you're on; an agent's permissions can be edited from the login, and an agent asking for more of an account updates it; Instagram's 2FA code is filled
+- 2.1.11: a bank's extra sign-in fields (document type and number), masked usernames and keypad PINs are saved and filled; 2FA-only logins are offered on sign-in forms; Free has no item limit, and AI agents on Free get 1 agent and 10 uses a month
 - 2.1.10: offers to save a newly created API key straight from the page that shows it (without the clipboard), linked to the site's login; search finds API credentials and other vault items by title, site, tag or a plain field
 - 2.2: secure files and SSH keys — SSH keys (imported or generated), Apple .p8 keys, certificates, service-account JSON and .env files kept in the encrypted vault (up to 64 KB per item), usable by AI agents as a temporary file path; crypto wallets — recovery phrases checked against the BIP39 list, addresses per network with a QR code, and a warning when a website asks for a recovery phrase
 - 2.1 (October 2026): OTPilot for AI agents — an MCP server (`@otpilot/mcp`) lets Claude Code, Codex, Cursor, Pi or any MCP agent sign in and run commands with the accounts the user allows, without handing the agent a password or a code
@@ -52,6 +54,8 @@ The user manages everything in the extension; the agent only talks to the OTPilo
 - Two approvals: an agent connects with a verification code checked in the extension and gets no accounts; each account is then allowed per agent, with a scope (2FA code only, whole sign-in, chosen fields) and a duration, or "ask every time"
 - Team plans: accounts teammates share with the user (directly or through a collection) can be allowed too; the agent's copy follows the shared item and goes when the user loses access to it
 - Each allowed account is encrypted for that agent's own key (kept in the OS keychain); the server stores ciphertext plus grant metadata (agent name, scopes, expiry, allowed commands, and the sites and programs each use touched); revoking an agent cuts its access
+- When a site shows another 2FA method first (a passkey, a security key, a prompt on a phone), OTPilot picks the site's option to use the authenticator app's code
+- An agent that needs an account it wasn't allowed (or more of one: its sign-in, its 2FA code, a field) asks the user in the extension on its own, and waits for the answer
 - Limits: Free has 1 connected agent, as many accounts as you like and 10 uses per month (a use = one browser_login or one run; listing accounts and asking for access are free; renews on the 1st, UTC, no rollover); Personal, Team and the trial have unlimited uses
 - Activity log of every use; requests show on the extension's badge
 - Connect an agent: `npx -y @otpilot/mcp@latest connect` (prints a verification code; approve it in the extension's Agents view)
