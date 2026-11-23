@@ -89,6 +89,10 @@ const OTP_SELECTORS = [
   'input[data-testid*="token"]:not([data-testid*="csrf"]):not([data-testid*="reset"]):not([data-testid*="access"]):not([data-testid*="invite"]):not([data-testid*="confirm"]):not([data-testid*="auth"])',
   // Twitter / X 2FA confirmation screen
   'input[data-testid="ocfEnterTextTextInput"]',
+  // Instagram's 2FA screen ("Security Code"): the generic selectors are
+  // case-sensitive and exclude "verification", so its verificationCode never
+  // matched. Exact name only: no other "verification" field is let in.
+  'input[name="verificationCode"]',
 ];
 
 const CODE_PAGE_HINTS = [
