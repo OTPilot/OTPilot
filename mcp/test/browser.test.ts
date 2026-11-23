@@ -107,7 +107,7 @@ beforeAll(async () => {
         <details><summary>More options</summary><ul><li><a href="/sessions/two-factor/sms">Send a code via SMS</a></li>
         <li><a href="/sessions/two-factor/app">Use your authenticator app</a></li></ul></details>`)
       : html('<form method="post" action="/gh-pass"><input type="password" name="pw"></form>')
-    if (url.pathname === '/sessions/two-factor/app') return html('<form method="post" action="/otp"><input name="app_otp" autocomplete="one-time-code"><button>Verify</button></form>')
+    if (url.pathname === '/sessions/two-factor/app') return html('<form method="post" action="/otp"><input id="app_totp" name="code" autocomplete="one-time-code"><button>Verify</button></form>')
     if (url.pathname === '/sessions/two-factor/sms') return html('sms sent')
     if (url.pathname === '/spa-login') { spaLogins++; res.writeHead(204); return res.end() }
     if (url.pathname === '/otp') return (await validCode(form.get('code')))
@@ -231,7 +231,14 @@ describe('browser_login', () => {
     if (!browserOk) ctx.skip()
     const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: { secret: SECRET } }), { url: `${base}gh`, outDir: join(tmpdir(), `otpilot-test-${Date.now()}`), show: false })
     expect(r.status).toBe('signed_in')
-    expect(r.title).toBe('Acme')
+    const state = JSON.parse(readFileSync(r.storageState!, 'utf8'))
+    expect(state.cookies.map((c: { name: string; value: string }) => `${c.name}=${c.value}`)).toContain('session=signed-in')
+  }, 60_000)
+
+  it('a code field on a page that doesn\'t read like 2FA is still a step it has no code for', async ctx => {
+    if (!browserOk) ctx.skip()
+    const r = await browserLogin(loginItem({ urls: ['127.0.0.1'], totp: null }), { url: base, outDir: tmpdir(), show: false })
+    expect(r).toMatchObject({ status: 'needs_user', needs: '2fa' })
   }, 60_000)
 
   it('a 2FA step it has no code for is not a sign-in, and says the code is missing', async ctx => {

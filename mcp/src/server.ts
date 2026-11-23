@@ -98,8 +98,9 @@ async function askUser(ctx: Ctx, key: string, query: string, reason: string, too
  * asked in OTPilot (an account request: the extension lists the matching
  * accounts, the one already allowed too) and the call waits for the answer.
  */
-async function ensureGrant(ctx: Ctx, ref: string, need: Need, tool: string, reason: string): Promise<Grant> {
-  let grants = await loadGrants(ctx.api, ctx.creds.privateJwk)
+async function ensureGrant(ctx: Ctx, ref: string, need: Need, tool: string, reason: string, cache: { grants?: Grant[] } = {}): Promise<Grant> {
+  // One list per tool call (`cache`), reloaded only once the user answered.
+  const grants = cache.grants ??= await loadGrants(ctx.api, ctx.creds.privateJwk)
   const found = matchGrant(grants, ref)
   if (found && allows(found, need)) return found
   const what = needText(need)
@@ -110,8 +111,8 @@ async function ensureGrant(ctx: Ctx, ref: string, need: Need, tool: string, reas
   const r = await askUser(ctx, key, found?.title || ref.trim(), `${ask}${reason ? ` ${reason}` : ''}`, tool, wait.ms)
   if (r.answer === 'pending') throw new PendingApproval(r.id, found ? `${what} of "${found.title}"` : `access to "${ref.trim()}"`)
   if (r.answer === 'denied') throw new Error(found ? `The user didn't allow ${what} of "${found.title}" (or didn't answer in time). Don't ask again for it.` : `The user denied access to "${ref.trim()}" (or didn't answer in time). Don't ask again for it.`)
-  grants = await loadGrants(ctx.api, ctx.creds.privateJwk)
-  const now = (r.itemId && grants.find(g => g.itemId === r.itemId)) || matchGrant(grants, found?.itemId ?? ref)
+  const fresh = cache.grants = await loadGrants(ctx.api, ctx.creds.privateJwk)
+  const now = (r.itemId && fresh.find(g => g.itemId === r.itemId)) || matchGrant(fresh, found?.itemId ?? ref)
   if (!now) throw new Error(`The user answered with an account that doesn't match "${ref}". Call list_accounts to see its name.`)
   if (!allows(now, need)) throw new Error(`The user answered, but "${now.title}" still doesn't allow ${what}.`)
   return now
@@ -123,6 +124,12 @@ async function reportMissing(ctx: Ctx, grant: Grant, need: Need, tool: string, r
   try {
     const key = `${grant.itemId}|${what}`
     let id = asked.get(key)
+    // Only a request still waiting is pointed to again: one answered,
+    // expired or forgotten gets a new one.
+    if (id) {
+      const st = await ctx.api.get<{ status: string }>(`/agent/requests/${id}`).catch(() => null)
+      if (st?.status !== 'pending') { asked.delete(key); id = undefined }
+    }
     if (!id) {
       id = (await ctx.api.post<{ id: string }>('/agent/requests', {
         query: grant.title, tool,
@@ -218,12 +225,13 @@ export function buildServer(ctx: Ctx): McpServer {
     // not allowed, or not for that field, is asked for); a wrong custom field name is only
     // found after, and that call still counts as a use.
     const refs: { name: string; grant: Grant; field: string }[] = []
+    const cache: { grants?: Grant[] } = {}
     let program: { path: string; rest: string } | undefined
     for (const [name, ref] of Object.entries(env)) {
       const cut = ref.lastIndexOf('/')
       if (cut <= 0) return fail(`env ${name}: write it as "<account>/<field>", e.g. "Staging DB/password".`)
       if (!ref.slice(cut + 1).trim()) return fail(`env ${name}: the field is empty. Write "<account>/<field>", e.g. "Staging DB/password".`)
-      const grant = await ensureGrant(ctx, ref.slice(0, cut), { kind: 'field', field: ref.slice(cut + 1) }, 'run', reason || '')
+      const grant = await ensureGrant(ctx, ref.slice(0, cut), { kind: 'field', field: ref.slice(cut + 1) }, 'run', reason || '', cache)
       const limit = resolveAllowed(command, grant.commands, cwd)
       if (limit && 'error' in limit) return fail(`${grant.title}: ${limit.error}`)
       if (limit) program = limit

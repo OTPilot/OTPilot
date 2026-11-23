@@ -87,8 +87,9 @@ describe('MCP server', () => {
     const path = /path=(\S+)/.exec(r.text)![1]
     expect(path.endsWith('/id_ed25519')).toBe(true)
     expect(existsSync(path)).toBe(false)
-    // A reference to an item without a file says so.
-    const none = await connect([{ item: loginItem({ title: 'Plain' }) }])
+    // A reference to an item without a file says so (once open: its fields' kinds aren't known before).
+    const plain = loginItem({ title: 'Plain', fields: [{ id: 'c1', label: 'Token', value: 'tok-123', custom: true }] })
+    const none = await connect([{ item: plain, scope: { kind: 'fields', parts: ['f:c1'] } }])
     const bad = await none.call('run', { command: 'true', env: { K: 'Plain/@file' } })
     expect(bad.isError).toBe(true)
     expect(bad.text).toContain('has no file')
@@ -193,7 +194,7 @@ describe('MCP server', () => {
   it('run: every reference is checked first, then all its accounts open in one request (one use)', async () => {
     const db = loginItem({ title: 'Staging DB' })
     const api = loginItem({ title: 'Stripe', fields: [{ id: 'c1', label: 'Secret key', value: 'sk_test_abc123', custom: true }] })
-    const { call, opens, uses } = await connect([{ item: db }, { item: api }])
+    const { call, opens, uses, api: fake } = await connect([{ item: db }, { item: api, scope: { kind: 'fields', parts: ['f:c1'] } }])
     const r = await call('run', { command: 'echo "$U $P $K"', env: { U: 'Staging DB/username', P: 'Staging DB/password', K: 'Stripe/Secret key' }, reason: 'deploy' })
     expect(r.isError).toBe(false)
     expect(r.text).toContain('[REDACTED] [REDACTED] [REDACTED]')
@@ -201,6 +202,7 @@ describe('MCP server', () => {
     expect(opens[0]).toMatchObject({ tool: 'run', item_ids: [db.id, api.id] })
     expect(opens[0].use_id).toMatch(/^[0-9a-f-]{36}$/)
     expect(uses.map(u => u.item_id)).toEqual([db.id, api.id])
+    expect(fake.calls.filter(c => c === 'GET /agent/grants')).toHaveLength(1) // one list for the whole call
     // A reference to an account it doesn't have: nothing is opened (the user is asked).
     const bad = await call('run', { command: 'true', env: { P: 'Staging DB/password', X: 'Nope/password' } })
     expect(bad.isError).toBe(true)
@@ -237,6 +239,29 @@ describe('MCP server', () => {
     expect(asked).toHaveLength(1) // the same request, not a second one
   })
 
+  it('a custom field labelled "Password" in a fields grant is used as such, not asked for', async () => {
+    const item = loginItem({ title: 'Router', fields: [{ id: 'c1', label: 'Password', value: 'router-pw-9', custom: true }] })
+    const { call, opens } = await connect([{ item, scope: { kind: 'fields', parts: ['f:c1'] } }])
+    const r = await call('run', { command: 'echo "$P"', env: { P: 'Router/Password' } })
+    expect(r.isError).toBe(false)
+    expect(r.text).toContain('[REDACTED]')
+    expect(opens).toHaveLength(1)
+  })
+
+  it('a field missing from the copy is reported to the user; an answered request is never pointed to again', async () => {
+    const item = loginItem({ title: 'Vault', totp: null })
+    const asked: any[] = []
+    const { call } = await connect([{ item }], (m, p, b) => {
+      if (m === 'POST' && p === '/agent/requests') { asked.push(b); return { body: { id: `00000000-0000-4000-8000-00000000010${asked.length}` } } }
+      if (p.startsWith('/agent/requests/')) return { body: { status: 'denied' } }
+      return undefined
+    })
+    await call('run', { command: 'true', env: { C: 'Vault/totp' } })
+    const again = await call('run', { command: 'true', env: { C: 'Vault/totp' } })
+    expect(asked).toHaveLength(2)
+    expect(again.text).toContain('request 00000000-0000-4000-8000-000000000102')
+  })
+
   it('a field missing from the copy is reported to the user', async () => {
     const item = loginItem({ title: 'Stripe', totp: null })
     const asked: any[] = []
@@ -252,7 +277,7 @@ describe('MCP server', () => {
 
   it('run: an empty field part is refused before opening; a wrong field label is only found after (one open)', async () => {
     const item = loginItem({ title: 'Stripe', fields: [{ id: 'c1', label: 'Secret key', value: 'sk_test_abc123', custom: true }] })
-    const { call, opens } = await connect([{ item }])
+    const { call, opens } = await connect([{ item, scope: { kind: 'fields', parts: ['f:c1'] } }])
     for (const ref of ['Stripe/', 'Stripe/  ']) {
       const r = await call('run', { command: 'true', env: { K: ref } })
       expect(r.isError).toBe(true)

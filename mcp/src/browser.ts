@@ -366,7 +366,7 @@ async function attempt(item: VaultItem, opts: { url?: string; outDir: string }, 
     // A 2FA step after the password that OTPilot couldn't fill: no code in
     // this copy, or no way to the authenticator app.
     const secondStep = async () => lastStep === 'password' && covers(page.url())
-      && ((await challenge(page)) || !!(await firstVisible(page, 'input[autocomplete="one-time-code"]')))
+      && ((await challenge(page)) || !!(await firstVisible(page, OTP)))
     const pending = async () => (await asking()) || (covers(page.url())
       && ((lastStep === 'username' && !!(await firstVisible(page, USER))) || (await botCheck(page)) || (await secondStep())))
     if (!headless && filledSomething && (await pending())) {
