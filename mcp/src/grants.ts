@@ -112,13 +112,11 @@ export function allows(grant: Grant, need: Need): boolean {
   if (need.kind === 'signin') return kind === 'login' || (kind === 'fields' && parts.includes('urls') && parts.includes('f:password'))
   const f = need.field.trim().toLowerCase()
   if (TOTP_NAMES.includes(f)) return kind !== 'fields' || parts.includes('totp')
-  // A field part other than the username and password: a custom field (or a
-  // type's own field, a file) whose label is only known once the copy is open,
-  // and may well be "Password".
-  const custom = kind === 'fields' && parts.some(p => p.startsWith('f:') && p !== 'f:username' && p !== 'f:password')
-  if (f === 'username' || f === 'password') return kind === 'login' || (kind === 'fields' && parts.includes(`f:${f}`)) || custom
+  // Any field the copy holds may be named by its label ("Unlock password",
+  // "Email", a custom "Password"), only known once the copy is open.
+  const custom = kind === 'login' || (kind === 'fields' && parts.some(p => p.startsWith('f:')))
   if (f === 'notes') return kind === 'fields' && parts.includes('notes')
-  // A sign-in or a 2FA code never carries custom fields or files.
+  // A 2FA code (or notes, sites only) carries no field to name.
   return custom
 }
 

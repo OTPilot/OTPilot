@@ -126,9 +126,11 @@ async function reportMissing(ctx: Ctx, grant: Grant, need: Need, tool: string, r
     let id = asked.get(key)
     // Only a request still waiting is pointed to again: one answered,
     // expired or forgotten gets a new one.
+    // A passing failure (timeout, 5xx) keeps it: asking again would leave duplicates.
     if (id) {
-      const st = await ctx.api.get<{ status: string }>(`/agent/requests/${id}`).catch(() => null)
-      if (st?.status !== 'pending') { asked.delete(key); id = undefined }
+      const st = await ctx.api.get<{ status: string }>(`/agent/requests/${id}`)
+        .catch(e => (e instanceof ApiError && e.status === 404 ? { status: 'gone' } : { status: 'pending' }))
+      if (st.status !== 'pending') { asked.delete(key); id = undefined }
     }
     if (!id) {
       id = (await ctx.api.post<{ id: string }>('/agent/requests', {

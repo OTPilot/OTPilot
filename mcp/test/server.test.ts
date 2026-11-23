@@ -248,6 +248,14 @@ describe('MCP server', () => {
     expect(opens).toHaveLength(1)
   })
 
+  it('a built-in field approved under another label (a wallet\'s "Unlock password") is used, not asked for', async () => {
+    const item = loginItem({ title: 'Wallet', fields: [{ id: 'password', label: 'Unlock password', value: 'unlock-77' }] })
+    const { call, opens } = await connect([{ item, scope: { kind: 'fields', parts: ['f:password'] } }])
+    const r = await call('run', { command: 'echo "$P"', env: { P: 'Wallet/Unlock password' } })
+    expect(r.isError).toBe(false)
+    expect(opens).toHaveLength(1)
+  })
+
   it('a field missing from the copy is reported to the user; an answered request is never pointed to again', async () => {
     const item = loginItem({ title: 'Vault', totp: null })
     const asked: any[] = []
