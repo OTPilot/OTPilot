@@ -8,6 +8,7 @@
 - **Agents view, cleaner**: three tabs. *Agents* lists the connected agents (a notice says when something waits); open one to see what it can use, tap an account to change its permissions or remove it, and find rename, setup instructions and revoke (now confirmed first) in its ⋯ menu. *Requests* holds what waits for you: a new agent's code, an account request in two steps (which account, what it can use), and "ask every time" uses answered in one tap. *Activity* shows every agent's uses, or one agent's. Adding an account now gives the whole sign-in (username, password and 2FA) by default. Setup instructions include [Pi](https://pi.dev).
 - An AI agent waiting for you (a new one to approve, an account request) shows a **card on the page you're on**, like "Unlock OTPilot", instead of opening a window; **Review in OTPilot** opens the extension on it. Connecting an agent from the website shows it right away.
 - The trial's days left never read more than 30 ("31 of 30" with a clock a few seconds behind the server's).
+- An agent's account can be changed from the login editor too (**Edit** beside the agent opens its permissions). An agent asking for more of an account it already has (its sign-in when only the 2FA code was allowed, its 2FA code, a field) gets a request whose form starts from what it has now, and allowing it updates that account (**Update**).
 - Free keeps unlimited items: the 50-item limit is gone (a CSV import of any size works). The Agents view shows the monthly uses card for Free (N of 10, the renew date) and offers **Start free trial** / **Upgrade to Personal** when they run out.
 
 ### API
@@ -18,6 +19,8 @@
 ### MCP (`@otpilot/mcp` 0.3.0)
 
 - `connect` also prints how to add the server to Pi; the README and the skill list it too.
+- `browser_login` on a 2FA step that shows another method first (a passkey, a security key, a prompt on a phone: GitHub, Google, Microsoft) clicks the site's option to use the authenticator app ("Use your authenticator app", under "More options" / "Try another way" too; never SMS, email or recovery codes). A 2FA step it can't fill is no longer reported as signed in.
+- `browser_login` and `run` ask the user by themselves (an account request in OTPilot, waited up to 90 s; calling again waits for the same one) when the account isn't allowed, or doesn't allow what they need (sign-in on a 2FA-only grant, a 2FA code, username / password / notes outside the scope). A field or 2FA code found missing only once the copy is open is reported to the user the same way.
 - Sends an `x-otpilot-mcp` header; `browser_login` and `run` open their accounts with one call (a `run` with several accounts is one use), and the server's limit and "update the MCP" messages are shown as they are. `list_accounts` ends with the monthly usage when on Free.
 
 ### Web

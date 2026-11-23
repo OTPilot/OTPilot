@@ -4,7 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { generateKeyPair } from '../src/ecies.js'
 import { openRetry } from '../src/grants.js'
-import { buildServer, INSTRUCTIONS } from '../src/server.js'
+import { buildServer, INSTRUCTIONS, wait } from '../src/server.js'
 import { FakeApi, grantRow, loginItem, openFrom } from './helpers.js'
 
 beforeAll(() => { openRetry.ms = 1 })
@@ -94,12 +94,18 @@ describe('MCP server', () => {
     expect(bad.text).toContain('has no file')
   })
 
-  it('a 2FA-only account gives a code to run, but no sign-in', async () => {
+  it('a 2FA-only account gives a code to run; signing in asks the user for its sign-in first', async () => {
     const item = loginItem({ title: 'AWS' })
-    const { call, opens } = await connect([{ item, scope: { kind: '2fa' } }])
-    const r = await call('browser_login', { account: 'AWS' })
+    const asked: any[] = []
+    const { call, opens } = await connect([{ item, scope: { kind: '2fa' } }], (m, p, b) => {
+      if (m === 'POST' && p === '/agent/requests') { asked.push(b); return { body: { id: '00000000-0000-4000-8000-00000000000a' } } }
+      if (p.startsWith('/agent/requests/')) return { body: { status: 'denied' } }
+      return undefined
+    })
+    const r = await call('browser_login', { account: 'AWS', reason: 'check billing' })
     expect(r.isError).toBe(true)
-    expect(r.text).toMatch(/only allows its 2FA code/)
+    expect(r.text).toMatch(/didn't allow its sign-in .* of "AWS"/)
+    expect(asked).toEqual([{ query: 'AWS', tool: 'browser_login', reason: 'browser_login: needs its sign-in (username and password) of "AWS"; it may only use its 2FA code now. check billing' }])
     expect(opens).toHaveLength(0) // refused before anything is opened (no use)
     const code = await call('run', { command: 'echo "${#CODE}"', env: { CODE: 'AWS/totp' } })
     expect(code.text).toMatch(/stdout:\n6/)
@@ -195,11 +201,53 @@ describe('MCP server', () => {
     expect(opens[0]).toMatchObject({ tool: 'run', item_ids: [db.id, api.id] })
     expect(opens[0].use_id).toMatch(/^[0-9a-f-]{36}$/)
     expect(uses.map(u => u.item_id)).toEqual([db.id, api.id])
-    // A reference to an account it doesn't have: nothing is opened.
+    // A reference to an account it doesn't have: nothing is opened (the user is asked).
     const bad = await call('run', { command: 'true', env: { P: 'Staging DB/password', X: 'Nope/password' } })
     expect(bad.isError).toBe(true)
-    expect(bad.text).toMatch(/No allowed account matches "Nope"/)
     expect(opens).toHaveLength(1)
+  })
+
+  it('an account it isn\'t allowed is asked for, waited on, then used; a retry waits for the same request', async () => {
+    const keys = await generateKeyPair()
+    const item = loginItem({ title: 'GitHub', urls: ['github.com'] })
+    const row = await grantRow(item, keys.publicKey)
+    const asked: any[] = []
+    let status = 'pending'
+    const api = new FakeApi((m, p, b) => {
+      if (p === '/agent/grants') return { body: { grants: status === 'allowed' ? [row] : [] } }
+      if (p === '/agent/grants/open') return openFrom([row], b)
+      if (m === 'POST' && p === '/agent/requests') { asked.push(b); return { body: { id: '00000000-0000-4000-8000-00000000000b' } } }
+      if (p.startsWith('/agent/requests/')) return { body: { status, item_id: status === 'allowed' ? item.id : null } }
+      if (p === '/agent/uses') return { body: { ok: true } }
+      return undefined
+    })
+    const server = buildServer({ api, creds: { apiUrl: '', agentId: 'a', name: 'x', token: 't', publicKey: keys.publicKey, privateJwk: keys.privateJwk } })
+    const [a, b] = InMemoryTransport.createLinkedPair()
+    const c = new Client({ name: 't', version: '1' })
+    await Promise.all([server.connect(a), c.connect(b)])
+    wait.ms = 50
+    const first: any = await c.callTool({ name: 'run', arguments: { command: 'echo "$T"', env: { T: 'github/password' } } }).finally(() => { wait.ms = 90_000 })
+    expect(first.isError).toBe(true)
+    expect(first.content[0].text).toMatch(/Waiting for approval: access to "github"/)
+    expect(asked).toEqual([{ query: 'github', tool: 'run', reason: 'run: needs the password of "github", which it isn\'t allowed to use.' }])
+    status = 'allowed'
+    const again: any = await c.callTool({ name: 'run', arguments: { command: 'echo "$T"', env: { T: 'github/password' } } })
+    expect(again.isError).toBeFalsy()
+    expect(again.content[0].text).toContain('[REDACTED]')
+    expect(asked).toHaveLength(1) // the same request, not a second one
+  })
+
+  it('a field missing from the copy is reported to the user', async () => {
+    const item = loginItem({ title: 'Stripe', totp: null })
+    const asked: any[] = []
+    const { call } = await connect([{ item }], (m, p, b) => {
+      if (m === 'POST' && p === '/agent/requests') { asked.push(b); return { body: { id: '00000000-0000-4000-8000-00000000000c' } } }
+      return undefined
+    })
+    const r = await call('run', { command: 'true', env: { C: 'Stripe/totp' } })
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/no 2FA code available .* OTPilot asked the user to allow it \(request 00000000-0000-4000-8000-00000000000c\)/)
+    expect(asked[0]).toMatchObject({ query: 'Stripe', tool: 'run' })
   })
 
   it('run: an empty field part is refused before opening; a wrong field label is only found after (one open)', async () => {

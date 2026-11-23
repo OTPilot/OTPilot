@@ -81,16 +81,62 @@ export function withoutWalletSecrets(item: VaultItem): VaultItem {
 
 const WALLET_SECRET_NAMES = ['seed', 'passphrase', 'privatekey', 'private key', 'recovery phrase', 'seed phrase', 'mnemonic']
 
-/** The grant `ref` names: its item id, its exact title, or the one title containing it. */
-export function findGrant(grants: Grant[], ref: string): Grant {
+/** The grant `ref` names (its item id, its exact title, or the one title containing it), or null when none does. */
+export function matchGrant(grants: Grant[], ref: string): Grant | null {
   const q = ref.trim().toLowerCase()
   const exact = grants.filter(g => g.itemId === ref || g.title.toLowerCase() === q)
   const found = exact.length ? exact : grants.filter(g => g.title.toLowerCase().includes(q) || g.urls.some(u => u.toLowerCase().includes(q)))
-  if (found.length === 1) return found[0]
-  const names = grants.map(g => `"${g.title}"`).join(', ') || 'none'
-  if (!found.length) throw new Error(`No allowed account matches "${ref}". Allowed: ${names}. To use another one, call request_access.`)
-  throw new Error(`"${ref}" matches several accounts: ${found.map(g => `"${g.title}"`).join(', ')}. Use the exact name.`)
+  if (found.length > 1) throw new Error(`"${ref}" matches several accounts: ${found.map(g => `"${g.title}"`).join(', ')}. Use the exact name.`)
+  return found[0] ?? null
 }
+
+/** The grant `ref` names: its item id, its exact title, or the one title containing it. */
+export function findGrant(grants: Grant[], ref: string): Grant {
+  const found = matchGrant(grants, ref)
+  if (found) return found
+  const names = grants.map(g => `"${g.title}"`).join(', ') || 'none'
+  throw new Error(`No allowed account matches "${ref}". Allowed: ${names}. To use another one, call request_access.`)
+}
+
+/** What a tool needs of an account: signing in, or one field of a `run` reference. */
+export type Need = { kind: 'signin' } | { kind: 'field'; field: string }
+
+const TOTP_NAMES = ['totp', 'code', '2fa', 'otp']
+
+/**
+ * Whether a grant's scope gives what's needed, as far as its labels tell:
+ * a custom field's label can only be checked once the copy is open.
+ */
+export function allows(grant: Grant, need: Need): boolean {
+  const { kind, parts = [] } = grant.scope
+  if (need.kind === 'signin') return kind === 'login' || (kind === 'fields' && parts.includes('urls') && parts.includes('f:password'))
+  const f = need.field.trim().toLowerCase()
+  if (TOTP_NAMES.includes(f)) return kind !== 'fields' || parts.includes('totp')
+  if (f === 'username' || f === 'password') return kind === 'login' || (kind === 'fields' && parts.includes(`f:${f}`))
+  if (f === 'notes') return kind === 'fields' && parts.includes('notes')
+  return kind === 'fields' || kind === 'login' // a custom field or a file: known once open
+}
+
+/** What a need is, for the user: "its sign-in", "its 2FA code", "its "API key"". */
+export function needText(need: Need): string {
+  if (need.kind === 'signin') return 'its sign-in (username and password)'
+  const f = need.field.trim().toLowerCase()
+  if (TOTP_NAMES.includes(f)) return 'its 2FA code'
+  if (f === 'username' || f === 'password' || f === 'notes') return `its ${f}`
+  return `its "${need.field.trim()}"`
+}
+
+/** What a grant gives now, for the user. */
+export function scopeText(grant: Grant): string {
+  const { kind, parts = [] } = grant.scope
+  if (kind === '2fa') return 'its 2FA code'
+  if (kind === 'login') return 'its sign-in'
+  const names: Record<string, string> = { totp: '2FA code', urls: 'sites', notes: 'notes', 'f:username': 'username', 'f:password': 'password' }
+  return `some fields (${parts.map(p => names[p] || 'a field').join(', ') || 'none'})`
+}
+
+/** A field the account's copy doesn't hold (found once open). */
+export class MissingField extends Error {}
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
@@ -362,7 +408,7 @@ export function fileField(item: VaultItem, field: string): VaultFile | null {
     ? files.find(x => x.value)
     : files.find(x => x.id.toLowerCase() === f) || files.find(x => (x.label || '').toLowerCase() === f)
   if (!hit) {
-    if (f === '@file') throw new Error(`"${item.title}" has no file available to this agent.`)
+    if (f === '@file') throw new MissingField(`"${item.title}" has no file available to this agent.`)
     return null
   }
   const file = Vault.fileOf(hit.value)
@@ -376,12 +422,12 @@ export async function fieldValue(item: VaultItem, field: string): Promise<string
   if (item.type === 'wallet' && WALLET_SECRET_NAMES.includes(f)) {
     throw new Error(`A crypto wallet's recovery phrase, passphrase and private keys are never available to agents.`)
   }
-  if (f === 'totp' || f === 'code' || f === '2fa' || f === 'otp') {
-    if (!item.totp?.secret) throw new Error(`"${item.title}" has no 2FA code available to this agent.`)
+  if (TOTP_NAMES.includes(f)) {
+    if (!item.totp?.secret) throw new MissingField(`"${item.title}" has no 2FA code available to this agent.`)
     return generateTOTP(item.totp.secret, item.totp.period || 30, item.totp.digits || 6)
   }
   if (f === 'notes') {
-    if (!item.notes) throw new Error(`"${item.title}" has no notes available to this agent.`)
+    if (!item.notes) throw new MissingField(`"${item.title}" has no notes available to this agent.`)
     return item.notes
   }
   const byId = item.fields.find(x => x.id.toLowerCase() === f)
@@ -390,7 +436,7 @@ export async function fieldValue(item: VaultItem, field: string): Promise<string
   const value = hit?.value ?? (f === 'username' || f === 'password' ? Vault.getValue(item, f) : '')
   if (!value) {
     const available = [...item.fields.filter(x => x.value).map(x => x.label || x.id), ...(item.totp?.secret ? ['totp'] : [])]
-    throw new Error(`"${item.title}" has no "${field}" available to this agent. Available: ${available.join(', ') || 'nothing'}.`)
+    throw new MissingField(`"${item.title}" has no "${field}" available to this agent. Available: ${available.join(', ') || 'nothing'}.`)
   }
   return value
 }
