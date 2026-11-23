@@ -49,6 +49,15 @@ npx playwright install --with-deps chromium       # only for browser_login witho
 
 With no keychain (a bare Linux box) the credentials go to `~/.config/otpilot/mcp-<profile>.json` (0600): the accounts you allow are opened on that machine, so connect only machines you trust — whoever has root there can use them.
 
+### Updating
+
+Set up as above (`npx -y @otpilot/mcp@latest`), there's nothing to install: **restart your agent** (quit and reopen it, or start a new session) and npx fetches the newest version when the server starts. Your connection stays: no need to run `connect` again or approve the agent again.
+
+- Which version runs: `npx -y @otpilot/mcp@latest --version` (the releases are in the [changelog](https://github.com/OTPilot/OTPilot/blob/main/CHANGELOG.md)).
+- Still the old one after a restart? npx reused its cache: `rm -rf ~/.npm/_npx`, then restart the agent.
+- Pinned a version (`@otpilot/mcp@0.2.0`) or installed it globally (`npm i -g`)? Switch to `@otpilot/mcp@latest` in your agent's configuration, or run `npm i -g @otpilot/mcp@latest`.
+- Claude Code plugin: `/plugin update otpilot` also updates the skill. The skill installed with `npx skills add OTPilot/OTPilot`: run it again.
+
 ## Tools
 
 | Tool | What the agent gets |

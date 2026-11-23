@@ -20,6 +20,7 @@
 
 - `browser_login` on a 2FA step that shows another method first (a passkey, a security key, a prompt on a phone: GitHub, Google, Microsoft) clicks the site's option to use the authenticator app ("Use your authenticator app", under "More options" / "Try another way" too; never SMS, email or recovery codes). A 2FA step it can't fill is no longer reported as signed in.
 - `browser_login` and `run` ask the user by themselves (an account request in OTPilot, waited up to 90 s; calling again waits for the same one) when the account isn't allowed, or doesn't allow what they need (sign-in on a 2FA-only grant, a 2FA code, username / password / notes outside the scope). A field or 2FA code found missing only once the copy is open is reported to the user the same way.
+- **To update:** restart your agent (the setup runs `npx -y @otpilot/mcp@latest`); the connection stays. The README's new *Updating* section covers a pinned or global install and a stale npx cache. The Claude Code plugin is 0.3.1 too (`/plugin update otpilot` brings the new skill).
 
 ### MCP (`@otpilot/mcp` 0.3.0)
 
