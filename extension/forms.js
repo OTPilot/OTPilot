@@ -829,6 +829,10 @@
   }, true);
 
   const passwordFormShowing = () => [...document.querySelectorAll('input[type="password"]')].some(isPasswordShown);
+  // In a frame, the background asks this before offering the frame's sign-in
+  // on its page (frameStillAsking): the same rule, read-only keypad PINs
+  // included (one that held a value at first sight is a display).
+  if (IN_FRAME) globalThis.__otpilotPasswordAsking = passwordFormShowing;
 
   async function offerSave() {
     if (!chrome.runtime?.id || document.getElementById(SAVE_ID) || passwordFormShowing()) return;

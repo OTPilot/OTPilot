@@ -102,12 +102,19 @@ async function accountsForContent() {
 // what it fills is then covered by both rules: the login must cover the
 // frame's host *and* its page's (a sign-in form framed by another site is
 // never served).
-const sameSite = (a, b) => !!a && !!b && EmailCodes.registrableDomain(a) === EmailCodes.registrableDomain(b);
-// An https address (plain http on the user's own machine), or null.
+// An IP address is its own site (never "the last two octets").
+const isIpHost = h => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(':') || h.startsWith('[');
+const sameSite = (a, b) => !!a && !!b && (isIpHost(a) || isIpHost(b)
+  ? a === b
+  : EmailCodes.registrableDomain(a) === EmailCodes.registrableDomain(b));
+// This machine only: plain http is never trusted for a frame elsewhere
+// (isLocalHost also lets a LAN address open over http, for launches).
+const isLoopback = h => h === 'localhost' || h.endsWith('.localhost') || /^127(\.\d{1,3}){3}$/.test(h) || h === '[::1]';
+// An https address (plain http on this machine), or null.
 function webUrl(raw) {
   try {
     const u = new URL(raw);
-    return u.protocol === 'https:' || (u.protocol === 'http:' && isLocalHost(u.hostname)) ? u : null;
+    return u.protocol === 'https:' || (u.protocol === 'http:' && isLoopback(u.hostname)) ? u : null;
   } catch { return null; }
 }
 
@@ -163,14 +170,15 @@ async function frameStillAsking(tabId, frameId) {
   try {
     const [r] = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
-      // As forms.js counts them: a read-only one holding a value is the page
-      // showing a stored secret ("••••" in settings), not a sign-in asking.
-      func: () => [...document.querySelectorAll('input[type="password"]')].some(el => {
-        if (el.disabled || (el.readOnly && el.value)) return false;
-        const box = el.getBoundingClientRect();
-        const st = getComputedStyle(el);
-        return box.width > 1 && box.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
-      }),
+      // forms.js's own rule there (a read-only "••••" display isn't asking, a
+      // filled keypad PIN is); without forms.js, any password on screen.
+      func: () => (typeof globalThis.__otpilotPasswordAsking === 'function'
+        ? globalThis.__otpilotPasswordAsking()
+        : [...document.querySelectorAll('input[type="password"]')].some(el => {
+          const box = el.getBoundingClientRect();
+          const st = getComputedStyle(el);
+          return !el.disabled && box.width > 1 && box.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
+        })),
     });
     return r?.result === true;
   } catch { return false; }
@@ -521,8 +529,10 @@ const LAUNCH_TTL = 2 * 60 * 1000;
 const launchKey = tabId => `launch:${tabId}`;
 
 // Plain http is only for the user's own machine / network.
-// *.localhost resolves to this machine too (dev setups, tests).
-const isLocalHost = host => host === 'localhost' || host.endsWith('.localhost') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+// This machine (*.localhost too) or a private network address (a router,
+// a NAS): never a public IP.
+const isLocalHost = host => host === 'localhost' || host.endsWith('.localhost')
+  || /^(127|10)(\.\d{1,3}){3}$|^192\.168(\.\d{1,3}){2}$|^172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2}$|^169\.254(\.\d{1,3}){2}$/.test(host);
 
 // The URL to open for a saved website pattern ("site.com/login",
 // "*.site.com", "https://…"), or null. A public site is always opened over

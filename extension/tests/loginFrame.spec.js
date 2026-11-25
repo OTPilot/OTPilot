@@ -182,3 +182,35 @@ test("a login saved only for the frame's host never gets the page's host (a page
   await offer.locator('.otpilot-save-later').click();
   expect((await logins(popup)).map(l => l.urls)).toEqual([[ID]]);
 });
+
+test('a rejected keypad PIN in the frame (read-only, filled after first sight) holds back the offer', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ name: 'Bank', email: 'me@bank.test', secret: '', password: '1111', urls: 'otp.localhost' }]);
+  const site = await context.newPage();
+  await site.goto(`http://${APP}:${PORT}/test/frame-top.html?frame=${encodeURIComponent(`http://${ID}:${PORT}/test/frame-pin.html`)}`);
+  const frame = site.frameLocator('#signin');
+  await expect(frame.locator('.otpilot-field-badge').first()).toBeVisible();
+  await site.keyboard.press('Escape');
+  await frame.locator('input[name="user"]').fill('me@bank.test');
+  for (const d of '2468') await frame.locator('.key', { hasText: d }).click();
+  await frame.locator('input[name="user"]').press('Enter');
+  await expect(site.locator('#other')).toHaveCount(1);
+  await site.waitForTimeout(3000);
+  await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
+});
+
+test('an IP address is its own site, and plain http is trusted only on this machine', async ({ context }) => {
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker');
+  const r = await worker.evaluate(() => {
+    const s = (url, top) => formSender({ tab: { id: 1, url: top }, frameId: 3, url });
+    return {
+      ipOctets: s('https://192.168.1.5/login', 'https://203.0.1.5/'),
+      ipSame: !!s('https://192.168.1.5/login', 'https://192.168.1.5/'),
+      lanHttp: s('http://192.168.1.5/login', 'http://192.168.1.5/'),
+      loopHttp: !!s('http://id.otp.localhost/login', 'http://app.otp.localhost/'),
+      publicIpLocal: isLocalHost('203.0.1.5'),
+      lanLocal: isLocalHost('192.168.1.5'),
+    };
+  });
+  expect(r).toEqual({ ipOctets: null, ipSame: true, lanHttp: null, loopHttp: true, publicIpLocal: false, lanLocal: true });
+});

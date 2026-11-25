@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in widget with a keypad PIN</title></head>
+<body>
+  <!-- A read-only PIN typed on the page's own keypad (ABANCA-style), in a
+       frame. Never navigates: the submit is rejected (the form stays) and
+       the page is asked to load another frame of this site. -->
+  <form id="f">
+    <input type="text" name="user" autocomplete="username">
+    <input type="password" name="pin" readonly>
+    <div id="keys"></div>
+    <button type="submit">Entrar</button>
+  </form>
+  <script>
+    const pin = document.querySelector('[name=pin]');
+    for (const d of '0123456789') {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = d; b.className = 'key';
+      b.onclick = () => { pin.value += d; };
+      document.getElementById('keys').appendChild(b);
+    }
+    document.getElementById('f').addEventListener('submit', e => {
+      e.preventDefault();
+      setTimeout(() => parent.postMessage('add-frame', '*'), 300);
+    });
+  </script>
+</body></html>
