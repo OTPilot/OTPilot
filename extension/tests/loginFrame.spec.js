@@ -239,3 +239,28 @@ test('same site is decided by the Public Suffix List: each tenant of a shared or
   }));
   expect(r).toEqual({ apple: true, ukCom: false, tunnel: false, pages: false, bank: true, coUk: true, ipOctets: false, wordpress: false, squarespace: false, wpCode: false, email: 'a.uk.com', updated: true });
 });
+
+test("a sign-in in the frame with a shared login saved for the frame's host gets no personal Save offer", async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  await popup.evaluate(async id => {
+    const cid = crypto.randomUUID();
+    const ck = VaultCrypto.b64e(VaultCrypto.generateKey());
+    const item = Vault.newItem('login', { title: 'Team Apple ID', urls: [id] });
+    Vault.getField(item, 'username').value = 'team@apple.test';
+    Vault.getField(item, 'password').value = 'team-pass';
+    await chrome.storage.local.set({ [`cr:${cid}:${item.id}`]: await VaultCrypto.encryptItem(item, ck) });
+    await chrome.storage.session.set({ collectionKeys: { [cid]: ck }, sharedKeysReady: true });
+    await chrome.storage.local.set({ cloudSession: { user: { id: 'user-me' }, access_token: 't', expires_at: 4102444800000 } });
+  }, ID);
+  const site = await context.newPage();
+  await site.goto(page(APP, ID));
+  const frame = site.frameLocator('#signin');
+  await expect(frame.locator('.otpilot-field-badge').first()).toBeVisible();
+  await frame.locator('input[name="email"]').fill('team@apple.test');
+  await frame.locator('input[name="password"]').fill('changed-pass');
+  await frame.getByRole('button', { name: 'Sign in' }).click();
+  await expect(frame.locator('body')).toContainText('Signed in');
+  await site.waitForTimeout(2500);
+  await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
+  expect(await logins(popup)).toEqual([]);
+});

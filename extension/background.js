@@ -812,7 +812,9 @@ async function planPendingLogin({ host, top, username, password, extras = [] }) 
   // Compared by username only when one was captured: without one, the
   // personal logins below are still offered.
   const sharedAll = match ? [] : await sharedLogins();
-  const shared = sharedAll.filter(i => Vault.loginCoversHost(i.urls, top || host));
+  // Either host here (only to hold back a personal copy, so the broad side):
+  // a shared login saved for the frame's host is the one signed in with too.
+  const shared = sharedAll.filter(i => hosts.some(h => Vault.loginCoversHost(i.urls, h)));
   // Signing in with a shared login's exact username and password: it's that
   // login, even when its copy has no website for this page.
   // (A username is needed: a password alone may be a personal login's new one.)
