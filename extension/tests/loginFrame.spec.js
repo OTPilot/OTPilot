@@ -165,3 +165,20 @@ test('a rejected password in the frame is never offered, even when another frame
   await site.waitForTimeout(3000); // the frame's own 2 s check, and the page's
   await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
 });
+
+test("a login saved only for the frame's host never gets the page's host (a page framing another tenant's sign-in)", async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ ...apple, urls: ID }]);
+  const site = await context.newPage();
+  await site.goto(page(APP, ID));
+  const frame = site.frameLocator('#signin');
+  await expect(frame.locator('.otpilot-field-badge').first()).toBeVisible();
+  await frame.locator('input[name="email"]').fill('me@apple.test');
+  await frame.locator('input[name="password"]').fill('fr4me-pass!');
+  await frame.getByRole('button', { name: 'Sign in' }).click();
+  const offer = site.locator('#otpilot-login-save');
+  // Only a new login of its own, never "use Apple ID here too".
+  await expect(offer).toContainText(`Save this login for ${APP}?`);
+  await expect(offer).not.toContainText('here too');
+  await offer.locator('.otpilot-save-later').click();
+  expect((await logins(popup)).map(l => l.urls)).toEqual([[ID]]);
+});

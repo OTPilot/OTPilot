@@ -752,13 +752,17 @@ async function readPendingLogin(sender) {
 // whose fields differ is an update too, `extrasOnly` (without a username,
 // only the logins holding that password are its candidates).
 // A sign-in typed in a same-site frame (`top`: its page's host) plans over
-// the logins of either host, and saving one makes it cover both (`addHosts`
-// on an update; `addsSite` when that's all it changes).
+// the logins of its page only, and an update adds the frame's host to the
+// one it picks (`addsSite` when that's all it changes): the page the user is
+// on is the login's site, the frame its sign-in. Never the other way round:
+// a login that covers only the frame never gets the page's host (a page on
+// a multi-tenant host the site check can't tell apart, framing another
+// tenant's sign-in, would get that tenant's login).
 async function planPendingLogin({ host, top, username, password, extras = [] }) {
   const key = await VaultKeys.getKey();
   const { items } = await VaultStore.readAll(key);
   const hosts = top ? [host, top] : [host];
-  const covering = items.filter(i => i.type === 'login' && hosts.some(h => Vault.loginCoversHost(i.urls, h)));
+  const covering = items.filter(i => i.type === 'login' && Vault.loginCoversHost(i.urls, top || host));
   const missing = i => hosts.filter(h => !Vault.loginCoversHost(i.urls, h));
   const addsSite = list => ({ kind: 'update', addsSite: true, item: list[0], candidates: list.map(item => ({ item })) });
   const userOf = i => Vault.getValue(i, 'username').trim();
@@ -795,7 +799,7 @@ async function planPendingLogin({ host, top, username, password, extras = [] }) 
   // Compared by username only when one was captured: without one, the
   // personal logins below are still offered.
   const sharedAll = match ? [] : await sharedLogins();
-  const shared = sharedAll.filter(i => hosts.some(h => Vault.loginCoversHost(i.urls, h)));
+  const shared = sharedAll.filter(i => Vault.loginCoversHost(i.urls, top || host));
   // Signing in with a shared login's exact username and password: it's that
   // login, even when its copy has no website for this page.
   // (A username is needed: a password alone may be a personal login's new one.)
@@ -902,8 +906,10 @@ async function resolvePendingLogin(sender, id, choice, target) {
       const current = VaultAccounts.toAccount(chosen.item);
       // A login saved without a username gets the one signed in with.
       const patch = { password: pending.password, ...(!current.email && pending.username ? { email: pending.username } : {}) };
-      // Signed in through a same-site frame: the login covers both hosts from now on.
-      const addHosts = [pending.host, pending.top].filter(h => h && !Vault.loginCoversHost(chosen.item.urls, h));
+      // Signed in through a same-site frame of a page this login covers: the
+      // frame's host is added (never the page's: see planPendingLogin).
+      const addHosts = pending.top && Vault.loginCoversHost(chosen.item.urls, pending.top)
+        ? [pending.host].filter(h => !Vault.loginCoversHost(chosen.item.urls, h)) : [];
       if (addHosts.length) patch.urls = [...(chosen.item.urls || []), ...addHosts].join('\n');
       // Its extra fields: matching ones take the new value, new ones are
       // added, the others stay. (No history for them.) Applied to the item
