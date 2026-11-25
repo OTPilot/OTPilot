@@ -163,7 +163,10 @@ async function frameStillAsking(tabId, frameId) {
   try {
     const [r] = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
+      // As forms.js counts them: a read-only one holding a value is the page
+      // showing a stored secret ("••••" in settings), not a sign-in asking.
       func: () => [...document.querySelectorAll('input[type="password"]')].some(el => {
+        if (el.disabled || (el.readOnly && el.value)) return false;
         const box = el.getBoundingClientRect();
         const st = getComputedStyle(el);
         return box.width > 1 && box.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
