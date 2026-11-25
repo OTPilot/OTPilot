@@ -135,3 +135,33 @@ test('the background serves a frame only on the same site as its page, over http
     ['https://evil.example', 'https://appstoreconnect.apple.com']));
   expect(injected).toBe(false);
 });
+
+const spaPage = then => `http://${APP}:${PORT}/test/frame-top.html?frame=${encodeURIComponent(`http://${ID}:${PORT}/test/frame-login-spa.html?then=${then}`)}`;
+
+test('an app that removes its sign-in frame once signed in still gets the offer', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await site.goto(spaPage('remove'));
+  const frame = site.frameLocator('#signin');
+  await expect(frame.locator('.otpilot-field-badge').first()).toBeVisible();
+  await frame.locator('input[name="email"]').fill('spa@apple.test');
+  await frame.locator('input[name="password"]').fill('spa-fr4me!');
+  await frame.getByRole('button', { name: 'Sign in' }).click();
+  await expect(site.locator('#signin')).toHaveCount(0);
+  await expect(site.locator('#otpilot-login-save')).toContainText('spa@apple.test');
+});
+
+test('a rejected password in the frame is never offered, even when another frame of the site loads', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ ...apple, urls: 'otp.localhost' }]);
+  const site = await context.newPage();
+  await site.goto(spaPage('reject'));
+  const frame = site.frameLocator('#signin');
+  await expect(frame.locator('.otpilot-field-badge').first()).toBeVisible();
+  await frame.locator('input[name="email"]').fill('me@apple.test');
+  await frame.locator('input[name="password"]').fill('wrong-pass');
+  await frame.locator('input[name="password"]').press('Enter'); // the login offer covers the button
+  await expect(site.locator('#other')).toHaveCount(1);
+  await expect(site.frameLocator('#other').locator('body')).toContainText('Signed in');
+  await site.waitForTimeout(3000); // the frame's own 2 s check, and the page's
+  await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
+});

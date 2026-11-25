@@ -151,8 +151,26 @@ async function offerInTop(sender) {
   await _capturesInFlight.get(sender.tab.id); // the capture may still be on its way
   const key = pendingLoginKey(sender.tab.id);
   const pending = (await chrome.storage.session.get(key))[key];
-  if (!pending?.top || !relatedHost(pending.top, ctx.top)) return;
+  // Only from the frame the sign-in was typed in (another frame of the site
+  // loading says nothing about it).
+  if (!pending?.top || pending.frameId !== sender.frameId || !relatedHost(pending.top, ctx.top)) return;
   await chrome.tabs.sendMessage(sender.tab.id, { action: 'otpilotOfferSave' }, { frameId: 0 }).catch(() => {});
+}
+
+// Whether the frame a sign-in was typed in still shows a password field (a
+// rejected password): no offer then. A frame that's gone isn't asking.
+async function frameStillAsking(tabId, frameId) {
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: () => [...document.querySelectorAll('input[type="password"]')].some(el => {
+        const box = el.getBoundingClientRect();
+        const st = getComputedStyle(el);
+        return box.width > 1 && box.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
+      }),
+    });
+    return r?.result === true;
+  } catch { return false; }
 }
 
 // The host of the page a top-frame content script runs on, or null.
@@ -658,9 +676,12 @@ async function storeCapture(sender, msg) {
   }
   const id = crypto.randomUUID(); // offers and choices name the capture they're about
   await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: {
-    id, host, username, password, at: Date.now(), ...(ctx.frame ? { top: ctx.top } : {}),
+    id, host, username, password, at: Date.now(), ...(ctx.frame ? { top: ctx.top, frameId: sender.frameId } : {}),
     ...(url ? { url } : {}), ...(step ? { step } : {}), ...(extras.length ? { extras } : {}),
   } });
+  // The page watches for the frame going away (an app that removes it once
+  // signed in): its next DOM change asks for the offer.
+  if (ctx.frame) chrome.tabs.sendMessage(sender.tab.id, { action: 'otpilotFrameCapture' }, { frameId: 0 }).catch(() => {});
 }
 
 // Two-step sign-ins (username page, then password page): the username step's
@@ -801,6 +822,9 @@ async function pendingLoginOffer(sender) {
   const found = await readPendingLogin(sender);
   if (!found) return null;
   const { key, pending } = found;
+  // Typed in a frame: offered once that frame no longer asks for a password
+  // (signed in, moved on, or removed); until then the page keeps waiting.
+  if (pending.frameId != null && sender.frameId !== pending.frameId && await frameStillAsking(sender.tab.id, pending.frameId)) return { waiting: true };
   // A frame's sign-in is named by its page (App Store Connect, not Apple's widget).
   const offer = { id: pending.id, host: pending.top || pending.host, username: pending.username };
   const state = await VaultLock.state();

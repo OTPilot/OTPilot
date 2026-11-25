@@ -843,6 +843,7 @@
     let offer;
     try { offer = await chrome.runtime.sendMessage({ action: 'vaultPendingLogin' }); } catch { offer = null; }
     if (!offer) { _capturedAt = 0; return; } // nothing pending: stop re-checking
+    if (offer.waiting) return; // its frame still asks for the password: checked again on the next change
     if (document.getElementById(SAVE_ID) || passwordFormShowing()) return;
     const el = makeOverlay(SAVE_ID);
     renderSave(el, offer);
@@ -881,7 +882,7 @@
         async () => {
           let next;
           try { next = await chrome.runtime.sendMessage({ action: 'vaultPendingLogin' }); } catch { next = null; }
-          if (!next) { closeSave(); return; }
+          if (!next || next.waiting) { closeSave(); return; }
           renderSave(el, next);
         },
         () => { resolve(offer, 'dismiss'); closeSave(); });
@@ -1692,7 +1693,12 @@
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   // A sign-in typed in a same-site frame of this page, now over.
-  if (!IN_FRAME) chrome.runtime.onMessage.addListener(msg => { if (msg?.action === 'otpilotOfferSave') offerSave(); });
+  // `otpilotFrameCapture`: one was just typed there; this page's changes (the
+  // frame removed) ask for the offer from now on, as after its own capture.
+  if (!IN_FRAME) chrome.runtime.onMessage.addListener(msg => {
+    if (msg?.action === 'otpilotOfferSave') offerSave();
+    if (msg?.action === 'otpilotFrameCapture') _capturedAt = Date.now();
+  });
   noteReadonlyPasswords();
   check();
   offerSave();

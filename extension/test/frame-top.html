@@ -2,8 +2,22 @@
 <html><head><meta charset="utf-8"><title>App</title></head>
 <body>
   <!-- A sign-in widget in an iframe (App Store Connect frames Apple's
-       idmsa.apple.com): ?frame=<url> is the frame's address. -->
+       idmsa.apple.com): ?frame=<url> is the frame's address. The frame can
+       ask (postMessage) to be removed (an app that drops it once signed in)
+       or for another frame of its site to load. -->
   <h1>Sign in to the app</h1>
   <iframe id="signin" style="width:520px;height:460px;border:1px solid #ccc"></iframe>
-  <script>document.getElementById('signin').src = new URLSearchParams(location.search).get('frame') || 'frame-login.html';</script>
+  <script>
+    const frame = document.getElementById('signin');
+    frame.src = new URLSearchParams(location.search).get('frame') || 'frame-login.html';
+    addEventListener('message', e => {
+      if (e.data === 'remove-me') frame.remove();
+      if (e.data === 'add-frame') {
+        const other = document.createElement('iframe');
+        other.id = 'other';
+        other.src = new URL('frame-done.html', frame.src).href;
+        document.body.appendChild(other);
+      }
+    });
+  </script>
 </body></html>
