@@ -1,7 +1,8 @@
 'use strict';
 
 importScripts(
-  'config.js', 'supabase.js', 'emailCodes.js',
+  // publicSuffix*.js before emailCodes.js: its registrableDomain uses the list.
+  'config.js', 'supabase.js', 'publicSuffixList.js', 'publicSuffix.js', 'emailCodes.js',
   // 2.0 vault lock: the unlocked vault key lives in chrome.storage.session,
   // which content scripts can't read, so they ask this worker (vaultState /
   // vaultUnlock below).
@@ -102,11 +103,9 @@ async function accountsForContent() {
 // what it fills is then covered by both rules: the login must cover the
 // frame's host *and* its page's (a sign-in form framed by another site is
 // never served).
-// An IP address is its own site (never "the last two octets").
-const isIpHost = h => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(':') || h.startsWith('[');
-const sameSite = (a, b) => !!a && !!b && (isIpHost(a) || isIpHost(b)
-  ? a === b
-  : EmailCodes.registrableDomain(a) === EmailCodes.registrableDomain(b));
+// By the Public Suffix List (publicSuffix.js): an IP address is its own
+// site, and so is each tenant of a shared host (x.github.io, a.uk.com).
+const sameSite = (a, b) => !!a && !!b && PublicSuffix.registrableDomain(a) === PublicSuffix.registrableDomain(b);
 // This machine only: plain http is never trusted for a frame elsewhere
 // (isLocalHost also lets a LAN address open over http, for launches).
 const isLoopback = h => h === 'localhost' || h.endsWith('.localhost') || /^127(\.\d{1,3}){3}$/.test(h) || h === '[::1]';

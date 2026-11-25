@@ -214,3 +214,21 @@ test('an IP address is its own site, and plain http is trusted only on this mach
   });
   expect(r).toEqual({ ipOctets: null, ipSame: true, lanHttp: null, loopHttp: true, publicIpLocal: false, lanLocal: true });
 });
+
+test('same site is decided by the Public Suffix List: each tenant of a shared or registry-sold host is its own site', async ({ context }) => {
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker');
+  const r = await worker.evaluate(() => ({
+    apple: sameSite('idmsa.apple.com', 'appstoreconnect.apple.com'),
+    ukCom: sameSite('a.uk.com', 'b.uk.com'),
+    tunnel: sameSite('a.trycloudflare.com', 'b.trycloudflare.com'),
+    pages: sameSite('a.github.io', 'b.github.io'),
+    bank: sameSite('online.bbva.com.ar', 'www.bbva.com.ar'),
+    coUk: sameSite('www.google.co.uk', 'accounts.google.co.uk'),
+    ipOctets: sameSite('192.168.1.5', '203.0.1.5'),
+    // The Gmail code check (EmailCodes.fromSite) uses the list too, in the background.
+    email: EmailCodes.registrableDomain('mail.a.uk.com'),
+    updated: /^\d{4}-\d{2}-\d{2}$/.test(PublicSuffix.updated),
+  }));
+  expect(r).toEqual({ apple: true, ukCom: false, tunnel: false, pages: false, bank: true, coUk: true, ipOctets: false, email: 'a.uk.com', updated: true });
+});

@@ -94,7 +94,8 @@ const EmailCodes = (() => {
     return { account, entries };
   }
 
-  // A host's registrable domain, roughly (no Public Suffix List here):
+  // A host's registrable domain: by the Public Suffix List where it's loaded
+  // (the background), else roughly, as below:
   // online.bbva.com.ar → bbva.com.ar, mail.notion.so → notion.so,
   // accounts.google.com → google.com.
   const SECOND_LEVEL = new Set(['com', 'co', 'org', 'net', 'gov', 'gob', 'edu', 'ac', 'or', 'ne', 'go', 'mil', 'nom']);
@@ -108,7 +109,10 @@ const EmailCodes = (() => {
     'amplifyapp.com', 'azurestaticapps.net', 'cloudflareaccess.com', 's3.amazonaws.com', 'deno.dev', 'railway.app',
     'up.railway.app', 'supabase.co', 'notion.site', 'carrd.co', 'neocities.org', 'bitbucket.io', 'readthedocs.io',
   ]);
+  // Where publicSuffix.js is loaded (the background), the Public Suffix List
+  // decides; the approximation below is for pages without it.
   function registrableDomain(host) {
+    if (typeof PublicSuffix !== 'undefined') return PublicSuffix.registrableDomain(host);
     const labels = String(host || '').toLowerCase().replace(/\.+$/, '').split('.').filter(Boolean);
     const n = labels.length;
     let keep = n >= 3 && labels[n - 1].length === 2 && SECOND_LEVEL.has(labels[n - 2]) ? 3 : 2;
