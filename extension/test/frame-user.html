@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Username widget</title></head>
+<body>
+  <!-- The username step in a frame; the password step then shows on the
+       page itself (the page is asked with postMessage). -->
+  <form id="f">
+    <input type="email" name="email" autocomplete="username">
+    <button>Next</button>
+  </form>
+  <script>
+    document.getElementById('f').addEventListener('submit', e => {
+      e.preventDefault();
+      setTimeout(() => parent.postMessage('show-password', '*'), 200);
+    });
+  </script>
+</body></html>

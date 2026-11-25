@@ -7,14 +7,15 @@ EXTENSION_FILES := \
   popup.html popup.js theme-boot.js theme.css unlock.html unlock.js generator.js \
   dashboardUnlock.html dashboardUnlock.js \
   background.js \
-  jsqr.js content.js forms.js totp.js emailCodes.js email-reader.js googleAuthMigration.js \
+  jsqr.js content.js forms.js frameForms.js totp.js emailCodes.js email-reader.js googleAuthMigration.js \
   supabase.js cloudSync.js keys.js sharing.js vaultCollections.js vaultShares.js agents.js agentsView.js \
   vault.js sshKeys.js fileKinds.js bip39.js qrcode.js cryptoAddresses.js seedGuard.js importers.js vaultAccounts.js apiKeys.js apiKeyOffer.js vaultCrypto.js vaultKeys.js vaultLock.js vaultMigration.js vaultStore.js vaultSync.js \
+  publicSuffixList.js publicSuffix.js \
   config.js links.js \
   icon16.png icon48.png icon128.png \
   LICENSE
 
-.PHONY: dev prod zip zip_dev
+.PHONY: dev prod zip zip_dev psl psl_age psl_check
 
 dev:
 	@cp config-dev.js config.js
@@ -36,3 +37,15 @@ zip_dev: dev
 	@rm -f $(ZIP_DEV)
 	zip $(ZIP_DEV) $(EXTENSION_FILES)
 	@echo "→ $(ZIP_DEV)"
+
+# The Public Suffix List (publicSuffixList.js): refresh every 3 months.
+psl:
+	@node scripts/updatePsl.mjs
+
+# How old the bundled list is.
+psl_age:
+	@grep -o "PUBLIC_SUFFIX_UPDATED = '[0-9-]*'" publicSuffixList.js
+
+# Whether the bundled list is behind the current one (exit 3 if so).
+psl_check:
+	@node scripts/updatePsl.mjs --check

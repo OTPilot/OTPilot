@@ -94,12 +94,18 @@ const EmailCodes = (() => {
     return { account, entries };
   }
 
-  // A host's registrable domain, roughly (no Public Suffix List here):
+  // A host's registrable domain ("site"): by the Public Suffix List where
+  // it's loaded (the background: publicSuffix.js), else roughly —
   // online.bbva.com.ar → bbva.com.ar, mail.notion.so → notion.so,
-  // accounts.google.com → google.com.
+  // accounts.google.com → google.com. SHARED_HOSTING is a floor on both:
+  // a tenant of one of these hosts is always its own site, even where the
+  // PSL doesn't list the host (wordpress.com, squarespace.com…).
+  // Used by the Gmail code check (fromSite) and the background's same-site
+  // sign-in frames (sameSite).
   const SECOND_LEVEL = new Set(['com', 'co', 'org', 'net', 'gov', 'gob', 'edu', 'ac', 'or', 'ne', 'go', 'mil', 'nom']);
   // Hosts where anyone gets a subdomain (the Public Suffix List's private
-  // section, its common ones): user.github.io is its own site, never github.io.
+  // section, its common ones, and some it lacks): user.github.io is its own
+  // site, never github.io.
   const SHARED_HOSTING = new Set([
     'github.io', 'gitlab.io', 'vercel.app', 'netlify.app', 'herokuapp.com', 'pages.dev', 'workers.dev',
     'web.app', 'firebaseapp.com', 'appspot.com', 'azurewebsites.net', 'cloudfront.net', 'blogspot.com',
@@ -109,13 +115,20 @@ const EmailCodes = (() => {
     'up.railway.app', 'supabase.co', 'notion.site', 'carrd.co', 'neocities.org', 'bitbucket.io', 'readthedocs.io',
   ]);
   function registrableDomain(host) {
-    const labels = String(host || '').toLowerCase().replace(/\.+$/, '').split('.').filter(Boolean);
+    const h = String(host || '').toLowerCase().replace(/\.+$/, '');
+    const labels = h.split('.').filter(Boolean);
     const n = labels.length;
-    let keep = n >= 3 && labels[n - 1].length === 2 && SECOND_LEVEL.has(labels[n - 2]) ? 3 : 2;
-    // Longest shared-hosting suffix → one more label (the tenant).
+    // The longest shared-hosting suffix → one more label (the tenant).
+    let tenant = null;
     for (let k = Math.min(n - 1, 3); k >= 2; k--) {
-      if (SHARED_HOSTING.has(labels.slice(-k).join('.'))) { keep = k + 1; break; }
+      if (SHARED_HOSTING.has(labels.slice(-k).join('.'))) { tenant = labels.slice(-(k + 1)).join('.'); break; }
     }
+    if (typeof PublicSuffix !== 'undefined') {
+      const site = PublicSuffix.registrableDomain(h);
+      return tenant && tenant.length > site.length ? tenant : site;
+    }
+    if (tenant) return tenant;
+    const keep = n >= 3 && labels[n - 1].length === 2 && SECOND_LEVEL.has(labels[n - 2]) ? 3 : 2;
     return labels.slice(-keep).join('.');
   }
 
