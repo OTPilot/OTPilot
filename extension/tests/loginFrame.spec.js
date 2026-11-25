@@ -264,3 +264,23 @@ test("a sign-in in the frame with a shared login saved for the frame's host gets
   await expect(site.locator('#otpilot-login-save')).toHaveCount(0);
   expect(await logins(popup)).toEqual([]);
 });
+
+test('a username typed in the frame, with the password then typed on the page, is not shown in the offer', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  // The page on the frame's parent host (otp.localhost ⊃ id.otp.localhost): a related host.
+  await site.goto(`http://otp.localhost:${PORT}/test/frame-top.html?frame=${encodeURIComponent(`http://${ID}:${PORT}/test/frame-user.html`)}`);
+  const frame = site.frameLocator('#signin');
+  await expect(frame.locator('.otpilot-field-badge').first()).toBeVisible();
+  await frame.locator('input[name="email"]').fill('widget@apple.test');
+  await frame.locator('input[name="email"]').press('Enter');
+  await site.locator('input[name="password"]').fill('p4ge-pass!');
+  await site.getByRole('button', { name: 'Sign in' }).click();
+  await expect(site).toHaveURL(/welcome\.html/);
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Save this login for otp.localhost?');
+  expect(await site.locator('body').innerHTML()).not.toContain('widget@apple.test');
+  // Saved, it still gets the username.
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(async () => (await logins(popup)).map(l => l.username)).toEqual(['widget@apple.test']);
+});

@@ -46,6 +46,6 @@ psl:
 psl_age:
 	@grep -o "PUBLIC_SUFFIX_UPDATED = '[0-9-]*'" publicSuffixList.js
 
-# Whether the bundled list is behind the current one (exit 1 if so).
+# Whether the bundled list is behind the current one (exit 3 if so).
 psl_check:
 	@node scripts/updatePsl.mjs --check

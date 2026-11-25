@@ -670,6 +670,7 @@ async function storeCapture(sender, msg) {
   // A password page that repeats the username step's username (a read-only
   // or hidden copy of it) is still that sign-in: it keeps its start.
   let step = null;
+  let hideUsername = false;
   // In a frame, the page the user is on (where "Open & sign in" goes).
   let url = signInUrlOf(ctx.frame ? sender.tab.url : sender.url);
   // Extra fields (forms.js `extras`): the username step's too, for the same
@@ -684,6 +685,9 @@ async function storeCapture(sender, msg) {
     await chrome.storage.session.remove(pendingUsernameKey(sender.tab.id));
   } else if (pending) {
     ({ username, id: step } = pending);
+    // Typed in a frame, offered here: the offer must not show it (the page
+    // can read its own DOM, not what was typed in the frame).
+    if (pending.frameId != null && pending.frameId !== sender.frameId) hideUsername = true;
     if (pending.url) url = pending.url;
     extras = mergeExtras(cleanExtras(pending.extras, password), extras);
   }
@@ -691,6 +695,7 @@ async function storeCapture(sender, msg) {
   await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: {
     id, host, username, password, at: Date.now(), ...(ctx.frame ? { top: ctx.top, frameId: sender.frameId } : {}),
     ...(url ? { url } : {}), ...(step ? { step } : {}), ...(extras.length ? { extras } : {}),
+    ...(hideUsername ? { hideUsername } : {}),
   } });
   // The page watches for the frame going away (an app that removes it once
   // signed in): its next DOM change asks for the offer.
@@ -711,6 +716,7 @@ async function captureUsername(sender, msg) {
   const extras = cleanExtras(msg.extras, username);
   await chrome.storage.session.set({ [pendingUsernameKey(sender.tab.id)]: {
     id: crypto.randomUUID(), host, username, at: Date.now(), ...(url ? { url } : {}), ...(extras.length ? { extras } : {}),
+    ...(ctx.frame ? { frameId: sender.frameId } : {}),
   } });
 }
 
@@ -847,7 +853,7 @@ async function pendingLoginOffer(sender) {
   // A frame's sign-in is named by its page (App Store Connect, not Apple's
   // widget), without its username: the offer is in the page's DOM, and the
   // page can't read what was typed in the frame.
-  const offer = { id: pending.id, host: pending.top || pending.host, username: pending.frameId != null ? '' : pending.username };
+  const offer = { id: pending.id, host: pending.top || pending.host, username: pending.frameId != null || pending.hideUsername ? '' : pending.username };
   const state = await VaultLock.state();
   if (state === 'setup') { await dropPendingLogin(key, pending.id); return null; }
   if (state === 'locked') return { ...offer, kind: 'locked' };

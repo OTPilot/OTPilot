@@ -12,6 +12,12 @@
     frame.src = new URLSearchParams(location.search).get('frame') || 'frame-login.html';
     addEventListener('message', e => {
       if (e.data === 'remove-me') frame.remove();
+      if (e.data === 'show-password') {
+        const form = document.createElement('form');
+        form.action = 'welcome.html'; form.method = 'get';
+        form.innerHTML = '<input type="password" name="password" autocomplete="current-password"><button>Sign in</button>';
+        document.body.appendChild(form);
+      }
       if (e.data === 'add-frame') {
         const other = document.createElement('iframe');
         other.id = 'other';

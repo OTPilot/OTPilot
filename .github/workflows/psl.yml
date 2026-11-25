@@ -26,11 +26,15 @@ jobs:
       - name: Compare with the current list
         id: psl
         working-directory: extension
+        # Exit 3: behind (an issue follows). Any other failure (the download,
+        # the list) fails the job, so a broken check never looks like a pass.
         run: |
           set +e
           node scripts/updatePsl.mjs --check > psl-check.txt
-          echo "behind=$?" >> "$GITHUB_OUTPUT"
+          code=$?
           cat psl-check.txt
+          if [ "$code" = 3 ]; then echo "behind=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          exit "$code"
 
       - name: Open an issue
         if: steps.psl.outputs.behind == '1'
