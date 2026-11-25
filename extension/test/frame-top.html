@@ -1,0 +1,9 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>App</title></head>
+<body>
+  <!-- A sign-in widget in an iframe (App Store Connect frames Apple's
+       idmsa.apple.com): ?frame=<url> is the frame's address. -->
+  <h1>Sign in to the app</h1>
+  <iframe id="signin" style="width:520px;height:460px;border:1px solid #ccc"></iframe>
+  <script>document.getElementById('signin').src = new URLSearchParams(location.search).get('frame') || 'frame-login.html';</script>
+</body></html>

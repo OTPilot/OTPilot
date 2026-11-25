@@ -9,11 +9,16 @@
 //
 // Nothing is filled without a click: the overlay lists the logins whose saved
 // URLs cover this host, and only the chosen one's password is requested from
-// the background, which re-checks the host from the sender. Top frame only.
+// the background, which re-checks the host from the sender. Top frame, or a
+// same-site sign-in frame the background loaded it into (frameForms.js:
+// `__otpilotFrameForms`), whose save offers show on the top page.
 // Sign-up and change-password fields (autocomplete="new-password") are left
 // alone.
 (() => {
-  if (window.top !== window) return;
+  const IN_FRAME = window.top !== window;
+  if (IN_FRAME && !globalThis.__otpilotFrameForms) return;
+  if (globalThis.__otpilotFormsLoaded) return;
+  globalThis.__otpilotFormsLoaded = true;
 
   const OVERLAY_ID = 'otpilot-login-fill';
   // These overlays live in the page's DOM, where its scripts can call
@@ -827,6 +832,14 @@
 
   async function offerSave() {
     if (!chrome.runtime?.id || document.getElementById(SAVE_ID) || passwordFormShowing()) return;
+    // A frame's sign-in is offered on its page (a frame is too small for it),
+    // once the frame's form is gone (not a rejected password).
+    // Once per capture (the page asks the background what's pending).
+    if (IN_FRAME) {
+      _capturedAt = 0;
+      chrome.runtime.sendMessage({ action: 'vaultOfferInTop' }).catch(() => {});
+      return;
+    }
     let offer;
     try { offer = await chrome.runtime.sendMessage({ action: 'vaultPendingLogin' }); } catch { offer = null; }
     if (!offer) { _capturedAt = 0; return; } // nothing pending: stop re-checking
@@ -857,6 +870,7 @@
     const body = el.querySelector('.otpilot-save-body');
     const first = (offer.candidates || [])[0];
     const title = offer.kind !== 'update' ? `Save this login for <b>${esc(offer.host)}</b>?`
+      : offer.addsSite ? `Use <b>${esc(offer.name || offer.host)}</b> to sign in here too?`
       : offer.extrasOnly ? `Update <b>${esc(offer.name || offer.host)}</b>?`
       : (offer.candidates || []).length > 1 ? `Update a login for <b>${esc(offer.host)}</b>?`
       : first && !first.username && offer.username ? `Add this username and password to <b>${esc(offer.name || offer.host)}</b>?`
@@ -1677,6 +1691,8 @@
     }, 400);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
+  // A sign-in typed in a same-site frame of this page, now over.
+  if (!IN_FRAME) chrome.runtime.onMessage.addListener(msg => { if (msg?.action === 'otpilotOfferSave') offerSave(); });
   noteReadonlyPasswords();
   check();
   offerSave();

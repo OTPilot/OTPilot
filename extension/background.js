@@ -96,6 +96,65 @@ async function accountsForContent() {
   return { locked: true, activeIndex, accounts: index };
 }
 
+// Sign-in forms inside a same-site iframe (frameForms.js): App Store
+// Connect's Apple ID widget is idmsa.apple.com in appstoreconnect.apple.com.
+// Such a frame gets forms.js (and its helpers) only after the checks below;
+// what it fills is then covered by both rules: the login must cover the
+// frame's host *and* its page's (a sign-in form framed by another site is
+// never served).
+const sameSite = (a, b) => !!a && !!b && EmailCodes.registrableDomain(a) === EmailCodes.registrableDomain(b);
+// An https address (plain http on the user's own machine), or null.
+function webUrl(raw) {
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' || (u.protocol === 'http:' && isLocalHost(u.hostname)) ? u : null;
+  } catch { return null; }
+}
+
+// Where a sign-in form's content script runs, from the browser's sender:
+// the top frame → { host, hosts: [host] }; a sub-frame of the same site as
+// its tab's page (both https) → { host: the frame's, top: the page's, hosts:
+// both, frame: true }. Null otherwise. A login is offered, filled or
+// launched there only when it covers every host in `hosts` (coversAll).
+function formSender(sender) {
+  if (!sender?.tab || sender.frameId == null || !sender.url) return null;
+  if (sender.frameId === 0) {
+    const host = senderHost(sender);
+    return host ? { host, hosts: [host] } : null;
+  }
+  const frame = webUrl(sender.url);
+  const top = webUrl(sender.tab.url);
+  if (!frame || !top || !sameSite(frame.hostname, top.hostname)) return null;
+  return { host: frame.hostname, top: top.hostname, hosts: [frame.hostname, top.hostname], frame: true };
+}
+const coversAll = (urls, ctx) => ctx.hosts.every(h => Vault.loginCoversHost(urls, h));
+
+// A sub-frame asking for forms.js (frameForms.js): only a same-site frame of
+// a same-site page — every ancestor too (`ancestors`, location.ancestorOrigins
+// read in the extension's isolated world) — and once per document.
+const FRAME_FORMS_FILES = ['totp.js', 'emailCodes.js', 'content.js', 'generator.js', 'forms.js'];
+async function injectFrameForms(sender, ancestors) {
+  const ctx = formSender(sender);
+  if (!ctx?.frame || !Array.isArray(ancestors) || !ancestors.length || ancestors.length > 8) return false;
+  if (!ancestors.every(o => { const u = webUrl(o); return u && sameSite(u.hostname, ctx.host); })) return false;
+  const target = { tabId: sender.tab.id, frameIds: [sender.frameId] };
+  await chrome.scripting.executeScript({ target, func: () => { globalThis.__otpilotFrameForms = true; } });
+  await chrome.scripting.executeScript({ target, files: FRAME_FORMS_FILES });
+  return true;
+}
+
+// A same-site frame's sign-in is over: the page (top frame) shows its save
+// offer, only when one from a frame of this page is pending.
+async function offerInTop(sender) {
+  const ctx = formSender(sender);
+  if (!ctx?.frame) return;
+  await _capturesInFlight.get(sender.tab.id); // the capture may still be on its way
+  const key = pendingLoginKey(sender.tab.id);
+  const pending = (await chrome.storage.session.get(key))[key];
+  if (!pending?.top || !relatedHost(pending.top, ctx.top)) return;
+  await chrome.tabs.sendMessage(sender.tab.id, { action: 'otpilotOfferSave' }, { frameId: 0 }).catch(() => {});
+}
+
 // The host of the page a top-frame content script runs on, or null.
 function senderHost(sender) {
   if (!sender?.tab || sender.frameId !== 0 || !sender.url) return null;
@@ -224,7 +283,8 @@ async function sharedLogin(id) {
 }
 
 async function loginsForPage(sender) {
-  const host = senderHost(sender);
+  const ctx = formSender(sender);
+  const host = ctx?.host;
   const state = await VaultLock.state();
   if (!host || state === 'setup') return { state, logins: [] };
   if (state === 'unlocked') {
@@ -233,7 +293,7 @@ async function loginsForPage(sender) {
     // is filled, the code then by the OTP auto-fill).
     const logins = [...items, ...(await sharedLogins())]
       .filter(i => i.type === 'login' && (Vault.getValue(i, 'password') || Vault.getValue(i, 'username').trim())
-        && Vault.loginCoversHost(i.urls, host))
+        && coversAll(i.urls, ctx))
       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
       .map(i => ({
         id: i.id, name: i.title || host, username: Vault.getValue(i, 'username'),
@@ -243,7 +303,7 @@ async function loginsForPage(sender) {
     return { state, logins };
   }
   const logins = (await VaultAccounts.readIndex())
-    .filter(e => e.hasPassword && Vault.loginCoversHost(e.urls, host))
+    .filter(e => e.hasPassword && coversAll(e.urls, ctx))
     .map(e => ({ id: e.id, name: e.name || host, autofill: e.autofill !== false, autoLogin: e.autoLogin !== false }));
   return { state, logins };
 }
@@ -253,14 +313,14 @@ async function loginsForPage(sender) {
 // `fields`: the page's empty extra controls (see matchExtras); the reply's
 // `extras` are the values of the login's extra fields that match them.
 async function fillLogin(sender, id, usernameOnly = false, fields = undefined) {
-  const host = senderHost(sender);
-  if (!host || typeof id !== 'string' || (await VaultLock.state()) !== 'unlocked') return { ok: false };
+  const ctx = formSender(sender);
+  if (!ctx || typeof id !== 'string' || (await VaultLock.state()) !== 'unlocked') return { ok: false };
   const item = (await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null))
     || (await sharedLogin(id));
   const password = item && Vault.getValue(item, 'password');
   const username = item && Vault.getValue(item, 'username');
   // A login without a password fills its username alone.
-  if (!item || item.type !== 'login' || !(password || username.trim()) || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
+  if (!item || item.type !== 'login' || !(password || username.trim()) || !coversAll(item.urls, ctx)) return { ok: false };
   await VaultLock.touch();
   const extras = matchExtras(item, fields);
   const withExtras = extras.length ? { extras } : {};
@@ -440,7 +500,8 @@ const LAUNCH_TTL = 2 * 60 * 1000;
 const launchKey = tabId => `launch:${tabId}`;
 
 // Plain http is only for the user's own machine / network.
-const isLocalHost = host => host === 'localhost' || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+// *.localhost resolves to this machine too (dev setups, tests).
+const isLocalHost = host => host === 'localhost' || host.endsWith('.localhost') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
 
 // The URL to open for a saved website pattern ("site.com/login",
 // "*.site.com", "https://…"), or null. A public site is always opened over
@@ -490,7 +551,8 @@ async function launchLogin(sender, id) {
 // only for the username) or 'password' (the sign-in form: username +
 // password, which ends the launch). `probe` just says whether one is on.
 async function launchFill(sender, step, fields = undefined) {
-  const host = senderHost(sender);
+  const ctx = formSender(sender);
+  const host = ctx?.host;
   if (!host) return { ok: false };
   // Never into a plain-http page of a public site (a redirect can land there).
   if (new URL(sender.url).protocol !== 'https:' && !isLocalHost(host)) return { ok: false };
@@ -501,7 +563,7 @@ async function launchFill(sender, step, fields = undefined) {
   if (step === 'probe') return { ok: true };
   if ((await VaultLock.state()) !== 'unlocked') return { ok: false };
   const item = (await VaultStore.get(launch.id, await VaultKeys.getKey()).catch(() => null)) || (await sharedLogin(launch.id));
-  if (!item || item.type !== 'login' || !Vault.loginCoversHost(item.urls, host)) return { ok: false };
+  if (!item || item.type !== 'login' || !coversAll(item.urls, ctx)) return { ok: false };
   const username = Vault.getValue(item, 'username');
   const extras = matchExtras(item, fields);
   const withExtras = extras.length ? { extras } : {};
@@ -562,10 +624,12 @@ function captureLogin(sender, msg) {
 }
 
 async function storeCapture(sender, msg) {
-  const host = senderHost(sender);
+  const ctx = formSender(sender);
+  const host = ctx?.host;
   const password = typeof msg.password === 'string' ? msg.password : '';
   if (!host || !password || password.length > 1024) return;
-  if ((await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE]?.includes(host)) return;
+  const never = (await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE] || [];
+  if (ctx.hosts.some(h => never.includes(h))) return;
   let username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
   // A form with its own username ends any two-step flow in this tab; one
   // without takes the username step's (kept for a retried password).
@@ -575,7 +639,8 @@ async function storeCapture(sender, msg) {
   // A password page that repeats the username step's username (a read-only
   // or hidden copy of it) is still that sign-in: it keeps its start.
   let step = null;
-  let url = signInUrlOf(sender.url);
+  // In a frame, the page the user is on (where "Open & sign in" goes).
+  let url = signInUrlOf(ctx.frame ? sender.tab.url : sender.url);
   // Extra fields (forms.js `extras`): the username step's too, for the same
   // sign-in, the password page's winning field by field.
   let extras = cleanExtras(msg.extras, password);
@@ -593,7 +658,8 @@ async function storeCapture(sender, msg) {
   }
   const id = crypto.randomUUID(); // offers and choices name the capture they're about
   await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: {
-    id, host, username, password, at: Date.now(), ...(url ? { url } : {}), ...(step ? { step } : {}), ...(extras.length ? { extras } : {}),
+    id, host, username, password, at: Date.now(), ...(ctx.frame ? { top: ctx.top } : {}),
+    ...(url ? { url } : {}), ...(step ? { step } : {}), ...(extras.length ? { extras } : {}),
   } });
 }
 
@@ -603,10 +669,11 @@ const PENDING_USERNAME_TTL = 5 * 60 * 1000;
 const pendingUsernameKey = tabId => `pendingUsername:${tabId}`;
 
 async function captureUsername(sender, msg) {
-  const host = senderHost(sender);
+  const ctx = formSender(sender);
+  const host = ctx?.host;
   const username = typeof msg.username === 'string' ? msg.username.trim().slice(0, 512) : '';
   if (!host || !username || sender.tab?.id === undefined) return;
-  const url = signInUrlOf(sender.url);
+  const url = signInUrlOf(ctx.frame ? sender.tab.url : sender.url);
   const extras = cleanExtras(msg.extras, username);
   await chrome.storage.session.set({ [pendingUsernameKey(sender.tab.id)]: {
     id: crypto.randomUUID(), host, username, at: Date.now(), ...(url ? { url } : {}), ...(extras.length ? { extras } : {}),
@@ -640,14 +707,15 @@ async function dropPendingLogin(key, id) {
 }
 
 async function readPendingLogin(sender) {
-  const host = senderHost(sender);
+  const host = formSender(sender)?.host;
   if (!host) return null;
   await _capturesInFlight.get(sender.tab.id);
   const key = pendingLoginKey(sender.tab.id);
   const pending = (await chrome.storage.session.get(key))[key];
   if (!pending) return null;
   if (Date.now() - pending.at > PENDING_LOGIN_TTL) { await dropPendingLogin(key, pending.id); return null; }
-  return relatedHost(pending.host, host) ? { key, pending } : null;
+  // A sign-in typed in a same-site frame is offered on its page too.
+  return relatedHost(pending.host, host) || (pending.top && relatedHost(pending.top, host)) ? { key, pending } : null;
 }
 
 // What saving the pending sign-in would do:
@@ -662,10 +730,16 @@ async function readPendingLogin(sender) {
 // `extras` (extra fields captured): a saved login with the same password
 // whose fields differ is an update too, `extrasOnly` (without a username,
 // only the logins holding that password are its candidates).
-async function planPendingLogin({ host, username, password, extras = [] }) {
+// A sign-in typed in a same-site frame (`top`: its page's host) plans over
+// the logins of either host, and saving one makes it cover both (`addHosts`
+// on an update; `addsSite` when that's all it changes).
+async function planPendingLogin({ host, top, username, password, extras = [] }) {
   const key = await VaultKeys.getKey();
   const { items } = await VaultStore.readAll(key);
-  const covering = items.filter(i => i.type === 'login' && Vault.loginCoversHost(i.urls, host));
+  const hosts = top ? [host, top] : [host];
+  const covering = items.filter(i => i.type === 'login' && hosts.some(h => Vault.loginCoversHost(i.urls, h)));
+  const missing = i => hosts.filter(h => !Vault.loginCoversHost(i.urls, h));
+  const addsSite = list => ({ kind: 'update', addsSite: true, item: list[0], candidates: list.map(item => ({ item })) });
   const userOf = i => Vault.getValue(i, 'username').trim();
   const newest = (x, y) => (y.updatedAt || '').localeCompare(x.updatedAt || '');
 
@@ -677,7 +751,10 @@ async function planPendingLogin({ host, username, password, extras = [] }) {
   const match = username ? (covering.find(i => userOf(i) === username) || (loose.length === 1 ? loose[0] : null)) : null;
   const extrasChanged = item => applyExtras(item, extras).changed.length > 0;
   const extrasOnly = list => ({ kind: 'update', extrasOnly: true, item: list[0], candidates: list.map(item => ({ item })) });
-  if (match && Vault.getValue(match, 'password') === password) return extrasChanged(match) ? extrasOnly([match]) : { kind: 'none' };
+  if (match && Vault.getValue(match, 'password') === password) {
+    if (extrasChanged(match)) return extrasOnly([match]);
+    return missing(match).length ? addsSite([match]) : { kind: 'none' };
+  }
   // No username captured: a saved login holding this password is the one
   // signed in with. Only it (or they) may get an extras-only update; never
   // offer to change another login's password to it.
@@ -685,7 +762,9 @@ async function planPendingLogin({ host, username, password, extras = [] }) {
     const same = covering.filter(i => Vault.getValue(i, 'password') === password);
     if (same.length) {
       const changed = same.filter(extrasChanged).sort(newest);
-      return changed.length ? extrasOnly(changed) : { kind: 'none' };
+      if (changed.length) return extrasOnly(changed);
+      const elsewhere = same.filter(i => missing(i).length).sort(newest);
+      return elsewhere.length ? addsSite(elsewhere) : { kind: 'none' };
     }
   }
 
@@ -695,7 +774,7 @@ async function planPendingLogin({ host, username, password, extras = [] }) {
   // Compared by username only when one was captured: without one, the
   // personal logins below are still offered.
   const sharedAll = match ? [] : await sharedLogins();
-  const shared = sharedAll.filter(i => Vault.loginCoversHost(i.urls, host));
+  const shared = sharedAll.filter(i => hosts.some(h => Vault.loginCoversHost(i.urls, h)));
   // Signing in with a shared login's exact username and password: it's that
   // login, even when its copy has no website for this page.
   // (A username is needed: a password alone may be a personal login's new one.)
@@ -722,7 +801,8 @@ async function pendingLoginOffer(sender) {
   const found = await readPendingLogin(sender);
   if (!found) return null;
   const { key, pending } = found;
-  const offer = { id: pending.id, host: pending.host, username: pending.username };
+  // A frame's sign-in is named by its page (App Store Connect, not Apple's widget).
+  const offer = { id: pending.id, host: pending.top || pending.host, username: pending.username };
   const state = await VaultLock.state();
   if (state === 'setup') { await dropPendingLogin(key, pending.id); return null; }
   if (state === 'locked') return { ...offer, kind: 'locked' };
@@ -740,6 +820,8 @@ async function pendingLoginOffer(sender) {
   return {
     ...offer, kind: plan.kind, name: plan.item?.title || '',
     extras, ...(plan.extrasOnly ? { extrasOnly: true } : {}),
+    // Only adds the page's site to the login (a same-site frame's sign-in).
+    ...(plan.addsSite ? { addsSite: true } : {}),
     // What an update could apply to (names and usernames only), so the page
     // can let the user pick, or save a new login instead.
     candidates: (plan.candidates || []).map(c => ({
@@ -764,7 +846,7 @@ async function resolvePendingLogin(sender, id, choice, target) {
   await endUsernameStep(sender.tab.id, pending);
   if (choice === 'never') {
     const never = (await chrome.storage.local.get(NEVER_SAVE))[NEVER_SAVE] || [];
-    await chrome.storage.local.set({ [NEVER_SAVE]: [...new Set([...never, pending.host])] });
+    await chrome.storage.local.set({ [NEVER_SAVE]: [...new Set([...never, pending.top || pending.host])] });
   }
   if (choice !== 'save' && choice !== 'new') { await dropPendingLogin(key, id); return { ok: true }; }
 
@@ -778,10 +860,12 @@ async function resolvePendingLogin(sender, id, choice, target) {
       // The sign-in's start, plus the password page's host when the start
       // doesn't cover it (login.site.com, then site.com): the login must
       // still be offered where its password is typed.
+      // In a same-site frame: the page's, and the frame's host where the
+      // password went (both must be covered to fill there).
       const urls = [pending.url || pending.host];
-      if (!Vault.loginCoversHost(urls, pending.host)) urls.push(pending.host);
+      for (const h of [pending.top, pending.host]) if (h && !Vault.loginCoversHost(urls, h)) urls.push(h);
       await VaultAccounts.add({
-        name: pending.host.replace(/^www\./, ''), email: pending.username, secret: '',
+        name: (pending.top || pending.host).replace(/^www\./, ''), email: pending.username, secret: '',
         urls: urls.join('\n'), password: pending.password,
         ...(changedExtras(pending.extras || []).length
           ? { customFields: changedExtras(pending.extras).map(({ label, value, kind, fill }) => ({ label, value, kind, fill })) } : {}),
@@ -794,6 +878,9 @@ async function resolvePendingLogin(sender, id, choice, target) {
       const current = VaultAccounts.toAccount(chosen.item);
       // A login saved without a username gets the one signed in with.
       const patch = { password: pending.password, ...(!current.email && pending.username ? { email: pending.username } : {}) };
+      // Signed in through a same-site frame: the login covers both hosts from now on.
+      const addHosts = [pending.host, pending.top].filter(h => h && !Vault.loginCoversHost(chosen.item.urls, h));
+      if (addHosts.length) patch.urls = [...(chosen.item.urls || []), ...addHosts].join('\n');
       // Its extra fields: matching ones take the new value, new ones are
       // added, the others stay. (No history for them.) Applied to the item
       // as stored when it's written, under the vault lock: a field a sync
@@ -1291,9 +1378,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   // Sign-in forms (forms.js). The page's host comes from the sender (the
-  // browser), never from the message, and only the top frame is served. The
+  // browser), never from the message: the top frame, or a same-site frame
+  // of it (formSender), never another site's frame. The
   // list carries no passwords; one is released only for a login the user
   // picked whose saved URLs cover that host.
+  // A same-site sub-frame showing a sign-in form (frameForms.js) gets forms.js.
+  if (msg.action === 'vaultFrameForms') {
+    injectFrameForms(_sender, msg.ancestors).then(ok => sendResponse({ ok }), () => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // A sign-in typed in a same-site frame is over (its form gone): the offer
+  // to save it shows on its page, the top frame.
+  if (msg.action === 'vaultOfferInTop') {
+    offerInTop(_sender).finally(() => sendResponse({}));
+    return true;
+  }
+
   if (msg.action === 'vaultLoginsForPage') {
     loginsForPage(_sender).then(sendResponse).catch(() => sendResponse({ state: 'locked', logins: [] }));
     return true;

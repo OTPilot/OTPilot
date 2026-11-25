@@ -3,6 +3,10 @@
 
 ## Unreleased
 
+### Extension
+
+- **Sign-in forms inside a frame of the same site** are filled and saved: App Store Connect's Apple ID sign-in (Apple's widget, `idmsa.apple.com`, in a frame of `appstoreconnect.apple.com`) gets the OTPilot badge and the login offer, and a sign-in typed there is offered on the page. A login fills there only when it covers both the page and the frame (one saved there does; signing in with one saved for the page offers to add the frame's site). Another site's frame never gets anything.
+
 
 ## v2.1.12
 

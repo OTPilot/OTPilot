@@ -1,5 +1,10 @@
 // Runs on every page; bails out immediately unless an account URL matches.
 
+// Loaded into a same-site sign-in frame too (frameForms.js → background
+// injectFrameForms), only as forms.js's helpers: the 2FA detection, the
+// code auto-fill and the popup's messages stay in the top frame.
+const OTPILOT_SUBFRAME = window.top !== window;
+
 // The unlocked vault key lives in chrome.storage.session, which content
 // scripts can't read, so the background worker answers: 'setup' (no master
 // password yet) | 'locked' | 'unlocked'. Anything unexpected reads as locked.
@@ -600,6 +605,7 @@ async function fillAndSubmitWithAccount(acc) {
 
 // Message from popup "Fill Page" button
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (OTPILOT_SUBFRAME) return;
   // From the popup, a login shared with the user (not in the page's own
   // account list): its code, filled like an own account's.
   if (msg.action === 'fillWith') {
@@ -1318,6 +1324,7 @@ async function runDetection() {
 }
 
 (async function startDetection() {
+  if (OTPILOT_SUBFRAME) return;
   let observer;
   let idleTimer;
 
@@ -1373,6 +1380,7 @@ async function runDetection() {
 // Accounts are read from storage on every check so that accounts added after
 // page load (e.g. via the suggestion overlay) are picked up immediately.
 (async () => {
+  if (OTPILOT_SUBFRAME) return;
   let _fillDebounce        = null;
   let _lastFilledInput     = null;
   let _pickerDismissed     = false;

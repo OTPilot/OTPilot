@@ -28,6 +28,12 @@
       "matches": ["*://*/*"],
       "js": ["jsqr.js", "totp.js", "emailCodes.js", "email-reader.js", "content.js", "generator.js", "forms.js", "bip39.js", "seedGuard.js", "apiKeys.js", "apiKeyOffer.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*/*"],
+      "js": ["frameForms.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
     }
   ],
   "externally_connectable": {

@@ -1,0 +1,137 @@
+import { test, expect, seedUnlocked, waitForVault, writeAccounts } from './fixtures.js';
+
+// A sign-in form inside a same-site iframe (App Store Connect frames Apple's
+// idmsa.apple.com): frameForms.js asks the background, which loads forms.js
+// there only when the frame and its page are the same site; a login fills
+// there only when it covers both hosts; a sign-in typed there is offered on
+// the page. *.localhost resolves to this machine: app.otp.localhost (the
+// page) and id.otp.localhost (the frame) are one site (otp.localhost).
+
+const PORT = 8765;
+const page = (host, frameHost) =>
+  `http://${host}:${PORT}/test/frame-top.html?frame=${encodeURIComponent(`http://${frameHost}:${PORT}/test/frame-login.html`)}`;
+const APP = 'app.otp.localhost';
+const ID = 'id.otp.localhost';
+
+async function vaultWith(context, extensionId, accounts) {
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await popup.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  await seedUnlocked(popup, { accounts: [] });
+  await popup.reload();
+  await waitForVault(popup);
+  if (accounts.length) await writeAccounts(popup, accounts);
+  return popup;
+}
+
+const logins = popup => popup.evaluate(async () =>
+  (await VaultStore.readAll(await VaultKeys.getKey())).items
+    .filter(i => i.type === 'login')
+    .map(i => ({ title: i.title, urls: i.urls, username: Vault.getValue(i, 'username'), password: Vault.getValue(i, 'password') })));
+
+const apple = { name: 'Apple ID', email: 'me@apple.test', secret: '', password: 'fr4me-pass!' };
+
+test('a login covering the page and its same-site frame is offered and filled inside the frame', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ ...apple, urls: 'otp.localhost' }]);
+  const site = await context.newPage();
+  await site.goto(page(APP, ID));
+  const frame = site.frameLocator('#signin');
+  const overlay = frame.locator('#otpilot-login-fill');
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toContainText('Apple ID');
+  await expect(frame.locator('input[name="password"]')).toHaveValue('');
+  await overlay.locator('.otpilot-login-choice').click();
+  await expect(frame.locator('input[name="email"]')).toHaveValue('me@apple.test');
+  await expect(frame.locator('input[name="password"]')).toHaveValue('fr4me-pass!');
+});
+
+test('a login covering only one of the two hosts is not offered in the frame', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ ...apple, urls: ID }]);
+  const site = await context.newPage();
+  await site.goto(page(APP, ID));
+  const frame = site.frameLocator('#signin');
+  // forms.js runs there (its badge shows), but nothing is offered.
+  await expect(frame.locator('.otpilot-field-badge').first()).toBeVisible();
+  await site.waitForTimeout(800);
+  await expect(frame.locator('#otpilot-login-fill')).toHaveCount(0);
+});
+
+test("another site's sign-in frame gets nothing", async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{ ...apple, urls: 'otp.localhost\nother.localhost' }]);
+  const site = await context.newPage();
+  await site.goto(page('app.other.localhost', ID));
+  const frame = site.frameLocator('#signin');
+  await expect(frame.locator('input[name="password"]')).toBeVisible();
+  await site.waitForTimeout(1500);
+  await expect(frame.locator('.otpilot-field-badge')).toHaveCount(0);
+  await expect(frame.locator('#otpilot-login-fill')).toHaveCount(0);
+});
+
+test('a sign-in typed in the frame is offered on the page and saved for both hosts', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, []);
+  const site = await context.newPage();
+  await site.goto(page(APP, ID));
+  const frame = site.frameLocator('#signin');
+  await expect(frame.locator('.otpilot-field-badge').first()).toBeVisible();
+  await frame.locator('input[name="email"]').fill('new@apple.test');
+  await frame.locator('input[name="password"]').fill('n3w-fr4me!');
+  await frame.getByRole('button', { name: 'Sign in' }).click();
+  await expect(frame.locator('body')).toContainText('Signed in');
+
+  const offer = site.locator('#otpilot-login-save'); // on the page, not in the frame
+  await expect(offer).toBeVisible();
+  await expect(offer).toContainText(`Save this login for ${APP}?`);
+  expect(await site.locator('body').innerHTML()).not.toContain('n3w-fr4me!');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(() => logins(popup)).toEqual([
+    { title: APP, urls: [`${APP}:${PORT}`, ID], username: 'new@apple.test', password: 'n3w-fr4me!' },
+  ]);
+
+  // Saved that way, it's offered in the frame next time.
+  await site.goto(page(APP, ID));
+  await expect(site.frameLocator('#signin').locator('#otpilot-login-fill')).toContainText('new@apple.test');
+});
+
+test("signing in through the frame with a login saved for the page adds the frame's host to it", async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId, [{ ...apple, urls: APP }]);
+  const site = await context.newPage();
+  await site.goto(page(APP, ID));
+  const frame = site.frameLocator('#signin');
+  await expect(frame.locator('.otpilot-field-badge').first()).toBeVisible();
+  await frame.locator('input[name="email"]').fill('me@apple.test');
+  await frame.locator('input[name="password"]').fill('fr4me-pass!');
+  await frame.getByRole('button', { name: 'Sign in' }).click();
+
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer).toContainText('Use Apple ID to sign in here too?');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(() => logins(popup)).toEqual([
+    { title: 'Apple ID', urls: [APP, ID], username: 'me@apple.test', password: 'fr4me-pass!' },
+  ]);
+});
+
+test('the background serves a frame only on the same site as its page, over https (or this machine)', async ({ context }) => {
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker');
+  const r = await worker.evaluate(() => {
+    const s = (url, top, frameId = 3) => formSender({ tab: { id: 1, url: top }, frameId, url });
+    return {
+      sameSite: s('https://idmsa.apple.com/auth', 'https://appstoreconnect.apple.com/login'),
+      otherSite: s('https://idmsa.apple.com/auth', 'https://evil.example/'),
+      plainHttp: s('http://idmsa.apple.com/auth', 'https://appstoreconnect.apple.com/'),
+      sharedHosting: s('https://a.github.io/', 'https://b.github.io/'),
+      top: s('https://appstoreconnect.apple.com/login', 'https://appstoreconnect.apple.com/login', 0),
+      covers: coversAll(['appstoreconnect.apple.com', 'idmsa.apple.com'], s('https://idmsa.apple.com/auth', 'https://appstoreconnect.apple.com/login')),
+      coversOne: coversAll(['appstoreconnect.apple.com'], s('https://idmsa.apple.com/auth', 'https://appstoreconnect.apple.com/login')),
+    };
+  });
+  expect(r.sameSite).toEqual({ host: 'idmsa.apple.com', top: 'appstoreconnect.apple.com', hosts: ['idmsa.apple.com', 'appstoreconnect.apple.com'], frame: true });
+  expect([r.otherSite, r.plainHttp, r.sharedHosting]).toEqual([null, null, null]);
+  expect(r.top).toEqual({ host: 'appstoreconnect.apple.com', hosts: ['appstoreconnect.apple.com'] });
+  expect([r.covers, r.coversOne]).toEqual([true, false]);
+  // An ancestor of another site (a frame of the site inside someone else's frame): nothing is loaded.
+  const injected = await worker.evaluate(() => injectFrameForms(
+    { tab: { id: 1, url: 'https://appstoreconnect.apple.com/' }, frameId: 3, url: 'https://idmsa.apple.com/auth' },
+    ['https://evil.example', 'https://appstoreconnect.apple.com']));
+  expect(injected).toBe(false);
+});
