@@ -1,5 +1,5 @@
-// Writes publicSuffixList.js from the Public Suffix List
-// (https://publicsuffix.org/list/public_suffix_list.dat): every rule, ICANN
+// Writes publicSuffixList.js from the Public Suffix List (its repository,
+// github.com/publicsuffix/list): every rule, ICANN
 // and private sections (github.io, uk.com, trycloudflare.com…), Unicode
 // rules converted to punycode (hosts in URLs are ASCII). Run with `make psl`
 // every few months (CLAUDE.md, "Periodic maintenance").
@@ -11,7 +11,10 @@ import { domainToASCII } from 'node:url';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SOURCE = 'https://publicsuffix.org/list/public_suffix_list.dat';
+// The list's own repository: publicsuffix.org's copy sits behind a CDN that
+// caches it for a day (max-age 86400), so two runs could see two versions
+// and the monthly check would cry wolf.
+const SOURCE = 'https://raw.githubusercontent.com/publicsuffix/list/main/public_suffix_list.dat';
 const out = join(dirname(fileURLToPath(import.meta.url)), '..', 'publicSuffixList.js');
 
 const res = await fetch(SOURCE);
