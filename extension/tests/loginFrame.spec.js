@@ -229,9 +229,13 @@ test('same site is decided by the Public Suffix List: each tenant of a shared or
     bank: sameSite('online.bbva.com.ar', 'www.bbva.com.ar'),
     coUk: sameSite('www.google.co.uk', 'accounts.google.co.uk'),
     ipOctets: sameSite('192.168.1.5', '203.0.1.5'),
+    // Shared hosts the PSL lacks stay split by our own list (a floor on it).
+    wordpress: sameSite('evil.wordpress.com', 'login.wordpress.com'),
+    squarespace: sameSite('a.squarespace.com', 'b.squarespace.com'),
+    wpCode: EmailCodes.fromSite({ authorEmail: 'login@wordpress.com' }, 'evil.wordpress.com'),
     // The Gmail code check (EmailCodes.fromSite) uses the list too, in the background.
     email: EmailCodes.registrableDomain('mail.a.uk.com'),
     updated: /^\d{4}-\d{2}-\d{2}$/.test(PublicSuffix.updated),
   }));
-  expect(r).toEqual({ apple: true, ukCom: false, tunnel: false, pages: false, bank: true, coUk: true, ipOctets: false, email: 'a.uk.com', updated: true });
+  expect(r).toEqual({ apple: true, ukCom: false, tunnel: false, pages: false, bank: true, coUk: true, ipOctets: false, wordpress: false, squarespace: false, wpCode: false, email: 'a.uk.com', updated: true });
 });
