@@ -313,7 +313,7 @@ Deleted accounts are tracked client-side as tombstones `{ [accountName]: ISO }` 
 
 Agents working in this repo: check these when you start a task, and tell the user when one is due (offer to do it in its own PR).
 
-- **Public Suffix List** (`extension/publicSuffixList.js`): refresh every **3 months**. `cd extension && make psl_age` prints its date (`PUBLIC_SUFFIX_UPDATED`); `make psl` downloads the list and regenerates the file (then run `tests/loginFrame.spec.js` and add a CHANGELOG line). Same-site sign-in frames and the Gmail code check rely on it: a new shared-hosting suffix missing from an old list makes two of its tenants one site.
+- **Public Suffix List** (`extension/publicSuffixList.js`): refresh every **3 months**, or when the monthly `.github/workflows/psl.yml` opens its issue ("Refresh the Public Suffix List"). `cd extension && make psl_age` prints its date (`PUBLIC_SUFFIX_UPDATED`), `make psl_check` says whether it's behind the current list, `make psl` downloads it and regenerates the file (then run `tests/loginFrame.spec.js` and add a CHANGELOG line). Same-site sign-in frames and the Gmail code check rely on it: a new shared-hosting suffix missing from an old list makes two of its tenants one site.
 
 ## Extension invariants
 

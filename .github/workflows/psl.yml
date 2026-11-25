@@ -1,0 +1,53 @@
+name: Public Suffix List
+
+# Once a month: is extension/publicSuffixList.js behind the current Public
+# Suffix List? If so, opens an issue (one at a time) asking to run `make psl`
+# (same-site sign-in frames and the Gmail code check rely on it).
+# Actions can't open pull requests in this repository, so it's an issue.
+on:
+  schedule:
+    - cron: '0 9 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Compare with the current list
+        id: psl
+        working-directory: extension
+        run: |
+          set +e
+          node scripts/updatePsl.mjs --check > psl-check.txt
+          echo "behind=$?" >> "$GITHUB_OUTPUT"
+          cat psl-check.txt
+
+      - name: Open an issue
+        if: steps.psl.outputs.behind == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Refresh the Public Suffix List (make psl)"
+          if gh issue list --state open --search "\"$title\" in:title" --json number --jq 'length' | grep -qv '^0$'; then
+            echo "An issue is already open."; exit 0
+          fi
+          {
+            echo "The extension's bundled Public Suffix List is behind the current one:"
+            echo
+            echo '```'
+            cat extension/psl-check.txt
+            echo '```'
+            echo
+            echo 'Run `cd extension && make psl`, then `npx playwright test tests/loginFrame.spec.js`, add a CHANGELOG line and open a PR (CLAUDE.md, "Periodic maintenance").'
+          } > body.md
+          gh issue create --title "$title" --body-file body.md
