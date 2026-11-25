@@ -81,7 +81,10 @@ test('a sign-in typed in the frame is offered on the page and saved for both hos
   const offer = site.locator('#otpilot-login-save'); // on the page, not in the frame
   await expect(offer).toBeVisible();
   await expect(offer).toContainText(`Save this login for ${APP}?`);
-  expect(await site.locator('body').innerHTML()).not.toContain('n3w-fr4me!');
+  // The page's DOM gets neither the password nor the username typed in the frame.
+  const html = await site.locator('body').innerHTML();
+  expect(html).not.toContain('n3w-fr4me!');
+  expect(html).not.toContain('new@apple.test');
   await offer.locator('.otpilot-save-confirm').click();
   await expect.poll(() => logins(popup)).toEqual([
     { title: APP, urls: [`${APP}:${PORT}`, ID], username: 'new@apple.test', password: 'n3w-fr4me!' },
@@ -148,7 +151,7 @@ test('an app that removes its sign-in frame once signed in still gets the offer'
   await frame.locator('input[name="password"]').fill('spa-fr4me!');
   await frame.getByRole('button', { name: 'Sign in' }).click();
   await expect(site.locator('#signin')).toHaveCount(0);
-  await expect(site.locator('#otpilot-login-save')).toContainText('spa@apple.test');
+  await expect(site.locator('#otpilot-login-save')).toContainText(`Save this login for ${APP}?`);
 });
 
 test('a rejected password in the frame is never offered, even when another frame of the site loads', async ({ context, extensionId }) => {

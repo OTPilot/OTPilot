@@ -841,8 +841,10 @@ async function pendingLoginOffer(sender) {
   // Typed in a frame: offered once that frame no longer asks for a password
   // (signed in, moved on, or removed); until then the page keeps waiting.
   if (pending.frameId != null && sender.frameId !== pending.frameId && await frameStillAsking(sender.tab.id, pending.frameId)) return { waiting: true };
-  // A frame's sign-in is named by its page (App Store Connect, not Apple's widget).
-  const offer = { id: pending.id, host: pending.top || pending.host, username: pending.username };
+  // A frame's sign-in is named by its page (App Store Connect, not Apple's
+  // widget), without its username: the offer is in the page's DOM, and the
+  // page can't read what was typed in the frame.
+  const offer = { id: pending.id, host: pending.top || pending.host, username: pending.frameId != null ? '' : pending.username };
   const state = await VaultLock.state();
   if (state === 'setup') { await dropPendingLogin(key, pending.id); return null; }
   if (state === 'locked') return { ...offer, kind: 'locked' };
