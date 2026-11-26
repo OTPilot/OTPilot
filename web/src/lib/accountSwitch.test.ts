@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { QueryClient, QueryObserver } from '@tanstack/react-query'
-import { accountSwitchGuard } from './accountSwitch'
+import { noteAccount } from './accountSwitch'
 
 function deferred<T>() {
   let resolve!: (v: T) => void
@@ -18,10 +18,10 @@ function observe(client: QueryClient, key: string, answer: Promise<unknown>) {
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
-describe('accountSwitchGuard', () => {
+describe('noteAccount', () => {
   it('the first account to arrive keeps the queries in flight (Billing from the offer email)', async () => {
     const client = new QueryClient()
-    const onAccount = accountSwitchGuard(client)
+    const onAccount = (id: string | null | undefined) => noteAccount(client, id)
     const answer = deferred<{ plan: string }>()
     const page = observe(client, 'user-plan', answer.promise)
 
@@ -51,7 +51,7 @@ describe('accountSwitchGuard', () => {
 
   it('the same account again (token refresh, signed-out blip) keeps the cache', () => {
     const client = new QueryClient()
-    const onAccount = accountSwitchGuard(client)
+    const onAccount = (id: string | null | undefined) => noteAccount(client, id)
     onAccount('user-a')
     client.setQueryData(['user-plan'], { plan: 'personal' })
 
@@ -65,7 +65,7 @@ describe('accountSwitchGuard', () => {
 
   it('another account drops the previous one\'s data', () => {
     const client = new QueryClient()
-    const onAccount = accountSwitchGuard(client)
+    const onAccount = (id: string | null | undefined) => noteAccount(client, id)
     onAccount('user-a')
     client.setQueryData(['user-plan'], { plan: 'team_lite' })
     client.setQueryData(['team'], { owner_id: 'user-a' })
@@ -78,7 +78,7 @@ describe('accountSwitchGuard', () => {
 
   it('another account after a sign-out in between still drops it', () => {
     const client = new QueryClient()
-    const onAccount = accountSwitchGuard(client)
+    const onAccount = (id: string | null | undefined) => noteAccount(client, id)
     onAccount('user-a')
     client.setQueryData(['user-plan'], { plan: 'team_lite' })
 
@@ -86,5 +86,31 @@ describe('accountSwitchGuard', () => {
     onAccount('user-b')
 
     expect(client.getQueryData(['user-plan'])).toBeUndefined()
+  })
+
+  it('remembers the account with the client, across the layout unmounting (Back after a sign-out elsewhere)', () => {
+    const client = new QueryClient()
+    // Account A's dashboard: the layout reports A, pages cache A's data.
+    noteAccount(client, 'user-a')
+    client.setQueryData(['devices'], [{ name: "A's laptop" }])
+
+    // Signed out in another tab: the layout unmounts (login redirect) and is
+    // mounted again later, B signed in. Nothing of the first mount is left
+    // but the client.
+    noteAccount(client, null)
+    noteAccount(client, 'user-b')
+
+    expect(client.getQueryData(['devices'])).toBeUndefined()
+  })
+
+  it('each client has its own account', () => {
+    const one = new QueryClient()
+    const two = new QueryClient()
+    noteAccount(one, 'user-a')
+    two.setQueryData(['user-plan'], { plan: 'free' })
+
+    noteAccount(two, 'user-b')
+
+    expect(two.getQueryData(['user-plan'])).toEqual({ plan: 'free' })
   })
 })
