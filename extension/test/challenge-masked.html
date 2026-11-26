@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Verify it's you</title></head>
+<body>
+  <!-- Review of #209: two masked answers (password inputs named answer1 /
+       answer2: never a new password and its confirmation), an answer field
+       without a type attribute, and a sign-in whose question's answer field
+       ("response") sits between the username and the password. -->
+  <form id="verify" action="welcome.html" method="get">
+    <label for="m1">What was the name of your first pet?</label> <input id="m1" type="password" name="answer1"><br>
+    <label for="m2">City of birth</label> <input id="m2" type="password" name="answer2"><br>
+    <label for="t">Mother's maiden name</label> <input id="t" name="securityAnswer"><br>
+    <button>Continue</button>
+  </form>
+  <form id="login" action="welcome.html" method="get" style="margin-top:30px">
+    <input type="text" name="user" aria-label="User">
+    <select name="securityQuestion" aria-label="Security question">
+      <option value="">Select a question</option>
+      <option value="1" selected>City of birth</option>
+    </select>
+    <input type="text" name="response" aria-label="Your response">
+    <input type="password" name="password" autocomplete="current-password">
+    <button>Sign in</button>
+  </form>
+</body></html>

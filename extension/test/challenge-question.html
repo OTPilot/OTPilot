@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Verify it's you</title></head>
+<body>
+  <!-- A site asking one of the saved security questions.
+       ?q=<question> — the answer field's label (default below).
+       ?mode=text — the question as a paragraph before the field, no label.
+       ?mode=two — two questions, each labelling its own answer field. -->
+  <h1>Verify it's you</h1>
+  <form id="f" action="welcome.html" method="get"></form>
+  <script>
+    const p = new URLSearchParams(location.search);
+    const q = p.get('q') || "What is your mother's maiden name?";
+    const f = document.getElementById('f');
+    if (p.get('mode') === 'text') {
+      f.innerHTML = `<p id="question"></p><div><input type="text" name="securityAnswer"></div>`;
+      document.getElementById('question').textContent = q;
+    } else if (p.get('mode') === 'two') {
+      f.innerHTML = `<label for="a1">In what city were you born?</label> <input id="a1" type="text" name="answer1"><br>
+        <label for="a2">What was the name of your first pet?</label> <input id="a2" type="password" name="answer2">`;
+    } else {
+      f.innerHTML = `<label for="a"></label> <input id="a" type="text" name="answer">`;
+      f.querySelector('label').textContent = q;
+    }
+    f.insertAdjacentHTML('beforeend', '<button>Continue</button>');
+  </script>
+</body></html>

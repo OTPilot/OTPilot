@@ -538,6 +538,77 @@ function applyQuestions(fields, questions = []) {
   return { customFields: out, changed };
 }
 
+// ── Answering a saved question on a page ──
+// The page sends what it says the question is (forms.js challengeTexts,
+// closest first) — never asks for a question by name. A saved question
+// matches a text when they read the same (normQuestion), or one holds the
+// other word for word with at least 3 words ("Mother's maiden name" in
+// "What is your mother's maiden name?"); the longest wins. The first text
+// that matches decides; two saved questions matching it as well with
+// different answers is no match (never a guess: a wrong answer can lock the
+// account).
+const QUESTION_TEXTS_MAX = 6;
+const qWords = s => normQuestion(s).split(' ').filter(Boolean);
+function questionScore(saved, text) {
+  const a = qWords(saved), b = qWords(text);
+  if (!a.length || !b.length) return 0;
+  if (a.join(' ') === b.join(' ')) return 1000;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.length < 3) return 0;
+  for (let i = 0; i + short.length <= long.length; i++) {
+    if (short.every((w, j) => long[i + j] === w)) return short.length;
+  }
+  return 0;
+}
+const cleanTexts = list => (Array.isArray(list) ? list : []).slice(0, QUESTION_TEXTS_MAX)
+  .filter(t => typeof t === 'string' && t.trim() && t.length <= 200);
+function answerFor(item, texts) {
+  const saved = (item.fields || []).filter(f => Vault.isSecurityQuestion(f) && String(f.value ?? '') !== '');
+  for (const text of texts) {
+    let best = null, score = 0, tie = false;
+    for (const f of saved) {
+      const s = questionScore(f.label, text);
+      if (s > score) { best = f; score = s; tie = false; } else if (s && s === score && best.value !== f.value) tie = true;
+    }
+    if (score) return tie ? null : best;
+  }
+  return null;
+}
+
+// The logins of the page's site holding an answer to its question (names
+// and usernames only); locked: the site's logins from the index (it can't
+// tell which hold one).
+async function questionLogins(sender, rawTexts) {
+  const ctx = formSender(sender);
+  const state = await VaultLock.state();
+  if (!ctx || state === 'setup') return { state, logins: [] };
+  const texts = cleanTexts(rawTexts);
+  if (state === 'unlocked') {
+    const { items } = await VaultStore.readAll(await VaultKeys.getKey());
+    const logins = [...items, ...(await sharedLogins())]
+      .filter(i => i.type === 'login' && coversAll(i.urls, ctx) && answerFor(i, texts))
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+      .map(i => ({ id: i.id, name: i.title || ctx.host, username: Vault.getValue(i, 'username') }));
+    return { state, logins };
+  }
+  const logins = (await VaultAccounts.readIndex()).filter(e => coversAll(e.urls, ctx))
+    .map(e => ({ id: e.id, name: e.name || ctx.host }));
+  return { state, logins };
+}
+
+// One answer, for the login the user clicked: re-checked here (unlocked,
+// the login covers the page as for its password, its question matches).
+async function fillAnswer(sender, id, rawTexts) {
+  const ctx = formSender(sender);
+  if (!ctx || typeof id !== 'string' || (await VaultLock.state()) !== 'unlocked') return { ok: false };
+  const item = (await VaultStore.get(id, await VaultKeys.getKey()).catch(() => null)) || (await sharedLogin(id));
+  if (!item || item.type !== 'login' || !coversAll(item.urls, ctx)) return { ok: false };
+  const field = answerFor(item, cleanTexts(rawTexts));
+  if (!field) return { ok: false };
+  await VaultLock.touch();
+  return { ok: true, value: String(field.value) };
+}
+
 // A pending sign-in's extras and questions over `item`'s custom fields.
 function applyCaptured(item, { extras = [], questions = [] } = {}) {
   const x = applyExtras(item, extras);
@@ -1516,6 +1587,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.action === 'vaultLoginsForPage') {
     loginsForPage(_sender).then(sendResponse).catch(() => sendResponse({ state: 'locked', logins: [] }));
+    return true;
+  }
+
+  // A security question's answer (forms.js): host from the sender only.
+  if (msg.action === 'vaultQuestionLogins') {
+    questionLogins(_sender, msg.texts).then(sendResponse).catch(() => sendResponse({ state: 'locked', logins: [] }));
+    return true;
+  }
+
+  if (msg.action === 'vaultFillAnswer') {
+    fillAnswer(_sender, msg.id, msg.texts).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
 
