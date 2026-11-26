@@ -155,9 +155,11 @@ const Agents = (() => {
   }
 
   // The parts an agent can be given: never a crypto wallet's recovery phrase,
-  // passphrase or private keys (Vault.isWalletSecret) — they move funds.
+  // passphrase or private keys (Vault.isWalletSecret) — they move funds —,
+  // nor the answer to a security question (it recovers the account).
+  const withheld = p => p.walletSecret || p.securityQuestion;
   function partsFor(item) {
-    return VaultShares.parts(item).filter(p => !p.walletSecret);
+    return VaultShares.parts(item).filter(p => !withheld(p));
   }
 
   // The scope that suits an item by default: a login's whole sign-in
@@ -183,15 +185,15 @@ const Agents = (() => {
     if (scope.kind !== 'fields') return SCOPE_LABELS[scope.kind];
     const all = VaultShares.parts(item);
     const labels = new Map(all.map(p => [p.key, p.label]));
-    const withheld = new Set(all.filter(p => p.walletSecret).map(p => p.key));
-    return (scope.parts || []).filter(k => !withheld.has(k)).map(k => labels.get(k) || k).join(' · ') || 'Nothing';
+    const kept = new Set(all.filter(withheld).map(p => p.key));
+    return (scope.parts || []).filter(k => !kept.has(k)).map(k => labels.get(k) || k).join(' · ') || 'Nothing';
   }
 
-  // Wallet secrets are dropped here too, whatever the scope says (one approved
-  // before this rule, or a field that became one).
+  // Wallet secrets and security answers are dropped here too, whatever the
+  // scope says (one approved before this rule, or a field that became one).
   function copyOf(item, scope) {
     const copy = VaultShares.project(item, { id: item.id, whole: false, parts: partsOf(scope) });
-    copy.fields = copy.fields.filter(f => !Vault.isWalletSecret(item, f));
+    copy.fields = copy.fields.filter(f => !Vault.withheldFromAgents(item, f));
     return copy;
   }
 

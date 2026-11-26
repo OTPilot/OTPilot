@@ -934,9 +934,11 @@ async function homeCopy(value, label) {
 // One label | value row; secret values masked with Show.
 // No label: the value takes the row (a section's only text, like notes).
 // `guard`: a wallet secret, shown / copied only after the master password.
-function homeRow({ label, value, secret = false, multiline = false, open = null, file = false, guard = false }) {
+// `question`: a security question — its label (the question) on a line of
+// its own, whole, the answer under it.
+function homeRow({ label, value, secret = false, multiline = false, open = null, file = false, guard = false, question = false }) {
   const el = document.createElement('div');
-  el.className = 'home-cred' + (multiline ? ' multiline' : '') + (label ? '' : ' full');
+  el.className = 'home-cred' + (multiline ? ' multiline' : '') + (label ? '' : ' full') + (question ? ' question' : '');
   el.innerHTML = `<span class="home-cred-label"></span><span class="home-cred-value"></span><span class="home-cred-actions"></span>`;
   if (label) el.querySelector('.home-cred-label').textContent = label;
   else el.querySelector('.home-cred-label').remove();
@@ -1010,7 +1012,7 @@ function homeSection(title, children, action) {
 function homeItemRows(item) {
   const rows = (item.fields || []).filter(f => String(f.value ?? '') !== '').map(f => homeRow({
     label: f.label || f.id, value: f.value, secret: Vault.SECRET_KINDS.includes(f.kind), multiline: f.kind === 'multiline', file: f.kind === 'file',
-    guard: Vault.isWalletSecret(item, f),
+    guard: Vault.isWalletSecret(item, f), question: Vault.isSecurityQuestion(f),
   }));
   if (String(item.notes || '').trim()) rows.push(homeRow({ label: item.type === 'note' ? '' : 'Notes', value: item.notes, multiline: true }));
   return rows;
@@ -1057,6 +1059,7 @@ function renderHomeCreds(acc) {
   for (const name of [...groups.keys()].sort((a, b) => (a !== '') - (b !== ''))) { // the default section first
     box.appendChild(homeSection(name || 'More fields', groups.get(name).map(f => homeRow({
       label: f.label || 'Field', value: f.value ?? '', secret: Vault.SECRET_KINDS.includes(f.kind), multiline: f.kind === 'multiline', file: f.kind === 'file',
+      question: Vault.isSecurityQuestion(f),
     }))));
   }
 
@@ -2103,21 +2106,44 @@ const CF_ADD_KINDS = [
 ];
 const CF_PLACEHOLDER = { email: 'name@example.com', date: 'YYYY-MM-DD', url: 'https://…', phone: '+1 555 0100' };
 
+// Security questions (Vault.isSecurityQuestion): the question is the row's
+// label, the answer its always-hidden value. Added from the default
+// section's bar into their own "Security questions" section.
+const SQ_SECTION = 'Security questions';
+const SQ_SUGGESTIONS = [
+  "Mother's maiden name", 'City of birth', "Name of your first pet", 'Name of your first school',
+  'Your first car', 'Street you grew up on', "Your father's middle name", 'Your favorite teacher',
+  'City where your parents met', 'Your childhood nickname',
+];
+const sqDatalistHTML = () => `<datalist id="cf-sq-list">${SQ_SUGGESTIONS.map(q => `<option value="${esc(q)}">`).join('')}</datalist>`;
+
 function customFieldRowHTML(f = {}) {
   const kind = f.kind || 'text';
   const hidden = Vault.SECRET_KINDS.includes(kind);
   const value = esc(f.value ?? '');
   const placeholder = CF_PLACEHOLDER[kind] || 'Value';
+  const id = esc(f.id || `c-${crypto.randomUUID()}`);
+  if (Vault.isSecurityQuestion(f)) {
+    return `<div class="cf-row cf-question" data-id="${id}" data-kind="hidden" data-format="question">
+    <input class="cf-label" type="text" placeholder="Question" value="${esc(f.label || '')}" maxlength="200" list="cf-sq-list" aria-label="Security question">
+    <input class="cf-value" type="password" placeholder="Answer" value="${value}" autocomplete="off" aria-label="Answer">
+    <span class="cf-actions">
+      <button type="button" class="btn-eye cf-eye" title="Show/hide">${SVG_EYE}</button>
+      <button type="button" class="btn-eye cf-copy" title="Copy">⧉</button>
+      <button type="button" class="btn-eye cf-del" title="Remove">✕</button>
+    </span>
+  </div>`;
+  }
   // A new row gets its id now: reading the form twice (Save re-reads it)
   // must give the same fields.
   if (kind === 'file') {
-    return `<div class="cf-row cf-file" data-id="${esc(f.id || `c-${crypto.randomUUID()}`)}" data-kind="file">
+    return `<div class="cf-row cf-file" data-id="${id}" data-kind="file">
     <input class="cf-label" type="text" placeholder="Label" value="${esc(f.label || '')}" maxlength="60" aria-label="Field label">
     ${fileFieldHTML(`<input type="hidden" class="cf-value" value="${value}">`)}
     <span class="cf-actions"><button type="button" class="btn-eye cf-del" title="Remove">✕</button></span>
   </div>`;
   }
-  return `<div class="cf-row" data-id="${esc(f.id || `c-${crypto.randomUUID()}`)}" data-kind="${esc(kind)}">
+  return `<div class="cf-row" data-id="${id}" data-kind="${esc(kind)}">
     <input class="cf-label" type="text" placeholder="Label" value="${esc(f.label || '')}" maxlength="60" aria-label="Field label">
     ${kind === 'multiline'
       ? `<textarea class="cf-value" placeholder="Value" aria-label="Field value">
@@ -2143,7 +2169,8 @@ function customSectionHTML(name, fields, readOnly) {
     </div>
     <div class="cf-list">${fields.map(customFieldRowHTML).join('')}</div>
     ${readOnly ? '' : `<div class="cf-add-bar">${CF_ADD_KINDS.map(k =>
-      `<button type="button" class="cf-add-kind${k.kind === 'text' ? ' cf-add' : ''}" data-kind="${k.kind}">+ ${k.label}</button>`).join('')}</div>`}
+      `<button type="button" class="cf-add-kind${k.kind === 'text' ? ' cf-add' : ''}" data-kind="${k.kind}">+ ${k.label}</button>`).join('')}${named
+      ? '' : '<button type="button" class="cf-add-question">+ Security question</button>'}</div>`}
   </div>`;
 }
 
@@ -2157,6 +2184,7 @@ function customFieldsHTML(fields, readOnly = false) {
     groups.get(name).push(f);
   }
   return `<div class="acc-field cf-fields"${readOnly ? ' data-readonly="1"' : ''}>
+    ${readOnly ? '' : sqDatalistHTML()}
     ${[...groups].map(([name, list]) => customSectionHTML(name, list, readOnly)).join('')}
     ${readOnly ? '' : '<button type="button" class="coll-link cf-new-section">+ New section</button>'}
   </div>`;
@@ -2171,6 +2199,7 @@ function readCustomFields(body) {
       value: row.querySelector('.cf-value').value,
       kind: row.dataset.kind || 'text',
       ...(section ? { section } : {}),
+      ...(row.dataset.format === 'question' ? { format: 'question' } : {}),
     };
   }).filter(f => f.label || f.value);
 }
@@ -2201,9 +2230,9 @@ function mountCustomFields(body) {
     });
     row.querySelector('.cf-del')?.addEventListener('click', () => row.remove());
   };
-  const addRow = (section, kind) => {
+  const addRow = (section, kind, extra = {}) => {
     const tmp = document.createElement('template');
-    tmp.innerHTML = customFieldRowHTML({ kind });
+    tmp.innerHTML = customFieldRowHTML({ kind, ...extra });
     const row = tmp.content.firstElementChild;
     section.querySelector('.cf-list').appendChild(row);
     wire(row);
@@ -2214,6 +2243,7 @@ function mountCustomFields(body) {
   const wireSection = section => {
     section.querySelectorAll('.cf-row').forEach(wire);
     section.querySelectorAll('.cf-add-kind').forEach(btn => btn.addEventListener('click', () => addRow(section, btn.dataset.kind)));
+    section.querySelector('.cf-add-question')?.addEventListener('click', () => addQuestion());
     section.querySelector('.cf-section-del')?.addEventListener('click', () => {
       const name = section.querySelector('.cf-section-name').value.trim() || 'this section';
       const filled = [...section.querySelectorAll('.cf-row')].some(r => r.querySelector('.cf-label').value.trim() || r.querySelector('.cf-value').value);
@@ -2221,15 +2251,27 @@ function mountCustomFields(body) {
       section.remove();
     });
   };
+  const newSection = name => {
+    const tmp = document.createElement('template');
+    tmp.innerHTML = customSectionHTML(name, [], false);
+    const section = tmp.content.firstElementChild;
+    root.querySelector('.cf-new-section').before(section);
+    wireSection(section);
+    return section;
+  };
+  // A security question goes to the "Security questions" section (made when
+  // there's none yet), wherever it's added from.
+  const addQuestion = () => {
+    const section = [...root.querySelectorAll('.cf-section')]
+      .find(s => s.querySelector('.cf-section-name')?.value.trim().toLowerCase() === SQ_SECTION.toLowerCase())
+      || newSection(SQ_SECTION);
+    addRow(section, 'hidden', { format: 'question' });
+  };
   root.querySelectorAll('.cf-section').forEach(wireSection);
   // A new section starts with one empty row; one left with no filled field
   // isn't saved (its name lives on its fields).
-  root.querySelector('.cf-new-section')?.addEventListener('click', e => {
-    const tmp = document.createElement('template');
-    tmp.innerHTML = customSectionHTML('New section', [], false);
-    const section = tmp.content.firstElementChild;
-    e.currentTarget.before(section);
-    wireSection(section);
+  root.querySelector('.cf-new-section')?.addEventListener('click', () => {
+    const section = newSection('New section');
     addRow(section, 'text');
     const name = section.querySelector('.cf-section-name');
     name.focus();
@@ -2515,7 +2557,7 @@ ${esc(item.notes || '')}</textarea>
     if (entry.role === 'view') {
       body.querySelectorAll('input, textarea').forEach(el => { el.readOnly = true; });
       body.querySelectorAll('.cat-choice').forEach(el => { el.disabled = true; });
-      body.querySelectorAll(`.cf-del, .cf-hide, .cf-add-kind, .cf-new-section, .cf-section-del${entry.share ? '' : ', .btn-del'}`).forEach(el => el.remove());
+      body.querySelectorAll(`.cf-del, .cf-hide, .cf-add-kind, .cf-add-question, .cf-new-section, .cf-section-del${entry.share ? '' : ', .btn-del'}`).forEach(el => el.remove());
     }
   }
   body.querySelector('.item-totp')?.addEventListener('input', e => { e.target.dataset.dirty = '1'; });

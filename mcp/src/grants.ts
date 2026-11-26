@@ -71,12 +71,13 @@ export async function loadGrants(api: Api, privateJwk: JsonWebKey): Promise<Gran
 }
 
 /**
- * A crypto wallet's recovery phrase, passphrase and private keys move funds:
- * the extension never puts them in an agent's copy, and one that still
- * carries them (an older extension) has them dropped here.
+ * A crypto wallet's recovery phrase, passphrase and private keys move funds,
+ * and a security question's answer recovers the account: the extension never
+ * puts them in an agent's copy, and one that still carries them (an older
+ * extension) has them dropped here.
  */
 export function withoutWalletSecrets(item: VaultItem): VaultItem {
-  return { ...item, fields: (item.fields || []).filter(f => !Vault.isWalletSecret(item, f)) }
+  return { ...item, fields: (item.fields || []).filter(f => !Vault.isWalletSecret(item, f) && f.format !== 'question') }
 }
 
 const WALLET_SECRET_NAMES = ['seed', 'passphrase', 'privatekey', 'private key', 'recovery phrase', 'seed phrase', 'mnemonic']

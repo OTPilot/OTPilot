@@ -453,7 +453,11 @@ function agentGrantFormHTML(item, current, label = 'What it can use') {
   const isLogin = item.type === 'login';
   const hasTotp = !!item.totp?.secret;
   const parts = Agents.partsFor(item);
-  const withheld = VaultShares.parts(item).some(p => p.walletSecret);
+  const all = VaultShares.parts(item);
+  const wallet = all.some(p => p.walletSecret), questions = all.some(p => p.securityQuestion);
+  const withheld = wallet && questions ? 'A wallet\'s recovery phrase and keys and the answers to security questions'
+    : wallet ? 'A wallet\'s recovery phrase and keys'
+    : questions ? 'Answers to security questions' : '';
   const chosen = new Set(scope.kind === 'fields' ? scope.parts : []);
   // An expired grant being renewed has no time left to keep: an hour by default.
   // The same rule the list shows "expired" by (its last half minute counts).
@@ -473,7 +477,7 @@ function agentGrantFormHTML(item, current, label = 'What it can use') {
       <span class="ag-grow"><b>${b}</b><span>${esc(s)}</span></span>${def === v ? '<em class="ag-def">Default</em>' : ''}</label>`).join('')}</div>
     <div class="ag-fields"${scope.kind === 'fields' ? '' : ' hidden'}>
       ${parts.map(p => `<label><input type="checkbox" value="${esc(p.key)}"${chosen.has(p.key) ? ' checked' : ''}> ${esc(p.label)}</label>`).join('')}
-      ${withheld ? '<span class="ag-note">A wallet\'s recovery phrase and keys are never given to AI agents.</span>' : ''}
+      ${withheld ? `<span class="ag-note">${withheld} are never given to AI agents.</span>` : ''}
     </div>
     <div class="ag-lbl">For how long</div>
     <div class="ag-durs" role="radiogroup">

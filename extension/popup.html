@@ -488,6 +488,9 @@
     .home-cred-label { font-size: 11.5px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .home-cred-value { font-size: 12.5px; color: var(--ink-0); font-weight: 600; overflow-wrap: anywhere; }
     .home-cred.full { grid-template-columns: minmax(0, 1fr) auto; }
+    /* A security question: the whole question, the answer under it. */
+    .home-cred.question { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; }
+    .home-cred.question .home-cred-label { grid-column: 1 / -1; white-space: normal; }
     .home-cred.multiline { align-items: start; }
     .home-cred.multiline .home-cred-value { white-space: pre-wrap; word-break: break-word; font-weight: 400; line-height: 1.45; }
     .home-cred-actions { display: flex; gap: 2px; }
@@ -763,7 +766,10 @@
     .cf-row .cf-hide, .cf-row .cf-del { opacity: .35; }
     .cf-row:hover .cf-hide, .cf-row:hover .cf-del, .cf-row:focus-within .cf-hide, .cf-row:focus-within .cf-del { opacity: 1; }
     .cf-add-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-    .cf-add-kind { height: 22px; padding: 0 7px; border-radius: 12px; border: 1px dashed var(--border); background: none; color: var(--ink-2); font: inherit; font-size: 11px; cursor: pointer; }
+    /* A security question: the question on its own line, the answer under it. */
+    .cf-row.cf-question { grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; }
+    .cf-row.cf-question .cf-label { grid-column: 1 / -1; color: var(--ink-2) !important; }
+    .cf-add-kind, .cf-add-question { height: 22px; padding: 0 7px; border-radius: 12px; border: 1px dashed var(--border); background: none; color: var(--ink-2); font: inherit; font-size: 11px; cursor: pointer; }
     /* Files (a file field: the type's or a custom one) */
     .file-field { border-radius: 6px; }
 

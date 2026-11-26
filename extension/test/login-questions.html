@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in</title></head>
+<body>
+  <!-- A sign-in that also asks a picked question, its answer field named
+       like nothing in particular ("response"). ?hidden=1: a first question
+       whose answer field is hidden, then a second question and its answer. -->
+  <form action="welcome.html" method="get">
+    <input type="email" name="email" autocomplete="username">
+    <input type="password" name="password" autocomplete="current-password">
+    <span id="first">
+      <select name="securityQuestionA" aria-label="Question A">
+        <option value="">Select a question</option>
+        <option value="1">City of birth</option>
+        <option value="2">Name of your first pet</option>
+      </select>
+      <input type="text" name="replyA" aria-label="Reply A" style="display:none">
+    </span>
+    <select name="securityQuestion" aria-label="Security question">
+      <option value="">Select a question</option>
+      <option value="1">City of birth</option>
+      <option value="2">Name of your first pet</option>
+    </select>
+    <input type="text" name="response" aria-label="Your response">
+    <button>Sign in</button>
+  </form>
+  <script>
+    if (!new URLSearchParams(location.search).has('hidden')) document.getElementById('first').remove();
+  </script>
+</body></html>

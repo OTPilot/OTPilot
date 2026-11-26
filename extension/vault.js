@@ -235,6 +235,20 @@ const Vault = (() => {
     return (item?.fields || []).some(f => String(f.value ?? '') !== '' && isWalletSecret(item, f));
   }
 
+  // ── Security questions ─────────────────────────────────────────────────
+  // A site's security question and its answer: a `hidden` field with
+  // `format: 'question'`, the question as its label and the answer as its
+  // value (versions that don't know them show a masked field named by the
+  // question). The answer recovers the account like the password does: it's
+  // never given to an AI agent.
+  const isSecurityQuestion = field => field?.format === 'question';
+
+  // What never goes into an AI agent's copy: a wallet's secrets and the
+  // answers to security questions.
+  function withheldFromAgents(item, field) {
+    return isWalletSecret(item, field) || isSecurityQuestion(field);
+  }
+
   // A wallet's addresses: one field each, `format: 'address'`, the network as
   // its label (versions that don't know them show "Solana: <address>" fields).
   //   → [{ id, network, address }]
@@ -303,5 +317,6 @@ const Vault = (() => {
     loginCoversHost,
     fileValue, fileOf, fileText, fileBytes, bytesToB64, b64ToBytes,
     isWalletSecret, hasWalletSecret, addressesOf, withAddresses,
+    isSecurityQuestion, withheldFromAgents,
   };
 })();

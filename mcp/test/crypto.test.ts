@@ -70,6 +70,24 @@ describe('grants', () => {
     await expect(fieldValue(wallet, 'private key')).rejects.toThrow(/never available to agents/)
   })
 
+  it('never hands out the answer to a security question, even when its copy carries it', async () => {
+    const keys = await generateKeyPair()
+    const bank = loginItem({
+      title: 'Bank',
+      fields: [
+        { id: 'username', label: 'Username', kind: 'text', value: 'me' },
+        { id: 'c-1', label: 'City of birth', kind: 'hidden', format: 'question', custom: true, section: 'Security questions', value: 'Rosario' },
+        { id: 'c-2', label: 'Customer no.', kind: 'text', custom: true, value: '77' },
+      ],
+    })
+    const row = await grantRow(bank, keys.publicKey)
+    const api = new FakeApi((m, p, b) => (p === '/agent/grants' ? { body: { grants: [row] } } : p === '/agent/grants/open' ? openFrom([row], b) : undefined))
+    const [g] = await loadGrants(api, keys.privateJwk)
+    const opened = (await openGrants(api, keys.privateJwk, [g], 'run', '')).items.get(g.itemId)!
+    expect(opened.fields.map(f => f.id)).toEqual(['username', 'c-2'])
+    await expect(fieldValue(opened, 'City of birth')).rejects.toThrow(/no "City of birth"/)
+  })
+
   it('a fresh 2FA code from the extension\'s own TOTP (RFC 6238 vector)', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(59_000)
