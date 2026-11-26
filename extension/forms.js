@@ -133,7 +133,8 @@
   // the nearest container (up to a few levels) that holds more than one — two
   // sign-in panels elsewhere on the page aren't one group.
   const passwordGroup = el => {
-    const visible = root => [...root.querySelectorAll('input[type="password"]')].filter(f => isVisible(f) && !isMaskedUsername(f));
+    // (A masked security answer is in no password group.)
+    const visible = root => [...root.querySelectorAll('input[type="password"]')].filter(f => isVisible(f) && !isMaskedUsername(f) && !isAnswerControl(f));
     if (el.form) return visible(el.form);
     let node = el.parentElement;
     for (let i = 0; node && i < 5; i++, node = node.parentElement) {
@@ -156,7 +157,7 @@
   };
   const isNewPassword = el => {
     if (!(el instanceof HTMLInputElement) || el.type !== 'password') return false;
-    if (isMaskedUsername(el)) return false;
+    if (isMaskedUsername(el) || isAnswerControl(el)) return false;
     const ac = autocompleteOf(el);
     if (ac.includes('new-password')) return true;
     if (ac.includes('current-password')) return false;
@@ -237,8 +238,8 @@
       && ['text', 'email', 'tel'].includes(el.type)
       && isVisible(el)
       && !autocompleteOf(el).includes('one-time-code')
-      && !isQuestionOrAnswer(el)
-      && precedes(el));
+      && precedes(el)
+      && !isQuestionOrAnswer(el) && !followsQuestion(el));
     const masked = [...scope.querySelectorAll('input[type="password"]')].filter(el => el !== password && precedes(el) && isMaskedUsername(el));
     const username = before.find(el => /\b(username|email)\b/.test(autocompleteOf(el)))
       || masked[masked.length - 1] || before[before.length - 1] || null;
@@ -428,13 +429,13 @@
     // Security questions first: the controls they take (an answer field may
     // be named like nothing in particular) are never the username or an extra.
     const questions = securityQuestions(password);
-    const taken = el => questions.controls.has(el) || isQuestionOrAnswer(el);
+    const taken = el => questions.controls.has(el) || isQuestionOrAnswer(el) || followsQuestion(el);
     const precedes = el => el.compareDocumentPosition(filled[0]) & Node.DOCUMENT_POSITION_FOLLOWING;
     const before = [...scope.querySelectorAll('input')].filter(el =>
       ['text', 'email', 'tel'].includes(el.type) && el.value
       && !autocompleteOf(el).includes('one-time-code')
-      && !taken(el)
-      && precedes(el));
+      && precedes(el)
+      && !taken(el));
     const masked = all.filter(el => isMaskedUsername(el) && precedes(el));
     const usernameEl = before.find(el => /\b(username|email)\b/.test(autocompleteOf(el)))
       || masked[masked.length - 1] || before[before.length - 1];
@@ -735,12 +736,17 @@
     const list = shownControls(field.form || document).filter(el => !field.form || el.form === field.form);
     return list[list.indexOf(field) - 1] || null;
   }
+  // A text field right after a question control: its answer, whatever its
+  // name ("response") — never the username either.
+  const followsQuestion = el => {
+    if (!(el instanceof HTMLInputElement) || el.type !== 'text') return false;
+    const prev = controlBefore(el);
+    return !!prev && isQuestionControl(prev);
+  };
   function isChallengeField(el) {
     if (!(el instanceof HTMLInputElement) || !['text', 'password'].includes(el.type) || !isVisible(el)) return false;
-    if (isNewPassword(el)) return false;
     if (isAnswerControl(el)) return true;
-    const prev = el.type === 'text' && controlBefore(el);
-    return !!prev && isQuestionControl(prev);
+    return !isNewPassword(el) && followsQuestion(el);
   }
   // What the page says the question is, closest first (≤ 6, each ≤ 200
   // chars): the field's label, aria-label(ledby), placeholder, the question
@@ -774,7 +780,8 @@
     }
     return texts;
   }
-  const answerFields = () => [...document.querySelectorAll('input[type="text"], input[type="password"]')].filter(isChallengeField);
+  // (Every input: one without a type attribute is a text field.)
+  const answerFields = () => [...document.querySelectorAll('input')].filter(isChallengeField);
 
   // The vault's state for the answer badges (asked once a page shows an
   // answer field): no badge before the vault is set up.

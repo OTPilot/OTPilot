@@ -316,3 +316,25 @@ test('a question that matches two saved answers equally fills nothing', async ({
   await answerBadge(site).click();
   await expect(answerDrop(site)).toContainText('No saved answer for this question');
 });
+
+// Review of #209.
+test('masked answers are no new passwords, a typeless field is one too, and an answer is never the username', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [portal()]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/challenge-masked.html`);
+  // #m1, #m2, #t and the sign-in's "response": answer badges; no generator.
+  await expect(answerBadge(site)).toHaveCount(4);
+  await expect(site.locator('.otpilot-field-badge[data-kind="generate"]')).toHaveCount(0);
+  await site.locator('#m2').focus();
+  await answerDrop(site).locator('.otpilot-answer-choice').click();
+  await expect(site.locator('#m2')).toHaveValue('Rosario');
+  await site.locator('#t').focus();
+  await answerDrop(site).locator('.otpilot-answer-choice').click();
+  await expect(site.locator('#t')).toHaveValue('Smith');
+  // The sign-in's username is "user", not the answer field after the question.
+  await expect(site.locator('.otpilot-field-badge[data-kind="login"]')).toHaveCount(2);
+  await site.locator('#login input[name="response"]').focus();
+  await answerDrop(site).locator('.otpilot-answer-choice').click();
+  await expect(site.locator('#login input[name="response"]')).toHaveValue('Rosario');
+  await expect(site.locator('#login input[name="user"]')).toHaveValue('');
+});
