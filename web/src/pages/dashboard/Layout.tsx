@@ -5,6 +5,7 @@ import { useAuth } from '../../lib/useAuth'
 import { useCrisp } from '../../lib/useCrisp'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
+import { noteAccount } from '../../lib/accountSwitch'
 import Logo from '../../components/Logo'
 
 const navItems = [
@@ -24,9 +25,7 @@ export default function DashboardLayout() {
   // Drop any cached data from a previous account when the signed-in user changes
   // (e.g. switching Supabase accounts in the same browser profile) so one user
   // never sees another's plan/team/devices.
-  useEffect(() => {
-    if (user?.id) queryClient.clear()
-  }, [user?.id, queryClient])
+  useEffect(() => { noteAccount(queryClient, user?.id) }, [user?.id, queryClient])
 
   // Hide Billing from team members who aren't the owner (the owner manages billing).
   const { data: me } = useQuery<{ id: string }>({
