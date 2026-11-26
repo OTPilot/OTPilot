@@ -196,3 +196,43 @@ test('AI agents never get a security answer; the CSV keeps it a question', async
   expect(r.flagged).toEqual(['City of birth']);
   expect(r.csv).toEqual([['City of birth', 'Rosario', 'hidden', 'question'], ['Customer no.', '77', 'text', undefined]]);
 });
+
+// Review of #208: an answer field named like nothing in particular is the
+// answer only (never also an extra, which could fill and reach an agent),
+// and a question never takes the next question's answer.
+test('an answer field without "answer" in its name is saved as the answer only, never as an extra', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-questions.html`);
+  await site.fill('input[name="email"]', 'me@example.com');
+  await site.fill('input[name="password"]', 'pw-Login-1');
+  await site.selectOption('select[name="securityQuestion"]', { label: 'Name of your first pet' });
+  await site.fill('input[name="response"]', 'Rex');
+  await site.click('button');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer.locator('.otpilot-save-extras')).toHaveText('Also saves: 1 security question');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(() => logins(popup)).toEqual([{
+    title: 'localhost', username: 'me@example.com', password: 'pw-Login-1',
+    fields: [question('Name of your first pet', 'Rex')],
+  }]);
+});
+
+test('a question whose answer field is hidden never takes the next question\'s answer', async ({ context, extensionId }) => {
+  const popup = await vaultWith(context, extensionId);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/login-questions.html?hidden=1`);
+  await site.fill('input[name="email"]', 'me@example.com');
+  await site.fill('input[name="password"]', 'pw-Login-1');
+  await site.selectOption('select[name="securityQuestionA"]', { label: 'City of birth' });
+  await site.selectOption('select[name="securityQuestion"]', { label: 'Name of your first pet' });
+  await site.fill('input[name="response"]', 'Rex');
+  await site.click('button');
+  const offer = site.locator('#otpilot-login-save');
+  await expect(offer.locator('.otpilot-save-extras')).toHaveText('Also saves: 1 security question');
+  await offer.locator('.otpilot-save-confirm').click();
+  await expect.poll(() => logins(popup)).toEqual([{
+    title: 'localhost', username: 'me@example.com', password: 'pw-Login-1',
+    fields: [question('Name of your first pet', 'Rex')],
+  }]);
+});
