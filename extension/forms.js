@@ -227,7 +227,8 @@
   // the password, else the last text field before it.
   function findLoginFields() {
     const password = [...document.querySelectorAll('input[type="password"]')]
-      .find(el => (isVisible(el) || (!el.value && isReadonlySignInPassword(el))) && !isNewPassword(el) && !isMaskedUsername(el));
+      .find(el => (isVisible(el) || (!el.value && isReadonlySignInPassword(el))) && !isNewPassword(el) && !isMaskedUsername(el)
+        && !isAnswerControl(el)); // a masked security answer is no sign-in
     if (!password) return null;
     const scope = password.form || document;
     const precedes = el => el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING;
@@ -236,6 +237,7 @@
       && ['text', 'email', 'tel'].includes(el.type)
       && isVisible(el)
       && !autocompleteOf(el).includes('one-time-code')
+      && !isQuestionOrAnswer(el)
       && precedes(el));
     const masked = [...scope.querySelectorAll('input[type="password"]')].filter(el => el !== password && precedes(el) && isMaskedUsername(el));
     const username = before.find(el => /\b(username|email)\b/.test(autocompleteOf(el)))
@@ -723,6 +725,153 @@
   }
   // A control the security questions own: never an extra sign-in field.
   const isQuestionOrAnswer = el => isQuestionControl(el) || isAnswerControl(el);
+
+  // ── Answering one (a site asking a saved question) ──
+  // An answer field: named / labelled like one (isAnswerControl), or a text
+  // field right after a question control. Never a new password.
+  const shownControls = scope => [...scope.querySelectorAll('input, select')].filter(el =>
+    (el instanceof HTMLSelectElement ? !el.multiple : ['text', 'password', 'email', 'tel'].includes(el.type)) && isShown(el));
+  function controlBefore(field) {
+    const list = shownControls(field.form || document).filter(el => !field.form || el.form === field.form);
+    return list[list.indexOf(field) - 1] || null;
+  }
+  function isChallengeField(el) {
+    if (!(el instanceof HTMLInputElement) || !['text', 'password'].includes(el.type) || !isVisible(el)) return false;
+    if (isNewPassword(el)) return false;
+    if (isAnswerControl(el)) return true;
+    const prev = el.type === 'text' && controlBefore(el);
+    return !!prev && isQuestionControl(prev);
+  }
+  // What the page says the question is, closest first (≤ 6, each ≤ 200
+  // chars): the field's label, aria-label(ledby), placeholder, the question
+  // control just before it (its picked option / typed question), then the
+  // text just before the field — up to 3 levels up, stopping at an element
+  // holding another control (another question's block). Matched by the
+  // background; the field's value never goes.
+  function challengeTexts(field) {
+    const texts = [];
+    const add = s => {
+      const t = String(s || '').replace(/\s+/g, ' ').trim();
+      if (t && t.length <= 200 && !texts.includes(t) && texts.length < 6) texts.push(t);
+    };
+    add(field.labels?.[0]?.textContent);
+    add(field.getAttribute('aria-label'));
+    add((field.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+      .map(id => document.getElementById(id)?.textContent || '').join(' '));
+    add(field.getAttribute('placeholder'));
+    const prev = controlBefore(field);
+    if (prev && isQuestionControl(prev)) {
+      add(prev instanceof HTMLSelectElement ? (prev.value !== '' ? prev.selectedOptions[0]?.textContent : '') : prev.value);
+    }
+    let node = field;
+    for (let level = 0; node && level < 3 && texts.length < 6; level++, node = node.parentElement) {
+      let sib = node.previousElementSibling;
+      for (let n = 0; sib && n < 2; n++, sib = sib.previousElementSibling) {
+        if (sib.matches('input, select, textarea') || sib.querySelector('input, select, textarea')) { node = null; break; }
+        add(sib.textContent);
+      }
+      if (!node) break;
+    }
+    return texts;
+  }
+  const answerFields = () => [...document.querySelectorAll('input[type="text"], input[type="password"]')].filter(isChallengeField);
+
+  // The vault's state for the answer badges (asked once a page shows an
+  // answer field): no badge before the vault is set up.
+  let _answerState = null; // null: not asked; 'asking'; else the state
+  function probeAnswers() {
+    if (_answerState !== null || !answerFields().length) return;
+    _answerState = 'asking';
+    chrome.runtime.sendMessage({ action: 'vaultState' }).then(res => {
+      _answerState = res?.state || 'locked';
+      syncBadges();
+    }, () => { _answerState = null; });
+  }
+  const answerLogins = field => chrome.runtime.sendMessage({ action: 'vaultQuestionLogins', texts: challengeTexts(field) })
+    .catch(() => null).then(res => res || { state: 'locked', logins: [] });
+
+  // `explicit`: the badge was clicked (say so when nothing matches); focusing
+  // the empty field opens only where a saved answer matches.
+  async function openAnswers(field, explicit = false) {
+    if (!chrome.runtime?.id) return;
+    closeDropdown();
+    const seq = _openSeq;
+    _pendingField = field;
+    const res = await answerLogins(field);
+    if (seq !== _openSeq) return;
+    _pendingField = null;
+    if (res.state === 'setup' || !field.isConnected) return;
+    if (!explicit && (res.state !== 'unlocked' || !res.logins.length)) return;
+    const el = makeAnchored(DROP_ID, field);
+    renderAnswers(el, field, res);
+    showAnchored(el, field);
+  }
+
+  function renderAnswers(el, field, { state, logins }) {
+    el.innerHTML = `${OVERLAY_HEADER}<div class="otpilot-answer-body" style="padding:10px 12px 12px;"></div>`;
+    el.querySelector('.otpilot-overlay-close').addEventListener('click', closeDropdown);
+    const body = el.querySelector('.otpilot-answer-body');
+    const replace = () => { if (_anchor?.el === el) placeUnder(el, field); };
+    if (state === 'locked') {
+      const intro = 'Unlock OTPilot to fill your answer.';
+      body.innerHTML = '<div class="otpilot-answer-locked" style="color:var(--ink-0, #f1f5f9);font-size:13px;margin-bottom:10px;"></div>';
+      body.firstElementChild.textContent = intro;
+      const unlock = saveButton('Unlock OTPilot', true);
+      unlock.className = 'otpilot-login-unlock';
+      unlock.style.width = '100%';
+      unlock.addEventListener('click', trusted(() => {
+        body.innerHTML = '';
+        mountUnlockFrame(body, { name: location.hostname, action: 'Unlock & fill', intro },
+          async () => {
+            const next = await answerLogins(field);
+            if (next.state !== 'unlocked') { closeDropdown(); return; }
+            if (next.logins.length === 1) { fillAnswer(field, next.logins[0]); return; }
+            renderAnswers(el, field, next);
+            replace();
+          },
+          closeDropdown);
+        replace();
+      }));
+      body.appendChild(unlock);
+      return;
+    }
+    if (!logins.length) {
+      body.innerHTML = '<div class="otpilot-answer-none" style="color:var(--ink-3, #94a3b8);font-size:12px;"></div>';
+      body.firstElementChild.textContent = 'No saved answer for this question. Add it to the login in OTPilot (Security questions).';
+      return;
+    }
+    body.innerHTML = '<div style="color:var(--ink-3, #94a3b8);font-size:12px;margin-bottom:8px;">Fill the answer saved in</div>';
+    for (const login of logins) {
+      const btn = document.createElement('button');
+      btn.className = 'otpilot-answer-choice';
+      Object.assign(btn.style, {
+        display: 'block', width: '100%', textAlign: 'left', margin: '0 0 6px', padding: '8px 10px',
+        background: 'var(--bg, #0f172a)', border: '1px solid var(--border, #1e3a5f)', borderRadius: '8px', cursor: 'pointer',
+        color: 'var(--ink-0, #f1f5f9)', font: 'inherit', fontSize: '13px',
+      });
+      btn.innerHTML = `<div style="font-weight:600;">${esc(login.name)}</div>`
+        + (login.username ? `<div style="color:var(--ink-3, #94a3b8);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(login.username)}</div>` : '');
+      btn.addEventListener('click', trusted(() => fillAnswer(field, login)));
+      body.appendChild(btn);
+    }
+  }
+
+  // Fills the answer only: never submitted (a wrong answer can lock the
+  // account; the user checks it and continues).
+  async function fillAnswer(field, { id }) {
+    let res;
+    try { res = await chrome.runtime.sendMessage({ action: 'vaultFillAnswer', id, texts: challengeTexts(field) }); } catch { res = null; }
+    closeDropdown();
+    if (!res?.ok || typeof res.value !== 'string' || !field.isConnected) {
+      showToast('OTPilot could not fill this answer', false);
+      return;
+    }
+    _filling = true;
+    try {
+      fillInputValue(field, res.value);
+      field.focus();
+    } finally { _filling = false; }
+  }
 
   // Picks the option reading `text` (its text, else its value). Never
   // fillInputValue on a select (an input's setter). → false: no such option.
@@ -1514,6 +1663,11 @@
     for (const f of document.querySelectorAll('input[type="password"]')) {
       if (isNewPassword(f) && isVisible(f)) out.set(f, ['generate', () => suggestPassword(f, { force: true })]);
     }
+    // A security question's answer field, once the vault is set up.
+    probeAnswers();
+    if (_answerState && _answerState !== 'asking' && _answerState !== 'setup') {
+      for (const f of answerFields()) if (!out.has(f)) out.set(f, ['answer', () => openAnswers(f, true)]);
+    }
     return out;
   }
 
@@ -1571,6 +1725,8 @@
     // background answered still opens (openLogins asks, and shows only if the
     // site has logins). Once that check found none, focusing doesn't ask again.
     if (_anchor?.field === f || _pendingField === f) return;
+    // A security question's answer field (its badge may not be there yet).
+    if (isChallengeField(f) && _badges.get(f)?.dataset.kind !== 'login') { openAnswers(f); return; }
     if (_pageLogins && !autoOffered(_pageLogins).logins.length) return;
     const login = findFillFields();
     if (login && (f === login.username || f === login.password)) openLogins(f);
@@ -1584,6 +1740,7 @@
       if (area !== 'local' || !changes.vaultIndex || !chrome.runtime?.id) return;
       _pageLogins = null;
       _checkedFor = null;
+      _answerState = null; // set up / locked / unlocked meanwhile
       if (!_dismissed) check();
     });
   } catch { /* extension context gone */ }

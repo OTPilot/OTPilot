@@ -236,3 +236,83 @@ test('a question whose answer field is hidden never takes the next question\'s a
     fields: [question('Name of your first pet', 'Rex')],
   }]);
 });
+
+// ── Answering a saved question on a page (forms.js challengeTexts /
+// openAnswers + background questionLogins / fillAnswer) ──────────────────
+
+const portal = (urls = 'localhost') => ({
+  name: 'Portal', email: 'me@example.com', secret: '', urls, password: 'pw-1',
+  customFields: [
+    { label: "Mother's maiden name", value: 'Smith', kind: 'hidden', format: 'question', section: 'Security questions' },
+    { label: 'City of birth', value: 'Rosario', kind: 'hidden', format: 'question', section: 'Security questions' },
+    { label: 'What was the name of your first pet?', value: 'Rex', kind: 'hidden', format: 'question', section: 'Security questions' },
+  ],
+});
+const answerBadge = site => site.locator('.otpilot-field-badge[data-kind="answer"]');
+const answerDrop = site => site.locator('#otpilot-login-dropdown');
+
+test('a question the site asks is answered from the login with the click, never submitted', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [portal()]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/challenge-question.html`);
+  await expect(answerBadge(site)).toHaveCount(1);
+  // Nothing is in the page before a click.
+  expect(await site.locator('body').innerHTML()).not.toContain('Smith');
+  await answerBadge(site).click();
+  await expect(answerDrop(site)).toContainText('Fill the answer saved in');
+  await answerDrop(site).locator('.otpilot-answer-choice', { hasText: 'Portal' }).click();
+  // "Mother's maiden name" is in "What is your mother's maiden name?".
+  await expect(site.locator('input[name="answer"]')).toHaveValue('Smith');
+  await site.waitForTimeout(1500);
+  expect(site.url()).toContain('challenge-question.html');
+});
+
+test('focusing the empty answer field opens the choice where an answer matches; the text before the field counts', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [portal()]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/challenge-question.html?mode=text&q=${encodeURIComponent('Security question: City of birth')}`);
+  await site.locator('input[name="securityAnswer"]').focus();
+  await answerDrop(site).locator('.otpilot-answer-choice').click();
+  await expect(site.locator('input[name="securityAnswer"]')).toHaveValue('Rosario');
+});
+
+test('each field gets its own question\'s answer (a masked one too)', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [portal()]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/challenge-question.html?mode=two`);
+  await expect(answerBadge(site)).toHaveCount(2);
+  // "In what city were you born?" is not "City of birth": no guess.
+  await site.locator('#a1').focus();
+  await site.waitForTimeout(800);
+  await expect(answerDrop(site)).toHaveCount(0);
+  await site.locator('#a2').focus();
+  await answerDrop(site).locator('.otpilot-answer-choice').click();
+  await expect(site.locator('#a1')).toHaveValue('');
+  await expect(site.locator('#a2')).toHaveValue('Rex');
+});
+
+test('no saved answer: focusing opens nothing, the badge says so; another site\'s login is never offered', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [portal('example.com')]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/challenge-question.html`);
+  await site.locator('input[name="answer"]').focus();
+  await site.waitForTimeout(800);
+  await expect(answerDrop(site)).toHaveCount(0);
+  await answerBadge(site).click();
+  await expect(answerDrop(site)).toContainText('No saved answer for this question');
+  await expect(answerDrop(site).locator('.otpilot-answer-choice')).toHaveCount(0);
+});
+
+test('a question that matches two saved answers equally fills nothing', async ({ context, extensionId }) => {
+  await vaultWith(context, extensionId, [{
+    ...portal(),
+    customFields: [
+      { label: 'Name of your first pet', value: 'Rex', kind: 'hidden', format: 'question', section: 'Security questions' },
+      { label: 'name of your first pet!', value: 'Toby', kind: 'hidden', format: 'question', section: 'Security questions' },
+    ],
+  }]);
+  const site = await context.newPage();
+  await site.goto(`${SITE}/challenge-question.html?q=${encodeURIComponent('Name of your first pet?')}`);
+  await answerBadge(site).click();
+  await expect(answerDrop(site)).toContainText('No saved answer for this question');
+});
