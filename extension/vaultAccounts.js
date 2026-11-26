@@ -48,10 +48,12 @@ const VaultAccounts = (() => {
   }
 
   // The user's own fields on an item (label + value; `kind` 'password' when
-  // hidden), after the type's template fields.
+  // hidden), after the type's template fields. `format: 'question'`: a
+  // security question (Vault.isSecurityQuestion).
   function customFieldsOf(item) {
     return (item.fields || []).filter(f => f.custom).map(f => ({
       id: f.id, label: f.label || '', value: f.value ?? '', kind: f.kind || 'text', ...(f.section ? { section: f.section } : {}),
+      ...(f.format === 'question' ? { format: 'question' } : {}),
     }));
   }
 
@@ -61,7 +63,8 @@ const VaultAccounts = (() => {
   // A field keeps what the caller doesn't know about it (the editor sends
   // id, label, value, kind, section): the stored field with the same id
   // gives its other properties — e.g. `fill`, the page control a sign-in's
-  // extra field was saved from. A caller may set `fill` (checked, fillDesc).
+  // extra field was saved from. A caller may set `fill` (checked, fillDesc),
+  // and `format: 'question'` (a security question: always hidden, no fill).
   function withCustomFields(item, list) {
     const stored = new Map((item.fields || []).filter(f => f.custom && f.id).map(f => [f.id, f]));
     const custom = (list || [])
@@ -72,7 +75,10 @@ const VaultAccounts = (() => {
         const fill = f.fill !== undefined ? fillDesc(f.fill) : null;
         if (fill) kept.fill = fill;
         else if (kept.fill !== undefined && !fillDesc(kept.fill)) delete kept.fill;
-        return { ...kept, id: f.id || `c-${crypto.randomUUID()}`, label: String(f.label || '').trim(), value: String(f.value ?? ''), kind: f.kind || 'text', custom: true, ...(section ? { section } : {}) };
+        const question = f.format === 'question' || kept.format === 'question';
+        if (question) { kept.format = 'question'; delete kept.fill; }
+        const kind = question ? 'hidden' : f.kind || 'text';
+        return { ...kept, id: f.id || `c-${crypto.randomUUID()}`, label: String(f.label || '').trim(), value: String(f.value ?? ''), kind, custom: true, ...(section ? { section } : {}) };
       })
       .filter(f => f.label || f.value);
     return { ...item, fields: [...(item.fields || []).filter(f => !f.custom), ...custom] };

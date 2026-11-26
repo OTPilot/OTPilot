@@ -487,6 +487,64 @@ function applyExtras(item, extras = []) {
   return { customFields: fields, changed };
 }
 
+// ── Security questions ──────────────────────────────────────────────────────────────────────
+// A form that sets a password may set security questions too (forms.js
+// `questions`: [{ question, answer }]). They're saved with the login as
+// custom fields with `format: 'question'` (Vault.isSecurityQuestion): the
+// question as the label, the answer hidden, in their own section. Never
+// released to a page from here.
+const QUESTIONS_MAX = 5;
+const QUESTION_SECTION = 'Security questions';
+// The same question however it's written: case, spacing, punctuation.
+const normQuestion = s => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+// A page's questions, checked: not a list or more than 5 is none; an entry
+// without a question or an answer, too long, multi-line, or answering with
+// the password or the username, is dropped; one per question.
+function cleanQuestions(list, ...exclude) {
+  if (!Array.isArray(list) || list.length > QUESTIONS_MAX) return [];
+  const out = [], seen = new Set();
+  for (const q of list) {
+    if (!q || typeof q !== 'object') continue;
+    const question = typeof q.question === 'string' ? q.question.replace(/\s+/g, ' ').trim() : '';
+    const answer = typeof q.answer === 'string' ? q.answer.trim() : '';
+    if (!question || question.length > 200 || !normQuestion(question)) continue;
+    if (!answer || answer.length > EXTRA_VALUE_MAX || /[\r\n]/.test(answer) || exclude.includes(answer)) continue;
+    const key = normQuestion(question);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ question, answer });
+  }
+  return out;
+}
+
+// Saving `questions` onto custom fields `fields` (VaultAccounts' list, as
+// applyExtras returns it): the saved question (same question, see
+// normQuestion) takes the new answer, a new one is added in the security
+// questions section; the others stay. → { customFields, changed (the
+// questions whose answer is new or changed) }.
+function applyQuestions(fields, questions = []) {
+  const out = fields.map(f => ({ ...f }));
+  const changed = [];
+  for (const { question, answer } of questions) {
+    const saved = out.find(f => f.format === 'question' && normQuestion(f.label) === normQuestion(question));
+    if (saved) {
+      if (saved.value !== answer) { saved.value = answer; changed.push(question); }
+      continue;
+    }
+    out.push({ label: question, value: answer, kind: 'hidden', format: 'question', section: QUESTION_SECTION });
+    changed.push(question);
+  }
+  return { customFields: out, changed };
+}
+
+// A pending sign-in's extras and questions over `item`'s custom fields.
+function applyCaptured(item, { extras = [], questions = [] } = {}) {
+  const x = applyExtras(item, extras);
+  const q = applyQuestions(x.customFields, questions);
+  return { customFields: q.customFields, extras: x.changed, questions: q.changed };
+}
+
 // The login's extra fields that fill the page's controls `rawFields` (its
 // descriptors, by index; invalid ones never match). Only a field saved from
 // a sign-in's control (a valid `fill`) is ever released: one without (added
@@ -691,11 +749,14 @@ async function storeCapture(sender, msg) {
     if (pending.url) url = pending.url;
     extras = mergeExtras(cleanExtras(pending.extras, password), extras);
   }
+  // Security questions (a form that sets the password): never the password
+  // or the username as an answer.
+  const questions = cleanQuestions(msg.questions, password, ...(username ? [username] : []));
   const id = crypto.randomUUID(); // offers and choices name the capture they're about
   await chrome.storage.session.set({ [pendingLoginKey(sender.tab.id)]: {
     id, host, username, password, at: Date.now(), ...(ctx.frame ? { top: ctx.top, frameId: sender.frameId } : {}),
     ...(url ? { url } : {}), ...(step ? { step } : {}), ...(extras.length ? { extras } : {}),
-    ...(hideUsername ? { hideUsername } : {}),
+    ...(questions.length ? { questions } : {}), ...(hideUsername ? { hideUsername } : {}),
   } });
   // The page watches for the frame going away (an app that removes it once
   // signed in): its next DOM change asks for the offer.
@@ -767,9 +828,10 @@ async function readPendingLogin(sender) {
 //   the most recently changed first);
 // - a `new` login otherwise;
 // - nothing when it's already saved as is.
-// `extras` (extra fields captured): a saved login with the same password
-// whose fields differ is an update too, `extrasOnly` (without a username,
-// only the logins holding that password are its candidates).
+// `extras` (extra fields captured) and `questions` (security questions): a
+// saved login with the same password whose fields differ is an update too,
+// `extrasOnly` (without a username, only the logins holding that password
+// are its candidates).
 // A sign-in typed in a same-site frame (`top`: its page's host) plans over
 // the logins of its page only, and an update adds the frame's host to the
 // one it picks (`addsSite` when that's all it changes): the page the user is
@@ -777,7 +839,7 @@ async function readPendingLogin(sender) {
 // a login that covers only the frame never gets the page's host (a page on
 // a multi-tenant host the site check can't tell apart, framing another
 // tenant's sign-in, would get that tenant's login).
-async function planPendingLogin({ host, top, username, password, extras = [] }) {
+async function planPendingLogin({ host, top, username, password, extras = [], questions = [] }) {
   const key = await VaultKeys.getKey();
   const { items } = await VaultStore.readAll(key);
   const hosts = top ? [host, top] : [host];
@@ -793,7 +855,7 @@ async function planPendingLogin({ host, top, username, password, extras = [] }) 
   // are all candidates (below).
   const loose = username ? covering.filter(i => userOf(i).toLowerCase() === username.toLowerCase()) : [];
   const match = username ? (covering.find(i => userOf(i) === username) || (loose.length === 1 ? loose[0] : null)) : null;
-  const extrasChanged = item => applyExtras(item, extras).changed.length > 0;
+  const extrasChanged = item => { const r = applyCaptured(item, { extras, questions }); return r.extras.length + r.questions.length > 0; };
   const extrasOnly = list => ({ kind: 'update', extrasOnly: true, item: list[0], candidates: list.map(item => ({ item })) });
   if (match && Vault.getValue(match, 'password') === password) {
     if (extrasChanged(match)) return extrasOnly([match]);
@@ -864,13 +926,14 @@ async function pendingLoginOffer(sender) {
     await endUsernameStep(sender.tab.id, pending);
     return null;
   }
-  // The extra fields it saves: their labels only, never a value.
-  const extras = (pending.extras || []).length
-    ? (plan.kind === 'update' ? applyExtras(plan.item, pending.extras).changed : changedExtras(pending.extras).map(e => e.label))
-    : [];
+  // The extra fields it saves: their labels only, never a value; the
+  // security questions: how many (new or changed).
+  const applied = plan.kind === 'update' ? applyCaptured(plan.item, pending) : null;
+  const extras = applied ? applied.extras : changedExtras(pending.extras || []).map(e => e.label);
+  const questions = applied ? applied.questions.length : (pending.questions || []).length;
   return {
     ...offer, kind: plan.kind, name: plan.item?.title || '',
-    extras, ...(plan.extrasOnly ? { extrasOnly: true } : {}),
+    extras, ...(questions ? { questions } : {}), ...(plan.extrasOnly ? { extrasOnly: true } : {}),
     // Only adds the page's site to the login (a same-site frame's sign-in).
     ...(plan.addsSite ? { addsSite: true } : {}),
     // What an update could apply to (names and usernames only), so the page
@@ -915,11 +978,14 @@ async function resolvePendingLogin(sender, id, choice, target) {
       // password went (both must be covered to fill there).
       const urls = [pending.url || pending.host];
       for (const h of [pending.top, pending.host]) if (h && !Vault.loginCoversHost(urls, h)) urls.push(h);
+      const customFields = [
+        ...changedExtras(pending.extras || []).map(({ label, value, kind, fill }) => ({ label, value, kind, fill })),
+        ...applyQuestions([], pending.questions || []).customFields,
+      ];
       await VaultAccounts.add({
         name: (pending.top || pending.host).replace(/^www\./, ''), email: pending.username, secret: '',
         urls: urls.join('\n'), password: pending.password,
-        ...(changedExtras(pending.extras || []).length
-          ? { customFields: changedExtras(pending.extras).map(({ label, value, kind, fill }) => ({ label, value, kind, fill })) } : {}),
+        ...(customFields.length ? { customFields } : {}),
       }, vk);
       kind = 'new';
     } else {
@@ -934,12 +1000,12 @@ async function resolvePendingLogin(sender, id, choice, target) {
       const addHosts = pending.top && Vault.loginCoversHost(chosen.item.urls, pending.top)
         ? [pending.host].filter(h => !Vault.loginCoversHost(chosen.item.urls, h)) : [];
       if (addHosts.length) patch.urls = [...(chosen.item.urls || []), ...addHosts].join('\n');
-      // Its extra fields: matching ones take the new value, new ones are
-      // added, the others stay. (No history for them.) Applied to the item
-      // as stored when it's written, under the vault lock: a field a sync
-      // added since the offer was planned stays.
-      const extras = pending.extras || [];
-      const withExtras = extras.length ? item => ({ ...patch, customFields: applyExtras(item, extras).customFields }) : patch;
+      // Its extra fields and security questions: matching ones take the new
+      // value, new ones are added, the others stay. (No history for them.)
+      // Applied to the item as stored when it's written, under the vault
+      // lock: a field a sync added since the offer was planned stays.
+      const captured = (pending.extras || []).length || (pending.questions || []).length;
+      const withExtras = captured ? item => ({ ...patch, customFields: applyCaptured(item, pending).customFields }) : patch;
       if (!(await VaultAccounts.update(chosen.item.id, current, withExtras, vk))) return { ok: false };
       kind = 'update';
     }

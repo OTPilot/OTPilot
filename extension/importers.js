@@ -173,8 +173,9 @@ const Importers = (() => {
 
   // OTPilot's `fields` cell: a JSON list of { id, label, value, kind, custom, section? }
   // (lossless), or — from an earlier export — "Label: value" lines.
-  // A field's `format` the export keeps: a crypto wallet's secrets and addresses.
-  const FIELD_FORMATS = ['bip39', 'key', 'address'];
+  // A field's `format` the export keeps: a crypto wallet's secrets and
+  // addresses, security questions.
+  const FIELD_FORMATS = ['bip39', 'key', 'address', 'question'];
 
   function parseFieldsCell(text) {
     const t = String(text || '').trim();
@@ -363,7 +364,8 @@ const Importers = (() => {
       const tpl = !f.custom && next.fields.find(t => !t.custom && t.format !== 'address' && (t.id === f.id || (f.label && (t.label || '').toLowerCase() === f.label.toLowerCase())));
       if (tpl) { tpl.value = f.value; continue; }
       if (next.fields.some(t => t.custom && t.label === f.label && t.value === f.value && (t.section || '') === (f.section || ''))) continue;
-      next.fields.push({ id: `c-${crypto.randomUUID()}`, label: f.label || f.id, value: f.value, kind: f.kind || 'text', custom: true, ...(f.section ? { section: f.section } : {}) });
+      next.fields.push({ id: `c-${crypto.randomUUID()}`, label: f.label || f.id, value: f.value, kind: f.kind || 'text', custom: true, ...(f.section ? { section: f.section } : {}),
+        ...(FIELD_FORMATS.includes(f.format) ? { format: f.format } : {}) });
     }
     return next;
   }

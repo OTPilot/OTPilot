@@ -417,7 +417,8 @@
   // A masked username is the username, never the password. A sign-in (not
   // a new password) also sends its extra fields (`extras`, see extraFields).
   function findSubmittedFields(root = document) {
-    const all = [...root.querySelectorAll('input[type="password"]')].filter(el => el.value && isPasswordShown(el));
+    // (A masked security answer is no password.)
+    const all = [...root.querySelectorAll('input[type="password"]')].filter(el => el.value && isPasswordShown(el) && !isAnswerControl(el));
     const filled = all.filter(el => !isMaskedUsername(el));
     if (!filled.length) return null;
     const password = filled.find(isNewPassword) || filled[0];
@@ -426,6 +427,7 @@
     const before = [...scope.querySelectorAll('input')].filter(el =>
       ['text', 'email', 'tel'].includes(el.type) && el.value
       && !autocompleteOf(el).includes('one-time-code')
+      && !isQuestionOrAnswer(el)
       && precedes(el));
     const masked = all.filter(el => isMaskedUsername(el) && precedes(el));
     const usernameEl = before.find(el => /\b(username|email)\b/.test(autocompleteOf(el)))
@@ -435,6 +437,8 @@
       const extras = extraFields(password, usernameEl, { filled: true }).map(extraOf);
       if (extras.length) fields.extras = extras;
     }
+    const questions = securityQuestions(password);
+    if (questions.length) fields.questions = questions;
     return fields;
   }
 
@@ -619,6 +623,7 @@
       const select = el instanceof HTMLSelectElement;
       if (select ? el.multiple : !EXTRA_INPUT_TYPES.includes(el.type)) continue;
       if (el.readOnly || !(isVisible(el) || slottedHost(el))) continue;
+      if (isQuestionOrAnswer(el)) continue;
       if (!filled && slotParent(el) && !seenOnScreen(slotParent(el))) continue;
       if (!select && (isSearchField(el) || autocompleteOf(el).includes('one-time-code'))) continue;
       const host = slottedHost(el);
@@ -643,6 +648,76 @@
   const extraOf = ({ el, desc, label, atDefault: def }) => ({
     label, value: controlValue(el), kind: desc.tag === 'select' ? 'text' : 'hidden', fill: desc, ...(def ? { atDefault: true } : {}),
   });
+
+  // ── Security questions ───────────────────────────────────────────────────────────
+  // A form that sets a password often sets security questions too (a picked
+  // question, then its answer): saved with the login as `format: 'question'`
+  // fields (the question as the label, the answer hidden). Never filled from
+  // here, and never an extra field nor a password.
+  const QUESTION_HINT = /question|pregunta|frage|domanda|pergunta/i;
+  const ANSWER_HINT = /answer|respuesta|antwort|r[eé]ponse|risposta|resposta/i;
+  const ANSWER_IS_PASSWORD = /pass|pwd|clave|contrase|senha|passwort/i;
+  // A select's placeholder option: "Select a question", "-- Choose --".
+  const QUESTION_PLACEHOLDER = /^\W*$|^\W*(select|choose|pick|please|seleccion|elij?[ae]|escoj?[ae]|wählen|choisi)/i;
+  const MAX_QUESTIONS = 5;
+  const ownText = el => `${el.name || ''} ${generatedId(el.id) ? '' : el.id} ${el.getAttribute('aria-label') || ''} ${el.labels?.[0]?.textContent || ''} ${el.getAttribute('placeholder') || ''}`;
+  // ("Answer to the security question" is an answer; a select never is.)
+  const isQuestionControl = el => QUESTION_HINT.test(ownText(el)) && (el instanceof HTMLSelectElement || !ANSWER_HINT.test(ownText(el)));
+  const isAnswerControl = el => el instanceof HTMLInputElement && ['text', 'password'].includes(el.type)
+    && ANSWER_HINT.test(ownText(el)) && !ANSWER_IS_PASSWORD.test(`${el.name || ''} ${el.id || ''} ${autocompleteOf(el)}`);
+  // "What was your first pet's name?" written as an answer field's label
+  // (a fixed question) — not "Answer #1" / "Security answer".
+  const fixedQuestion = el => {
+    const label = String(el.labels?.[0]?.textContent || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+    return /\?$/.test(label) && !/^(security\s*|secret\s*)?answer\b/i.test(label) && label.length <= 200 ? label : '';
+  };
+  const answerValue = el => el.value.trim();
+  const usable = s => !!s && s.length <= 256 && !/[\r\n]/.test(s);
+
+  // Where they are: the password's form, else the nearest container (up to
+  // 6 levels) holding the password and a question control.
+  function questionsScope(password) {
+    if (password.form) return password.form;
+    for (let node = password.parentElement, i = 0; node && i < 6; i++, node = node.parentElement) {
+      if ([...node.querySelectorAll('input, select')].some(isQuestionControl)) return node;
+    }
+    return null;
+  }
+
+  // → [{ question, answer }] (≤ 5): a question control (a select's picked
+  // option, or a typed question) followed by its answer (the next text or
+  // password field before another question), or an answer field labelled by
+  // its fixed question.
+  function securityQuestions(password) {
+    const scope = questionsScope(password);
+    if (!scope) return [];
+    const controls = [...scope.querySelectorAll('input, select')].filter(el =>
+      (el instanceof HTMLSelectElement ? !el.multiple : ['text', 'password'].includes(el.type)) && isShown(el)
+      && (!password.form || el.form === password.form));
+    const out = [], used = new Set();
+    for (let i = 0; i < controls.length && out.length < MAX_QUESTIONS; i++) {
+      const el = controls[i];
+      if (el === password || used.has(el) || !isQuestionControl(el)) continue;
+      const question = el instanceof HTMLSelectElement
+        ? (el.value === '' || !el.selectedOptions[0] ? '' : el.selectedOptions[0].textContent.replace(/\s+/g, ' ').trim())
+        : el.value.replace(/\s+/g, ' ').trim();
+      if (!question || QUESTION_PLACEHOLDER.test(question) || question.length > 200) continue;
+      const answer = controls.slice(i + 1).find(c => !(c instanceof HTMLSelectElement));
+      if (!answer || answer === password || isQuestionControl(answer) || answer.type === 'password' && !isAnswerControl(answer)) continue;
+      if (!usable(answerValue(answer))) continue;
+      used.add(el); used.add(answer);
+      out.push({ question, answer: answerValue(answer) });
+    }
+    for (const el of controls) {
+      if (out.length >= MAX_QUESTIONS) break;
+      if (used.has(el) || !isAnswerControl(el)) continue;
+      const question = fixedQuestion(el);
+      if (question && usable(answerValue(el))) out.push({ question, answer: answerValue(el) });
+    }
+    return out;
+  }
+  // A control the security questions own: never an extra sign-in field.
+  const isQuestionOrAnswer = el => isQuestionControl(el) || isAnswerControl(el);
 
   // Picks the option reading `text` (its text, else its value). Never
   // fillInputValue on a select (an input's setter). → false: no such option.
@@ -897,6 +972,8 @@
       + (offer.username ? `<div style="color:var(--ink-3, #94a3b8);font-size:12px;margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(offer.username)}</div>` : '<div style="height:6px"></div>');
     // The extra fields it saves (labels only; the page's text, so textContent).
     const extraLabels = (Array.isArray(offer.extras) ? offer.extras : []).filter(l => typeof l === 'string' && l);
+    const questions = Number.isInteger(offer.questions) && offer.questions > 0 ? offer.questions : 0;
+    if (questions) extraLabels.push(questions === 1 ? '1 security question' : `${questions} security questions`);
     if (extraLabels.length) {
       const also = document.createElement('div');
       also.className = 'otpilot-save-extras';
