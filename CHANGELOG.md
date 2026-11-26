@@ -3,6 +3,10 @@
 
 ## Unreleased
 
+### Web
+
+- The dashboard's first page load no longer stays loading: opening **Billing** from the 50%-off email (or any dashboard page as you arrive) showed disabled Upgrade buttons and no offer until you clicked something. The cache is now cleared only when the signed-in account changes.
+
 ### Extension
 
 - **Sign-in forms inside a frame of the same site** are filled and saved: App Store Connect's Apple ID sign-in (Apple's widget, `idmsa.apple.com`, in a frame of `appstoreconnect.apple.com`) gets the OTPilot badge and the login offer, and a sign-in typed there is offered on the page. A login fills there only when it covers both the page and the frame (one saved there does; signing in with one saved for the page offers to add the frame's site — never the page's site to one saved for the frame). Another site's frame never gets anything: "same site" is decided by the Public Suffix List, now bundled (`make psl` refreshes it), so each tenant of a shared host (x.github.io, a.uk.com) is its own site — the Gmail code check uses it too. "Open & sign in" goes over plain http only to this machine or a private network address, never a public IP.

@@ -1,10 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, Navigate, useNavigate } from 'react-router-dom'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { useAuth } from '../../lib/useAuth'
 import { useCrisp } from '../../lib/useCrisp'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
+import { accountSwitchGuard } from '../../lib/accountSwitch'
 import Logo from '../../components/Logo'
 
 const navItems = [
@@ -24,9 +25,8 @@ export default function DashboardLayout() {
   // Drop any cached data from a previous account when the signed-in user changes
   // (e.g. switching Supabase accounts in the same browser profile) so one user
   // never sees another's plan/team/devices.
-  useEffect(() => {
-    if (user?.id) queryClient.clear()
-  }, [user?.id, queryClient])
+  const [onAccount] = useState(() => accountSwitchGuard(queryClient))
+  useEffect(() => { onAccount(user?.id) }, [user?.id, onAccount])
 
   // Hide Billing from team members who aren't the owner (the owner manages billing).
   const { data: me } = useQuery<{ id: string }>({
